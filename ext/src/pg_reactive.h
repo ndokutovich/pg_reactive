@@ -3,8 +3,61 @@
 
 #include "postgres.h"
 #include "fmgr.h"
+#include "storage/lwlock.h"
+#include "utils/hsearch.h"
+#include "utils/timestamp.h"
 
 /* Version */
 #define PG_REACTIVE_VERSION "0.1"
+
+/* Limits */
+#define PGR_QUERY_ID_LEN        64
+#define PGR_MAX_DEPS_PER_QUERY  16
+#define PGR_QUERY_TEXT_LEN      2048
+
+/* GUC variables */
+extern int pgr_max_subscriptions;
+
+/*
+ * One entry in the dependency map: query_id -> tables it depends on.
+ * Stored in shared memory hash table.
+ */
+typedef struct PgrDepEntry
+{
+	char		query_id[PGR_QUERY_ID_LEN];		/* hash key */
+	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
+	int			num_tables;
+	char		query_text[PGR_QUERY_TEXT_LEN];
+	TimestampTz	subscribed_at;
+	TimestampTz	last_invalidated;
+	int64		invalidation_count;
+} PgrDepEntry;
+
+/*
+ * Shared state header, protected by LWLock.
+ */
+typedef struct PgrSharedState
+{
+	LWLock	   *lock;
+	int64		subscribe_count;	/* total subscribe calls */
+	int64		unsubscribe_count;	/* total unsubscribe calls */
+	int64		invalidation_count;	/* total invalidations */
+} PgrSharedState;
+
+/* Global pointers to shared memory structures */
+extern PgrSharedState *pgr_state;
+extern HTAB *pgr_dep_hash;
+
+/* dependency.c */
+extern void pgr_shmem_request(void);
+extern void pgr_shmem_startup(void);
+extern PgrDepEntry *pgr_dep_add(const char *query_id, const char *query_text,
+								Oid *table_oids, int num_tables);
+extern bool pgr_dep_remove(const char *query_id);
+extern PgrDepEntry *pgr_dep_find(const char *query_id);
+extern int pgr_dep_find_by_table(Oid table_oid, char query_ids[][PGR_QUERY_ID_LEN],
+								 int max_results);
+extern int pgr_dep_count(void);
+extern void pgr_dep_init_hooks(void);
 
 #endif /* PG_REACTIVE_H */
