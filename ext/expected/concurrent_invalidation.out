@@ -1,0 +1,58 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_insert1 s2_truncate s1_insert2 s2_insert1 s1_insert3 s1_check s2_check
+step s1_insert1: INSERT INTO cinv (val) VALUES ('s1_a');
+step s2_truncate: TRUNCATE cinv;
+step s1_insert2: INSERT INTO cinv (val) VALUES ('s1_b');
+step s2_insert1: INSERT INTO cinv (val) VALUES ('s2_after_trunc');
+step s1_insert3: INSERT INTO cinv (val) VALUES ('s1_c');
+step s1_check: SELECT count(*) FROM cinv;
+count
+-----
+    3
+(1 row)
+
+step s2_check: SELECT count(*) FROM cinv;
+count
+-----
+    3
+(1 row)
+
+
+starting permutation: s1_insert1 s1_insert2 s2_truncate s2_insert1 s1_insert3 s1_check s2_check
+step s1_insert1: INSERT INTO cinv (val) VALUES ('s1_a');
+step s1_insert2: INSERT INTO cinv (val) VALUES ('s1_b');
+step s2_truncate: TRUNCATE cinv;
+step s2_insert1: INSERT INTO cinv (val) VALUES ('s2_after_trunc');
+step s1_insert3: INSERT INTO cinv (val) VALUES ('s1_c');
+step s1_check: SELECT count(*) FROM cinv;
+count
+-----
+    2
+(1 row)
+
+step s2_check: SELECT count(*) FROM cinv;
+count
+-----
+    2
+(1 row)
+
+
+starting permutation: s2_truncate s1_insert1 s2_insert1 s1_insert2 s1_insert3 s1_check s2_check
+step s2_truncate: TRUNCATE cinv;
+step s1_insert1: INSERT INTO cinv (val) VALUES ('s1_a');
+step s2_insert1: INSERT INTO cinv (val) VALUES ('s2_after_trunc');
+step s1_insert2: INSERT INTO cinv (val) VALUES ('s1_b');
+step s1_insert3: INSERT INTO cinv (val) VALUES ('s1_c');
+step s1_check: SELECT count(*) FROM cinv;
+count
+-----
+    4
+(1 row)
+
+step s2_check: SELECT count(*) FROM cinv;
+count
+-----
+    4
+(1 row)
+
