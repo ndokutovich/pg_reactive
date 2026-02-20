@@ -1,0 +1,25 @@
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      POSTGRES_DB: pg_reactive_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "15432:5432"
+    volumes:
+      - .:/ext
+    command: >
+      postgres
+        -c shared_preload_libraries=pg_reactive
+        -c log_min_messages=debug1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pg_reactive_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data

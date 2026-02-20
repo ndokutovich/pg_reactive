@@ -1,0 +1,14 @@
+FROM postgres:16-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    postgresql-server-dev-16 \
+    python3 \
+    python3-psycopg2 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/entrypoint-dev.sh /usr/local/bin/entrypoint-dev.sh
+RUN chmod +x /usr/local/bin/entrypoint-dev.sh
+
+ENTRYPOINT ["entrypoint-dev.sh"]
+CMD ["postgres"]

@@ -1,0 +1,43 @@
+# C build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.a
+*.bc
+
+# PGXS build
+ext/regression.diffs
+ext/regression.out
+ext/results/
+ext/log/
+ext/tmp_check/
+
+# Rust
+proxy/target/
+
+# Node
+sdk/node_modules/
+sdk/dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Docker
+pgdata/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
