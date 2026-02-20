@@ -12,6 +12,8 @@
 #include "utils/lsyscache.h"
 
 #include "pg_reactive.h"
+#include "invalidation.h"
+#include "recompute.h"
 
 PG_MODULE_MAGIC;
 
@@ -113,8 +115,22 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("could not extract any table references from query")));
 
-	/* Register in shared memory */
+	/* Create snapshot table first — validates the query and fails early
+	 * if the query is invalid (before we touch shared memory). */
+	pgr_snapshot_create(query_id, query_str);
+
+	/* Register in shared memory (only after snapshot succeeds) */
 	pgr_dep_add(query_id, query_str, table_oids, num_tables);
+
+	/* Install triggers on any tables that don't have them yet */
+	{
+		int		i;
+		for (i = 0; i < num_tables; i++)
+		{
+			if (!pgr_has_triggers(table_oids[i]))
+				pgr_install_triggers(table_oids[i]);
+		}
+	}
 
 	/* Build JSON result */
 	initStringInfo(&buf);
@@ -135,9 +151,38 @@ pgr_unsubscribe(PG_FUNCTION_ARGS)
 {
 	text	   *query_id_text = PG_GETARG_TEXT_PP(0);
 	char	   *query_id = text_to_cstring(query_id_text);
+	PgrDepEntry *entry;
+	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
+	int			num_tables = 0;
 	bool		found;
 
+	/* Before removing, save the table OIDs so we can check trigger cleanup */
+	entry = pgr_dep_find(query_id);
+	if (entry != NULL)
+	{
+		num_tables = entry->num_tables;
+		memcpy(table_oids, entry->table_oids, num_tables * sizeof(Oid));
+	}
+
 	found = pgr_dep_remove(query_id);
+
+	/* Drop the snapshot table */
+	if (found)
+		pgr_snapshot_drop(query_id);
+
+	/* Check if any remaining subscriptions reference these tables */
+	if (found)
+	{
+		int		i;
+		char	dummy[1][PGR_QUERY_ID_LEN];
+
+		for (i = 0; i < num_tables; i++)
+		{
+			int remaining = pgr_dep_find_by_table(table_oids[i], dummy, 1);
+			if (remaining == 0)
+				pgr_remove_triggers(table_oids[i]);
+		}
+	}
 
 	PG_RETURN_BOOL(found);
 }
@@ -319,6 +364,12 @@ _PG_init(void)
 
 	/* Install shared memory hooks */
 	pgr_dep_init_hooks();
+
+	/* Install invalidation hooks (ProcessUtility + xact callback) */
+	pgr_invalidation_init_hooks();
+
+	/* Install recompute hooks (pre-commit callback) */
+	pgr_recompute_init_hooks();
 
 	elog(LOG, "pg_reactive %s: loaded (max_subscriptions=%d)",
 		 PG_REACTIVE_VERSION, pgr_max_subscriptions);

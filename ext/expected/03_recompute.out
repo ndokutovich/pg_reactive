@@ -1,0 +1,92 @@
+-- Test: recompute engine + NOTIFY deltas
+CREATE EXTENSION pg_reactive;
+CREATE TABLE items (id serial PRIMARY KEY, name text, price numeric);
+-- Subscribe to a query
+SELECT pgr.subscribe('rc_q1', 'SELECT * FROM items');
+                         subscribe                          
+------------------------------------------------------------
+ {"status": "subscribed", "tables": 1, "query_id": "rc_q1"}
+(1 row)
+
+-- Verify snapshot table was created
+SELECT count(*) AS snap_exists
+FROM pg_tables
+WHERE schemaname = 'pgr' AND tablename = '_snap_rc_q1';
+ snap_exists 
+-------------
+           1
+(1 row)
+
+-- Snapshot should be empty (no rows in items yet)
+SELECT count(*) AS snap_rows FROM pgr."_snap_rc_q1";
+ snap_rows 
+-----------
+         0
+(1 row)
+
+-- INSERT should trigger recompute synchronously via trigger
+INSERT INTO items (name, price) VALUES ('apple', 1.50);
+-- Snapshot should now have the inserted row
+SELECT count(*) AS snap_rows FROM pgr."_snap_rc_q1";
+ snap_rows 
+-----------
+         1
+(1 row)
+
+-- Insert more rows
+INSERT INTO items (name, price) VALUES ('banana', 0.75);
+SELECT count(*) AS snap_rows FROM pgr."_snap_rc_q1";
+ snap_rows 
+-----------
+         2
+(1 row)
+
+-- UPDATE should be reflected in snapshot
+UPDATE items SET price = 2.00 WHERE name = 'apple';
+SELECT name, price FROM pgr."_snap_rc_q1" WHERE name = 'apple';
+ name  | price 
+-------+-------
+ apple |  2.00
+(1 row)
+
+-- DELETE should be reflected in snapshot
+DELETE FROM items WHERE name = 'banana';
+SELECT count(*) AS snap_rows FROM pgr."_snap_rc_q1";
+ snap_rows 
+-----------
+         1
+(1 row)
+
+-- Verify remaining snapshot contents match the actual query
+SELECT i.id, i.name, i.price FROM items i
+EXCEPT
+SELECT s.id, s.name, s.price FROM pgr."_snap_rc_q1" s;
+ id | name | price 
+----+------+-------
+(0 rows)
+
+SELECT s.id, s.name, s.price FROM pgr."_snap_rc_q1" s
+EXCEPT
+SELECT i.id, i.name, i.price FROM items i;
+ id | name | price 
+----+------+-------
+(0 rows)
+
+-- Unsubscribe should drop snapshot
+SELECT pgr.unsubscribe('rc_q1');
+ unsubscribe 
+-------------
+ t
+(1 row)
+
+SELECT count(*) AS snap_exists
+FROM pg_tables
+WHERE schemaname = 'pgr' AND tablename = '_snap_rc_q1';
+ snap_exists 
+-------------
+           0
+(1 row)
+
+-- Cleanup
+DROP TABLE items;
+DROP EXTENSION pg_reactive;

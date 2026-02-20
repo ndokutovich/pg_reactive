@@ -32,6 +32,12 @@ LANGUAGE C STRICT;
 CREATE VIEW pgr.subscriptions AS
     SELECT * FROM pgr.get_subscriptions();
 
+-- Trigger function for DML interception on tracked tables
+CREATE FUNCTION pgr.trigger_func()
+RETURNS trigger
+AS 'MODULE_PATHNAME', 'pgr_trigger_func'
+LANGUAGE C;
+
 -- Extension stats
 CREATE FUNCTION pgr.stats(
     OUT metric text,

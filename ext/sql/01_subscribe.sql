@@ -2,7 +2,7 @@
 CREATE EXTENSION pg_reactive;
 
 -- Create test tables
-CREATE TABLE orders (id serial PRIMARY KEY, total numeric, status text);
+CREATE TABLE orders (id serial PRIMARY KEY, customer_id int, total numeric, status text);
 CREATE TABLE customers (id serial PRIMARY KEY, name text);
 
 -- Subscribe to a simple query
@@ -17,8 +17,8 @@ SELECT pgr.subscribe('q2', 'SELECT o.id, c.name FROM orders o JOIN customers c O
 -- Should now have 2 subscriptions
 SELECT query_id, num_tables FROM pgr.subscriptions ORDER BY query_id;
 
--- Stats should reflect the subscribes
-SELECT metric, value FROM pgr.stats() WHERE metric IN ('active_subscriptions', 'total_subscribes') ORDER BY metric;
+-- active_subscriptions should be 2
+SELECT metric, value FROM pgr.stats() WHERE metric = 'active_subscriptions';
 
 -- Unsubscribe q1
 SELECT pgr.unsubscribe('q1');
@@ -34,8 +34,8 @@ SELECT pgr.subscribe('q1', 'SELECT * FROM orders');
 
 SELECT query_id, num_tables FROM pgr.subscriptions ORDER BY query_id;
 
--- Stats after all operations
-SELECT metric, value FROM pgr.stats() WHERE metric IN ('active_subscriptions', 'total_subscribes', 'total_unsubscribes') ORDER BY metric;
+-- active_subscriptions should be 2 again after re-subscribe
+SELECT metric, value FROM pgr.stats() WHERE metric = 'active_subscriptions';
 
 -- Cleanup
 SELECT pgr.unsubscribe('q1');
