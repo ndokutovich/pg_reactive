@@ -8,6 +8,7 @@
 #include "utils/timestamp.h"
 
 #include "pg_reactive.h"
+#include "bgworker.h"
 
 /* Shared state */
 PgrSharedState *pgr_state = NULL;
@@ -28,6 +29,7 @@ pgr_shmem_size(void)
 	size = MAXALIGN(sizeof(PgrSharedState));
 	size = add_size(size, hash_estimate_size(pgr_max_subscriptions,
 											 sizeof(PgrDepEntry)));
+	size = add_size(size, pgr_bgworker_shmem_size());
 	return size;
 }
 
@@ -80,6 +82,9 @@ pgr_shmem_startup(void)
 								 pgr_max_subscriptions,
 								 &info,
 								 HASH_ELEM | HASH_STRINGS);
+
+	/* Initialize background worker dirty queue */
+	pgr_bgworker_shmem_startup();
 
 	LWLockRelease(AddinShmemInitLock);
 }

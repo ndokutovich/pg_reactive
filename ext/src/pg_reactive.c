@@ -14,6 +14,7 @@
 #include "pg_reactive.h"
 #include "invalidation.h"
 #include "recompute.h"
+#include "bgworker.h"
 
 PG_MODULE_MAGIC;
 
@@ -362,6 +363,27 @@ _PG_init(void)
 							0,
 							NULL, NULL, NULL);
 
+	/* GUC: pg_reactive.async_recompute */
+	DefineCustomBoolVariable("pg_reactive.async_recompute",
+							 "Enable async recompute via background worker",
+							 "When enabled, DML triggers defer recompute to a "
+							 "background worker instead of running inline.",
+							 &pgr_async_recompute,
+							 false,		/* default off */
+							 PGC_POSTMASTER,
+							 0,
+							 NULL, NULL, NULL);
+
+	/* GUC: pg_reactive.database */
+	DefineCustomStringVariable("pg_reactive.database",
+							   "Database for the background worker to connect to",
+							   NULL,
+							   &pgr_database,
+							   "postgres",	/* default */
+							   PGC_POSTMASTER,
+							   0,
+							   NULL, NULL, NULL);
+
 	/* Install shared memory hooks */
 	pgr_dep_init_hooks();
 
@@ -371,6 +393,11 @@ _PG_init(void)
 	/* Install recompute hooks (pre-commit callback) */
 	pgr_recompute_init_hooks();
 
-	elog(LOG, "pg_reactive %s: loaded (max_subscriptions=%d)",
-		 PG_REACTIVE_VERSION, pgr_max_subscriptions);
+	/* Register background worker for async recompute (only if enabled) */
+	if (pgr_async_recompute)
+		pgr_bgworker_register();
+
+	elog(LOG, "pg_reactive %s: loaded (max_subscriptions=%d, async_recompute=%s)",
+		 PG_REACTIVE_VERSION, pgr_max_subscriptions,
+		 pgr_async_recompute ? "on" : "off");
 }

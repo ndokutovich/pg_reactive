@@ -17,6 +17,7 @@
 #include "pg_reactive.h"
 #include "invalidation.h"
 #include "recompute.h"
+#include "bgworker.h"
 
 /* ProcessUtility hook chain */
 static ProcessUtility_hook_type prev_ProcessUtility = NULL;
@@ -31,9 +32,24 @@ typedef struct PgrDirtyList
 	char	query_ids[PGR_MAX_DIRTY][PGR_QUERY_ID_LEN];
 } PgrDirtyList;
 
+/*
+ * Per-transaction dirty table list. Tracks table OIDs for async queue push.
+ * Allocated in TopTransactionContext, freed automatically on xact end.
+ */
+#define PGR_MAX_DIRTY_TABLES 256
+
+typedef struct PgrDirtyTableList
+{
+	int		count;
+	Oid		table_oids[PGR_MAX_DIRTY_TABLES];
+} PgrDirtyTableList;
+
 static PgrDirtyList *dirty_list = NULL;
+static PgrDirtyTableList *dirty_tables = NULL;
 
 static void pgr_ensure_dirty_list(void);
+static void pgr_ensure_dirty_tables(void);
+static void pgr_mark_dirty_table(Oid table_oid);
 static void pgr_xact_callback(XactEvent event, void *arg);
 
 /*
@@ -127,7 +143,42 @@ pgr_get_dirty_queries(char query_ids[][PGR_QUERY_ID_LEN], int max_results)
 }
 
 /*
- * Clear the dirty list.
+ * Ensure the dirty table list exists for the current transaction.
+ */
+static void
+pgr_ensure_dirty_tables(void)
+{
+	if (dirty_tables == NULL)
+	{
+		MemoryContext old = MemoryContextSwitchTo(TopTransactionContext);
+		dirty_tables = palloc0(sizeof(PgrDirtyTableList));
+		MemoryContextSwitchTo(old);
+	}
+}
+
+/*
+ * Track a table OID as dirty for async queue push on COMMIT.
+ */
+static void
+pgr_mark_dirty_table(Oid table_oid)
+{
+	int		i;
+
+	pgr_ensure_dirty_tables();
+
+	/* Deduplicate */
+	for (i = 0; i < dirty_tables->count; i++)
+	{
+		if (dirty_tables->table_oids[i] == table_oid)
+			return;
+	}
+
+	if (dirty_tables->count < PGR_MAX_DIRTY_TABLES)
+		dirty_tables->table_oids[dirty_tables->count++] = table_oid;
+}
+
+/*
+ * Clear the dirty list and dirty table list.
  */
 void
 pgr_clear_dirty(void)
@@ -136,6 +187,11 @@ pgr_clear_dirty(void)
 	{
 		dirty_list->count = 0;
 		dirty_list = NULL;		/* will be freed with TopTransactionContext */
+	}
+	if (dirty_tables != NULL)
+	{
+		dirty_tables->count = 0;
+		dirty_tables = NULL;	/* will be freed with TopTransactionContext */
 	}
 }
 
@@ -159,16 +215,26 @@ pgr_trigger_func(PG_FUNCTION_ARGS)
 	/* Update invalidation stats */
 	pgr_invalidate_table(table_oid);
 
-	/* Recompute affected queries, diff against snapshot, send NOTIFY.
-	 * SPI_connect pushes a snapshot that predates the triggering DML.
-	 * We pop it, advance the command counter, and push a fresh snapshot
-	 * so SPI queries can see the DML's effects. */
-	SPI_connect();
-	PopActiveSnapshot();
-	CommandCounterIncrement();
-	PushActiveSnapshot(GetTransactionSnapshot());
-	pgr_recompute_for_table(table_oid);
-	SPI_finish();
+	if (pgr_async_recompute)
+	{
+		/* Async mode: just track the dirty table OID.
+		 * The xact callback will push it to the shared queue on COMMIT,
+		 * and the background worker will handle recompute. */
+		pgr_mark_dirty_table(table_oid);
+	}
+	else
+	{
+		/* Sync mode: recompute inline within the trigger.
+		 * SPI_connect pushes a snapshot that predates the triggering DML.
+		 * We pop it, advance the command counter, and push a fresh snapshot
+		 * so SPI queries can see the DML's effects. */
+		SPI_connect();
+		PopActiveSnapshot();
+		CommandCounterIncrement();
+		PushActiveSnapshot(GetTransactionSnapshot());
+		pgr_recompute_for_table(table_oid);
+		SPI_finish();
+	}
 
 	return PointerGetDatum(NULL);
 }
@@ -412,6 +478,23 @@ pgr_xact_callback(XactEvent event, void *arg)
 	switch (event)
 	{
 		case XACT_EVENT_COMMIT:
+			/* In async mode, push dirty table OIDs to shared queue
+			 * so the background worker can recompute after commit. */
+			if (pgr_async_recompute && dirty_tables != NULL)
+			{
+				int		i;
+
+				for (i = 0; i < dirty_tables->count; i++)
+				{
+					pgr_dirty_queue_push(dirty_tables->table_oids[i]);
+				}
+
+				/* Wake the background worker */
+				if (dirty_tables->count > 0)
+					pgr_signal_worker();
+			}
+			pgr_clear_dirty();
+			break;
 		case XACT_EVENT_ABORT:
 			pgr_clear_dirty();
 			break;

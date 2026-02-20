@@ -1,5 +1,5 @@
 MODULE_big = pg_reactive
-OBJS = src/pg_reactive.o src/dependency.o src/invalidation.o src/recompute.o
+OBJS = src/pg_reactive.o src/dependency.o src/invalidation.o src/recompute.o src/bgworker.o
 
 EXTENSION = pg_reactive
 DATA = pg_reactive--0.1.sql
