@@ -209,7 +209,7 @@ export class LiveQuery {
     }, delay);
   }
 
-  private emit(event: LiveQueryEventType, data?: Delta | Error): void {
+  private emit(event: LiveQueryEventType, data?: Delta | Overflow | Error): void {
     for (const listener of this.listeners) {
       try {
         listener(event, data);

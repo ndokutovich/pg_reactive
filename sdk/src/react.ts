@@ -20,6 +20,9 @@ export interface UseLiveQueryResult {
   /** Last delta received */
   lastDelta: Delta | null;
 
+  /** Whether an overflow occurred (client should re-fetch full state) */
+  overflow: boolean;
+
   /** Last error */
   error: Error | null;
 
@@ -48,6 +51,7 @@ export function useLiveQuery(
   const [rows, setRows] = useState<ReadonlyArray<DeltaRow>>([]);
   const [state, setState] = useState<ConnectionState>("connecting");
   const [lastDelta, setLastDelta] = useState<Delta | null>(null);
+  const [overflow, setOverflow] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const lqRef = useRef<LiveQuery | null>(null);
 
@@ -75,6 +79,11 @@ export function useLiveQuery(
         case "delta":
           setRows([...lq.snapshot]);
           setLastDelta(data as Delta);
+          setOverflow(false);
+          break;
+        case "overflow":
+          setRows([]);
+          setOverflow(true);
           break;
         case "error":
           setError(data as Error);
@@ -89,5 +98,5 @@ export function useLiveQuery(
     };
   }, [queryId, options.url]);
 
-  return { rows, state, lastDelta, error, reconnect };
+  return { rows, state, lastDelta, overflow, error, reconnect };
 }

@@ -85,29 +85,52 @@ async fn main() {
         listen_addr, max_connections
     );
 
+    let shutdown = tokio::signal::ctrl_c();
+    tokio::pin!(shutdown);
+
     loop {
-        let (stream, addr) = match listener.accept().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                error!("accept error: {}", e);
-                continue;
-            }
-        };
+        tokio::select! {
+            result = listener.accept() => {
+                let (stream, addr) = match result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        error!("accept error: {}", e);
+                        continue;
+                    }
+                };
 
-        let permit = match semaphore.clone().try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => {
-                warn!("connection limit reached, rejecting {}", addr);
-                drop(stream);
-                continue;
-            }
-        };
+                let permit = match semaphore.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        warn!("connection limit reached, rejecting {}", addr);
+                        drop(stream);
+                        continue;
+                    }
+                };
 
-        let state = state.clone();
-        tokio::spawn(async move {
-            handle_connection(stream, addr, state).await;
-            drop(permit);
-        });
+                let state = state.clone();
+                tokio::spawn(async move {
+                    handle_connection(stream, addr, state).await;
+                    drop(permit);
+                });
+            }
+            _ = &mut shutdown => {
+                info!("shutdown signal received, draining connections...");
+                break;
+            }
+        }
+    }
+
+    // Wait for all active connections to finish (acquire all permits back)
+    let drain_timeout = std::time::Duration::from_secs(30);
+    let drained = tokio::time::timeout(
+        drain_timeout,
+        semaphore.acquire_many(max_connections as u32),
+    )
+    .await;
+    match drained {
+        Ok(_) => info!("all connections drained, shutting down"),
+        Err(_) => warn!("drain timeout after {}s, forcing shutdown", drain_timeout.as_secs()),
     }
 }
 

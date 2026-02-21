@@ -12,6 +12,8 @@ ext/regression.out
 ext/results/
 ext/log/
 ext/tmp_check/
+ext/tmp_check_iso/
+ext/output_iso/
 
 # Rust
 proxy/target/
@@ -37,6 +39,7 @@ pgdata/
 # OS
 .DS_Store
 Thumbs.db
+~$*
 
 # Env
 .env
