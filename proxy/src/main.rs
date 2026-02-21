@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
@@ -16,6 +17,7 @@ type Channels = Arc<RwLock<HashMap<String, broadcast::Sender<String>>>>;
 
 /// JWT claims (minimal — sub is the only required field).
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)]
 struct Claims {
     sub: String,
     #[serde(default)]
@@ -27,6 +29,7 @@ struct Claims {
 struct AppState {
     channels: Channels,
     jwt_secret: Option<String>,
+    pg_connected: Arc<AtomicBool>,
 }
 
 #[tokio::main]
@@ -53,16 +56,18 @@ async fn main() {
     }
 
     let channels: Channels = Arc::new(RwLock::new(HashMap::new()));
+    let pg_connected = Arc::new(AtomicBool::new(false));
     let state = AppState {
         channels: channels.clone(),
         jwt_secret,
+        pg_connected: pg_connected.clone(),
     };
 
     // Spawn the PG LISTEN task
     let pg_channels = channels.clone();
     let pg_url_clone = pg_url.clone();
     tokio::spawn(async move {
-        pg_listener_loop(&pg_url_clone, pg_channels).await;
+        pg_listener_loop(&pg_url_clone, pg_channels, pg_connected).await;
     });
 
     // Start the HTTP/WebSocket server
@@ -107,24 +112,36 @@ async fn main() {
 }
 
 /// Connects to PG and listens on `pgr` channel, dispatching to broadcast channels.
-async fn pg_listener_loop(pg_url: &str, channels: Channels) {
+/// Uses exponential backoff on connection failures (1s -> 2s -> 4s -> ... -> 30s max).
+async fn pg_listener_loop(pg_url: &str, channels: Channels, pg_connected: Arc<AtomicBool>) {
+    let mut backoff_secs: u64 = 1;
     loop {
-        match pg_listener_run(pg_url, &channels).await {
-            Ok(()) => info!("PG listener exited normally, reconnecting..."),
-            Err(e) => error!("PG listener error: {}, reconnecting in 2s...", e),
+        pg_connected.store(false, Ordering::Relaxed);
+        match pg_listener_run(pg_url, &channels, &pg_connected).await {
+            Ok(()) => {
+                info!("PG listener exited normally, reconnecting...");
+                backoff_secs = 1; // reset on clean exit
+            }
+            Err(e) => {
+                error!("PG listener error: {}, reconnecting in {}s...", e, backoff_secs);
+            }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        pg_connected.store(false, Ordering::Relaxed);
+        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+        backoff_secs = (backoff_secs * 2).min(30);
     }
 }
 
 async fn pg_listener_run(
     pg_url: &str,
     channels: &Channels,
+    pg_connected: &AtomicBool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut listener = sqlx::postgres::PgListener::connect(pg_url).await?;
     // Listen on the wildcard channel that pg_reactive uses
     // pg_reactive sends NOTIFY on channel "pgr" with JSON payload containing query_id
     listener.listen("pgr").await?;
+    pg_connected.store(true, Ordering::Relaxed);
     info!("connected to PG, listening on channel 'pgr'");
 
     loop {
@@ -220,12 +237,19 @@ async fn handle_request(
     let path = req.uri().path().to_string();
 
     match path.as_str() {
-        "/health" => Ok(Response::builder()
-            .status(200)
-            .body(http_body_util::Full::new(hyper::body::Bytes::from(
-                r#"{"status":"ok"}"#,
-            )))
-            .unwrap()),
+        "/health" => {
+            let pg_ok = state.pg_connected.load(Ordering::Relaxed);
+            let status = if pg_ok { "ok" } else { "degraded" };
+            let code = if pg_ok { 200 } else { 503 };
+            let body = format!(
+                r#"{{"status":"{}","pg_connected":{}}}"#,
+                status, pg_ok
+            );
+            Ok(Response::builder()
+                .status(code)
+                .body(http_body_util::Full::new(hyper::body::Bytes::from(body)))
+                .unwrap())
+        }
 
         _ if path.starts_with("/ws/") => {
             // Extract query_id from path: /ws/{query_id}

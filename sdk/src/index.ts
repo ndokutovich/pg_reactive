@@ -54,6 +54,15 @@ export interface LiveQueryClientOptions {
 }
 
 /**
+ * Produce a canonical string key for a row, independent of property order.
+ * Sorts keys alphabetically so {b:2,a:1} and {a:1,b:2} produce the same key.
+ */
+function rowKey(row: DeltaRow): string {
+  const sorted = Object.keys(row).sort();
+  return JSON.stringify(sorted.map((k) => [k, row[k]]));
+}
+
+/**
  * A live query subscription. Connects to the proxy WebSocket,
  * receives delta messages, and maintains a local snapshot of the query results.
  */
@@ -172,10 +181,10 @@ export class LiveQuery {
 
   /** Apply a delta to the local snapshot */
   private applyDelta(delta: Delta): void {
-    // Remove deleted rows (match by all columns)
+    // Remove deleted rows (match by deep equality)
     if (delta.deleted.length > 0) {
-      const deleteSet = new Set(delta.deleted.map((r) => JSON.stringify(r)));
-      this.rows = this.rows.filter((r) => !deleteSet.has(JSON.stringify(r)));
+      const deleteSet = new Set(delta.deleted.map(rowKey));
+      this.rows = this.rows.filter((r) => !deleteSet.has(rowKey(r)));
     }
 
     // Add inserted rows

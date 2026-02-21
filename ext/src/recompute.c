@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "executor/spi.h"
 #include "lib/stringinfo.h"
@@ -15,6 +16,18 @@
 static char *pgr_build_delta_json(const char *query_id, const char *query_text);
 static char *pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 									TupleDesc tupdesc);
+static void pgr_json_escape_string(StringInfo buf, const char *value);
+
+/*
+ * Return true if the given type OID represents a JSON-numeric type
+ * (should be emitted without quotes).
+ */
+static inline bool
+pgr_is_json_numeric_type(Oid typid)
+{
+	return typid == INT2OID || typid == INT4OID || typid == INT8OID ||
+		   typid == FLOAT4OID || typid == FLOAT8OID || typid == NUMERICOID;
+}
 
 /*
  * Recompute all queries that depend on a given table.
@@ -178,8 +191,47 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 }
 
 /*
+ * Append a JSON-escaped string value (with surrounding quotes) to buf.
+ */
+static void
+pgr_json_escape_string(StringInfo buf, const char *value)
+{
+	const char *p;
+
+	appendStringInfoChar(buf, '"');
+	for (p = value; *p; p++)
+	{
+		switch (*p)
+		{
+			case '"':
+				appendStringInfoString(buf, "\\\"");
+				break;
+			case '\\':
+				appendStringInfoString(buf, "\\\\");
+				break;
+			case '\n':
+				appendStringInfoString(buf, "\\n");
+				break;
+			case '\r':
+				appendStringInfoString(buf, "\\r");
+				break;
+			case '\t':
+				appendStringInfoString(buf, "\\t");
+				break;
+			default:
+				appendStringInfoChar(buf, *p);
+				break;
+		}
+	}
+	appendStringInfoChar(buf, '"');
+}
+
+/*
  * Convert SPI result rows to a JSON array string.
  * Each row becomes a JSON object with column names as keys.
+ * Numeric types (int2/4/8, float4/8, numeric) are emitted unquoted.
+ * Booleans are emitted as true/false.
+ * Everything else is a quoted string.
  */
 static char *
 pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
@@ -205,6 +257,7 @@ pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 		for (j = 1; j <= natts; j++)
 		{
 			char   *colname = NameStr(tupdesc->attrs[j - 1].attname);
+			Oid		typid = tupdesc->attrs[j - 1].atttypid;
 			char   *value;
 
 			if (j > 1)
@@ -218,37 +271,22 @@ pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 			{
 				appendStringInfoString(&buf, "null");
 			}
+			else if (typid == BOOLOID)
+			{
+				/* Emit true/false (PG returns "t"/"f") */
+				appendStringInfoString(&buf,
+									   (value[0] == 't') ? "true" : "false");
+				pfree(value);
+			}
+			else if (pgr_is_json_numeric_type(typid))
+			{
+				/* Emit number without quotes */
+				appendStringInfoString(&buf, value);
+				pfree(value);
+			}
 			else
 			{
-				appendStringInfoChar(&buf, '"');
-				{
-					char *p;
-					for (p = value; *p; p++)
-					{
-						switch (*p)
-						{
-							case '"':
-								appendStringInfoString(&buf, "\\\"");
-								break;
-							case '\\':
-								appendStringInfoString(&buf, "\\\\");
-								break;
-							case '\n':
-								appendStringInfoString(&buf, "\\n");
-								break;
-							case '\r':
-								appendStringInfoString(&buf, "\\r");
-								break;
-							case '\t':
-								appendStringInfoString(&buf, "\\t");
-								break;
-							default:
-								appendStringInfoChar(&buf, *p);
-								break;
-						}
-					}
-				}
-				appendStringInfoChar(&buf, '"');
+				pgr_json_escape_string(&buf, value);
 				pfree(value);
 			}
 		}
@@ -277,7 +315,7 @@ pgr_snapshot_create(const char *query_id, const char *query_text)
 	 * memory context and survives SPI_finish(). */
 	initStringInfo(&sql);
 	appendStringInfo(&sql,
-					 "CREATE TABLE IF NOT EXISTS pgr.\"_snap_%s\" AS %s",
+					 "CREATE UNLOGGED TABLE IF NOT EXISTS pgr.\"_snap_%s\" AS %s",
 					 query_id, query_text);
 
 	ret = SPI_connect();

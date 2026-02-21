@@ -54,6 +54,29 @@ static void pgr_ensure_dirty_list(void);
 static void pgr_ensure_dirty_tables(void);
 static void pgr_mark_dirty_table(Oid table_oid);
 static void pgr_xact_callback(XactEvent event, void *arg);
+static char *pgr_sanitize_trigger_id(const char *query_id);
+
+/*
+ * Sanitize a query_id for use in SQL trigger names.
+ * Replaces any non-alphanumeric, non-underscore character with '_'.
+ * Returns a palloc'd string.
+ */
+static char *
+pgr_sanitize_trigger_id(const char *query_id)
+{
+	char   *result;
+	int		i;
+
+	result = pstrdup(query_id);
+	for (i = 0; result[i] != '\0'; i++)
+	{
+		char c = result[i];
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			  (c >= '0' && c <= '9') || c == '_'))
+			result[i] = '_';
+	}
+	return result;
+}
 
 /*
  * Ensure the dirty list exists for the current transaction.
@@ -344,6 +367,7 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 {
 	char	   *relname;
 	char	   *nspname;
+	char	   *safe_id;
 	StringInfoData buf;
 	int			ret;
 
@@ -354,6 +378,8 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_TABLE),
 				 errmsg("pg_reactive: table OID %u not found", table_oid)));
+
+	safe_id = pgr_sanitize_trigger_id(query_id);
 
 	/* Allocate buffer before SPI_connect so it survives SPI_finish(). */
 	initStringInfo(&buf);
@@ -366,7 +392,7 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 			"AFTER UPDATE ON %s.%s "
 			"FOR EACH STATEMENT "
 			"EXECUTE FUNCTION pgr.trigger_func('%s')",
-			table_oid, query_id,
+			table_oid, safe_id,
 			quote_identifier(nspname),
 			quote_identifier(relname),
 			query_id);
@@ -414,7 +440,7 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 				"AFTER UPDATE ON %s.%s "
 				"FOR EACH STATEMENT "
 				"EXECUTE FUNCTION pgr.trigger_func('%s')",
-				table_oid, query_id,
+				table_oid, safe_id,
 				quote_identifier(nspname),
 				quote_identifier(relname),
 				query_id);
@@ -426,7 +452,7 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 				"AFTER UPDATE OF %s ON %s.%s "
 				"FOR EACH STATEMENT "
 				"EXECUTE FUNCTION pgr.trigger_func('%s')",
-				table_oid, query_id,
+				table_oid, safe_id,
 				collist.data,
 				quote_identifier(nspname),
 				quote_identifier(relname),
@@ -441,13 +467,14 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 	ret = SPI_execute(buf.data, false, 0);
 	if (ret != SPI_OK_UTILITY)
 		elog(WARNING, "pg_reactive: failed to install UPDATE trigger pgr_upd_%u_%s on %s.%s",
-			 table_oid, query_id, nspname, relname);
+			 table_oid, safe_id, nspname, relname);
 
 	SPI_finish();
 	pfree(buf.data);
+	pfree(safe_id);
 
-	elog(DEBUG1, "pg_reactive: installed UPDATE trigger pgr_upd_%u_%s on %s.%s",
-		 table_oid, query_id, nspname, relname);
+	elog(DEBUG1, "pg_reactive: installed UPDATE trigger on %s.%s for query %s",
+		 nspname, relname, query_id);
 }
 
 /*
@@ -458,6 +485,7 @@ pgr_remove_update_trigger(Oid table_oid, const char *query_id)
 {
 	char	   *relname;
 	char	   *nspname;
+	char	   *safe_id;
 	StringInfoData buf;
 
 	relname = get_rel_name(table_oid);
@@ -466,12 +494,14 @@ pgr_remove_update_trigger(Oid table_oid, const char *query_id)
 	if (relname == NULL || nspname == NULL)
 		return;		/* table may have been dropped */
 
+	safe_id = pgr_sanitize_trigger_id(query_id);
+
 	/* Allocate buffer before SPI_connect so it survives SPI_finish(). */
 	initStringInfo(&buf);
 
 	appendStringInfo(&buf,
 		"DROP TRIGGER IF EXISTS pgr_upd_%u_%s ON %s.%s",
-		table_oid, query_id,
+		table_oid, safe_id,
 		quote_identifier(nspname),
 		quote_identifier(relname));
 
@@ -479,9 +509,10 @@ pgr_remove_update_trigger(Oid table_oid, const char *query_id)
 	SPI_execute(buf.data, false, 0);
 	SPI_finish();
 	pfree(buf.data);
+	pfree(safe_id);
 
-	elog(DEBUG1, "pg_reactive: removed UPDATE trigger pgr_upd_%u_%s from %s.%s",
-		 table_oid, query_id, nspname, relname);
+	elog(DEBUG1, "pg_reactive: removed UPDATE trigger for query %s from %s.%s",
+		 query_id, nspname, relname);
 }
 
 /*
