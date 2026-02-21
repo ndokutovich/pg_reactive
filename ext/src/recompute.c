@@ -10,7 +10,7 @@
 
 /* Max NOTIFY payload is 7999 bytes. We use 7800 as safe limit. */
 #define PGR_NOTIFY_MAX_PAYLOAD	7800
-#define PGR_NOTIFY_CHANNEL_PREFIX "pgr_"
+#define PGR_NOTIFY_CHANNEL "pgr"
 
 static char *pgr_build_delta_json(const char *query_id, const char *query_text);
 static char *pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
@@ -50,23 +50,22 @@ pgr_recompute_for_table(Oid table_oid)
 
 		if (delta_json != NULL)
 		{
-			StringInfoData channel;
-
-			initStringInfo(&channel);
-			appendStringInfo(&channel, "%s%s",
-							 PGR_NOTIFY_CHANNEL_PREFIX, entry->query_id);
-
 			if (strlen(delta_json) <= PGR_NOTIFY_MAX_PAYLOAD)
 			{
-				Async_Notify(channel.data, delta_json);
+				Async_Notify(PGR_NOTIFY_CHANNEL, delta_json);
 			}
 			else
 			{
-				Async_Notify(channel.data,
-							 "{\"type\":\"overflow\",\"fetch\":true}");
+				StringInfoData overflow;
+
+				initStringInfo(&overflow);
+				appendStringInfo(&overflow,
+								 "{\"type\":\"overflow\",\"query_id\":\"%s\",\"fetch\":true}",
+								 entry->query_id);
+				Async_Notify(PGR_NOTIFY_CHANNEL, overflow.data);
+				pfree(overflow.data);
 			}
 
-			pfree(channel.data);
 			pfree(delta_json);
 
 			/* Update per-entry stats */

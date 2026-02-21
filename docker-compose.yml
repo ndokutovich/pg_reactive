@@ -11,7 +11,7 @@ services:
     ports:
       - "15432:5432"
     volumes:
-      - .:/ext
+      - ./ext:/ext/ext
     command: >
       postgres
         -c shared_preload_libraries=pg_reactive
@@ -23,3 +23,16 @@ services:
       retries: 10
     tmpfs:
       - /var/lib/postgresql/data
+
+  proxy:
+    build:
+      context: ./proxy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
+      LISTEN_ADDR: "0.0.0.0:8080"
+      RUST_LOG: pg_reactive_proxy=info
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy

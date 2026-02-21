@@ -17,7 +17,7 @@ ext/tmp_check/
 proxy/target/
 
 # Node
-sdk/node_modules/
+node_modules/
 sdk/dist/
 
 # Python
