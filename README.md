@@ -219,6 +219,7 @@ All messages are JSON, sent over the `pgr` NOTIFY channel (extension to proxy) a
 |-----------------------------------|---------|----------|---------------------------------|
 | `shared_preload_libraries`        | --      | Yes      | Must include `pg_reactive`      |
 | `pg_reactive.max_subscriptions`   | `1024`  | Yes      | Max concurrent subscriptions    |
+| `pg_reactive.async_recompute`     | `off`   | Yes      | Use background worker for recompute |
 
 ## Testing
 
@@ -261,8 +262,8 @@ JWT_SECRET=test node tests/e2e_jwt_test.mjs
 Shared memory pressure (200 subscriptions) and NOTIFY throughput (200 writes, 100% delivery):
 
 ```bash
-docker compose exec db bash -c 'cd /ext && bash tests/integration/test_shmem_pressure.sh'
-docker compose exec db bash -c 'cd /ext && bash tests/integration/test_notify_throughput.sh'
+docker compose exec db bash -c 'cd /ext && python3 tests/integration/test_shmem_pressure.py'
+docker compose exec db bash -c 'cd /ext && python3 tests/integration/test_notify_throughput.py'
 ```
 
 ### Benchmarks
