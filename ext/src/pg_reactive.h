@@ -19,6 +19,13 @@
 extern int pgr_max_subscriptions;
 
 /*
+ * Column bitmask: bit N corresponds to attnum (N+1).
+ * Supports up to 64 columns per table.
+ * PGR_COL_MASK_ALL means "all columns" (e.g. SELECT *).
+ */
+#define PGR_COL_MASK_ALL	((uint64) ~0ULL)
+
+/*
  * One entry in the dependency map: query_id -> tables it depends on.
  * Stored in shared memory hash table.
  */
@@ -26,6 +33,7 @@ typedef struct PgrDepEntry
 {
 	char		query_id[PGR_QUERY_ID_LEN];		/* hash key */
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
+	uint64		col_masks[PGR_MAX_DEPS_PER_QUERY];	/* column bitmask per table */
 	int			num_tables;
 	char		query_text[PGR_QUERY_TEXT_LEN];
 	TimestampTz	subscribed_at;
@@ -42,7 +50,19 @@ typedef struct PgrSharedState
 	int64		subscribe_count;	/* total subscribe calls */
 	int64		unsubscribe_count;	/* total unsubscribe calls */
 	int64		invalidation_count;	/* total invalidations */
+	int64		eviction_count;		/* total LRU evictions */
 } PgrSharedState;
+
+/*
+ * Info about an evicted subscription (for caller cleanup).
+ */
+typedef struct PgrEvictedInfo
+{
+	bool		evicted;
+	char		query_id[PGR_QUERY_ID_LEN];
+	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
+	int			num_tables;
+} PgrEvictedInfo;
 
 /* Global pointers to shared memory structures */
 extern PgrSharedState *pgr_state;
@@ -52,7 +72,9 @@ extern HTAB *pgr_dep_hash;
 extern void pgr_shmem_request(void);
 extern void pgr_shmem_startup(void);
 extern PgrDepEntry *pgr_dep_add(const char *query_id, const char *query_text,
-								Oid *table_oids, int num_tables);
+								Oid *table_oids, uint64 *col_masks,
+								int num_tables,
+								PgrEvictedInfo *evicted);
 extern bool pgr_dep_remove(const char *query_id);
 extern PgrDepEntry *pgr_dep_find(const char *query_id);
 extern int pgr_dep_find_by_table(Oid table_oid, char query_ids[][PGR_QUERY_ID_LEN],

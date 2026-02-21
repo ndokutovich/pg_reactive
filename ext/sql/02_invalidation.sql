@@ -38,8 +38,8 @@ INSERT INTO t2 (val) VALUES ('world');
 UPDATE t1 SET val = 'updated' WHERE id = 1;
 DELETE FROM t2 WHERE id = 1;
 
--- Check invalidation count increased by 6
--- (INSERT t1 hits q1+q2=2, INSERT t2 hits q2=1, UPDATE t1 hits q1+q2=2, DELETE t2 hits q2=1)
+-- Check invalidation count increased by 5
+-- (INSERT t1 hits q1+q2=2, INSERT t2 hits q2=1, UPDATE t1 val hits q1=1 (q2 only tracks id), DELETE t2 hits q2=1)
 SELECT value::bigint - :baseline AS new_invalidations
 FROM pgr.stats() WHERE metric = 'total_invalidations';
 
@@ -78,8 +78,44 @@ TRUNCATE t1;
 SELECT value::bigint - :pre_truncate AS truncate_invalidations
 FROM pgr.stats() WHERE metric = 'total_invalidations';
 
--- Cleanup
+-- Cleanup TRUNCATE test
 SELECT pgr.unsubscribe('inv_q3');
+
+-- ALTER TABLE DDL hook test: subscribe, alter table, check invalidation
+SELECT pgr.subscribe('inv_q4', 'SELECT id, val FROM t1');
+
+-- Record current invalidation count before ALTER TABLE
+SELECT value::bigint AS pre_alter FROM pgr.stats() WHERE metric = 'total_invalidations' \gset
+
+-- ALTER TABLE ADD COLUMN should invalidate
+ALTER TABLE t1 ADD COLUMN extra text;
+
+SELECT value::bigint - :pre_alter AS alter_add_invalidations
+FROM pgr.stats() WHERE metric = 'total_invalidations';
+
+-- ALTER TABLE RENAME COLUMN should invalidate
+SELECT value::bigint AS pre_rename FROM pgr.stats() WHERE metric = 'total_invalidations' \gset
+
+ALTER TABLE t1 RENAME COLUMN extra TO extra2;
+
+SELECT value::bigint - :pre_rename AS alter_rename_invalidations
+FROM pgr.stats() WHERE metric = 'total_invalidations';
+
+-- ALTER TABLE DROP COLUMN should invalidate
+SELECT value::bigint AS pre_drop_col FROM pgr.stats() WHERE metric = 'total_invalidations' \gset
+
+ALTER TABLE t1 DROP COLUMN extra2;
+
+SELECT value::bigint - :pre_drop_col AS alter_drop_invalidations
+FROM pgr.stats() WHERE metric = 'total_invalidations';
+
+-- Cleanup ALTER test
+SELECT pgr.unsubscribe('inv_q4');
+
+-- Query text length limit test
+SELECT pgr.subscribe('inv_toolong', repeat('SELECT id FROM t1 UNION ALL ', 100));
+
+-- Cleanup
 DROP TABLE t2;
 DROP TABLE t1;
 DROP EXTENSION pg_reactive;

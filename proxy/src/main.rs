@@ -6,12 +6,28 @@ use futures_util::{SinkExt, StreamExt};
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
+use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
 
 /// Per-channel broadcast sender. One PG LISTEN channel -> N WebSocket clients.
 type Channels = Arc<RwLock<HashMap<String, broadcast::Sender<String>>>>;
+
+/// JWT claims (minimal — sub is the only required field).
+#[derive(Debug, serde::Deserialize)]
+struct Claims {
+    sub: String,
+    #[serde(default)]
+    exp: Option<u64>,
+}
+
+/// Shared app state including optional JWT secret.
+#[derive(Clone)]
+struct AppState {
+    channels: Channels,
+    jwt_secret: Option<String>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -29,7 +45,18 @@ async fn main() {
         .parse()
         .expect("invalid LISTEN_ADDR");
 
+    let jwt_secret = std::env::var("JWT_SECRET").ok();
+    if jwt_secret.is_some() {
+        info!("JWT authentication enabled");
+    } else {
+        warn!("JWT_SECRET not set — authentication disabled");
+    }
+
     let channels: Channels = Arc::new(RwLock::new(HashMap::new()));
+    let state = AppState {
+        channels: channels.clone(),
+        jwt_secret,
+    };
 
     // Spawn the PG LISTEN task
     let pg_channels = channels.clone();
@@ -53,9 +80,9 @@ async fn main() {
             }
         };
 
-        let channels = channels.clone();
+        let state = state.clone();
         tokio::spawn(async move {
-            handle_connection(stream, addr, channels).await;
+            handle_connection(stream, addr, state).await;
         });
     }
 }
@@ -110,13 +137,49 @@ async fn pg_listener_run(
     }
 }
 
+/// Extract JWT token from request: query param `?token=xxx` or `Authorization: Bearer xxx`.
+fn extract_token(req: &Request<Incoming>) -> Option<String> {
+    // Check query parameter first
+    if let Some(query) = req.uri().query() {
+        for pair in query.split('&') {
+            if let Some(token) = pair.strip_prefix("token=") {
+                return Some(token.to_string());
+            }
+        }
+    }
+
+    // Check Authorization header
+    if let Some(auth) = req.headers().get(hyper::header::AUTHORIZATION) {
+        if let Ok(auth_str) = auth.to_str() {
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                return Some(token.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Validate JWT token against the configured secret.
+fn validate_jwt(token: &str, secret: &str) -> Result<Claims, String> {
+    let key = DecodingKey::from_secret(secret.as_bytes());
+    let mut validation = Validation::new(Algorithm::HS256);
+    // Allow tokens without exp claim for flexibility
+    validation.required_spec_claims.remove("exp");
+    validation.validate_exp = false;
+
+    decode::<Claims>(token, &key, &validation)
+        .map(|data| data.claims)
+        .map_err(|e| format!("JWT validation failed: {}", e))
+}
+
 /// Handle a TCP connection: health check or WebSocket upgrade.
-async fn handle_connection(stream: tokio::net::TcpStream, addr: SocketAddr, channels: Channels) {
+async fn handle_connection(stream: tokio::net::TcpStream, addr: SocketAddr, state: AppState) {
     let io = TokioIo::new(stream);
 
     let service = hyper::service::service_fn(move |req: Request<Incoming>| {
-        let channels = channels.clone();
-        async move { handle_request(req, addr, channels).await }
+        let state = state.clone();
+        async move { handle_request(req, addr, state).await }
     });
 
     if let Err(e) = hyper::server::conn::http1::Builder::new()
@@ -133,11 +196,11 @@ async fn handle_connection(stream: tokio::net::TcpStream, addr: SocketAddr, chan
 async fn handle_request(
     req: Request<Incoming>,
     addr: SocketAddr,
-    channels: Channels,
+    state: AppState,
 ) -> Result<Response<http_body_util::Full<hyper::body::Bytes>>, hyper::Error> {
-    let path = req.uri().path();
+    let path = req.uri().path().to_string();
 
-    match path {
+    match path.as_str() {
         "/health" => Ok(Response::builder()
             .status(200)
             .body(http_body_util::Full::new(hyper::body::Bytes::from(
@@ -157,6 +220,37 @@ async fn handle_request(
                     .unwrap());
             }
 
+            // JWT authentication (if secret is configured)
+            if let Some(ref secret) = state.jwt_secret {
+                match extract_token(&req) {
+                    Some(token) => {
+                        match validate_jwt(&token, secret) {
+                            Ok(claims) => {
+                                info!("authenticated WebSocket: sub={} query_id={}", claims.sub, query_id);
+                            }
+                            Err(e) => {
+                                warn!("JWT auth failed from {}: {}", addr, e);
+                                return Ok(Response::builder()
+                                    .status(401)
+                                    .body(http_body_util::Full::new(hyper::body::Bytes::from(
+                                        r#"{"error":"invalid token"}"#,
+                                    )))
+                                    .unwrap());
+                            }
+                        }
+                    }
+                    None => {
+                        warn!("missing JWT token from {}", addr);
+                        return Ok(Response::builder()
+                            .status(401)
+                            .body(http_body_util::Full::new(hyper::body::Bytes::from(
+                                r#"{"error":"authentication required"}"#,
+                            )))
+                            .unwrap());
+                    }
+                }
+            }
+
             // Check for WebSocket upgrade
             if !hyper_tungstenite_upgrade::is_upgrade_request(&req) {
                 return Ok(Response::builder()
@@ -171,7 +265,7 @@ async fn handle_request(
             let (response, ws_future) =
                 hyper_tungstenite_upgrade::upgrade(req).expect("upgrade failed");
 
-            let channels = channels.clone();
+            let channels = state.channels.clone();
             tokio::spawn(async move {
                 match ws_future.await {
                     Ok(ws_stream) => {

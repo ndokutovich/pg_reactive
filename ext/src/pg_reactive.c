@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "access/relation.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_class.h"
 #include "fmgr.h"
@@ -10,6 +11,7 @@
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
+#include "utils/rel.h"
 
 #include "pg_reactive.h"
 #include "invalidation.h"
@@ -24,65 +26,364 @@ int pgr_max_subscriptions = 1024;
 void _PG_init(void);
 
 /*
- * Extract table OIDs from a query by parsing it and looking at the
- * RangeVar nodes in the raw parse tree.
+ * Context for recursive dependency extraction.
+ * Collects table OIDs and per-table column bitmasks.
+ */
+typedef struct {
+	Oid		   *table_oids;
+	uint64	   *col_masks;		/* bitmask of AttrNumbers per table */
+	int			count;
+	int			max_tables;
+	bool		has_star;		/* SELECT * detected */
+} ExtractDepsContext;
+
+static void pgr_extract_from_node(Node *node, ExtractDepsContext *ctx);
+static void pgr_extract_from_select(SelectStmt *sel, ExtractDepsContext *ctx);
+static void pgr_extract_columns_from_node(Node *node, ExtractDepsContext *ctx);
+
+/*
+ * Add a table OID to the context, deduplicating.
+ * Returns the index of the table in the arrays.
  */
 static int
-pgr_extract_tables(const char *query_text, Oid *table_oids, int max_tables)
+pgr_add_table_oid(ExtractDepsContext *ctx, Oid relid)
 {
-	List	   *raw_parsetree_list;
+	int		i;
+
+	if (!OidIsValid(relid))
+		return -1;
+
+	/* Check if already present */
+	for (i = 0; i < ctx->count; i++)
+	{
+		if (ctx->table_oids[i] == relid)
+			return i;
+	}
+
+	if (ctx->count >= ctx->max_tables)
+		return -1;
+
+	ctx->table_oids[ctx->count] = relid;
+	ctx->col_masks[ctx->count] = 0;
+	return ctx->count++;
+}
+
+/*
+ * Mark a column as referenced for a given table.
+ * Looks up the table by name (schemaname.relname) among already-found tables
+ * and sets the appropriate bit in col_masks.
+ */
+static void
+pgr_mark_column(ExtractDepsContext *ctx, const char *schemaname,
+				const char *relname, const char *colname)
+{
+	int		i;
+
+	/*
+	 * Walk all known tables and try to find one where the column name matches
+	 * an actual attribute. If relname is given (qualified reference like t.col),
+	 * only check tables that match the alias/name.
+	 */
+	for (i = 0; i < ctx->count; i++)
+	{
+		Relation	rel;
+		TupleDesc	tupdesc;
+		int			j;
+
+		rel = relation_open(ctx->table_oids[i], NoLock);
+		tupdesc = RelationGetDescr(rel);
+
+		/* If qualified, check table name matches */
+		if (relname != NULL)
+		{
+			const char *tname = RelationGetRelationName(rel);
+			if (strcmp(tname, relname) != 0)
+			{
+				relation_close(rel, NoLock);
+				continue;
+			}
+		}
+
+		for (j = 0; j < tupdesc->natts; j++)
+		{
+			Form_pg_attribute att = TupleDescAttr(tupdesc, j);
+
+			if (att->attisdropped)
+				continue;
+
+			if (strcmp(NameStr(att->attname), colname) == 0)
+			{
+				/* Set bit for this column (attnum is 1-based, bit 0 = attnum 1) */
+				if (att->attnum <= 64)
+					ctx->col_masks[i] |= ((uint64) 1 << (att->attnum - 1));
+				relation_close(rel, NoLock);
+				return;
+			}
+		}
+
+		relation_close(rel, NoLock);
+	}
+}
+
+/*
+ * Extract column references from an expression node (ColumnRef).
+ * Walks recursively through expressions looking for ColumnRef nodes.
+ */
+static void
+pgr_extract_columns_from_node(Node *node, ExtractDepsContext *ctx)
+{
+	if (node == NULL)
+		return;
+
+	if (IsA(node, ColumnRef))
+	{
+		ColumnRef  *cref = (ColumnRef *) node;
+		int			nfields = list_length(cref->fields);
+
+		/* Check for SELECT * — first field is A_Star */
+		if (nfields == 1)
+		{
+			Node *field = linitial(cref->fields);
+			if (IsA(field, A_Star))
+			{
+				ctx->has_star = true;
+				return;
+			}
+			/* Unqualified column: colname */
+			pgr_mark_column(ctx, NULL, NULL, strVal(field));
+		}
+		else if (nfields == 2)
+		{
+			Node *first = linitial(cref->fields);
+			Node *second = lsecond(cref->fields);
+
+			if (IsA(second, A_Star))
+			{
+				/* table.* */
+				ctx->has_star = true;
+				return;
+			}
+			/* Qualified: table.column */
+			pgr_mark_column(ctx, NULL, strVal(first), strVal(second));
+		}
+	}
+	else if (IsA(node, A_Expr))
+	{
+		A_Expr *expr = (A_Expr *) node;
+		pgr_extract_columns_from_node(expr->lexpr, ctx);
+		pgr_extract_columns_from_node(expr->rexpr, ctx);
+	}
+	else if (IsA(node, BoolExpr))
+	{
+		BoolExpr   *bexpr = (BoolExpr *) node;
+		ListCell   *lc;
+
+		foreach(lc, bexpr->args)
+			pgr_extract_columns_from_node(lfirst(lc), ctx);
+	}
+	else if (IsA(node, FuncCall))
+	{
+		FuncCall   *fc = (FuncCall *) node;
+		ListCell   *lc;
+
+		foreach(lc, fc->args)
+			pgr_extract_columns_from_node(lfirst(lc), ctx);
+
+		/* Check for agg_star (COUNT(*)) */
+		if (fc->agg_star)
+			ctx->has_star = true;
+	}
+	else if (IsA(node, ResTarget))
+	{
+		ResTarget  *rt = (ResTarget *) node;
+		pgr_extract_columns_from_node(rt->val, ctx);
+	}
+	else if (IsA(node, SortBy))
+	{
+		SortBy	   *sb = (SortBy *) node;
+		pgr_extract_columns_from_node(sb->node, ctx);
+	}
+	else if (IsA(node, TypeCast))
+	{
+		TypeCast   *tc = (TypeCast *) node;
+		pgr_extract_columns_from_node(tc->arg, ctx);
+	}
+	else if (IsA(node, CoalesceExpr))
+	{
+		CoalesceExpr *ce = (CoalesceExpr *) node;
+		ListCell   *lc;
+
+		foreach(lc, ce->args)
+			pgr_extract_columns_from_node(lfirst(lc), ctx);
+	}
+	else if (IsA(node, NullTest))
+	{
+		NullTest   *nt = (NullTest *) node;
+		pgr_extract_columns_from_node((Node *) nt->arg, ctx);
+	}
+	else if (IsA(node, SubLink))
+	{
+		SubLink	   *sl = (SubLink *) node;
+		pgr_extract_columns_from_node(sl->testexpr, ctx);
+		/* Don't recurse into subquery — it has its own table context */
+	}
+	else if (IsA(node, CaseExpr))
+	{
+		CaseExpr   *ce = (CaseExpr *) node;
+		ListCell   *lc;
+
+		pgr_extract_columns_from_node((Node *) ce->arg, ctx);
+		foreach(lc, ce->args)
+		{
+			CaseWhen *when = lfirst_node(CaseWhen, lc);
+			pgr_extract_columns_from_node((Node *) when->expr, ctx);
+			pgr_extract_columns_from_node((Node *) when->result, ctx);
+		}
+		pgr_extract_columns_from_node((Node *) ce->defresult, ctx);
+	}
+}
+
+/*
+ * Recursively walk a node looking for table references.
+ */
+static void
+pgr_extract_from_node(Node *node, ExtractDepsContext *ctx)
+{
+	if (node == NULL)
+		return;
+
+	if (IsA(node, RangeVar))
+	{
+		RangeVar   *rv = (RangeVar *) node;
+		Oid			relid = RangeVarGetRelid(rv, NoLock, true);
+
+		pgr_add_table_oid(ctx, relid);
+	}
+	else if (IsA(node, JoinExpr))
+	{
+		JoinExpr   *j = (JoinExpr *) node;
+
+		pgr_extract_from_node(j->larg, ctx);
+		pgr_extract_from_node(j->rarg, ctx);
+		/* Extract columns from JOIN ON clause */
+		pgr_extract_columns_from_node(j->quals, ctx);
+	}
+	else if (IsA(node, RangeSubselect))
+	{
+		RangeSubselect *rs = (RangeSubselect *) node;
+
+		if (rs->subquery && IsA(rs->subquery, SelectStmt))
+			pgr_extract_from_select((SelectStmt *) rs->subquery, ctx);
+	}
+	else if (IsA(node, SubLink))
+	{
+		SubLink	   *sl = (SubLink *) node;
+
+		if (sl->subselect && IsA(sl->subselect, SelectStmt))
+			pgr_extract_from_select((SelectStmt *) sl->subselect, ctx);
+	}
+}
+
+/*
+ * Walk a SelectStmt recursively: FROM clause, target list, WHERE clause,
+ * GROUP BY, HAVING, CTEs, and set operations.
+ */
+static void
+pgr_extract_from_select(SelectStmt *sel, ExtractDepsContext *ctx)
+{
 	ListCell   *lc;
-	int			count = 0;
+
+	if (sel == NULL)
+		return;
+
+	/* FROM clause — extract tables first */
+	foreach(lc, sel->fromClause)
+		pgr_extract_from_node(lfirst(lc), ctx);
+
+	/* Target list (SELECT columns) */
+	foreach(lc, sel->targetList)
+		pgr_extract_columns_from_node(lfirst(lc), ctx);
+
+	/* WHERE clause — may contain SubLink (subqueries) and ColumnRefs */
+	if (sel->whereClause)
+	{
+		pgr_extract_from_node(sel->whereClause, ctx);
+		pgr_extract_columns_from_node(sel->whereClause, ctx);
+	}
+
+	/* GROUP BY */
+	foreach(lc, sel->groupClause)
+		pgr_extract_columns_from_node(lfirst(lc), ctx);
+
+	/* HAVING clause */
+	if (sel->havingClause)
+	{
+		pgr_extract_from_node(sel->havingClause, ctx);
+		pgr_extract_columns_from_node(sel->havingClause, ctx);
+	}
+
+	/* ORDER BY (sortClause) */
+	foreach(lc, sel->sortClause)
+		pgr_extract_columns_from_node(lfirst(lc), ctx);
+
+	/* CTEs (WITH clause) */
+	if (sel->withClause)
+	{
+		foreach(lc, sel->withClause->ctes)
+		{
+			CommonTableExpr *cte = lfirst_node(CommonTableExpr, lc);
+
+			if (cte->ctequery && IsA(cte->ctequery, SelectStmt))
+				pgr_extract_from_select((SelectStmt *) cte->ctequery, ctx);
+		}
+	}
+
+	/* Set operations: UNION, EXCEPT, INTERSECT */
+	if (sel->larg)
+		pgr_extract_from_select(sel->larg, ctx);
+	if (sel->rarg)
+		pgr_extract_from_select(sel->rarg, ctx);
+}
+
+/*
+ * Extract table OIDs and column bitmasks from a query by parsing it
+ * and recursively walking the raw parse tree.
+ *
+ * If SELECT * or table.* is used, all tables get PGR_COL_MASK_ALL.
+ */
+static int
+pgr_extract_deps(const char *query_text, Oid *table_oids,
+				 uint64 *col_masks, int max_tables)
+{
+	List		   *raw_parsetree_list;
+	ListCell	   *lc;
+	ExtractDepsContext ctx;
+	int				i;
+
+	ctx.table_oids = table_oids;
+	ctx.col_masks = col_masks;
+	ctx.count = 0;
+	ctx.max_tables = max_tables;
+	ctx.has_star = false;
 
 	raw_parsetree_list = raw_parser(query_text, RAW_PARSE_DEFAULT);
 
 	foreach(lc, raw_parsetree_list)
 	{
 		RawStmt	   *rawstmt = lfirst_node(RawStmt, lc);
-		SelectStmt *sel;
-		ListCell   *fc;
 
-		if (!IsA(rawstmt->stmt, SelectStmt))
-			continue;
-
-		sel = (SelectStmt *) rawstmt->stmt;
-
-		foreach(fc, sel->fromClause)
-		{
-			Node	   *n = lfirst(fc);
-
-			if (IsA(n, RangeVar))
-			{
-				RangeVar   *rv = (RangeVar *) n;
-				Oid			relid;
-
-				relid = RangeVarGetRelid(rv, NoLock, true);
-				if (OidIsValid(relid) && count < max_tables)
-					table_oids[count++] = relid;
-			}
-			else if (IsA(n, JoinExpr))
-			{
-				JoinExpr   *j = (JoinExpr *) n;
-
-				if (IsA(j->larg, RangeVar))
-				{
-					RangeVar *rv = (RangeVar *) j->larg;
-					Oid relid = RangeVarGetRelid(rv, NoLock, true);
-					if (OidIsValid(relid) && count < max_tables)
-						table_oids[count++] = relid;
-				}
-				if (IsA(j->rarg, RangeVar))
-				{
-					RangeVar *rv = (RangeVar *) j->rarg;
-					Oid relid = RangeVarGetRelid(rv, NoLock, true);
-					if (OidIsValid(relid) && count < max_tables)
-						table_oids[count++] = relid;
-				}
-			}
-		}
+		if (IsA(rawstmt->stmt, SelectStmt))
+			pgr_extract_from_select((SelectStmt *) rawstmt->stmt, &ctx);
 	}
 
-	return count;
+	/* If SELECT * was used, mark all tables as all-columns */
+	if (ctx.has_star)
+	{
+		for (i = 0; i < ctx.count; i++)
+			ctx.col_masks[i] = PGR_COL_MASK_ALL;
+	}
+
+	return ctx.count;
 }
 
 /*
@@ -97,7 +398,9 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	char	   *query_id = text_to_cstring(query_id_text);
 	char	   *query_str = text_to_cstring(query_text);
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
+	uint64		col_masks[PGR_MAX_DEPS_PER_QUERY];
 	int			num_tables;
+	PgrEvictedInfo evicted;
 	StringInfoData buf;
 
 	/* Validate query_id length */
@@ -107,9 +410,17 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 				 errmsg("query_id too long (max %d characters)",
 						PGR_QUERY_ID_LEN - 1)));
 
-	/* Parse the query to extract table references */
-	num_tables = pgr_extract_tables(query_str, table_oids,
-									PGR_MAX_DEPS_PER_QUERY);
+	/* Validate query text length */
+	if (strlen(query_str) >= PGR_QUERY_TEXT_LEN)
+		ereport(ERROR,
+				(errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
+				 errmsg("query text too long (%zu bytes, max %d)",
+						strlen(query_str), PGR_QUERY_TEXT_LEN - 1),
+				 errhint("Simplify the query or recompile with a larger PGR_QUERY_TEXT_LEN.")));
+
+	/* Parse the query to extract table references and column bitmasks */
+	num_tables = pgr_extract_deps(query_str, table_oids, col_masks,
+								  PGR_MAX_DEPS_PER_QUERY);
 
 	if (num_tables == 0)
 		ereport(ERROR,
@@ -120,16 +431,45 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	 * if the query is invalid (before we touch shared memory). */
 	pgr_snapshot_create(query_id, query_str);
 
-	/* Register in shared memory (only after snapshot succeeds) */
-	pgr_dep_add(query_id, query_str, table_oids, num_tables);
+	/* Register in shared memory (only after snapshot succeeds).
+	 * If shmem is full, pgr_dep_add evicts the oldest entry. */
+	pgr_dep_add(query_id, query_str, table_oids, col_masks, num_tables,
+				&evicted);
 
-	/* Install triggers on any tables that don't have them yet */
+	/* Clean up evicted subscription if one was evicted */
+	if (evicted.evicted)
+	{
+		int		i;
+		char	dummy[1][PGR_QUERY_ID_LEN];
+
+		/* Drop the evicted subscription's snapshot table */
+		pgr_snapshot_drop(evicted.query_id);
+
+		/* Remove its per-query UPDATE triggers and clean up base triggers */
+		for (i = 0; i < evicted.num_tables; i++)
+		{
+			int remaining;
+
+			pgr_remove_update_trigger(evicted.table_oids[i],
+									  evicted.query_id);
+			remaining = pgr_dep_find_by_table(evicted.table_oids[i],
+											  dummy, 1);
+			if (remaining == 0)
+				pgr_remove_triggers(evicted.table_oids[i]);
+		}
+	}
+
+	/* Install triggers on any tables that don't have them yet.
+	 * For UPDATE triggers, install per-query column-specific triggers. */
 	{
 		int		i;
 		for (i = 0; i < num_tables; i++)
 		{
 			if (!pgr_has_triggers(table_oids[i]))
 				pgr_install_triggers(table_oids[i]);
+			/* Install per-query UPDATE trigger with column list */
+			pgr_install_update_trigger(table_oids[i], query_id,
+									   col_masks[i]);
 		}
 	}
 
@@ -171,7 +511,7 @@ pgr_unsubscribe(PG_FUNCTION_ARGS)
 	if (found)
 		pgr_snapshot_drop(query_id);
 
-	/* Check if any remaining subscriptions reference these tables */
+	/* Remove per-query UPDATE triggers and check if base triggers can go */
 	if (found)
 	{
 		int		i;
@@ -179,7 +519,14 @@ pgr_unsubscribe(PG_FUNCTION_ARGS)
 
 		for (i = 0; i < num_tables; i++)
 		{
-			int remaining = pgr_dep_find_by_table(table_oids[i], dummy, 1);
+			int remaining;
+
+			/* Remove the per-query UPDATE trigger */
+			pgr_remove_update_trigger(table_oids[i], query_id);
+
+			/* If no remaining subscriptions reference this table,
+			 * remove the base INSERT/DELETE triggers too */
+			remaining = pgr_dep_find_by_table(table_oids[i], dummy, 1);
 			if (remaining == 0)
 				pgr_remove_triggers(table_oids[i]);
 		}
@@ -281,7 +628,7 @@ pgr_stats(PG_FUNCTION_ARGS)
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "value",
 						   TEXTOID, -1, 0);
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
-		funcctx->max_calls = 5;
+		funcctx->max_calls = 6;
 		funcctx->call_cntr = 0;
 
 		MemoryContextSwitchTo(oldcontext);
@@ -326,6 +673,11 @@ pgr_stats(PG_FUNCTION_ARGS)
 				values[0] = CStringGetTextDatum("total_invalidations");
 				snprintf(valbuf, sizeof(valbuf), "%ld",
 						 pgr_state->invalidation_count);
+				break;
+			case 5:
+				values[0] = CStringGetTextDatum("total_evictions");
+				snprintf(valbuf, sizeof(valbuf), "%ld",
+						 pgr_state->eviction_count);
 				break;
 			default:
 				LWLockRelease(pgr_state->lock);

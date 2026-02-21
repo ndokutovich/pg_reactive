@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { LiveQuery, Delta } from "./index.js";
+import { LiveQuery, Delta, createClient } from "./index.js";
 
 // Mock WebSocket
 class MockWebSocket {
@@ -182,5 +182,41 @@ describe("LiveQuery", () => {
     expect(lq.snapshot).toEqual([{ id: 1 }]);
 
     lq.close();
+  });
+});
+
+describe("createClient", () => {
+  it("creates multiple subscriptions with shared options", async () => {
+    const client = createClient({ url: "ws://127.0.0.1:8080", token: "abc" });
+
+    const lq1 = client.subscribe("q1");
+    const lq2 = client.subscribe("q2");
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(MockWebSocket.instances[0].url).toBe(
+      "ws://127.0.0.1:8080/ws/q1?token=abc",
+    );
+    expect(MockWebSocket.instances[1].url).toBe(
+      "ws://127.0.0.1:8080/ws/q2?token=abc",
+    );
+
+    expect(lq1.queryId).toBe("q1");
+    expect(lq2.queryId).toBe("q2");
+
+    client.close();
+  });
+
+  it("close() closes all subscriptions", async () => {
+    const client = createClient({ url: "ws://127.0.0.1:8080" });
+    const lq1 = client.subscribe("q1");
+    const lq2 = client.subscribe("q2");
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    client.close();
+
+    // Both WebSockets should be closed
+    expect(MockWebSocket.instances[0].readyState).toBe(3);
+    expect(MockWebSocket.instances[1].readyState).toBe(3);
   });
 });

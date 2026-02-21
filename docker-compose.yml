@@ -12,6 +12,7 @@ services:
       - "15432:5432"
     volumes:
       - ./ext:/ext/ext
+      - ./tests:/ext/tests
     command: >
       postgres
         -c shared_preload_libraries=pg_reactive
@@ -31,6 +32,7 @@ services:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
       RUST_LOG: pg_reactive_proxy=info
+      JWT_SECRET: ${JWT_SECRET:-}
     ports:
       - "8080:8080"
     depends_on:

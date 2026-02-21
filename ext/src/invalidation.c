@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "access/relation.h"
 #include "access/xact.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
@@ -199,6 +200,9 @@ pgr_clear_dirty(void)
  * C trigger function: installed on tracked tables as AFTER INSERT/UPDATE/DELETE
  * FOR EACH STATEMENT. Looks up which queries depend on the modified table and
  * marks them dirty.
+ *
+ * Per-query UPDATE triggers pass query_id as first argument to avoid
+ * double-counting when multiple per-query triggers fire on the same table.
  */
 PG_FUNCTION_INFO_V1(pgr_trigger_func);
 Datum
@@ -212,8 +216,23 @@ pgr_trigger_func(PG_FUNCTION_ARGS)
 
 	table_oid = RelationGetRelid(trigdata->tg_relation);
 
-	/* Update invalidation stats */
-	pgr_invalidate_table(table_oid);
+	if (trigdata->tg_trigger->tgnargs > 0)
+	{
+		/* Per-query UPDATE trigger: only invalidate the specific query */
+		const char *query_id = trigdata->tg_trigger->tgargs[0];
+
+		pgr_mark_dirty(query_id);
+
+		/* Update shared stats */
+		LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
+		pgr_state->invalidation_count++;
+		LWLockRelease(pgr_state->lock);
+	}
+	else
+	{
+		/* Base INSERT/DELETE trigger: invalidate all queries for this table */
+		pgr_invalidate_table(table_oid);
+	}
 
 	if (pgr_async_recompute)
 	{
@@ -240,8 +259,9 @@ pgr_trigger_func(PG_FUNCTION_ARGS)
 }
 
 /*
- * Install AFTER statement-level triggers on a table.
- * Creates three triggers: INSERT, UPDATE, DELETE.
+ * Install base AFTER statement-level triggers on a table.
+ * Creates two triggers: INSERT, DELETE.
+ * UPDATE triggers are per-query (with column lists) and installed separately.
  */
 void
 pgr_install_triggers(Oid table_oid)
@@ -279,22 +299,6 @@ pgr_install_triggers(Oid table_oid)
 		elog(WARNING, "pg_reactive: failed to install INSERT trigger on %s.%s",
 			 nspname, relname);
 
-	/* UPDATE trigger */
-	resetStringInfo(&buf);
-	appendStringInfo(&buf,
-		"CREATE TRIGGER pgr_upd_%u "
-		"AFTER UPDATE ON %s.%s "
-		"FOR EACH STATEMENT "
-		"EXECUTE FUNCTION pgr.trigger_func()",
-		table_oid,
-		quote_identifier(nspname),
-		quote_identifier(relname));
-
-	ret = SPI_execute(buf.data, false, 0);
-	if (ret != SPI_OK_UTILITY)
-		elog(WARNING, "pg_reactive: failed to install UPDATE trigger on %s.%s",
-			 nspname, relname);
-
 	/* DELETE trigger */
 	resetStringInfo(&buf);
 	appendStringInfo(&buf,
@@ -319,7 +323,159 @@ pgr_install_triggers(Oid table_oid)
 }
 
 /*
- * Remove pg_reactive triggers from a table.
+ * Install a per-query UPDATE trigger with AFTER UPDATE OF <columns>.
+ * If col_mask == PGR_COL_MASK_ALL or 0, creates AFTER UPDATE (all columns).
+ * Trigger name: pgr_upd_<tableoid>_<queryid>
+ */
+void
+pgr_install_update_trigger(Oid table_oid, const char *query_id,
+						   uint64 col_mask)
+{
+	char	   *relname;
+	char	   *nspname;
+	StringInfoData buf;
+	int			ret;
+
+	relname = get_rel_name(table_oid);
+	nspname = get_namespace_name(get_rel_namespace(table_oid));
+
+	if (relname == NULL || nspname == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_TABLE),
+				 errmsg("pg_reactive: table OID %u not found", table_oid)));
+
+	/* Allocate buffer before SPI_connect so it survives SPI_finish(). */
+	initStringInfo(&buf);
+
+	if (col_mask == PGR_COL_MASK_ALL || col_mask == 0)
+	{
+		/* All columns — plain AFTER UPDATE */
+		appendStringInfo(&buf,
+			"CREATE TRIGGER pgr_upd_%u_%s "
+			"AFTER UPDATE ON %s.%s "
+			"FOR EACH STATEMENT "
+			"EXECUTE FUNCTION pgr.trigger_func('%s')",
+			table_oid, query_id,
+			quote_identifier(nspname),
+			quote_identifier(relname),
+			query_id);
+	}
+	else
+	{
+		/* Column-specific: AFTER UPDATE OF col1, col2, ... */
+		Relation	rel;
+		TupleDesc	tupdesc;
+		StringInfoData collist;
+		bool		first = true;
+		int			j;
+
+		rel = relation_open(table_oid, AccessShareLock);
+		tupdesc = RelationGetDescr(rel);
+
+		initStringInfo(&collist);
+
+		for (j = 0; j < tupdesc->natts; j++)
+		{
+			Form_pg_attribute att = TupleDescAttr(tupdesc, j);
+
+			if (att->attisdropped)
+				continue;
+
+			/* Check if this column's bit is set (bit 0 = attnum 1) */
+			if (att->attnum <= 64 &&
+				(col_mask & ((uint64) 1 << (att->attnum - 1))) != 0)
+			{
+				if (!first)
+					appendStringInfoString(&collist, ", ");
+				appendStringInfoString(&collist,
+									   quote_identifier(NameStr(att->attname)));
+				first = false;
+			}
+		}
+
+		relation_close(rel, AccessShareLock);
+
+		if (first)
+		{
+			/* No columns matched — fall back to all columns */
+			appendStringInfo(&buf,
+				"CREATE TRIGGER pgr_upd_%u_%s "
+				"AFTER UPDATE ON %s.%s "
+				"FOR EACH STATEMENT "
+				"EXECUTE FUNCTION pgr.trigger_func('%s')",
+				table_oid, query_id,
+				quote_identifier(nspname),
+				quote_identifier(relname),
+				query_id);
+		}
+		else
+		{
+			appendStringInfo(&buf,
+				"CREATE TRIGGER pgr_upd_%u_%s "
+				"AFTER UPDATE OF %s ON %s.%s "
+				"FOR EACH STATEMENT "
+				"EXECUTE FUNCTION pgr.trigger_func('%s')",
+				table_oid, query_id,
+				collist.data,
+				quote_identifier(nspname),
+				quote_identifier(relname),
+				query_id);
+		}
+
+		pfree(collist.data);
+	}
+
+	SPI_connect();
+
+	ret = SPI_execute(buf.data, false, 0);
+	if (ret != SPI_OK_UTILITY)
+		elog(WARNING, "pg_reactive: failed to install UPDATE trigger pgr_upd_%u_%s on %s.%s",
+			 table_oid, query_id, nspname, relname);
+
+	SPI_finish();
+	pfree(buf.data);
+
+	elog(DEBUG1, "pg_reactive: installed UPDATE trigger pgr_upd_%u_%s on %s.%s",
+		 table_oid, query_id, nspname, relname);
+}
+
+/*
+ * Remove a per-query UPDATE trigger.
+ */
+void
+pgr_remove_update_trigger(Oid table_oid, const char *query_id)
+{
+	char	   *relname;
+	char	   *nspname;
+	StringInfoData buf;
+
+	relname = get_rel_name(table_oid);
+	nspname = get_namespace_name(get_rel_namespace(table_oid));
+
+	if (relname == NULL || nspname == NULL)
+		return;		/* table may have been dropped */
+
+	/* Allocate buffer before SPI_connect so it survives SPI_finish(). */
+	initStringInfo(&buf);
+
+	appendStringInfo(&buf,
+		"DROP TRIGGER IF EXISTS pgr_upd_%u_%s ON %s.%s",
+		table_oid, query_id,
+		quote_identifier(nspname),
+		quote_identifier(relname));
+
+	SPI_connect();
+	SPI_execute(buf.data, false, 0);
+	SPI_finish();
+	pfree(buf.data);
+
+	elog(DEBUG1, "pg_reactive: removed UPDATE trigger pgr_upd_%u_%s from %s.%s",
+		 table_oid, query_id, nspname, relname);
+}
+
+/*
+ * Remove base pg_reactive triggers (INSERT/DELETE) from a table.
+ * Per-query UPDATE triggers are removed separately via pgr_remove_update_trigger().
  */
 void
 pgr_remove_triggers(Oid table_oid)
@@ -341,14 +497,6 @@ pgr_remove_triggers(Oid table_oid)
 
 	appendStringInfo(&buf,
 		"DROP TRIGGER IF EXISTS pgr_ins_%u ON %s.%s",
-		table_oid,
-		quote_identifier(nspname),
-		quote_identifier(relname));
-	SPI_execute(buf.data, false, 0);
-
-	resetStringInfo(&buf);
-	appendStringInfo(&buf,
-		"DROP TRIGGER IF EXISTS pgr_upd_%u ON %s.%s",
 		table_oid,
 		quote_identifier(nspname),
 		quote_identifier(relname));
@@ -459,6 +607,33 @@ pgr_ProcessUtility(PlannedStmt *pstmt,
 						if (OidIsValid(relid))
 							pgr_invalidate_table(relid);
 					}
+				}
+			}
+			break;
+
+		case T_AlterTableStmt:
+			{
+				AlterTableStmt *stmt = (AlterTableStmt *) parsetree;
+				Oid		relid = RangeVarGetRelid(stmt->relation, NoLock, true);
+
+				if (OidIsValid(relid))
+					pgr_invalidate_table(relid);
+			}
+			break;
+
+		case T_RenameStmt:
+			{
+				RenameStmt *stmt = (RenameStmt *) parsetree;
+
+				if (stmt->relation != NULL &&
+					(stmt->renameType == OBJECT_TABLE ||
+					 stmt->renameType == OBJECT_COLUMN))
+				{
+					Oid		relid = RangeVarGetRelid(stmt->relation,
+													  NoLock, true);
+
+					if (OidIsValid(relid))
+						pgr_invalidate_table(relid);
 				}
 			}
 			break;

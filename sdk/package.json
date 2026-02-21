@@ -13,6 +13,10 @@
     "./react": {
       "import": "./dist/react.js",
       "types": "./dist/react.d.ts"
+    },
+    "./server": {
+      "import": "./dist/server.js",
+      "types": "./dist/server.d.ts"
     }
   },
   "scripts": {
@@ -22,14 +26,21 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "^8.16.0",
+    "@types/react": "^19.2.14",
+    "pg": "^8.18.0",
     "typescript": "^5.4",
     "vitest": "^2.0",
     "ws": "^8.19.0"
   },
   "peerDependencies": {
+    "pg": ">=8",
     "react": ">=18"
   },
   "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    },
     "react": {
       "optional": true
     }

@@ -6,14 +6,21 @@
 /* Maximum dirty queries per transaction */
 #define PGR_MAX_DIRTY 256
 
-/* Install AFTER triggers on a table for DML interception */
+/* Install base AFTER triggers (INSERT/DELETE) on a table */
 extern void pgr_install_triggers(Oid table_oid);
 
-/* Remove pg_reactive triggers from a table */
+/* Remove base pg_reactive triggers (INSERT/DELETE) from a table */
 extern void pgr_remove_triggers(Oid table_oid);
 
-/* Check if pg_reactive triggers exist on a table */
+/* Check if pg_reactive base triggers exist on a table */
 extern bool pgr_has_triggers(Oid table_oid);
+
+/* Install per-query UPDATE trigger with column list */
+extern void pgr_install_update_trigger(Oid table_oid, const char *query_id,
+										uint64 col_mask);
+
+/* Remove per-query UPDATE trigger */
+extern void pgr_remove_update_trigger(Oid table_oid, const char *query_id);
 
 /* Install the ProcessUtility hook for DDL interception */
 extern void pgr_invalidation_init_hooks(void);

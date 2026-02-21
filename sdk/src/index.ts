@@ -35,6 +35,9 @@ export interface LiveQueryClientOptions {
   /** WebSocket proxy URL, e.g. "ws://127.0.0.1:8080" */
   url: string;
 
+  /** JWT token for authentication (passed as ?token= query param) */
+  token?: string;
+
   /** Reconnect delay in ms (default: 1000). Uses exponential backoff with jitter. */
   reconnectDelay?: number;
 
@@ -64,7 +67,8 @@ export class LiveQuery {
 
   constructor(queryId: string, options: LiveQueryClientOptions) {
     this.queryId = queryId;
-    this.url = `${options.url}/ws/${queryId}`;
+    const tokenParam = options.token ? `?token=${encodeURIComponent(options.token)}` : "";
+    this.url = `${options.url}/ws/${queryId}${tokenParam}`;
     this.reconnectDelay = options.reconnectDelay ?? 1000;
     this.maxReconnectDelay = options.maxReconnectDelay ?? 30000;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? Infinity;
@@ -203,4 +207,46 @@ export function subscribe(
   options: LiveQueryClientOptions,
 ): LiveQuery {
   return new LiveQuery(queryId, options);
+}
+
+/**
+ * A client that manages multiple live query subscriptions with shared options.
+ */
+export interface LiveQueryClient {
+  /** Subscribe to a live query by ID */
+  subscribe(queryId: string): LiveQuery;
+
+  /** Close all active subscriptions */
+  close(): void;
+}
+
+/**
+ * Create a client that manages multiple live queries with shared connection options.
+ *
+ * @example
+ * ```ts
+ * const client = createClient({ url: "ws://127.0.0.1:8080", token: "..." });
+ * const orders = client.subscribe("orders_q");
+ * const users = client.subscribe("users_q");
+ * // later:
+ * client.close(); // closes all
+ * ```
+ */
+export function createClient(options: LiveQueryClientOptions): LiveQueryClient {
+  const queries: LiveQuery[] = [];
+
+  return {
+    subscribe(queryId: string): LiveQuery {
+      const lq = new LiveQuery(queryId, options);
+      queries.push(lq);
+      return lq;
+    },
+
+    close(): void {
+      for (const lq of queries) {
+        lq.close();
+      }
+      queries.length = 0;
+    },
+  };
 }

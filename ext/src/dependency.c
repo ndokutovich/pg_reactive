@@ -70,6 +70,7 @@ pgr_shmem_startup(void)
 		pgr_state->subscribe_count = 0;
 		pgr_state->unsubscribe_count = 0;
 		pgr_state->invalidation_count = 0;
+		pgr_state->eviction_count = 0;
 	}
 
 	/* Initialize dependency hash table */
@@ -91,15 +92,20 @@ pgr_shmem_startup(void)
 
 /*
  * Add or update a dependency entry.
- * Returns the entry, or NULL on failure (hash table full).
+ * If the hash table is full, evicts the oldest entry (by subscribed_at)
+ * and fills evicted info for caller cleanup.
  */
 PgrDepEntry *
 pgr_dep_add(const char *query_id, const char *query_text,
-			Oid *table_oids, int num_tables)
+			Oid *table_oids, uint64 *col_masks, int num_tables,
+			PgrEvictedInfo *evicted)
 {
 	PgrDepEntry *entry;
 	bool		found;
 	char		key[PGR_QUERY_ID_LEN];
+
+	if (evicted)
+		evicted->evicted = false;
 
 	if (num_tables > PGR_MAX_DEPS_PER_QUERY)
 		ereport(ERROR,
@@ -113,23 +119,71 @@ pgr_dep_add(const char *query_id, const char *query_text,
 
 	LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
 
+	/*
+	 * Check if key already exists — if so, we can update in place
+	 * without worrying about capacity.
+	 */
 	entry = (PgrDepEntry *) hash_search(pgr_dep_hash, key,
-										HASH_ENTER_NULL, &found);
+										HASH_FIND, &found);
 
-	if (entry == NULL)
+	if (!found &&
+		hash_get_num_entries(pgr_dep_hash) >= (long) pgr_max_subscriptions)
 	{
-		LWLockRelease(pgr_state->lock);
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("pg_reactive: max subscriptions (%d) reached",
-						pgr_max_subscriptions)));
+		/* At capacity and this is a new key — evict oldest entry */
+		HASH_SEQ_STATUS seq;
+		PgrDepEntry *oldest = NULL;
+		PgrDepEntry *scan;
+		char		evict_key[PGR_QUERY_ID_LEN];
+
+		hash_seq_init(&seq, pgr_dep_hash);
+		while ((scan = hash_seq_search(&seq)) != NULL)
+		{
+			if (oldest == NULL ||
+				scan->subscribed_at < oldest->subscribed_at)
+				oldest = scan;
+		}
+
+		if (oldest == NULL)
+		{
+			/* Shouldn't happen — table is full but no entries? */
+			LWLockRelease(pgr_state->lock);
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+					 errmsg("pg_reactive: max subscriptions (%d) reached",
+							pgr_max_subscriptions)));
+		}
+
+		/* Save evicted info for caller cleanup */
+		if (evicted)
+		{
+			evicted->evicted = true;
+			strlcpy(evicted->query_id, oldest->query_id, PGR_QUERY_ID_LEN);
+			evicted->num_tables = oldest->num_tables;
+			memcpy(evicted->table_oids, oldest->table_oids,
+				   oldest->num_tables * sizeof(Oid));
+		}
+
+		/* Remove the oldest entry */
+		memset(evict_key, 0, PGR_QUERY_ID_LEN);
+		strlcpy(evict_key, oldest->query_id, PGR_QUERY_ID_LEN);
+		hash_search(pgr_dep_hash, evict_key, HASH_REMOVE, NULL);
+		pgr_state->eviction_count++;
+
+		elog(LOG, "pg_reactive: evicted oldest subscription '%s'",
+			 evict_key);
 	}
+
+	/* Insert or find the entry */
+	entry = (PgrDepEntry *) hash_search(pgr_dep_hash, key,
+										HASH_ENTER, &found);
 
 	/* Fill or update the entry */
 	strlcpy(entry->query_text, query_text, PGR_QUERY_TEXT_LEN);
 	entry->num_tables = num_tables;
 	memset(entry->table_oids, 0, sizeof(entry->table_oids));
 	memcpy(entry->table_oids, table_oids, num_tables * sizeof(Oid));
+	memset(entry->col_masks, 0, sizeof(entry->col_masks));
+	memcpy(entry->col_masks, col_masks, num_tables * sizeof(uint64));
 
 	if (!found)
 	{
