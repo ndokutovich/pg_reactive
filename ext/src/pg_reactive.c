@@ -492,18 +492,13 @@ pgr_unsubscribe(PG_FUNCTION_ARGS)
 {
 	text	   *query_id_text = PG_GETARG_TEXT_PP(0);
 	char	   *query_id = text_to_cstring(query_id_text);
-	PgrDepEntry *entry;
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
 	int			num_tables = 0;
 	bool		found;
 
-	/* Before removing, save the table OIDs so we can check trigger cleanup */
-	entry = pgr_dep_find(query_id);
-	if (entry != NULL)
-	{
-		num_tables = entry->num_tables;
-		memcpy(table_oids, entry->table_oids, num_tables * sizeof(Oid));
-	}
+	/* Copy table OIDs under lock before removing (avoids race with eviction) */
+	num_tables = pgr_dep_copy_tables(query_id, table_oids,
+									 PGR_MAX_DEPS_PER_QUERY);
 
 	found = pgr_dep_remove(query_id);
 

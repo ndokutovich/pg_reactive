@@ -26,11 +26,13 @@ static ProcessUtility_hook_type prev_ProcessUtility = NULL;
 /*
  * Per-transaction dirty list. Tracks query_ids that need recompute.
  * Allocated in TopTransactionContext, freed automatically on xact end.
+ * Grows dynamically — no fixed upper limit.
  */
 typedef struct PgrDirtyList
 {
 	int		count;
-	char	query_ids[PGR_MAX_DIRTY][PGR_QUERY_ID_LEN];
+	int		capacity;
+	char	(*query_ids)[PGR_QUERY_ID_LEN];	/* palloc'd array */
 } PgrDirtyList;
 
 /*
@@ -62,13 +64,18 @@ pgr_ensure_dirty_list(void)
 	if (dirty_list == NULL)
 	{
 		MemoryContext old = MemoryContextSwitchTo(TopTransactionContext);
+
 		dirty_list = palloc0(sizeof(PgrDirtyList));
+		dirty_list->capacity = PGR_MAX_DIRTY;
+		dirty_list->query_ids = palloc(dirty_list->capacity * PGR_QUERY_ID_LEN);
+
 		MemoryContextSwitchTo(old);
 	}
 }
 
 /*
  * Add a query_id to the dirty list if not already present.
+ * Grows dynamically if needed.
  */
 static void
 pgr_mark_dirty(const char *query_id)
@@ -84,17 +91,21 @@ pgr_mark_dirty(const char *query_id)
 			return;
 	}
 
-	if (dirty_list->count < PGR_MAX_DIRTY)
+	/* Grow if needed */
+	if (dirty_list->count >= dirty_list->capacity)
 	{
-		strlcpy(dirty_list->query_ids[dirty_list->count],
-				query_id, PGR_QUERY_ID_LEN);
-		dirty_list->count++;
+		MemoryContext old = MemoryContextSwitchTo(TopTransactionContext);
+
+		dirty_list->capacity *= 2;
+		dirty_list->query_ids = repalloc(dirty_list->query_ids,
+										 dirty_list->capacity * PGR_QUERY_ID_LEN);
+
+		MemoryContextSwitchTo(old);
 	}
-	else
-	{
-		elog(WARNING, "pg_reactive: dirty list overflow (max %d), some queries may not be refreshed",
-			 PGR_MAX_DIRTY);
-	}
+
+	strlcpy(dirty_list->query_ids[dirty_list->count],
+			query_id, PGR_QUERY_ID_LEN);
+	dirty_list->count++;
 }
 
 /*

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { LiveQuery, Delta, createClient } from "./index.js";
+import { LiveQuery, Delta, Overflow, createClient } from "./index.js";
 
 // Mock WebSocket
 class MockWebSocket {
@@ -180,6 +180,37 @@ describe("LiveQuery", () => {
 
     // But snapshot is still updated (internal)
     expect(lq.snapshot).toEqual([{ id: 1 }]);
+
+    lq.close();
+  });
+
+  it("handles overflow by clearing snapshot and emitting event", async () => {
+    const lq = new LiveQuery("q1", { url: "ws://127.0.0.1:8080" });
+    const overflows: Overflow[] = [];
+    lq.on((event, data) => {
+      if (event === "overflow") overflows.push(data as Overflow);
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    const ws = MockWebSocket.instances[0];
+
+    // First, add some rows
+    ws.simulateMessage(
+      JSON.stringify({ query_id: "q1", inserted: [{ id: 1 }, { id: 2 }], deleted: [] }),
+    );
+    expect(lq.snapshot).toHaveLength(2);
+
+    // Simulate overflow message
+    ws.simulateMessage(
+      JSON.stringify({ type: "overflow", query_id: "q1", fetch: true }),
+    );
+
+    // Snapshot should be cleared
+    expect(lq.snapshot).toEqual([]);
+    // Overflow event should be emitted
+    expect(overflows).toHaveLength(1);
+    expect(overflows[0].query_id).toBe("q1");
+    expect(overflows[0].fetch).toBe(true);
 
     lq.close();
   });

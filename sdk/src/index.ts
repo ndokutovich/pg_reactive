@@ -27,9 +27,14 @@ export interface LiveQueryMessage {
   fetch?: boolean;
 }
 
-export type LiveQueryEventType = "delta" | "connected" | "disconnected" | "error";
+export interface Overflow {
+  query_id: string;
+  fetch: boolean;
+}
 
-export type LiveQueryListener = (event: LiveQueryEventType, data?: Delta | Error) => void;
+export type LiveQueryEventType = "delta" | "overflow" | "connected" | "disconnected" | "error";
+
+export type LiveQueryListener = (event: LiveQueryEventType, data?: Delta | Overflow | Error) => void;
 
 export interface LiveQueryClientOptions {
   /** WebSocket proxy URL, e.g. "ws://127.0.0.1:8080" */
@@ -145,6 +150,13 @@ export class LiveQuery {
     }
 
     if (msg.query_id !== this.queryId) return;
+
+    // Overflow: payload was too large or client lagged, clear local snapshot
+    if (msg.type === "overflow") {
+      this.rows = [];
+      this.emit("overflow", { query_id: msg.query_id, fetch: msg.fetch ?? true });
+      return;
+    }
 
     // Delta messages are flat: {query_id, inserted, deleted}
     if (msg.inserted || msg.deleted) {

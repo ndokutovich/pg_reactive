@@ -77,6 +77,8 @@ extern PgrDepEntry *pgr_dep_add(const char *query_id, const char *query_text,
 								PgrEvictedInfo *evicted);
 extern bool pgr_dep_remove(const char *query_id);
 extern PgrDepEntry *pgr_dep_find(const char *query_id);
+extern int pgr_dep_copy_tables(const char *query_id, Oid *table_oids,
+							   int max_tables);
 extern int pgr_dep_find_by_table(Oid table_oid, char query_ids[][PGR_QUERY_ID_LEN],
 								 int max_results);
 extern int pgr_dep_count(void);

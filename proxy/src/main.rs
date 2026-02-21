@@ -8,7 +8,7 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, RwLock, Semaphore};
 use tracing::{error, info, warn};
 
 /// Per-channel broadcast sender. One PG LISTEN channel -> N WebSocket clients.
@@ -66,10 +66,19 @@ async fn main() {
     });
 
     // Start the HTTP/WebSocket server
+    let max_connections: usize = std::env::var("MAX_CONNECTIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10000);
+    let semaphore = Arc::new(Semaphore::new(max_connections));
+
     let listener = TcpListener::bind(listen_addr)
         .await
         .expect("failed to bind");
-    info!("pg_reactive proxy listening on {}", listen_addr);
+    info!(
+        "pg_reactive proxy listening on {} (max_connections={})",
+        listen_addr, max_connections
+    );
 
     loop {
         let (stream, addr) = match listener.accept().await {
@@ -80,9 +89,19 @@ async fn main() {
             }
         };
 
+        let permit = match semaphore.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                warn!("connection limit reached, rejecting {}", addr);
+                drop(stream);
+                continue;
+            }
+        };
+
         let state = state.clone();
         tokio::spawn(async move {
             handle_connection(stream, addr, state).await;
+            drop(permit);
         });
     }
 }
@@ -262,8 +281,19 @@ async fn handle_request(
             }
 
             // Perform the upgrade
-            let (response, ws_future) =
-                hyper_tungstenite_upgrade::upgrade(req).expect("upgrade failed");
+            let (response, ws_future) = match hyper_tungstenite_upgrade::upgrade(req)
+            {
+                Ok(pair) => pair,
+                Err(e) => {
+                    warn!("websocket upgrade failed from {}: {}", addr, e);
+                    return Ok(Response::builder()
+                        .status(400)
+                        .body(http_body_util::Full::new(hyper::body::Bytes::from(
+                            r#"{"error":"websocket upgrade failed"}"#,
+                        )))
+                        .unwrap());
+                }
+            };
 
             let channels = state.channels.clone();
             tokio::spawn(async move {
@@ -339,7 +369,17 @@ async fn handle_websocket(
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("client {} lagged by {} messages", addr, n);
+                        warn!("client {} lagged by {} messages, sending overflow", addr, n);
+                        let overflow = serde_json::json!({
+                            "type": "overflow",
+                            "query_id": query_id,
+                            "fetch": true,
+                        });
+                        let _ = ws_tx.send(
+                            tokio_tungstenite::tungstenite::Message::Text(
+                                overflow.to_string().into(),
+                            )
+                        ).await;
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         info!("broadcast channel closed for {}", addr);
@@ -366,6 +406,17 @@ async fn handle_websocket(
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    // Clean up broadcast channel if no more subscribers
+    {
+        let mut channels_write = channels.write().await;
+        if let Some(tx) = channels_write.get(&query_id) {
+            if tx.receiver_count() == 0 {
+                channels_write.remove(&query_id);
+                info!("removed empty broadcast channel for query_id={}", query_id);
             }
         }
     }

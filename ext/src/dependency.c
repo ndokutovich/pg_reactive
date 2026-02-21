@@ -246,6 +246,38 @@ pgr_dep_find(const char *query_id)
 }
 
 /*
+ * Copy table OIDs for a given query_id into caller-provided arrays.
+ * Returns the number of tables, or 0 if not found.
+ * Holds the lock during the copy, so the data is consistent.
+ */
+int
+pgr_dep_copy_tables(const char *query_id, Oid *table_oids, int max_tables)
+{
+	PgrDepEntry *entry;
+	bool		found;
+	char		key[PGR_QUERY_ID_LEN];
+	int			num_tables = 0;
+
+	memset(key, 0, PGR_QUERY_ID_LEN);
+	strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+
+	LWLockAcquire(pgr_state->lock, LW_SHARED);
+
+	entry = (PgrDepEntry *) hash_search(pgr_dep_hash, key,
+										HASH_FIND, &found);
+	if (found && entry != NULL)
+	{
+		num_tables = entry->num_tables;
+		if (num_tables > max_tables)
+			num_tables = max_tables;
+		memcpy(table_oids, entry->table_oids, num_tables * sizeof(Oid));
+	}
+
+	LWLockRelease(pgr_state->lock);
+	return num_tables;
+}
+
+/*
  * Find all query_ids that depend on a given table.
  * Returns the count of matching queries.
  * query_ids must be pre-allocated with max_results slots.

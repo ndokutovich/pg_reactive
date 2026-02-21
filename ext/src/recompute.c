@@ -146,12 +146,18 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 	resetStringInfo(&sql);
 	appendStringInfo(&sql,
 					 "DELETE FROM %s", snap_name.data);
-	SPI_execute(sql.data, false, 0);
+	ret = SPI_execute(sql.data, false, 0);
+	if (ret < 0)
+		elog(WARNING, "pg_reactive: failed to clear snapshot %s (SPI error %d)",
+			 snap_name.data, ret);
 
 	resetStringInfo(&sql);
 	appendStringInfo(&sql,
 					 "INSERT INTO %s %s", snap_name.data, query_text);
-	SPI_execute(sql.data, false, 0);
+	ret = SPI_execute(sql.data, false, 0);
+	if (ret < 0)
+		elog(WARNING, "pg_reactive: failed to update snapshot %s (SPI error %d)",
+			 snap_name.data, ret);
 
 	/* Build result JSON */
 	initStringInfo(&result);
