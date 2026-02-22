@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Product Catalog — pg_reactive Example 1</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #39d353;
+    --red: #f85149;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ── Disconnected banner ── */
+  .disconnect-banner {
+    display: none;
+    background: var(--red);
+    color: #fff;
+    text-align: center;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .disconnect-banner.visible { display: block; }
+
+  /* ── Header ── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header .left { display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 20px; font-weight: 600; }
+  header .subtitle { color: var(--text-muted); font-size: 14px; }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--red);
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+  /* ── Product grid ── */
+  .grid-container { padding: 32px; }
+  .grid-container h2 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+
+  .product-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 16px;
+  }
+
+  .product-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+    animation: cardIn 0.4s ease-out both;
+  }
+  .product-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), #a371f7);
+    opacity: 0.7;
+  }
+  .product-card .name {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #fff;
+  }
+  .product-card .price {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--green);
+  }
+  .product-card .id-badge {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  /* Animations */
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .product-card.removing {
+    animation: cardOut 0.4s ease-in forwards;
+    background: rgba(248, 81, 73, 0.08);
+    border-color: var(--red);
+  }
+  @keyframes cardOut {
+    from { opacity: 1; transform: scale(1); }
+    to   { opacity: 0; transform: scale(0.95) translateY(8px); }
+  }
+
+  /* ── Empty state ── */
+  .empty-state {
+    text-align: center;
+    padding: 64px 16px;
+    color: var(--text-muted);
+  }
+
+  /* ── Collapsible sections ── */
+  .collapsible {
+    border-top: 1px solid var(--border);
+    margin: 0 32px;
+  }
+  .collapsible summary {
+    cursor: pointer;
+    padding: 16px 0;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--accent);
+    list-style: none;
+    user-select: none;
+  }
+  .collapsible summary::before {
+    content: '\25B6';
+    display: inline-block;
+    margin-right: 8px;
+    font-size: 10px;
+    transition: transform 0.2s;
+  }
+  .collapsible[open] summary::before { transform: rotate(90deg); }
+
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+  pre .comment { color: var(--text-muted); }
+  pre .keyword { color: #ff7b72; }
+  pre .string { color: #a5d6ff; }
+  pre .fn { color: #d2a8ff; }
+
+  .sdk-section { margin-bottom: 24px; }
+  .sdk-section h4 { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }
+
+  /* ── Footer ── */
+  footer {
+    padding: 24px 32px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div id="disconnect-banner" class="disconnect-banner">
+  Disconnected from server. Attempting to reconnect...
+</div>
+
+<header>
+  <div class="left">
+    <div id="status-dot" class="status-dot"></div>
+    <h1>Live Product Catalog</h1>
+  </div>
+  <span class="subtitle">pg_reactive Example 1</span>
+</header>
+
+<div class="grid-container">
+  <h2>Electronics (<span id="count">0</span> products)</h2>
+  <div id="product-grid" class="product-grid"></div>
+  <div id="empty-state" class="empty-state" style="display:none;">
+    Waiting for data...<br>
+    <small>Make sure docker compose is running and setup.sql has been executed.</small>
+  </div>
+</div>
+
+<details class="collapsible">
+  <summary>Demo Commands</summary>
+  <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+    Run these in a psql session connected to the database:
+    <code style="color: var(--accent); font-size: 12px;">docker compose exec -T db psql -U postgres -d pg_reactive_test</code>
+  </p>
+  <pre><span class="comment">-- Add a product (appears instantly)</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+<span class="keyword">VALUES</span> (<span class="string">'Webcam Pro'</span>, <span class="string">99.99</span>, <span class="string">'electronics'</span>);
+
+<span class="comment">-- Update a price (old card out, new card in)</span>
+<span class="keyword">UPDATE</span> products <span class="keyword">SET</span> price = <span class="string">89.99</span>
+<span class="keyword">WHERE</span> name = <span class="string">'Mechanical Keyboard'</span>;
+
+<span class="comment">-- Remove a product (fades out)</span>
+<span class="keyword">DELETE FROM</span> products
+<span class="keyword">WHERE</span> name = <span class="string">'Wireless Mouse'</span>;</pre>
+</details>
+
+<details class="collapsible">
+  <summary>SDK Equivalent</summary>
+  <div class="sdk-section">
+    <h4>React Hook</h4>
+    <pre><span class="keyword">import</span> { <span class="fn">useLiveQuery</span> } <span class="keyword">from</span> <span class="string">'pg-reactive/react'</span>;
+
+<span class="keyword">function</span> <span class="fn">ProductCatalog</span>() {
+  <span class="keyword">const</span> { rows, state } = <span class="fn">useLiveQuery</span>(<span class="string">'electronics'</span>, {
+    url: <span class="string">'ws://127.0.0.1:8080'</span>
+  });
+
+  <span class="keyword">return</span> (
+    &lt;div className=<span class="string">"grid"</span>&gt;
+      {rows.<span class="fn">map</span>(p =&gt; &lt;<span class="fn">ProductCard</span> key={p.id} product={p} /&gt;)}
+    &lt;/div&gt;
+  );
+}</pre>
+  </div>
+  <div class="sdk-section">
+    <h4>Vanilla JS (what this demo uses internally)</h4>
+    <pre><span class="keyword">const</span> ws = <span class="keyword">new</span> <span class="fn">WebSocket</span>(<span class="string">'ws://127.0.0.1:8080/ws/electronics'</span>);
+
+ws.<span class="fn">onmessage</span> = (e) =&gt; {
+  <span class="keyword">const</span> msg = JSON.<span class="fn">parse</span>(e.data);
+  <span class="keyword">if</span> (msg.inserted) applyDelta(msg);
+};</pre>
+  </div>
+</details>
+
+<footer>
+  pg_reactive &mdash; live queries for PostgreSQL
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var QUERY_ID = 'electronics';
+  var WS_URL = 'ws://127.0.0.1:8080/ws/' + QUERY_ID;
+
+  // ── State ──
+  var rows = [];
+  var ws = null;
+  var reconnectAttempts = 0;
+  var reconnectTimer = null;
+  var BASE_DELAY = 1000;
+  var MAX_DELAY = 30000;
+
+  // ── DOM refs ──
+  var grid = document.getElementById('product-grid');
+  var countEl = document.getElementById('count');
+  var emptyEl = document.getElementById('empty-state');
+  var statusDot = document.getElementById('status-dot');
+  var banner = document.getElementById('disconnect-banner');
+
+  // ── Rendering (safe DOM construction — no innerHTML with user data) ──
+
+  function formatPrice(v) {
+    var n = parseFloat(v);
+    return isNaN(n) ? '$0.00' : '$' + n.toFixed(2);
+  }
+
+  function createCard(row) {
+    var card = document.createElement('div');
+    card.className = 'product-card';
+    card.setAttribute('data-id', row.id);
+
+    var badge = document.createElement('span');
+    badge.className = 'id-badge';
+    badge.textContent = '#' + row.id;
+    card.appendChild(badge);
+
+    var nameEl = document.createElement('div');
+    nameEl.className = 'name';
+    nameEl.textContent = row.name;
+    card.appendChild(nameEl);
+
+    var priceEl = document.createElement('div');
+    priceEl.className = 'price';
+    priceEl.textContent = formatPrice(row.price);
+    card.appendChild(priceEl);
+
+    return card;
+  }
+
+  function renderAll() {
+    countEl.textContent = rows.length;
+    grid.textContent = '';
+    if (rows.length === 0) {
+      emptyEl.style.display = 'block';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    rows.forEach(function (row) {
+      grid.appendChild(createCard(row));
+    });
+  }
+
+  function animateInsert(row) {
+    grid.appendChild(createCard(row));
+  }
+
+  function animateRemove(id) {
+    var card = grid.querySelector('[data-id="' + id + '"]');
+    if (!card) return;
+    card.classList.add('removing');
+    card.addEventListener('animationend', function () {
+      card.remove();
+    });
+  }
+
+  // ── Delta application ──
+
+  function applyDelta(msg) {
+    var deleted = msg.deleted || [];
+    var inserted = msg.inserted || [];
+
+    // Build set of deleted ids for fast lookup
+    var deletedIds = {};
+    deleted.forEach(function (r) { deletedIds[r.id] = true; });
+
+    // Remove from state
+    rows = rows.filter(function (r) { return !deletedIds[r.id]; });
+
+    // Animate removals
+    deleted.forEach(function (r) { animateRemove(r.id); });
+
+    // Add new rows
+    inserted.forEach(function (r) {
+      rows.push(r);
+    });
+
+    // Short delay so removal animation starts before inserts appear
+    setTimeout(function () {
+      inserted.forEach(function (r) { animateInsert(r); });
+      countEl.textContent = rows.length;
+      emptyEl.style.display = rows.length === 0 ? 'block' : 'none';
+    }, 50);
+  }
+
+  // ── WebSocket ──
+
+  function connect() {
+    if (ws) {
+      try { ws.close(); } catch (e) { /* noop */ }
+    }
+
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = function () {
+      reconnectAttempts = 0;
+      statusDot.classList.add('connected');
+      banner.classList.remove('visible');
+    };
+
+    ws.onmessage = function (event) {
+      var msg;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+
+      if (msg.type === 'subscribed') {
+        // Welcome — connection confirmed. First delta will carry the full snapshot.
+        return;
+      }
+
+      if (msg.type === 'overflow') {
+        // Server says payload too big; clear and wait for next full delta
+        rows = [];
+        renderAll();
+        return;
+      }
+
+      if (msg.query_id === QUERY_ID && (msg.inserted || msg.deleted)) {
+        // First delta from server delivers the full snapshot (all existing rows
+        // appear as inserts, nothing deleted). Subsequent deltas are incremental.
+        if (rows.length === 0 && (!msg.deleted || msg.deleted.length === 0)) {
+          // Initial full snapshot — render all at once for a clean load
+          rows = msg.inserted || [];
+          renderAll();
+        } else {
+          applyDelta(msg);
+        }
+      }
+    };
+
+    ws.onclose = function () {
+      statusDot.classList.remove('connected');
+      banner.classList.add('visible');
+      scheduleReconnect();
+    };
+
+    ws.onerror = function () {
+      // onclose fires after onerror — reconnect handled there
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectAttempts++;
+    var delay = Math.min(
+      BASE_DELAY * Math.pow(2, reconnectAttempts - 1) + Math.random() * 500,
+      MAX_DELAY
+    );
+    reconnectTimer = setTimeout(connect, delay);
+  }
+
+  // ── Boot ──
+  emptyEl.style.display = 'block';
+  connect();
+})();
+</script>
+<script>
+window.DEMO_ACTIONS = [
+  { action: 'insert_product', label: 'Add Product' },
+  { action: 'update_price', label: 'Update Price' },
+  { action: 'delete_demo_product', label: 'Remove Demo Product' },
+];
+</script>
+<script src="/demo-panel.js"></script>
+</body>
+</html>

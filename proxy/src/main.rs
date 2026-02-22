@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
-use hyper::{Request, Response};
+use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioIo;
 use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 use tokio::net::TcpListener;
+use sqlx::PgPool;
 use tokio::sync::{broadcast, RwLock, Semaphore};
 use tracing::{error, info, warn};
 
@@ -30,6 +32,7 @@ struct AppState {
     channels: Channels,
     jwt_secret: Option<String>,
     pg_connected: Arc<AtomicBool>,
+    pg_pool: PgPool,
 }
 
 #[tokio::main]
@@ -48,12 +51,17 @@ async fn main() {
         .parse()
         .expect("invalid LISTEN_ADDR");
 
-    let jwt_secret = std::env::var("JWT_SECRET").ok();
+    let jwt_secret = std::env::var("JWT_SECRET").ok().filter(|s| !s.is_empty());
     if jwt_secret.is_some() {
         info!("JWT authentication enabled");
     } else {
         warn!("JWT_SECRET not set — authentication disabled");
     }
+
+    let pg_pool = PgPool::connect(&pg_url)
+        .await
+        .expect("failed to connect to PostgreSQL");
+    info!("PG connection pool ready");
 
     let channels: Channels = Arc::new(RwLock::new(HashMap::new()));
     let pg_connected = Arc::new(AtomicBool::new(false));
@@ -61,6 +69,7 @@ async fn main() {
         channels: channels.clone(),
         jwt_secret,
         pg_connected: pg_connected.clone(),
+        pg_pool,
     };
 
     // Spawn the PG LISTEN task
@@ -343,16 +352,25 @@ async fn handle_request(
             };
 
             let channels = state.channels.clone();
+            let pg_pool = state.pg_pool.clone();
             tokio::spawn(async move {
                 match ws_future.await {
                     Ok(ws_stream) => {
-                        handle_websocket(ws_stream, addr, query_id, channels).await;
+                        handle_websocket(ws_stream, addr, query_id, channels, pg_pool).await;
                     }
                     Err(e) => error!("websocket upgrade error from {}: {}", addr, e),
                 }
             });
 
             Ok(response.map(|_| http_body_util::Full::new(hyper::body::Bytes::new())))
+        }
+
+        "/api/demo" if req.method() == Method::OPTIONS => {
+            Ok(cors_response(204, ""))
+        }
+
+        "/api/demo" if req.method() == Method::POST => {
+            handle_demo(req, state).await
         }
 
         _ => Ok(Response::builder()
@@ -364,12 +382,139 @@ async fn handle_request(
     }
 }
 
+fn cors_response(status: u16, body: &str) -> Response<http_body_util::Full<hyper::body::Bytes>> {
+    Response::builder()
+        .status(status)
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        .header("Access-Control-Allow-Headers", "Content-Type")
+        .body(http_body_util::Full::new(hyper::body::Bytes::from(
+            body.to_string(),
+        )))
+        .unwrap()
+}
+
+fn demo_action_sql(action: &str) -> Option<&'static str> {
+    match action {
+        "insert_product" => Some(
+            "INSERT INTO products (name, price, category) \
+             VALUES ('Demo ' || substr(md5(random()::text),1,4), \
+             round((random()*200+20)::numeric,2), 'electronics')"
+        ),
+        "update_price" => Some(
+            "UPDATE products SET price = round((random()*300+10)::numeric,2) \
+             WHERE id = (SELECT id FROM products ORDER BY random() LIMIT 1)"
+        ),
+        "delete_demo_product" => Some(
+            "DELETE FROM products WHERE name LIKE 'Demo %' \
+             AND id = (SELECT id FROM products WHERE name LIKE 'Demo %' \
+             ORDER BY id DESC LIMIT 1)"
+        ),
+        "insert_order" => Some(
+            "INSERT INTO orders (customer_id, product_id, qty, total) \
+             VALUES (\
+               (SELECT id FROM customers ORDER BY random() LIMIT 1), \
+               (SELECT id FROM products ORDER BY random() LIMIT 1), \
+               floor(random()*5+1)::int, \
+               round((random()*300+20)::numeric,2))"
+        ),
+        "insert_customer" => Some(
+            "INSERT INTO customers (name, region) \
+             VALUES ('Demo ' || substr(md5(random()::text),1,4), \
+             (ARRAY['us-east','us-west','eu-west','ap-south'])[floor(random()*4+1)::int])"
+        ),
+        "delete_demo_customer" => Some(
+            "DELETE FROM customers WHERE name LIKE 'Demo %' \
+             AND id = (SELECT id FROM customers WHERE name LIKE 'Demo %' \
+             ORDER BY id DESC LIMIT 1)"
+        ),
+        _ => None,
+    }
+}
+
+async fn handle_demo(
+    req: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<http_body_util::Full<hyper::body::Bytes>>, hyper::Error> {
+    // Read body
+    let body_bytes = match req.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(_) => {
+            return Ok(cors_response(400, r#"{"error":"failed to read body"}"#));
+        }
+    };
+
+    // Parse JSON
+    let payload: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(cors_response(400, r#"{"error":"invalid JSON"}"#));
+        }
+    };
+
+    let action = match payload.get("action").and_then(|v| v.as_str()) {
+        Some(a) => a,
+        None => {
+            return Ok(cors_response(400, r#"{"error":"missing action field"}"#));
+        }
+    };
+
+    // Look up predefined SQL
+    let sql = match demo_action_sql(action) {
+        Some(s) => s,
+        None => {
+            let body = format!(r#"{{"error":"unknown action: {}"}}"#, action);
+            return Ok(cors_response(400, &body));
+        }
+    };
+
+    // Execute
+    match sqlx::query(sql).execute(&state.pg_pool).await {
+        Ok(result) => {
+            let body = format!(
+                r#"{{"ok":true,"action":"{}","rows_affected":{}}}"#,
+                action,
+                result.rows_affected()
+            );
+            Ok(cors_response(200, &body))
+        }
+        Err(e) => {
+            warn!("demo action '{}' failed: {}", action, e);
+            let body = format!(r#"{{"error":"sql error: {}"}}"#, e);
+            Ok(cors_response(500, &body))
+        }
+    }
+}
+
+/// Fetch the current snapshot for a query_id from PG.
+/// Returns rows as JSON values, or empty vec on error.
+async fn fetch_snapshot(pool: &PgPool, query_id: &str) -> Vec<serde_json::Value> {
+    // Sanitize query_id: only alphanumeric + underscore
+    if !query_id.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return vec![];
+    }
+
+    let sql = format!("SELECT row_to_json(t) AS doc FROM pgr._snap_{} t", query_id);
+    match sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(&sql)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            // Table may not exist yet (no recompute has run)
+            tracing::debug!("snapshot fetch failed for {}: {}", query_id, e);
+            vec![]
+        }
+    }
+}
+
 /// Handle an established WebSocket connection for a given query_id.
 async fn handle_websocket(
     ws_stream: tokio_tungstenite::WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>,
     addr: SocketAddr,
     query_id: String,
     channels: Channels,
+    pg_pool: PgPool,
 ) {
     info!("WebSocket connected: {} -> query_id={}", addr, query_id);
 
@@ -400,6 +545,26 @@ async fn handle_websocket(
     {
         error!("failed to send welcome to {}: {}", addr, e);
         return;
+    }
+
+    // Send initial snapshot so clients see data immediately
+    let snapshot_rows = fetch_snapshot(&pg_pool, &query_id).await;
+    if !snapshot_rows.is_empty() {
+        let snapshot_msg = serde_json::json!({
+            "query_id": query_id,
+            "inserted": snapshot_rows,
+            "deleted": [],
+        });
+        if let Err(e) = ws_tx
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                snapshot_msg.to_string().into(),
+            ))
+            .await
+        {
+            error!("failed to send snapshot to {}: {}", addr, e);
+            return;
+        }
+        info!("sent initial snapshot ({} rows) to {} for query_id={}", snapshot_rows.len(), addr, query_id);
     }
 
     loop {

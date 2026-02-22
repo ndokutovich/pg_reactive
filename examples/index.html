@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_reactive Examples</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+  header { text-align: center; padding: 48px 20px 32px; }
+  header h1 { font-size: 32px; margin-bottom: 8px; }
+  header h1 span { color: var(--accent); }
+  header p { color: var(--text-muted); font-size: 16px; max-width: 600px; margin: 0 auto; }
+  .examples { max-width: 800px; margin: 0 auto; padding: 0 20px 48px; display: flex; flex-direction: column; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; text-decoration: none; color: inherit; transition: border-color 0.2s, transform 0.2s; display: block; }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .card-num { background: var(--accent); color: var(--bg); width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
+  .card-title { font-size: 18px; font-weight: 600; }
+  .card-badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600; margin-left: auto; }
+  .badge-basic { background: #1f6feb33; color: #58a6ff; }
+  .badge-intermediate { background: #3fb95033; color: #3fb950; }
+  .badge-advanced { background: #d2a82833; color: #d2a828; }
+  .badge-expert { background: #f8514933; color: #f85149; }
+  .badge-fullstack { background: #bc8cff33; color: #bc8cff; }
+  .card-desc { color: var(--text-muted); font-size: 14px; line-height: 1.5; margin-bottom: 12px; }
+  .card-sql { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; color: var(--accent); background: var(--bg); padding: 6px 10px; border-radius: 6px; display: inline-block; }
+  .prereqs { max-width: 800px; margin: 0 auto; padding: 0 20px 48px; }
+  .prereqs h2 { font-size: 18px; margin-bottom: 12px; }
+  .prereqs pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-size: 13px; overflow-x: auto; color: var(--green); }
+  footer { text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>pg_reactive</span> Examples</h1>
+  <p>5 live applications showing real-time SQL subscriptions — from simple filters to full CRM dashboards.</p>
+</header>
+
+<div class="examples">
+  <a class="card" href="01-live-products/app.html">
+    <div class="card-header">
+      <div class="card-num">1</div>
+      <div class="card-title">Live Product Catalog</div>
+      <span class="card-badge badge-basic">Basic</span>
+    </div>
+    <div class="card-desc">Real-time product grid filtered by category. Cards animate in and out as you INSERT, UPDATE, or DELETE products in psql.</div>
+    <span class="card-sql">SELECT ... FROM products WHERE category = 'electronics'</span>
+  </a>
+
+  <a class="card" href="02-order-feed/app.html">
+    <div class="card-header">
+      <div class="card-num">2</div>
+      <div class="card-title">Order Feed</div>
+      <span class="card-badge badge-intermediate">Intermediate</span>
+    </div>
+    <div class="card-desc">Live order feed with customer and product names resolved via 3-table JOIN. Changing a customer name updates all their orders instantly.</div>
+    <span class="card-sql">SELECT ... FROM orders JOIN customers JOIN products</span>
+  </a>
+
+  <a class="card" href="03-revenue-dashboard/app.html">
+    <div class="card-header">
+      <div class="card-num">3</div>
+      <div class="card-title">Revenue Dashboard</div>
+      <span class="card-badge badge-advanced">Advanced</span>
+    </div>
+    <div class="card-desc">Animated bar chart of revenue per customer using LEFT JOIN + GROUP BY + SUM. Bars grow in real-time as orders are placed.</div>
+    <span class="card-sql">SELECT ... COALESCE(SUM(total), 0) ... GROUP BY customer</span>
+  </a>
+
+  <a class="card" href="04-category-leaderboard/app.html">
+    <div class="card-header">
+      <div class="card-num">4</div>
+      <div class="card-title">Category Leaderboard</div>
+      <span class="card-badge badge-expert">Expert</span>
+    </div>
+    <div class="card-desc">Two simultaneous subscriptions: HAVING-filtered categories and RANK() window function product rankings. Categories appear/disappear as averages cross the threshold.</div>
+    <span class="card-sql">HAVING AVG(price) > 50 &nbsp;+&nbsp; RANK() OVER (PARTITION BY ...)</span>
+  </a>
+
+  <a class="card" href="05-realtime-crm/app.html">
+    <div class="card-header">
+      <div class="card-num">5</div>
+      <div class="card-title">Real-Time CRM Dashboard</div>
+      <span class="card-badge badge-fullstack">Full-Stack</span>
+    </div>
+    <div class="card-desc">Three live queries: CTE-based top customers, LIMIT-constrained recent orders, and regional revenue rollup. A single INSERT updates all three panels simultaneously.</div>
+    <span class="card-sql">WITH cte AS (...) &nbsp;+&nbsp; LIMIT 10 &nbsp;+&nbsp; GROUP BY region</span>
+  </a>
+</div>
+
+<div class="prereqs">
+  <h2>Quick Start</h2>
+  <pre>cd examples
+docker compose up --build
+
+# Open http://127.0.0.1:3000 in your browser
+# Then run demo SQL commands in psql:
+docker compose exec db psql -U postgres -d pg_reactive_test</pre>
+</div>
+
+<footer>pg_reactive &mdash; SQL SELECTs as live queries with real-time delta notifications</footer>
+
+</body>
+</html>

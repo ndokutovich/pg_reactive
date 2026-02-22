@@ -1,0 +1,5 @@
+FROM python:3-slim
+WORKDIR /srv
+COPY examples/ /srv/
+EXPOSE 8000
+CMD ["python", "-m", "http.server", "8000"]

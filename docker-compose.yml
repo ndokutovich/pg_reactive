@@ -13,6 +13,7 @@ services:
     volumes:
       - ./ext:/ext/ext
       - ./tests:/ext/tests
+      - ./examples:/examples
     command: >
       postgres
         -c shared_preload_libraries=pg_reactive

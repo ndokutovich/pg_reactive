@@ -1,0 +1,67 @@
+services:
+  db:
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile.examples
+    environment:
+      POSTGRES_DB: pg_reactive_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "15432:5432"
+    command: >
+      postgres
+        -c shared_preload_libraries=pg_reactive
+        -c log_min_messages=warning
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pg_reactive_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  proxy:
+    build:
+      context: ../proxy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
+      LISTEN_ADDR: "0.0.0.0:8080"
+      RUST_LOG: pg_reactive_proxy=info
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  setup:
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile.examples
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGDATABASE: pg_reactive_test
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        echo "Initializing examples..."
+        for f in /examples/0*/setup.sql; do
+          echo "  Running $$f"
+          psql -f "$$f"
+        done
+        echo "All examples initialized!"
+
+  web:
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile.web
+    ports:
+      - "3000:8000"
+    depends_on:
+      setup:
+        condition: service_completed_successfully

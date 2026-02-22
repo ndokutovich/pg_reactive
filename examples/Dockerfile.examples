@@ -1,0 +1,15 @@
+FROM postgres:16-bookworm
+
+# Install build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    postgresql-server-dev-16 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and build the extension
+COPY ext/ /tmp/ext/
+RUN make -C /tmp/ext clean && make -C /tmp/ext && make -C /tmp/ext install \
+    && rm -rf /tmp/ext
+
+# Copy example setup scripts (used by the setup service)
+COPY examples/ /examples/

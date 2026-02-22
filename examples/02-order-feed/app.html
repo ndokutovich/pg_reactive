@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Feed — pg_reactive Example 2</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #39d353;
+    --red: #f85149;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ── Disconnected banner ── */
+  .disconnect-banner {
+    display: none;
+    background: var(--red);
+    color: #fff;
+    text-align: center;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .disconnect-banner.visible { display: block; }
+
+  /* ── Header ── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+  }
+  .header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header-left { display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 20px; font-weight: 600; }
+  header .subtitle { color: var(--text-muted); font-size: 14px; }
+  header .tagline {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-top: 4px;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--red);
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+  /* ── Table ── */
+  .table-container {
+    padding: 32px;
+    overflow-x: auto;
+  }
+  .table-container h2 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  thead th {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.2s;
+  }
+  tbody tr:hover { background: rgba(88, 166, 255, 0.04); }
+  tbody td {
+    padding: 12px 14px;
+    vertical-align: middle;
+  }
+
+  /* Row animations */
+  tbody tr.inserting {
+    animation: rowIn 0.5s ease-out both;
+  }
+  @keyframes rowIn {
+    from { opacity: 0; transform: translateX(-12px); background: rgba(57, 211, 83, 0.1); }
+    60%  { background: rgba(57, 211, 83, 0.06); }
+    to   { opacity: 1; transform: translateX(0); background: transparent; }
+  }
+
+  tbody tr.removing {
+    animation: rowOut 0.4s ease-in forwards;
+  }
+  @keyframes rowOut {
+    from { opacity: 1; background: rgba(248, 81, 73, 0.1); }
+    to   { opacity: 0; transform: translateX(12px); background: rgba(248, 81, 73, 0.15); }
+  }
+
+  /* Region badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge-us-east  { background: rgba(88, 166, 255, 0.15); color: #79c0ff; }
+  .badge-eu-west  { background: rgba(57, 211, 83, 0.15);  color: #56d364; }
+  .badge-ap-south { background: rgba(210, 153, 34, 0.15); color: #e3b341; }
+  .badge-us-west  { background: rgba(163, 113, 247, 0.15); color: #bc8cff; }
+  .badge-default  { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
+
+  .total-cell { font-weight: 600; color: var(--green); }
+  .time-cell  { color: var(--text-muted); font-size: 13px; }
+
+  /* ── Callout ── */
+  .callout {
+    margin: 0 32px 24px;
+    background: rgba(88, 166, 255, 0.06);
+    border: 1px solid rgba(88, 166, 255, 0.2);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 16px 20px;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  .callout strong { color: #fff; }
+  .callout .highlight { color: var(--accent); font-weight: 600; }
+
+  /* ── Empty state ── */
+  .empty-state {
+    text-align: center;
+    padding: 64px 16px;
+    color: var(--text-muted);
+  }
+
+  /* ── Collapsible sections ── */
+  .collapsible {
+    border-top: 1px solid var(--border);
+    margin: 0 32px;
+  }
+  .collapsible summary {
+    cursor: pointer;
+    padding: 16px 0;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--accent);
+    list-style: none;
+    user-select: none;
+  }
+  .collapsible summary::before {
+    content: '\25B6';
+    display: inline-block;
+    margin-right: 8px;
+    font-size: 10px;
+    transition: transform 0.2s;
+  }
+  .collapsible[open] summary::before { transform: rotate(90deg); }
+
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+  pre .comment { color: var(--text-muted); }
+  pre .keyword { color: #ff7b72; }
+  pre .string  { color: #a5d6ff; }
+  pre .fn      { color: #d2a8ff; }
+
+  /* ── Footer ── */
+  footer {
+    padding: 24px 32px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div id="disconnect-banner" class="disconnect-banner">
+  Disconnected from server. Attempting to reconnect...
+</div>
+
+<header>
+  <div class="header-row">
+    <div class="header-left">
+      <div id="status-dot" class="status-dot"></div>
+      <h1>Order Feed</h1>
+    </div>
+    <span class="subtitle">pg_reactive Example 2 &mdash; Multi-table JOIN</span>
+  </div>
+  <p class="tagline">Changes to orders, customers, OR products all trigger updates</p>
+</header>
+
+<div class="table-container">
+  <h2>Recent Orders (<span id="count">0</span> rows)</h2>
+
+  <table id="order-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Customer</th>
+        <th>Region</th>
+        <th>Product</th>
+        <th>Qty</th>
+        <th>Total</th>
+        <th>Time</th>
+      </tr>
+    </thead>
+    <tbody id="order-body"></tbody>
+  </table>
+
+  <div id="empty-state" class="empty-state" style="display:none;">
+    Waiting for data...<br>
+    <small>Make sure docker compose is running and both setup.sql files have been executed.</small>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>This query JOINs 3 tables.</strong>
+  Changing a customer name, product name, or order detail all trigger a real-time delta.
+  <span class="highlight">CDC tools like Debezium, Supabase, and ElectricSQL cannot track JOINs</span> &mdash;
+  they only watch single-table changes. pg_reactive re-evaluates the full query and delivers
+  precise inserted/deleted row diffs over WebSocket.
+</div>
+
+<details class="collapsible">
+  <summary>Demo Commands</summary>
+  <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+    Run these in a psql session:
+    <code style="color: var(--accent); font-size: 12px;">docker compose exec -T db psql -U postgres -d pg_reactive_test</code>
+  </p>
+  <pre><span class="comment">-- New order (row appears instantly)</span>
+<span class="keyword">INSERT INTO</span> orders (customer_id, product_id, qty, total)
+<span class="keyword">VALUES</span> (<span class="string">1</span>, <span class="string">1</span>, <span class="string">2</span>, <span class="string">159.98</span>);
+
+<span class="comment">-- Change customer name -- the JOIN updates!</span>
+<span class="keyword">UPDATE</span> customers <span class="keyword">SET</span> name = <span class="string">'Alice Chen'</span>
+<span class="keyword">WHERE</span> name = <span class="string">'Alice Johnson'</span>;
+
+<span class="comment">-- Change product name -- order feed reflects it</span>
+<span class="keyword">UPDATE</span> products <span class="keyword">SET</span> name = <span class="string">'Pro Keyboard'</span>
+<span class="keyword">WHERE</span> name = <span class="string">'Mechanical Keyboard'</span>;
+
+<span class="comment">-- Delete an order</span>
+<span class="keyword">DELETE FROM</span> orders <span class="keyword">WHERE</span> id = <span class="string">1</span>;</pre>
+</details>
+
+<footer>
+  pg_reactive &mdash; live queries for PostgreSQL
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var QUERY_ID = 'order_feed';
+  var WS_URL = 'ws://127.0.0.1:8080/ws/' + QUERY_ID;
+
+  // ── State ──
+  var rows = [];
+  var ws = null;
+  var reconnectAttempts = 0;
+  var reconnectTimer = null;
+  var BASE_DELAY = 1000;
+  var MAX_DELAY = 30000;
+
+  // ── DOM refs ──
+  var tbody = document.getElementById('order-body');
+  var countEl = document.getElementById('count');
+  var emptyEl = document.getElementById('empty-state');
+  var statusDot = document.getElementById('status-dot');
+  var banner = document.getElementById('disconnect-banner');
+
+  // ── Helpers ──
+
+  var REGION_CLASSES = {
+    'us-east':  'badge-us-east',
+    'eu-west':  'badge-eu-west',
+    'ap-south': 'badge-ap-south',
+    'us-west':  'badge-us-west'
+  };
+
+  function formatCurrency(v) {
+    var n = parseFloat(v);
+    return isNaN(n) ? '$0.00' : '$' + n.toFixed(2);
+  }
+
+  function formatTime(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return String(ts);
+
+    var now = new Date();
+    var diffMs = now - d;
+    var diffSec = Math.floor(diffMs / 1000);
+
+    if (diffSec < 5) return 'just now';
+    if (diffSec < 60) return diffSec + 's ago';
+    var diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return diffMin + ' min ago';
+    var diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return diffHr + 'h ago';
+
+    // Fallback: HH:MM:SS
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    var ss = String(d.getSeconds()).padStart(2, '0');
+    return hh + ':' + mm + ':' + ss;
+  }
+
+  // ── Rendering (safe DOM construction — no innerHTML with user data) ──
+
+  function createRegionBadge(region) {
+    var span = document.createElement('span');
+    var cls = REGION_CLASSES[region] || 'badge-default';
+    span.className = 'badge ' + cls;
+    span.textContent = region;
+    return span;
+  }
+
+  function createRow(order, animate) {
+    var tr = document.createElement('tr');
+    if (animate) tr.className = 'inserting';
+    tr.setAttribute('data-id', order.id);
+
+    var tdId = document.createElement('td');
+    tdId.textContent = order.id;
+    tr.appendChild(tdId);
+
+    var tdCustomer = document.createElement('td');
+    tdCustomer.textContent = order.customer;
+    tr.appendChild(tdCustomer);
+
+    var tdRegion = document.createElement('td');
+    tdRegion.appendChild(createRegionBadge(order.region));
+    tr.appendChild(tdRegion);
+
+    var tdProduct = document.createElement('td');
+    tdProduct.textContent = order.product;
+    tr.appendChild(tdProduct);
+
+    var tdQty = document.createElement('td');
+    tdQty.textContent = order.qty;
+    tr.appendChild(tdQty);
+
+    var tdTotal = document.createElement('td');
+    tdTotal.className = 'total-cell';
+    tdTotal.textContent = formatCurrency(order.total);
+    tr.appendChild(tdTotal);
+
+    var tdTime = document.createElement('td');
+    tdTime.className = 'time-cell';
+    tdTime.textContent = formatTime(order.created_at);
+    tr.appendChild(tdTime);
+
+    return tr;
+  }
+
+  function renderAll() {
+    countEl.textContent = rows.length;
+    tbody.textContent = '';
+    if (rows.length === 0) {
+      emptyEl.style.display = 'block';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    rows.forEach(function (row) {
+      tbody.appendChild(createRow(row, false));
+    });
+  }
+
+  function animateInsert(order) {
+    var tr = createRow(order, true);
+    // Insert at the top of the table
+    if (tbody.firstChild) {
+      tbody.insertBefore(tr, tbody.firstChild);
+    } else {
+      tbody.appendChild(tr);
+    }
+  }
+
+  function animateRemove(id) {
+    var tr = tbody.querySelector('tr[data-id="' + id + '"]');
+    if (!tr) return;
+    tr.classList.add('removing');
+    tr.addEventListener('animationend', function () {
+      tr.remove();
+    });
+  }
+
+  // ── Delta ──
+
+  function applyDelta(msg) {
+    var deleted = msg.deleted || [];
+    var inserted = msg.inserted || [];
+
+    var deletedIds = {};
+    deleted.forEach(function (r) { deletedIds[r.id] = true; });
+
+    rows = rows.filter(function (r) { return !deletedIds[r.id]; });
+
+    deleted.forEach(function (r) { animateRemove(r.id); });
+
+    inserted.forEach(function (r) { rows.unshift(r); });
+
+    setTimeout(function () {
+      inserted.forEach(function (r) { animateInsert(r); });
+      countEl.textContent = rows.length;
+      emptyEl.style.display = rows.length === 0 ? 'block' : 'none';
+    }, 50);
+  }
+
+  // ── WebSocket ──
+
+  function connect() {
+    if (ws) {
+      try { ws.close(); } catch (e) { /* noop */ }
+    }
+
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = function () {
+      reconnectAttempts = 0;
+      statusDot.classList.add('connected');
+      banner.classList.remove('visible');
+    };
+
+    ws.onmessage = function (event) {
+      var msg;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+
+      if (msg.type === 'subscribed') return;
+
+      if (msg.type === 'overflow') {
+        rows = [];
+        renderAll();
+        return;
+      }
+
+      if (msg.query_id === QUERY_ID && (msg.inserted || msg.deleted)) {
+        // First delta carries full snapshot (all inserts, no deletes)
+        if (rows.length === 0 && (!msg.deleted || msg.deleted.length === 0)) {
+          rows = msg.inserted || [];
+          renderAll();
+        } else {
+          applyDelta(msg);
+        }
+      }
+    };
+
+    ws.onclose = function () {
+      statusDot.classList.remove('connected');
+      banner.classList.add('visible');
+      scheduleReconnect();
+    };
+
+    ws.onerror = function () {
+      // onclose fires after onerror
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectAttempts++;
+    var delay = Math.min(
+      BASE_DELAY * Math.pow(2, reconnectAttempts - 1) + Math.random() * 500,
+      MAX_DELAY
+    );
+    reconnectTimer = setTimeout(connect, delay);
+  }
+
+  // ── Periodically refresh relative timestamps ──
+  setInterval(function () {
+    var trs = tbody.querySelectorAll('tr[data-id]');
+    trs.forEach(function (tr) {
+      var id = tr.getAttribute('data-id');
+      var row = rows.find(function (r) { return String(r.id) === id; });
+      if (row) {
+        var timeCell = tr.querySelector('.time-cell');
+        if (timeCell) timeCell.textContent = formatTime(row.created_at);
+      }
+    });
+  }, 30000);
+
+  // ── Boot ──
+  emptyEl.style.display = 'block';
+  connect();
+})();
+</script>
+<script>
+window.DEMO_ACTIONS = [
+  { action: 'insert_order', label: 'Place Order' },
+  { action: 'insert_product', label: 'Add Product' },
+  { action: 'insert_customer', label: 'Add Customer' },
+];
+</script>
+<script src="/demo-panel.js"></script>
+</body>
+</html>
