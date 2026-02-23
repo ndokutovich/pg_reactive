@@ -1,0 +1,37 @@
+{
+  "scenario": "s4_result_set_scale",
+  "scale": 10000,
+  "query": "Q3",
+  "results": [
+    {
+      "approach": "pg_reactive",
+      "snapshot_rows": 50000,
+      "delivery_latency": {
+        "p50_us": 197069.5,
+        "p95_us": 239408.0,
+        "p99_us": 268807.4
+      },
+      "write_tps": 3.44
+    },
+    {
+      "approach": "pg_ivm",
+      "snapshot_rows": 50055,
+      "delivery_latency": {
+        "p50_us": 3829.7,
+        "p95_us": 5027.5,
+        "p99_us": 6826.7
+      },
+      "write_tps": 1405.57
+    },
+    {
+      "approach": "polling",
+      "snapshot_rows": 64131,
+      "delivery_latency": {
+        "p50_us": 151147.8,
+        "p95_us": 239259.2,
+        "p99_us": 282636.4
+      },
+      "write_tps": 4058.74
+    }
+  ]
+}

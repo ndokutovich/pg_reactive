@@ -1,0 +1,140 @@
+{
+  "scenario": "s3_query_complexity",
+  "queries": [
+    "Q1",
+    "Q2",
+    "Q3",
+    "Q4",
+    "Q5",
+    "Q6",
+    "Q7",
+    "Q8"
+  ],
+  "results": [
+    {
+      "approach": "pg_reactive",
+      "produces_delta": true,
+      "push_based": true,
+      "matrix": {
+        "Q1": {
+          "status": "pass"
+        },
+        "Q2": {
+          "status": "pass"
+        },
+        "Q3": {
+          "status": "pass"
+        },
+        "Q4": {
+          "status": "pass"
+        },
+        "Q5": {
+          "status": "pass"
+        },
+        "Q6": {
+          "status": "pass"
+        },
+        "Q7": {
+          "status": "pass"
+        },
+        "Q8": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "approach": "pg_ivm",
+      "produces_delta": false,
+      "push_based": false,
+      "matrix": {
+        "Q1": {
+          "status": "pass"
+        },
+        "Q2": {
+          "status": "pass"
+        },
+        "Q3": {
+          "status": "pass"
+        },
+        "Q4": {
+          "status": "fail",
+          "error": "expression containing an aggregate in it is not supported on incrementally maintainable materialized view"
+        },
+        "Q5": {
+          "status": "not_supported"
+        },
+        "Q6": {
+          "status": "not_supported"
+        },
+        "Q7": {
+          "status": "not_supported"
+        },
+        "Q8": {
+          "status": "not_supported"
+        }
+      }
+    },
+    {
+      "approach": "polling",
+      "produces_delta": false,
+      "push_based": false,
+      "matrix": {
+        "Q1": {
+          "status": "pass"
+        },
+        "Q2": {
+          "status": "pass"
+        },
+        "Q3": {
+          "status": "pass"
+        },
+        "Q4": {
+          "status": "pass"
+        },
+        "Q5": {
+          "status": "pass"
+        },
+        "Q6": {
+          "status": "pass"
+        },
+        "Q7": {
+          "status": "pass"
+        },
+        "Q8": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "approach": "listen_notify",
+      "produces_delta": false,
+      "push_based": true,
+      "matrix": {
+        "Q1": {
+          "status": "pass"
+        },
+        "Q2": {
+          "status": "pass"
+        },
+        "Q3": {
+          "status": "pass"
+        },
+        "Q4": {
+          "status": "pass"
+        },
+        "Q5": {
+          "status": "pass"
+        },
+        "Q6": {
+          "status": "pass"
+        },
+        "Q7": {
+          "status": "pass"
+        },
+        "Q8": {
+          "status": "pass"
+        }
+      }
+    }
+  ]
+}

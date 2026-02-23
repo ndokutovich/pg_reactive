@@ -8,8 +8,11 @@
  * Usage: node tests/perf/p5_soak.mjs
  */
 import WebSocket from 'ws';
-import { execFileSync, spawn } from 'child_process';
+import { execFileSync, execFile as execFileCb, spawn } from 'child_process';
+import { promisify } from 'util';
 import { performance } from 'perf_hooks';
+
+const execFileAsync = promisify(execFileCb);
 
 const WS_URL = 'ws://127.0.0.1:8080/ws/p5_q';
 const NUM_CLIENTS = 5;
@@ -234,6 +237,189 @@ async function main() {
 
   const allPass = driftPass && deliveryPass && p99Pass;
   console.log(`=== P5: ${allPass ? 'PASS' : 'FAIL'} ===`);
+
+  // Save pg_reactive stats for comparison
+  const reactiveP50 = lastP50;
+  const reactiveP95 = lastCp ? lastCp.p95 : 0;
+  const reactiveDelivery = deliveryRate;
+
+  // --- Polling Soak (60s comparison) ---
+  console.log('\n=== Polling Soak (60s comparison) ===');
+
+  const POLL_DURATION_SEC = 60;
+  const POLL_INTERVAL_MS = 200;
+  const POLL_WRITES_PER_SEC = 50;
+  const POLL_TOTAL_WRITES = POLL_WRITES_PER_SEC * POLL_DURATION_SEC;
+  const POLL_CHECKPOINT_SEC = 10;
+
+  // Reset table
+  psql('TRUNCATE p5_data');
+  psql("INSERT INTO p5_data (seq, payload) SELECT g, repeat('x', 50) FROM generate_series(1, 1000) g");
+
+  console.log(`Duration: ${POLL_DURATION_SEC}s | Writes: ${POLL_TOTAL_WRITES} | Poll interval: ${POLL_INTERVAL_MS}ms`);
+
+  // Polling state
+  let pollGlobalSeq = 20000;
+  const pollSendTimes = new Map();        // seq -> performance.now()
+  const pollWindowLatencies = [];
+  const pollCheckpoints = [];
+  let pollTotalDelivered = 0;
+  let pollTotalWritten = 0;
+  let pollWindowWritten = 0;
+  let pollWritesSinceCheckpoint = 0;
+  let pollLastMaxSeq = null;
+
+  // Spawn write pipe for polling phase
+  const pollPsqlProc = spawn(
+    'docker',
+    ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test'],
+    { stdio: ['pipe', 'pipe', 'pipe'] }
+  );
+  pollPsqlProc.stdout.on('data', () => {});
+  pollPsqlProc.stderr.on('data', () => {});
+
+  async function pollMaxSeq() {
+    try {
+      const { stdout } = await execFileAsync(
+        'docker',
+        ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-t', '-A', '-c',
+         'SELECT MAX(seq) FROM p5_data']
+      );
+      return parseInt(stdout.trim(), 10) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  const pollStartTime = performance.now();
+  let pollNextCheckpoint = POLL_CHECKPOINT_SEC;
+
+  // Write interval for polling soak
+  const pollWriteInterval = setInterval(() => {
+    const elapsed = (performance.now() - pollStartTime) / 1000;
+    if (elapsed >= POLL_DURATION_SEC) return;
+
+    pollGlobalSeq++;
+    const seq = pollGlobalSeq;
+    pollSendTimes.set(seq, performance.now());
+    pollPsqlProc.stdin.write(`INSERT INTO p5_data (seq, payload) VALUES (${seq}, repeat('x', 50));\n`);
+    pollTotalWritten++;
+    pollWindowWritten++;
+    pollWritesSinceCheckpoint++;
+  }, 1000 / POLL_WRITES_PER_SEC);
+
+  // Poll interval
+  const pollTimer = setInterval(async () => {
+    const maxSeq = await pollMaxSeq();
+    const now = performance.now();
+    if (maxSeq != null && maxSeq !== pollLastMaxSeq) {
+      // Detect all seqs between old max and new max
+      const oldMax = pollLastMaxSeq || 20000;
+      for (let s = oldMax + 1; s <= maxSeq; s++) {
+        if (pollSendTimes.has(s)) {
+          const latency = now - pollSendTimes.get(s);
+          pollWindowLatencies.push(latency);
+          pollSendTimes.delete(s);
+          pollTotalDelivered++;
+        }
+      }
+      pollLastMaxSeq = maxSeq;
+    }
+  }, POLL_INTERVAL_MS);
+
+  // Checkpoint loop for polling soak
+  const pollCheckpointInterval = setInterval(() => {
+    const elapsedSec = Math.round((performance.now() - pollStartTime) / 1000);
+    if (elapsedSec < pollNextCheckpoint) return;
+
+    const sorted = pollWindowLatencies.slice().sort((a, b) => a - b);
+    const p50 = sorted.length > 0 ? percentile(sorted, 50) : 0;
+    const p95 = sorted.length > 0 ? percentile(sorted, 95) : 0;
+    const p99 = sorted.length > 0 ? percentile(sorted, 99) : 0;
+
+    pollCheckpoints.push({
+      sec: pollNextCheckpoint,
+      writes: pollTotalWritten,
+      delivered: pollTotalDelivered,
+      windowDelivered: sorted.length,
+      windowWrites: pollWritesSinceCheckpoint,
+      p50, p95, p99
+    });
+
+    console.log(
+      `[${pad(pollNextCheckpoint, 3)}s] ` +
+      `writes=${pad(pollTotalWritten, 5)}  ` +
+      `delivered=${pad(pollTotalDelivered, 5)}  ` +
+      `p50=${pad(fms(p50), 8)}  ` +
+      `p95=${pad(fms(p95), 8)}  ` +
+      `p99=${pad(fms(p99), 8)}`
+    );
+
+    pollWindowLatencies.length = 0;
+    pollWritesSinceCheckpoint = 0;
+    pollNextCheckpoint += POLL_CHECKPOINT_SEC;
+
+    // Prune stale sendTimes
+    const cutoff = performance.now() - 30000;
+    for (const [k, v] of pollSendTimes) {
+      if (v < cutoff) pollSendTimes.delete(k);
+    }
+  }, 1000);
+
+  // Wait for polling duration + drain
+  await new Promise(r => setTimeout(r, POLL_DURATION_SEC * 1000));
+  clearInterval(pollWriteInterval);
+
+  // Flush final checkpoint window
+  if (pollWindowLatencies.length > 0 || pollWritesSinceCheckpoint > 0) {
+    const sorted = pollWindowLatencies.slice().sort((a, b) => a - b);
+    const p50 = sorted.length > 0 ? percentile(sorted, 50) : 0;
+    const p95 = sorted.length > 0 ? percentile(sorted, 95) : 0;
+    const p99 = sorted.length > 0 ? percentile(sorted, 99) : 0;
+    pollCheckpoints.push({
+      sec: POLL_DURATION_SEC,
+      writes: pollTotalWritten,
+      delivered: pollTotalDelivered,
+      windowDelivered: sorted.length,
+      windowWrites: pollWritesSinceCheckpoint,
+      p50, p95, p99
+    });
+    console.log(
+      `[${pad(POLL_DURATION_SEC, 3)}s] ` +
+      `writes=${pad(pollTotalWritten, 5)}  ` +
+      `delivered=${pad(pollTotalDelivered, 5)}  ` +
+      `p50=${pad(fms(p50), 8)}  ` +
+      `p95=${pad(fms(p95), 8)}  ` +
+      `p99=${pad(fms(p99), 8)}`
+    );
+  }
+
+  // Drain period for polling
+  await new Promise(r => setTimeout(r, DRAIN_SEC * 1000));
+  clearInterval(pollTimer);
+  clearInterval(pollCheckpointInterval);
+
+  // Clean up polling write pipe
+  pollPsqlProc.stdin.end();
+  pollPsqlProc.kill();
+
+  // Polling summary
+  const pollLastCp = pollCheckpoints[pollCheckpoints.length - 1];
+  const pollP50 = pollLastCp ? pollLastCp.p50 : 0;
+  const pollP95 = pollLastCp ? pollLastCp.p95 : 0;
+  const pollDeliveryRate = pollTotalWritten > 0 ? (pollTotalDelivered / pollTotalWritten) * 100 : 0;
+
+  console.log('\n--- Polling Summary ---');
+  console.log(`Delivery rate:     ${pollDeliveryRate.toFixed(1)}% (${pollTotalDelivered}/${pollTotalWritten})`);
+  console.log(`Last window p50:   ${fms(pollP50)}`);
+  console.log(`Last window p95:   ${fms(pollP95)}`);
+
+  // Side-by-side comparison
+  console.log('\n--- Polling vs pg_reactive ---');
+  console.log('                 pg_reactive    polling_200ms');
+  console.log(`p50:             ${fms(reactiveP50).padEnd(15)}${fms(pollP50)}`);
+  console.log(`p95:             ${fms(reactiveP95).padEnd(15)}${fms(pollP95)}`);
+  console.log(`delivery:        ${(reactiveDelivery.toFixed(1) + '%').padEnd(15)}${pollDeliveryRate.toFixed(1)}%`);
 
   // --- Cleanup ---
   for (const c of clients) c.ws.close();

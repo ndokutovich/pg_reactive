@@ -1,0 +1,119 @@
+{
+  "scenario": "s5_subscription_scale",
+  "levels": [
+    0,
+    1,
+    5,
+    10,
+    25,
+    50
+  ],
+  "results": [
+    {
+      "approach": "pg_reactive",
+      "measurements": [
+        {
+          "subs": 0,
+          "subs_requested": 0,
+          "tps": 4705.0,
+          "p50_us": 188.1,
+          "p95_us": 328.6,
+          "p99_us": 446.1
+        },
+        {
+          "subs": 1,
+          "subs_requested": 1,
+          "tps": 19.38,
+          "p50_us": 46492.6,
+          "p95_us": 81323.0,
+          "p99_us": 106277.6
+        },
+        {
+          "subs": 5,
+          "subs_requested": 5,
+          "tps": 3.45,
+          "p50_us": 280679.3,
+          "p95_us": 358137.9,
+          "p99_us": 409620.6
+        },
+        {
+          "subs": 10,
+          "subs_requested": 10,
+          "tps": 2.94,
+          "p50_us": 332674.4,
+          "p95_us": 418707.8,
+          "p99_us": 428789.8
+        },
+        {
+          "subs": 25,
+          "subs_requested": 25,
+          "tps": 1.1,
+          "p50_us": 910891.9,
+          "p95_us": 962521.2,
+          "p99_us": 966159.5
+        },
+        {
+          "subs": 50,
+          "subs_requested": 50,
+          "tps": 0.56,
+          "p50_us": 1754612.7,
+          "p95_us": 1899739.6,
+          "p99_us": 1917996.7
+        }
+      ]
+    },
+    {
+      "approach": "pg_ivm",
+      "measurements": [
+        {
+          "subs": 0,
+          "subs_requested": 0,
+          "tps": 4918.79,
+          "p50_us": 187.8,
+          "p95_us": 301.3,
+          "p99_us": 388.6
+        },
+        {
+          "subs": 1,
+          "subs_requested": 1,
+          "tps": 1771.13,
+          "p50_us": 485.2,
+          "p95_us": 983.4,
+          "p99_us": 1560.3
+        },
+        {
+          "subs": 3,
+          "subs_requested": 5,
+          "tps": 1251.05,
+          "p50_us": 738.4,
+          "p95_us": 1188.2,
+          "p99_us": 1592.5
+        },
+        {
+          "subs": 3,
+          "subs_requested": 10,
+          "tps": 1266.44,
+          "p50_us": 728.9,
+          "p95_us": 1174.8,
+          "p99_us": 1557.0
+        },
+        {
+          "subs": 3,
+          "subs_requested": 25,
+          "tps": 1127.36,
+          "p50_us": 805.1,
+          "p95_us": 1376.2,
+          "p99_us": 1834.0
+        },
+        {
+          "subs": 3,
+          "subs_requested": 50,
+          "tps": 1177.81,
+          "p50_us": 759.4,
+          "p95_us": 1384.3,
+          "p99_us": 1874.9
+        }
+      ]
+    }
+  ]
+}

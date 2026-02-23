@@ -1,0 +1,126 @@
+services:
+  bench-db:
+    build:
+      context: ..
+      dockerfile: bench/Dockerfile.bench
+    environment:
+      POSTGRES_DB: bench_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "25432:5432"
+    command: >
+      postgres
+        -c shared_preload_libraries=pg_reactive
+        -c wal_level=logical
+        -c max_replication_slots=4
+        -c max_wal_senders=4
+        -c pg_reactive.max_subscriptions=1024
+        -c log_min_messages=warning
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bench_db"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    volumes:
+      - ./results:/bench/results
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  bench-proxy:
+    build:
+      context: ../proxy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@bench-db:5432/bench_db
+      LISTEN_ADDR: "0.0.0.0:8080"
+      RUST_LOG: pg_reactive_proxy=warn
+    ports:
+      - "28080:8080"
+    depends_on:
+      bench-db:
+        condition: service_healthy
+    profiles: [proxy]
+
+  hasura:
+    image: hasura/graphql-engine:v2.44.0
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL: postgres://postgres:postgres@bench-db:5432/bench_db
+      HASURA_GRAPHQL_ENABLE_CONSOLE: "true"
+      HASURA_GRAPHQL_LIVE_QUERIES_MULTIPLEXED_REFETCH_INTERVAL: 1000
+    ports:
+      - "28081:8080"
+    depends_on:
+      bench-db:
+        condition: service_healthy
+    profiles: [hasura]
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.7.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    profiles: [debezium]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.7.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    profiles: [debezium]
+
+  debezium:
+    image: quay.io/debezium/connect:2.7
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: bench
+      CONFIG_STORAGE_TOPIC: bench_configs
+      OFFSET_STORAGE_TOPIC: bench_offsets
+      STATUS_STORAGE_TOPIC: bench_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    ports:
+      - "28083:8083"
+    depends_on:
+      - kafka
+    profiles: [debezium]
+
+  supabase-realtime:
+    image: supabase/realtime:v2.33.58
+    entrypoint: ["/app/bin/realtime", "start"]
+    environment:
+      DB_HOST: bench-db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: bench_db
+      PORT: 4000
+      SECRET_KEY_BASE: "bench-secret-key-base-that-is-at-least-64-chars-long-for-phoenix-framework"
+      DB_ENC_KEY: "benchencryptionkey1234567890abcde"
+      APP_NAME: bench
+      FLY_APP_NAME: bench
+      FLY_ALLOC_ID: bench
+      ERL_AFLAGS: "-proto_dist inet_tcp"
+      RLIMIT_NOFILE: "65536"
+    ports:
+      - "24000:4000"
+    depends_on:
+      bench-db:
+        condition: service_healthy
+    profiles: [supabase]
+
+  electric:
+    image: electricsql/electric:latest
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@bench-db:5432/bench_db
+      ELECTRIC_INSECURE: "true"
+    ports:
+      - "23000:3000"
+    depends_on:
+      bench-db:
+        condition: service_healthy
+    profiles: [electric]

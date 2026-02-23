@@ -88,7 +88,28 @@ def main():
                 "1 + (random() * 19)::int FROM generate_series(1, 5000) g"
             )
 
-            # Subscribe to 3-table JOIN query
+        tables = [
+            ("customers", 500),
+            ("products", 200),
+            ("orders", 5000),
+        ]
+
+        # --- No-subscription baseline ---
+        print("=== P6: Multi-Table Cascade ===")
+        print("\n--- No-subscription baseline ---")
+        baseline_results = {}
+        for table, base_rows in tables:
+            lats = measure_table(conn, table, INSERTS_PER_TABLE)
+            lats.sort()
+            p50 = percentile(lats, 50) * 1000
+            p95 = percentile(lats, 95) * 1000
+            baseline_results[table] = {"p50": p50, "p95": p95}
+            print("{:<10s}({} base): p50={:>7.1f}ms  p95={:>7.1f}ms".format(
+                table, base_rows, p50, p95
+            ))
+
+        # Subscribe to 3-table JOIN query
+        with conn.cursor() as cur:
             cur.execute(
                 "SELECT pgr.subscribe('p6_q', "
                 "'SELECT o.id, c.name AS customer, p.name AS product, "
@@ -99,17 +120,9 @@ def main():
                 "ORDER BY o.id DESC LIMIT 100')"
             )
 
-        # Measure baseline: INSERT into orders with NO subscription
-        # (already have subscription, so first measure with it)
-
-        tables = [
-            ("customers", 500),
-            ("products", 200),
-            ("orders", 5000),
-        ]
-
+        # --- With pgr subscription ---
+        print("\n--- With pgr subscription (3-table JOIN) ---")
         results = {}
-        print("=== P6: Multi-Table Cascade ===")
 
         for table, base_rows in tables:
             lats = measure_table(conn, table, INSERTS_PER_TABLE)
@@ -125,8 +138,24 @@ def main():
         variance = max(p50s) / min(p50s) if min(p50s) > 0 else float("inf")
         print("Cross-table variance: {:.2f}x (max/min p50)".format(variance))
 
+        # --- Comparison: baseline vs pgr ---
+        print("\n--- Comparison: baseline vs pgr ---")
+        for table, base_rows in tables:
+            base_p50 = baseline_results[table]["p50"]
+            pgr_p50 = results[table]["p50"]
+            if base_p50 > 0:
+                ratio = pgr_p50 / base_p50
+                overhead_ms = pgr_p50 - base_p50
+                print("{:<10s} baseline={:>7.1f}ms  pgr={:>7.1f}ms  overhead=+{:.1f}ms ({:.1f}x)".format(
+                    table, base_p50, pgr_p50, overhead_ms, ratio
+                ))
+            else:
+                print("{:<10s} baseline={:>7.1f}ms  pgr={:>7.1f}ms".format(
+                    table, base_p50, pgr_p50
+                ))
+
         # Thresholds
-        print("--- Thresholds ---")
+        print("\n--- Thresholds ---")
         passed = True
         for table, _ in tables:
             r = results[table]

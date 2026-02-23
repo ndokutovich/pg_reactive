@@ -1,0 +1,97 @@
+{
+  "scenario": "s1_write_overhead",
+  "duration_s": 10,
+  "baseline": {
+    "tps": 3801.53,
+    "p50_us": 193.81,
+    "p95_us": 404.25,
+    "p99_us": 1480.6,
+    "total_ops": 38016
+  },
+  "results": [
+    {
+      "approach": "pg_reactive",
+      "levels": {
+        "1": {
+          "tps": 27.49,
+          "p50_us": 33740.97,
+          "p95_us": 58441.52,
+          "p99_us": 74403.84,
+          "total_ops": 275,
+          "overhead_pct": 99.28
+        },
+        "10": {
+          "tps": 3.29,
+          "p50_us": 297748.48,
+          "p95_us": 362994.04,
+          "p99_us": 559338.05,
+          "total_ops": 34,
+          "overhead_pct": 99.91
+        }
+      }
+    },
+    {
+      "approach": "pg_ivm",
+      "levels": {
+        "1": {
+          "tps": 1686.92,
+          "p50_us": 510.7,
+          "p95_us": 968.35,
+          "p99_us": 1457.71,
+          "total_ops": 16870,
+          "overhead_pct": 55.63
+        },
+        "5": {
+          "tps": 656.89,
+          "p50_us": 1264.59,
+          "p95_us": 2779.03,
+          "p99_us": 4609.63,
+          "total_ops": 6569,
+          "overhead_pct": 82.72
+        }
+      }
+    },
+    {
+      "approach": "polling",
+      "levels": {
+        "1": {
+          "tps": 3873.27,
+          "p50_us": 220.61,
+          "p95_us": 410.35,
+          "p99_us": 688.81,
+          "total_ops": 38733,
+          "overhead_pct": -1.89
+        },
+        "10": {
+          "tps": 4007.54,
+          "p50_us": 220.87,
+          "p95_us": 382.41,
+          "p99_us": 560.64,
+          "total_ops": 40076,
+          "overhead_pct": -5.42
+        }
+      }
+    },
+    {
+      "approach": "listen_notify",
+      "levels": {
+        "1": {
+          "tps": 3591.24,
+          "p50_us": 234.49,
+          "p95_us": 457.5,
+          "p99_us": 783.24,
+          "total_ops": 35913,
+          "overhead_pct": 5.53
+        },
+        "10": {
+          "tps": 3242.67,
+          "p50_us": 267.07,
+          "p95_us": 509.47,
+          "p99_us": 714.72,
+          "total_ops": 32427,
+          "overhead_pct": 14.7
+        }
+      }
+    }
+  ]
+}

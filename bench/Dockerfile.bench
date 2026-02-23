@@ -1,0 +1,24 @@
+FROM postgres:16-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    postgresql-server-dev-16 \
+    python3 \
+    python3-psycopg2 \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pg_ivm from source
+RUN git clone --depth 1 --branch v1.9 https://github.com/sraoss/pg_ivm.git /tmp/pg_ivm \
+    && cd /tmp/pg_ivm \
+    && make \
+    && make install \
+    && rm -rf /tmp/pg_ivm
+
+# Build and install pg_reactive
+COPY ext/ /build/ext/
+RUN cd /build/ext && make clean && make && make install && rm -rf /build
+
+# Copy benchmark files
+COPY bench/ /bench/

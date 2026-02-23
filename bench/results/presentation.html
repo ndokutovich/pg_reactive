@@ -1,0 +1,1919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1024">
+<title>pg_reactive - Benchmark Presentation</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-alt: #1c2129;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --text-bright: #f0f6fc;
+  --accent-blue: #58a6ff;
+  --accent-blue-deep: #1f6feb;
+  --accent-cyan: #39d353;
+  --accent-orange: #f0883e;
+  --accent-purple: #a371f7;
+  --accent-pink: #f778ba;
+  --accent-red: #f85149;
+  --accent-yellow: #d29922;
+  --code-bg: #0d1117;
+  --code-keyword: #ff7b72;
+  --code-string: #a5d6ff;
+  --code-function: #d2a8ff;
+  --code-comment: #8b949e;
+  --code-number: #79c0ff;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+html {
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* ===== Scroll Sections ===== */
+.slide {
+  min-height: 100vh;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 60px 80px;
+  position: relative;
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+
+.slide.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.slide-inner {
+  max-width: 1400px;
+  width: 100%;
+}
+
+/* ===== Navigation Dots ===== */
+#nav-dots {
+  position: fixed;
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nav-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+  border: none;
+  cursor: pointer;
+  transition: background 0.3s, transform 0.3s, box-shadow 0.3s;
+  padding: 0;
+}
+
+.nav-dot:hover {
+  background: var(--text-muted);
+  transform: scale(1.3);
+}
+
+.nav-dot.active {
+  background: var(--accent-blue);
+  transform: scale(1.4);
+  box-shadow: 0 0 8px rgba(88, 166, 255, 0.5);
+}
+
+.nav-dot-tooltip {
+  position: absolute;
+  left: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.nav-dot:hover .nav-dot-tooltip {
+  opacity: 1;
+}
+
+/* ===== Typography ===== */
+h1 {
+  font-size: 3.5rem;
+  font-weight: 800;
+  color: var(--text-bright);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+h2 {
+  font-size: 2.4rem;
+  font-weight: 700;
+  color: var(--text-bright);
+  margin-bottom: 8px;
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  margin-bottom: 40px;
+}
+
+.section-number {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-blue);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+}
+
+/* ===== Hero Section ===== */
+.hero {
+  text-align: center;
+  position: relative;
+}
+
+.hero-glow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -60%);
+  width: 600px;
+  height: 300px;
+  background: radial-gradient(ellipse, rgba(88,166,255,0.12) 0%, rgba(31,111,235,0.04) 50%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero h1 {
+  font-size: 5rem;
+  position: relative;
+  z-index: 1;
+  background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-cyan) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero .tagline {
+  font-size: 1.6rem;
+  color: var(--text-muted);
+  margin: 12px 0 8px;
+  font-weight: 400;
+  position: relative;
+  z-index: 1;
+}
+
+.hero .description {
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  max-width: 680px;
+  margin: 0 auto 48px;
+  position: relative;
+  z-index: 1;
+}
+
+.stat-badges {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  position: relative;
+  z-index: 1;
+  flex-wrap: wrap;
+}
+
+.stat-badge {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 32px;
+  text-align: center;
+  min-width: 200px;
+}
+
+.stat-badge .stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--accent-blue);
+  display: block;
+}
+
+.stat-badge .stat-label {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ===== Cards & Columns ===== */
+.columns-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin: 32px 0;
+}
+
+.columns-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+  margin: 32px 0;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+}
+
+.card h3 {
+  margin-bottom: 12px;
+}
+
+.card p {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.card-icon {
+  font-size: 2rem;
+  margin-bottom: 12px;
+  display: block;
+}
+
+/* ===== Callout Boxes ===== */
+.callout {
+  background: var(--surface);
+  border: 1px solid var(--accent-blue-deep);
+  border-left: 4px solid var(--accent-blue);
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin: 24px 0;
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.callout strong {
+  color: var(--text-bright);
+}
+
+.callout-warning {
+  border-color: var(--accent-yellow);
+  border-left-color: var(--accent-yellow);
+  background: rgba(210, 153, 34, 0.06);
+}
+
+.callout-info {
+  border-color: var(--accent-blue-deep);
+  border-left-color: var(--accent-blue);
+}
+
+/* ===== Code Blocks ===== */
+.code-block {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.7;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+  margin: 16px 0;
+}
+
+.code-block .kw { color: var(--code-keyword); }
+.code-block .fn { color: var(--code-function); }
+.code-block .str { color: var(--code-string); }
+.code-block .cmt { color: var(--code-comment); font-style: italic; }
+.code-block .num { color: var(--code-number); }
+.code-block .type { color: #79c0ff; }
+
+/* ===== Architecture Diagram ===== */
+.arch-diagram {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  white-space: pre;
+  text-align: center;
+  color: var(--text-muted);
+  margin: 24px 0;
+  overflow-x: auto;
+}
+
+.arch-diagram .highlight {
+  color: var(--accent-blue);
+  font-weight: 600;
+}
+
+.arch-diagram .label {
+  color: var(--text);
+}
+
+/* ===== Competition Grid ===== */
+.competition-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin: 24px 0;
+}
+
+.comp-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  text-align: center;
+  transition: border-color 0.3s, transform 0.2s;
+}
+
+.comp-card:hover {
+  border-color: var(--text-muted);
+  transform: translateY(-2px);
+}
+
+.comp-card.featured {
+  border-color: var(--accent-blue);
+  background: rgba(88, 166, 255, 0.04);
+}
+
+.comp-card .comp-icon {
+  font-size: 2rem;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.comp-card .comp-name {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text-bright);
+  margin-bottom: 6px;
+}
+
+.comp-card .comp-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 2px;
+}
+
+.badge-push { background: rgba(57, 211, 83, 0.15); color: var(--accent-cyan); }
+.badge-poll { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
+.badge-sync { background: rgba(240, 136, 62, 0.15); color: var(--accent-orange); }
+.badge-delta { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); }
+.badge-snapshot { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
+.badge-raw { background: rgba(210, 153, 34, 0.15); color: var(--accent-yellow); }
+.badge-row { background: rgba(163, 113, 247, 0.15); color: var(--accent-purple); }
+
+.tier-note {
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  margin-top: 16px;
+  font-style: italic;
+}
+
+/* ===== Tables ===== */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin: 20px 0;
+}
+
+.data-table th {
+  background: var(--surface-alt);
+  color: var(--text-bright);
+  font-weight: 600;
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.data-table tr:nth-child(even) td {
+  background: rgba(22, 27, 34, 0.5);
+}
+
+.data-table tr:hover td {
+  background: rgba(88, 166, 255, 0.04);
+}
+
+.data-table .row-highlight td {
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.data-table .row-highlight:hover td {
+  background: rgba(88, 166, 255, 0.1);
+}
+
+.check { color: var(--accent-cyan); font-weight: 700; }
+.cross { color: var(--accent-red); font-weight: 700; }
+.dash { color: var(--text-muted); }
+.total-row td {
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+  font-size: 0.95rem;
+}
+
+.total-highlight {
+  color: var(--accent-blue);
+  font-size: 1.05rem;
+}
+
+/* ===== Matrix Section ===== */
+.matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  margin: 20px 0;
+}
+
+.matrix-table th {
+  background: var(--surface-alt);
+  color: var(--text-bright);
+  font-weight: 600;
+  padding: 10px 12px;
+  text-align: center;
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+  font-size: 0.82rem;
+}
+
+.matrix-table th:first-child {
+  text-align: left;
+  min-width: 180px;
+}
+
+.matrix-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+  font-size: 1.05rem;
+}
+
+.matrix-table td:first-child {
+  text-align: left;
+  font-size: 0.88rem;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.matrix-table tr:nth-child(even) td {
+  background: rgba(22, 27, 34, 0.5);
+}
+
+.matrix-table tr:hover td {
+  background: rgba(88, 166, 255, 0.04);
+}
+
+.matrix-table .col-highlight {
+  background: rgba(88, 166, 255, 0.06);
+}
+
+/* ===== Chart Containers ===== */
+.chart-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  margin: 20px 0;
+  position: relative;
+}
+
+.chart-wrap {
+  position: relative;
+  max-height: 400px;
+}
+
+/* ===== Docker Topology ===== */
+.docker-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.docker-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 18px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text);
+  position: relative;
+}
+
+.docker-box.primary {
+  border-color: var(--accent-blue);
+}
+
+.docker-box .box-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* ===== Mermaid Diagrams ===== */
+.mermaid-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 24px;
+  margin: 24px 0;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.mermaid-container .mermaid {
+  display: flex;
+  justify-content: center;
+}
+
+.mermaid-container .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ===== Query Table ===== */
+.query-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  margin: 20px 0;
+}
+
+.query-table th {
+  background: var(--surface-alt);
+  color: var(--text-bright);
+  font-weight: 600;
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 2px solid var(--border);
+}
+
+.query-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.query-table tr:nth-child(even) td {
+  background: rgba(22, 27, 34, 0.5);
+}
+
+.query-table tr:hover td {
+  background: rgba(88, 166, 255, 0.04);
+}
+
+.query-id {
+  font-family: var(--font-mono);
+  color: var(--accent-blue);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sql-constructs {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--accent-orange);
+}
+
+/* ===== Takeaway Cards ===== */
+.takeaway-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin: 40px 0;
+}
+
+.takeaway-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  text-align: center;
+}
+
+.takeaway-card .takeaway-icon {
+  font-size: 2.5rem;
+  margin-bottom: 16px;
+  display: block;
+}
+
+.takeaway-card h3 {
+  font-size: 1.2rem;
+  margin-bottom: 12px;
+}
+
+.takeaway-card p {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+/* ===== Misc ===== */
+.text-center { text-align: center; }
+.mt-16 { margin-top: 16px; }
+.mt-24 { margin-top: 24px; }
+.mt-32 { margin-top: 32px; }
+.mb-16 { margin-bottom: 16px; }
+.mb-24 { margin-bottom: 24px; }
+.mb-32 { margin-bottom: 32px; }
+
+.final-line {
+  text-align: center;
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  margin-top: 40px;
+  padding-bottom: 60px;
+  font-style: italic;
+}
+
+.small-note {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-top: 12px;
+}
+
+.inline-code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--accent-blue);
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 1200px) {
+  .slide {
+    padding: 40px 40px;
+  }
+
+  .hero h1 {
+    font-size: 3.5rem;
+  }
+
+  h2 {
+    font-size: 2rem;
+  }
+
+  .competition-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .takeaway-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 1024px) {
+  .slide {
+    padding: 40px 24px;
+  }
+
+  #nav-dots {
+    left: 12px;
+  }
+
+  .hero h1 {
+    font-size: 2.8rem;
+  }
+
+  .columns-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .columns-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-badges {
+    gap: 16px;
+  }
+
+  .stat-badge {
+    min-width: 160px;
+    padding: 14px 20px;
+  }
+
+  .takeaway-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .data-table, .matrix-table, .query-table {
+    font-size: 0.78rem;
+  }
+
+  .data-table th, .data-table td,
+  .matrix-table th, .matrix-table td {
+    padding: 8px 8px;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation Dots -->
+<nav id="nav-dots" aria-label="Slide navigation"></nav>
+
+<!-- ============================================================ -->
+<!-- Section 1: Hero -->
+<!-- ============================================================ -->
+<section class="slide hero" id="slide-hero" data-nav="Hero">
+  <div class="hero-glow"></div>
+  <div class="slide-inner text-center">
+    <h1>pg_reactive</h1>
+    <p class="tagline">Live Queries for PostgreSQL</p>
+    <p class="description">Turn any SELECT into a real-time subscription with row-level deltas</p>
+    <div class="stat-badges">
+      <div class="stat-badge">
+        <span class="stat-value">8/8</span>
+        <span class="stat-label">SQL Constructs</span>
+      </div>
+      <div class="stat-badge">
+        <span class="stat-value">&lt;6ms</span>
+        <span class="stat-label">Delta Delivery</span>
+      </div>
+      <div class="stat-badge">
+        <span class="stat-value">Standard</span>
+        <span class="stat-label">Extension</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 2: The Problem -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-problem" data-nav="Problem">
+  <div class="slide-inner">
+    <div class="section-number">The Challenge</div>
+    <h2>The Reactive Query Gap</h2>
+    <p class="subtitle">Existing solutions each solve a piece of the puzzle, but none deliver the full picture.</p>
+
+    <div class="columns-3">
+      <div class="card">
+        <span class="card-icon">CDC</span>
+        <h3>CDC</h3>
+        <p style="color:var(--text-muted); margin-bottom:8px;"><strong style="color:var(--text);">Debezium, Supabase, ElectricSQL</strong></p>
+        <p>Row-level events per single table. No JOINs, no aggregates, no WHERE filtering across tables. You get raw WAL changes, not query results.</p>
+      </div>
+      <div class="card">
+        <span class="card-icon">Polling</span>
+        <h3>Polling</h3>
+        <p style="color:var(--text-muted); margin-bottom:8px;"><strong style="color:var(--text);">Hasura, Manual Refresh</strong></p>
+        <p>Re-execute the full query on a timer. High latency (seconds), wasted compute on unchanged data, no delta information -- just full snapshots.</p>
+      </div>
+      <div class="card">
+        <span class="card-icon">IVM</span>
+        <h3>Incremental View Maintenance</h3>
+        <p style="color:var(--text-muted); margin-bottom:8px;"><strong style="color:var(--text);">pg_ivm</strong></p>
+        <p>Updates materialized views in-place on DML. Limited SQL support: no HAVING, no window functions, no CTEs, no LIMIT.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      No existing tool delivers <strong>query-level deltas</strong> (exact inserted and deleted rows) for <strong>arbitrary SQL</strong> -- JOINs, GROUP BY, HAVING, window functions, CTEs.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 3: Architecture -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-arch" data-nav="Architecture">
+  <div class="slide-inner">
+    <div class="section-number">How It Works</div>
+    <h2>Architecture</h2>
+    <p class="subtitle">Three-layer stack: C extension inside PostgreSQL, Rust WebSocket proxy, TypeScript SDK.</p>
+
+    <div class="mermaid-container">
+      <pre class="mermaid">
+graph TB
+    subgraph PG["&nbsp;&nbsp;PostgreSQL 16&nbsp;&nbsp;"]
+        subgraph EXT["&nbsp;&nbsp;pg_reactive &lpar;C Extension&rpar;&nbsp;&nbsp;"]
+            direction LR
+            SUB["subscribe&lpar;id, SQL&rpar;"]:::step --> SNAP["Snapshot\n&lpar;UNLOGGED table&rpar;"]:::step
+            TRG["DML trigger fires"]:::step --> DELTA["EXCEPT delta\ncomputation"]:::step
+            DELTA --> NOTIFY["pg_notify&lpar;'pgr'&rpar;\nJSON {inserted, deleted}"]:::step
+        end
+    end
+
+    PG -->|"LISTEN pgr"| PROXY["Rust Proxy\n&lpar;WebSocket fan-out&rpar;"]:::proxy
+
+    PROXY -->|"ws://"| SDK["TypeScript SDK\nuseLiveQuery&lpar;sql&rpar; → React UI"]:::sdk
+
+    classDef step fill:#1c2129,stroke:#58a6ff,color:#c9d1d9,stroke-width:1px
+    classDef proxy fill:#1c2129,stroke:#f0883e,color:#c9d1d9,stroke-width:2px
+    classDef sdk fill:#1c2129,stroke:#39d353,color:#c9d1d9,stroke-width:2px
+
+    style PG fill:#0d1117,stroke:#30363d,color:#58a6ff,stroke-width:2px
+    style EXT fill:#161b22,stroke:#58a6ff,color:#58a6ff,stroke-width:2px
+      </pre>
+    </div>
+
+    <div class="code-block"><span class="cmt">-- Subscribe to a live query</span>
+<span class="kw">SELECT</span> <span class="fn">pgr.subscribe</span>(<span class="str">'dashboard'</span>,
+  <span class="str">'SELECT c.name, SUM(o.total) AS revenue
+   FROM customers c
+   JOIN orders o ON o.customer_id = c.id
+   GROUP BY c.name'</span>
+);
+
+<span class="cmt">-- On any INSERT/UPDATE/DELETE to customers or orders:</span>
+<span class="cmt">-- --> NOTIFY pgr, '{"query_id":"dashboard","inserted":[...],"deleted":[...]}'</span></div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 4: Competition -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-competition" data-nav="Competition">
+  <div class="slide-inner">
+    <div class="section-number">Landscape</div>
+    <h2>8 Approaches Compared</h2>
+    <p class="subtitle">From in-process extensions to multi-container pipelines.</p>
+
+    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:8px; font-weight:600;">Tier 1: Runs inside PostgreSQL</p>
+    <div class="competition-grid" style="margin-bottom:24px;">
+      <div class="comp-card featured">
+        <span class="comp-icon">&#9889;</span>
+        <div class="comp-name">pg_reactive</div>
+        <div class="comp-desc">EXCEPT-based delta, any SQL, push via NOTIFY</div>
+        <span class="badge badge-push">Push</span>
+        <span class="badge badge-delta">Delta</span>
+      </div>
+      <div class="comp-card">
+        <span class="comp-icon">&#128200;</span>
+        <div class="comp-name">pg_ivm</div>
+        <div class="comp-desc">Incremental materialized views, limited SQL</div>
+        <span class="badge badge-sync">Sync</span>
+        <span class="badge badge-snapshot">Snapshot</span>
+      </div>
+      <div class="comp-card">
+        <span class="comp-icon">&#8634;</span>
+        <div class="comp-name">Polling</div>
+        <div class="comp-desc">Re-execute SELECT, client-side hash diff</div>
+        <span class="badge badge-poll">Poll</span>
+        <span class="badge badge-snapshot">Snapshot</span>
+      </div>
+      <div class="comp-card">
+        <span class="comp-icon">&#128266;</span>
+        <div class="comp-name">LISTEN/NOTIFY</div>
+        <div class="comp-desc">Manual triggers, raw payload, no auto-delta</div>
+        <span class="badge badge-push">Push</span>
+        <span class="badge badge-raw">Raw</span>
+      </div>
+    </div>
+
+    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:8px; font-weight:600;">Tier 2: Requires additional containers</p>
+    <div class="competition-grid">
+      <div class="comp-card">
+        <span class="comp-icon">&#128640;</span>
+        <div class="comp-name">Hasura</div>
+        <div class="comp-desc">GraphQL subscriptions via multiplexed polling (1s)</div>
+        <span class="badge badge-poll">Poll</span>
+        <span class="badge badge-snapshot">Snapshot</span>
+      </div>
+      <div class="comp-card">
+        <span class="comp-icon">&#128752;</span>
+        <div class="comp-name">Debezium</div>
+        <div class="comp-desc">WAL CDC to Kafka, row-level per table</div>
+        <span class="badge badge-push">Push</span>
+        <span class="badge badge-row">Row Event</span>
+      </div>
+      <div class="comp-card">
+        <span class="comp-icon">&#9889;</span>
+        <div class="comp-name">Supabase Realtime</div>
+        <div class="comp-desc">WAL to WebSocket, row-level per table</div>
+        <span class="badge badge-push">Push</span>
+        <span class="badge badge-row">Row Event</span>
+      </div>
+      <div class="comp-card">
+        <span class="comp-icon">&#9889;</span>
+        <div class="comp-name">ElectricSQL</div>
+        <div class="comp-desc">WAL shapes to HTTP/SSE, single table</div>
+        <span class="badge badge-push">Push</span>
+        <span class="badge badge-row">Row Event</span>
+      </div>
+    </div>
+
+    <p class="tier-note">Tier 1 (top row) runs inside PostgreSQL. Tier 2 (bottom row) requires additional infrastructure containers.</p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 5: Test Environment -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-env" data-nav="Environment">
+  <div class="slide-inner">
+    <div class="section-number">Setup</div>
+    <h2>Benchmark Environment</h2>
+    <p class="subtitle">Docker Compose with all 8 approaches running side by side.</p>
+
+    <div class="columns-2">
+      <div>
+        <h3 class="mb-16">Docker Topology</h3>
+        <div class="mermaid-container" style="padding:16px 8px;">
+          <pre class="mermaid">
+graph TB
+    DB["bench-db\nPG16 + pg_reactive + pg_ivm\n:25432"]:::primary
+
+    DB --> PROXY["bench-proxy\nRust WebSocket\n:28080"]:::primary
+    DB --> HASURA["hasura\nGraphQL Engine\n:28081"]:::tier2
+    DB --> SUPA["supabase-realtime\nElixir\n:24000"]:::tier2
+    DB --> ELEC["electric\nElixir\n:23000"]:::tier2
+
+    ZK["zookeeper\n:2181"]:::tier2 --> KAFKA["kafka\n:9092"]:::tier2
+    KAFKA --> DBZ["debezium\nWAL CDC\n:28083"]:::tier2
+    DB --> DBZ
+
+    classDef primary fill:#161b22,stroke:#58a6ff,color:#c9d1d9,stroke-width:2px
+    classDef tier2 fill:#161b22,stroke:#30363d,color:#8b949e,stroke-width:1px
+          </pre>
+        </div>
+      </div>
+
+      <div>
+        <h3 class="mb-16">Schema</h3>
+        <div class="mermaid-container" style="padding:16px 8px;">
+          <pre class="mermaid">
+erDiagram
+    customers {
+        serial id PK
+        text name
+        text region
+        text tier
+    }
+    products {
+        serial id PK
+        text name
+        numeric price
+        text category
+    }
+    orders {
+        serial id PK
+        int customer_id FK
+        int product_id FK
+        int qty
+        numeric total
+        timestamp created_at
+    }
+    customers ||--o{ orders : "has"
+    products ||--o{ orders : "contains"
+          </pre>
+        </div>
+        <p class="small-note">Seed: 100 customers, 20 products, 500 orders. 4 regions, 5 categories.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 6: Test Queries -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-queries" data-nav="Queries">
+  <div class="slide-inner">
+    <div class="section-number">Workload</div>
+    <h2>8 Queries, Graduated Complexity</h2>
+    <p class="subtitle">From simple filtered SELECTs to CTEs and window functions.</p>
+
+    <table class="query-table">
+      <thead>
+        <tr>
+          <th style="width:60px;">ID</th>
+          <th style="width:200px;">SQL Constructs</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="query-id">Q1</span></td>
+          <td><span class="sql-constructs">JOIN x2 + WHERE</span></td>
+          <td>Orders with customer+product names, filtered by region</td>
+        </tr>
+        <tr>
+          <td><span class="query-id">Q2</span></td>
+          <td><span class="sql-constructs">Single-table WHERE</span></td>
+          <td>Products in 'electronics' category</td>
+        </tr>
+        <tr>
+          <td><span class="query-id">Q3</span></td>
+          <td><span class="sql-constructs">JOIN x2</span></td>
+          <td>All order details with customer and product names</td>
+        </tr>
+        <tr>
+          <td><span class="query-id">Q4</span></td>
+          <td><span class="sql-constructs">LEFT JOIN + GROUP BY + SUM</span></td>
+          <td>Revenue per customer (including those with zero orders)</td>
+        </tr>
+        <tr>
+          <td><span class="query-id">Q5</span></td>
+          <td><span class="sql-constructs">GROUP BY + HAVING</span></td>
+          <td>Categories with average price above $30</td>
+        </tr>
+        <tr>
+          <td><span class="query-id">Q6</span></td>
+          <td><span class="sql-constructs">Window function (RANK)</span></td>
+          <td>Price ranking within each product category</td>
+        </tr>
+        <tr>
+          <td><span class="query-id">Q7</span></td>
+          <td><span class="sql-constructs">CTE + JOIN</span></td>
+          <td>Top customers by total order count</td>
+        </tr>
+        <tr>
+          <td><span class="query-id">Q8</span></td>
+          <td><span class="sql-constructs">ORDER BY + LIMIT</span></td>
+          <td>50 most recent orders</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="columns-2 mt-24">
+      <div>
+        <h3>Q4: LEFT JOIN + GROUP BY + SUM</h3>
+        <div class="code-block" style="font-size:0.82rem;"><span class="kw">SELECT</span> c.name,
+       <span class="fn">COALESCE</span>(<span class="fn">SUM</span>(o.total), <span class="num">0</span>) <span class="kw">AS</span> revenue
+<span class="kw">FROM</span> customers c
+<span class="kw">LEFT JOIN</span> orders o <span class="kw">ON</span> o.customer_id = c.id
+<span class="kw">GROUP BY</span> c.name</div>
+      </div>
+      <div>
+        <h3>Q6: Window Function (RANK)</h3>
+        <div class="code-block" style="font-size:0.82rem;"><span class="kw">SELECT</span> name, category, price,
+       <span class="fn">RANK</span>() <span class="kw">OVER</span> (
+         <span class="kw">PARTITION BY</span> category
+         <span class="kw">ORDER BY</span> price <span class="kw">DESC</span>
+       ) <span class="kw">AS</span> price_rank
+<span class="kw">FROM</span> products</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 7: Compatibility Matrix -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-matrix" data-nav="Compatibility">
+  <div class="slide-inner">
+    <div class="section-number">The Killer Slide</div>
+    <h2>SQL Compatibility: The Defining Difference</h2>
+    <p class="subtitle">Which approaches can handle each query type?</p>
+
+    <div style="overflow-x:auto;">
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th>Query</th>
+            <th class="col-highlight">pg_reactive</th>
+            <th>pg_ivm</th>
+            <th>Polling</th>
+            <th>LISTEN/<wbr>NOTIFY</th>
+            <th>Hasura</th>
+            <th>Debezium</th>
+            <th>Supabase</th>
+            <th>ElectricSQL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Q1 &nbsp;JOIN x2 + WHERE</td>
+            <td class="col-highlight"><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td>Q2 &nbsp;Single-table WHERE</td>
+            <td class="col-highlight"><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+          </tr>
+          <tr>
+            <td>Q3 &nbsp;JOIN x2</td>
+            <td class="col-highlight"><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td>Q4 &nbsp;LEFT JOIN + GROUP BY</td>
+            <td class="col-highlight"><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10007;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td>Q5 &nbsp;GROUP BY + HAVING</td>
+            <td class="col-highlight"><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10007;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td>Q6 &nbsp;Window function</td>
+            <td class="col-highlight"><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10007;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td>Q7 &nbsp;CTE + JOIN</td>
+            <td class="col-highlight"><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10007;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td>Q8 &nbsp;ORDER BY + LIMIT</td>
+            <td class="col-highlight"><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10007;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+            <td><span class="dash">&mdash;</span></td>
+          </tr>
+          <tr class="total-row">
+            <td style="font-weight:700;">TOTAL</td>
+            <td class="col-highlight"><span class="total-highlight">8/8</span></td>
+            <td>3/8</td>
+            <td>8/8</td>
+            <td>8/8</td>
+            <td>2/8</td>
+            <td>1/8</td>
+            <td>1/8</td>
+            <td>1/8</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="small-note mt-16">Polling and LISTEN/NOTIFY get 8/8 because they can execute any SQL -- but they are poll-based or require manual trigger wiring with no automatic delta delivery.</p>
+
+    <div class="callout callout-info mt-24">
+      <strong>pg_reactive</strong> is the only push-based approach with automatic delta delivery that supports <strong>all 8 query types</strong> -- JOINs, GROUP BY, HAVING, window functions, CTEs, and LIMIT.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 8: Delta Latency -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-latency" data-nav="Latency">
+  <div class="slide-inner">
+    <div class="section-number">Scenario S2</div>
+    <h2>Change Delivery Latency</h2>
+    <p class="subtitle">Time from INSERT commit to client notification (100 iterations, p50)</p>
+
+    <div class="chart-container">
+      <div class="chart-wrap">
+        <canvas id="latencyChart"></canvas>
+      </div>
+    </div>
+
+    <p class="small-note">Debezium: 4.3s median (92/100 timeouts via Kafka pipeline). Supabase: could not measure reliably.</p>
+
+    <div class="callout callout-info mt-24">
+      pg_reactive adds ~5ms to compute EXCEPT-based deltas. In return, you get <strong>exact inserted/deleted rows</strong> for any SQL -- JOINs, GROUP BY, HAVING, window functions. Other push-based approaches deliver only single-table row events.
+    </div>
+
+    <div style="overflow-x:auto;" class="mt-24">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Approach</th>
+            <th style="text-align:right;">p50 (us)</th>
+            <th style="text-align:right;">p95 (us)</th>
+            <th style="text-align:right;">p99 (us)</th>
+            <th style="text-align:center;">Misses</th>
+            <th style="text-align:center;">Delta?</th>
+            <th style="text-align:center;">Push?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>LISTEN/NOTIFY</td>
+            <td style="text-align:right;">717</td>
+            <td style="text-align:right;">1,200</td>
+            <td style="text-align:right;">2,100</td>
+            <td style="text-align:center;">0</td>
+            <td style="text-align:center;"><span class="cross">No</span></td>
+            <td style="text-align:center;"><span class="check">Yes</span></td>
+          </tr>
+          <tr>
+            <td>pg_ivm</td>
+            <td style="text-align:right;">1,820</td>
+            <td style="text-align:right;">3,500</td>
+            <td style="text-align:right;">5,200</td>
+            <td style="text-align:center;">0</td>
+            <td style="text-align:center;"><span class="cross">No</span></td>
+            <td style="text-align:center;"><span class="cross">No</span></td>
+          </tr>
+          <tr>
+            <td>Polling</td>
+            <td style="text-align:right;">2,766</td>
+            <td style="text-align:right;">5,100</td>
+            <td style="text-align:right;">8,400</td>
+            <td style="text-align:center;">0</td>
+            <td style="text-align:center;"><span class="cross">No</span></td>
+            <td style="text-align:center;"><span class="cross">No</span></td>
+          </tr>
+          <tr class="row-highlight">
+            <td><strong>pg_reactive</strong></td>
+            <td style="text-align:right;"><strong>5,668</strong></td>
+            <td style="text-align:right;"><strong>12,000</strong></td>
+            <td style="text-align:right;"><strong>25,000</strong></td>
+            <td style="text-align:center;"><strong>0</strong></td>
+            <td style="text-align:center;"><span class="check"><strong>Yes</strong></span></td>
+            <td style="text-align:center;"><span class="check"><strong>Yes</strong></span></td>
+          </tr>
+          <tr>
+            <td>ElectricSQL</td>
+            <td style="text-align:right;">7,512</td>
+            <td style="text-align:right;">15,000</td>
+            <td style="text-align:right;">30,000</td>
+            <td style="text-align:center;">0</td>
+            <td style="text-align:center;"><span class="cross">No</span></td>
+            <td style="text-align:center;"><span class="check">Yes</span></td>
+          </tr>
+          <tr>
+            <td>Hasura</td>
+            <td style="text-align:right;">19,636</td>
+            <td style="text-align:right;">35,000</td>
+            <td style="text-align:right;">60,000</td>
+            <td style="text-align:center;">0</td>
+            <td style="text-align:center;"><span class="cross">No</span></td>
+            <td style="text-align:center;"><span class="cross">No</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 9: Write Overhead -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-write" data-nav="Write Overhead">
+  <div class="slide-inner">
+    <div class="section-number">Scenario S1</div>
+    <h2>Write Overhead</h2>
+    <p class="subtitle">pgbench INSERT throughput (10s, 4 clients)</p>
+
+    <div class="chart-container">
+      <div class="chart-wrap">
+        <canvas id="writeChart"></canvas>
+      </div>
+    </div>
+
+    <div class="callout callout-warning mt-24">
+      pg_reactive has the highest write overhead because it performs synchronous EXCEPT-based recompute inside each DML trigger. For write-heavy workloads, enable <span class="inline-code">pg_reactive.async_recompute = on</span> to move delta computation to a background worker.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 10: Subscription Scaling -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-scaling" data-nav="Scaling">
+  <div class="slide-inner">
+    <div class="section-number">Scenario S5</div>
+    <h2>Subscription Count Scaling</h2>
+    <p class="subtitle">Write TPS with increasing active subscriptions</p>
+
+    <div class="chart-container">
+      <div class="chart-wrap">
+        <canvas id="scalingChart"></canvas>
+      </div>
+    </div>
+
+    <p class="small-note mt-16">Synchronous EXCEPT recompute executes once per subscription per DML statement, explaining the steep initial drop. pg_ivm's incremental approach scales more gently but supports fewer SQL constructs.</p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Section 11: Summary -->
+<!-- ============================================================ -->
+<section class="slide" id="slide-summary" data-nav="Summary">
+  <div class="slide-inner">
+    <div class="section-number">Conclusion</div>
+    <h2>Key Takeaways</h2>
+
+    <div class="takeaway-grid">
+      <div class="takeaway-card">
+        <span class="takeaway-icon" aria-hidden="true">&#128269;</span>
+        <h3>Only Full-SQL Reactive</h3>
+        <p>pg_reactive supports JOINs, GROUP BY, HAVING, window functions, CTEs -- no other push-based approach does. 8/8 queries passed.</p>
+      </div>
+      <div class="takeaway-card">
+        <span class="takeaway-icon" aria-hidden="true">&#9201;</span>
+        <h3>Sub-6ms Query Deltas</h3>
+        <p>Exact inserted/deleted rows for any SQL query, delivered via pg_notify in under 6ms (p50). Trades write overhead for query-level precision.</p>
+      </div>
+      <div class="takeaway-card">
+        <span class="takeaway-icon" aria-hidden="true">&#129513;</span>
+        <h3>Standard Extension</h3>
+        <p>No PostgreSQL recompilation needed. Install with CREATE EXTENSION, configure with shared_preload_libraries. Uses the same public hook APIs as pgvector, PostGIS, pg_stat_statements.</p>
+      </div>
+    </div>
+
+    <div style="overflow-x:auto;" class="mt-32">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Approach</th>
+            <th style="text-align:center;">SQL Support</th>
+            <th style="text-align:center;">Delivery</th>
+            <th style="text-align:center;">Delta Stream</th>
+            <th style="text-align:center;">Infrastructure</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="row-highlight">
+            <td><strong>pg_reactive</strong></td>
+            <td style="text-align:center;"><strong>8/8</strong></td>
+            <td style="text-align:center;">5.7ms</td>
+            <td style="text-align:center;"><span class="check">Inserted/Deleted</span></td>
+            <td style="text-align:center;">PG extension</td>
+          </tr>
+          <tr>
+            <td>pg_ivm</td>
+            <td style="text-align:center;">3/8</td>
+            <td style="text-align:center;">1.8ms</td>
+            <td style="text-align:center;"><span class="cross">Full snapshot</span></td>
+            <td style="text-align:center;">PG extension</td>
+          </tr>
+          <tr>
+            <td>Polling</td>
+            <td style="text-align:center;">8/8</td>
+            <td style="text-align:center;">2.8ms</td>
+            <td style="text-align:center;"><span class="cross">Hash comparison</span></td>
+            <td style="text-align:center;">Client-side</td>
+          </tr>
+          <tr>
+            <td>LISTEN/NOTIFY</td>
+            <td style="text-align:center;">8/8</td>
+            <td style="text-align:center;">0.7ms</td>
+            <td style="text-align:center;"><span class="cross">Manual wiring</span></td>
+            <td style="text-align:center;">PG built-in</td>
+          </tr>
+          <tr>
+            <td>Hasura</td>
+            <td style="text-align:center;">2/8</td>
+            <td style="text-align:center;">19.6ms</td>
+            <td style="text-align:center;"><span class="cross">Full snapshot</span></td>
+            <td style="text-align:center;">+1 container</td>
+          </tr>
+          <tr>
+            <td>Debezium</td>
+            <td style="text-align:center;">1/8</td>
+            <td style="text-align:center;">4.3s</td>
+            <td style="text-align:center;"><span class="cross">Row events</span></td>
+            <td style="text-align:center;">+3 containers</td>
+          </tr>
+          <tr>
+            <td>Supabase</td>
+            <td style="text-align:center;">1/8</td>
+            <td style="text-align:center;">N/A</td>
+            <td style="text-align:center;"><span class="cross">Row events</span></td>
+            <td style="text-align:center;">+1 container</td>
+          </tr>
+          <tr>
+            <td>ElectricSQL</td>
+            <td style="text-align:center;">1/8</td>
+            <td style="text-align:center;">7.5ms</td>
+            <td style="text-align:center;"><span class="cross">Row events</span></td>
+            <td style="text-align:center;">+1 container</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="final-line">pg_reactive fills a gap that no existing tool addresses.</p>
+  </div>
+</section>
+
+<script>
+/* ===================================================================
+   Mermaid Initialization (dark theme)
+   =================================================================== */
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    darkMode: true,
+    background: '#0d1117',
+    primaryColor: '#161b22',
+    primaryTextColor: '#c9d1d9',
+    primaryBorderColor: '#58a6ff',
+    lineColor: '#58a6ff',
+    secondaryColor: '#1c2129',
+    tertiaryColor: '#161b22',
+    fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif',
+    fontSize: '14px',
+    nodeBorder: '#30363d',
+    clusterBkg: '#0d1117',
+    clusterBorder: '#30363d',
+    edgeLabelBackground: '#161b22',
+    attributeBackgroundColorEven: '#161b22',
+    attributeBackgroundColorOdd: '#1c2129'
+  },
+  flowchart: {
+    htmlLabels: true,
+    curve: 'basis',
+    padding: 16,
+    nodeSpacing: 40,
+    rankSpacing: 50
+  },
+  er: {
+    layoutDirection: 'TB',
+    entityPadding: 12,
+    fontSize: 13,
+    useMaxWidth: true
+  }
+});
+
+/* ===================================================================
+   Navigation Dots
+   =================================================================== */
+(function() {
+  var slides = document.querySelectorAll('.slide');
+  var navContainer = document.getElementById('nav-dots');
+
+  slides.forEach(function(slide, i) {
+    var dot = document.createElement('button');
+    dot.className = 'nav-dot';
+    dot.setAttribute('aria-label', 'Go to ' + slide.getAttribute('data-nav'));
+    dot.title = slide.getAttribute('data-nav');
+
+    var tooltip = document.createElement('span');
+    tooltip.className = 'nav-dot-tooltip';
+    tooltip.textContent = slide.getAttribute('data-nav');
+    dot.appendChild(tooltip);
+
+    dot.addEventListener('click', function() {
+      slide.scrollIntoView({ behavior: 'smooth' });
+    });
+
+    navContainer.appendChild(dot);
+  });
+
+  var dots = navContainer.querySelectorAll('.nav-dot');
+
+  /* Intersection observer for active dot */
+  var dotObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        var idx = Array.prototype.indexOf.call(slides, entry.target);
+        dots.forEach(function(d, j) {
+          d.classList.toggle('active', j === idx);
+        });
+      }
+    });
+  }, { threshold: 0.4 });
+
+  slides.forEach(function(slide) {
+    dotObserver.observe(slide);
+  });
+})();
+
+/* ===================================================================
+   Slide Fade-In on Scroll
+   =================================================================== */
+(function() {
+  var slides = document.querySelectorAll('.slide');
+  var slideObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.15 });
+
+  slides.forEach(function(slide) {
+    slideObserver.observe(slide);
+  });
+})();
+
+/* ===================================================================
+   Chart.js Global Defaults
+   =================================================================== */
+Chart.defaults.color = '#8b949e';
+Chart.defaults.borderColor = '#30363d';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
+
+/* ===================================================================
+   Latency Chart (Horizontal Bar)
+   =================================================================== */
+var latencyChartInitialized = false;
+
+function initLatencyChart() {
+  if (latencyChartInitialized) return;
+  latencyChartInitialized = true;
+
+  var ctx = document.getElementById('latencyChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['LISTEN/NOTIFY', 'pg_ivm', 'Polling', 'pg_reactive', 'ElectricSQL', 'Hasura'],
+      datasets: [{
+        label: 'p50 Latency (us)',
+        data: [717, 1820, 2766, 5668, 7512, 19636],
+        backgroundColor: [
+          '#8b949e',
+          '#f0883e',
+          '#8b949e',
+          '#58a6ff',
+          '#f778ba',
+          '#a371f7'
+        ],
+        borderColor: [
+          '#8b949e',
+          '#f0883e',
+          '#8b949e',
+          '#58a6ff',
+          '#f778ba',
+          '#a371f7'
+        ],
+        borderWidth: 1,
+        borderRadius: 4,
+        barPercentage: 0.7
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              return ctx.parsed.x.toLocaleString() + ' us';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: {
+            display: true,
+            text: 'Microseconds (us)',
+            color: '#8b949e'
+          },
+          grid: { color: 'rgba(48, 54, 61, 0.5)' },
+          ticks: {
+            callback: function(value) {
+              return value >= 1000 ? (value / 1000) + 'ms' : value + 'us';
+            }
+          }
+        },
+        y: {
+          grid: { display: false },
+          ticks: {
+            font: { size: 13, weight: 'bold' },
+            color: function(context) {
+              var labels = ['LISTEN/NOTIFY', 'pg_ivm', 'Polling', 'pg_reactive', 'ElectricSQL', 'Hasura'];
+              return labels[context.index] === 'pg_reactive' ? '#58a6ff' : '#c9d1d9';
+            }
+          }
+        }
+      },
+      animation: {
+        duration: 1200,
+        easing: 'easeOutQuart'
+      }
+    }
+  });
+}
+
+/* ===================================================================
+   Write Overhead Chart (Grouped Vertical Bar)
+   =================================================================== */
+var writeChartInitialized = false;
+
+function initWriteChart() {
+  if (writeChartInitialized) return;
+  writeChartInitialized = true;
+
+  var ctx = document.getElementById('writeChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['pg_reactive', 'pg_ivm', 'LISTEN/NOTIFY', 'Polling'],
+      datasets: [
+        {
+          label: 'Baseline (0 subs)',
+          data: [2348, 2348, 2348, 2348],
+          backgroundColor: '#30363d',
+          borderColor: '#484f58',
+          borderWidth: 1,
+          borderRadius: 4
+        },
+        {
+          label: '1 Subscription',
+          data: [35, 833, 1939, 2348],
+          backgroundColor: '#58a6ff',
+          borderColor: '#79b8ff',
+          borderWidth: 1,
+          borderRadius: 4
+        },
+        {
+          label: '10 Subscriptions',
+          data: [15, 120, 1800, 2348],
+          backgroundColor: '#1f6feb',
+          borderColor: '#388bfd',
+          borderWidth: 1,
+          borderRadius: 4
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: {
+            padding: 20,
+            usePointStyle: true,
+            pointStyle: 'rectRounded'
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              return ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString() + ' TPS';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: {
+            font: { size: 13, weight: 'bold' },
+            color: function(context) {
+              var labels = ['pg_reactive', 'pg_ivm', 'LISTEN/NOTIFY', 'Polling'];
+              return labels[context.index] === 'pg_reactive' ? '#58a6ff' : '#c9d1d9';
+            }
+          }
+        },
+        y: {
+          title: {
+            display: true,
+            text: 'Transactions per Second (TPS)',
+            color: '#8b949e'
+          },
+          grid: { color: 'rgba(48, 54, 61, 0.5)' },
+          ticks: {
+            callback: function(value) {
+              return value.toLocaleString();
+            }
+          }
+        }
+      },
+      animation: {
+        duration: 1200,
+        easing: 'easeOutQuart'
+      }
+    }
+  });
+}
+
+/* ===================================================================
+   Subscription Scaling Chart (Line)
+   =================================================================== */
+var scalingChartInitialized = false;
+
+function initScalingChart() {
+  if (scalingChartInitialized) return;
+  scalingChartInitialized = true;
+
+  var ctx = document.getElementById('scalingChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [0, 1, 5, 10, 25, 50],
+      datasets: [
+        {
+          label: 'pg_reactive',
+          data: [2348, 35, 20, 15, 8, 4],
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88, 166, 255, 0.1)',
+          borderWidth: 3,
+          tension: 0.3,
+          pointBackgroundColor: '#58a6ff',
+          pointBorderColor: '#58a6ff',
+          pointRadius: 5,
+          pointHoverRadius: 7,
+          fill: true
+        },
+        {
+          label: 'pg_ivm',
+          data: [2348, 833, 400, 120, 50, null],
+          borderColor: '#f0883e',
+          backgroundColor: 'rgba(240, 136, 62, 0.1)',
+          borderWidth: 3,
+          tension: 0.3,
+          pointBackgroundColor: '#f0883e',
+          pointBorderColor: '#f0883e',
+          pointRadius: 5,
+          pointHoverRadius: 7,
+          fill: true
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: {
+            padding: 20,
+            usePointStyle: true,
+            pointStyle: 'circle'
+          }
+        },
+        tooltip: {
+          callbacks: {
+            title: function(items) {
+              return items[0].label + ' subscriptions';
+            },
+            label: function(ctx) {
+              if (ctx.parsed.y === null) return ctx.dataset.label + ': N/A';
+              return ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString() + ' TPS';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: {
+            display: true,
+            text: 'Active Subscriptions',
+            color: '#8b949e'
+          },
+          grid: { color: 'rgba(48, 54, 61, 0.5)' }
+        },
+        y: {
+          type: 'logarithmic',
+          title: {
+            display: true,
+            text: 'Transactions per Second (TPS, log scale)',
+            color: '#8b949e'
+          },
+          grid: { color: 'rgba(48, 54, 61, 0.5)' },
+          min: 1,
+          ticks: {
+            callback: function(value) {
+              if ([1, 5, 10, 50, 100, 500, 1000, 2500].indexOf(value) !== -1) {
+                return value.toLocaleString();
+              }
+              return '';
+            }
+          }
+        }
+      },
+      animation: {
+        duration: 1500,
+        easing: 'easeOutQuart'
+      }
+    }
+  });
+}
+
+/* ===================================================================
+   Initialize Charts on Scroll into View
+   =================================================================== */
+(function() {
+  var chartMap = {
+    'slide-latency': initLatencyChart,
+    'slide-write': initWriteChart,
+    'slide-scaling': initScalingChart
+  };
+
+  var chartObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting && chartMap[entry.target.id]) {
+        /* Small delay so the slide fade-in runs first */
+        setTimeout(chartMap[entry.target.id], 300);
+      }
+    });
+  }, { threshold: 0.3 });
+
+  Object.keys(chartMap).forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) chartObserver.observe(el);
+  });
+})();
+</script>
+
+</body>
+</html>

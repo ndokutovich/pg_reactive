@@ -133,6 +133,56 @@ def main():
                     "Level 0 (baseline): TPS={:<8.1f} p50={:.2f}ms  "
                     "p95={:.2f}ms  p99={:.2f}ms".format(tps, p50, p95, p99)
                 )
+
+                # --- Raw NOTIFY baseline ---
+                raw_cur = conn.cursor()
+                raw_cur.execute(
+                    "CREATE OR REPLACE FUNCTION p1_raw_notify() "
+                    "RETURNS trigger AS $$ "
+                    "BEGIN PERFORM pg_notify('pgr_raw', "
+                    "row_to_json(NEW)::text); RETURN NEW; END; "
+                    "$$ LANGUAGE plpgsql"
+                )
+                raw_cur.execute(
+                    "CREATE TRIGGER p1_raw_trg AFTER INSERT ON p1_data "
+                    "FOR EACH ROW EXECUTE FUNCTION p1_raw_notify()"
+                )
+                raw_cur.close()
+
+                raw_lats, next_val = run_level(conn, level, next_val)
+                raw_lats.sort()
+
+                raw_tps = len(raw_lats) / DURATION_SECONDS
+                raw_p50 = percentile(raw_lats, 50) * 1000
+                raw_p95 = percentile(raw_lats, 95) * 1000
+                raw_p99 = percentile(raw_lats, 99) * 1000
+                raw_overhead = ((baseline_tps - raw_tps) / baseline_tps) * 100
+
+                results["raw_notify"] = {
+                    "tps": raw_tps,
+                    "p50": raw_p50,
+                    "p95": raw_p95,
+                    "p99": raw_p99,
+                    "count": len(raw_lats),
+                    "overhead": raw_overhead,
+                }
+
+                print(
+                    "raw_notify:          TPS={:<8.1f} p50={:.2f}ms  "
+                    "p95={:.2f}ms  p99={:.2f}ms  overhead=+{:.0f}%".format(
+                        raw_tps, raw_p50, raw_p95, raw_p99, raw_overhead
+                    )
+                )
+
+                raw_cur = conn.cursor()
+                raw_cur.execute(
+                    "DROP TRIGGER IF EXISTS p1_raw_trg ON p1_data"
+                )
+                raw_cur.execute(
+                    "DROP FUNCTION IF EXISTS p1_raw_notify()"
+                )
+                raw_cur.close()
+
             else:
                 overhead = ((baseline_tps - tps) / baseline_tps) * 100
                 results[level]["overhead"] = overhead
@@ -168,6 +218,36 @@ def main():
                 )
             )
 
+        # Comparison summary: baseline → raw NOTIFY → full pgr
+        print("\n--- Comparison ---")
+        print(
+            "baseline:    TPS={:<8.1f} p50={:.2f}ms".format(
+                results[0]["tps"], results[0]["p50"]
+            )
+        )
+        if "raw_notify" in results:
+            print(
+                "raw_notify:  TPS={:<8.1f} p50={:.2f}ms  "
+                "(NOTIFY overhead: +{:.0f}%)".format(
+                    results["raw_notify"]["tps"],
+                    results["raw_notify"]["p50"],
+                    results["raw_notify"]["overhead"],
+                )
+            )
+        if 1 in results:
+            pgr_overhead = (
+                (results[0]["tps"] - results[1]["tps"])
+                / results[0]["tps"]
+            ) * 100
+            print(
+                "1 sub (pgr): TPS={:<8.1f} p50={:.2f}ms  "
+                "(full pgr overhead: +{:.0f}%)".format(
+                    results[1]["tps"],
+                    results[1]["p50"],
+                    pgr_overhead,
+                )
+            )
+
         if passed:
             print("\n=== P1: PASS ===")
         else:
@@ -189,6 +269,15 @@ def main():
                 cleanup_cur.execute(
                     "SELECT pgr.unsubscribe(%s)", (row[0],)
                 )
+        except Exception:
+            pass
+        try:
+            cleanup_cur.execute(
+                "DROP TRIGGER IF EXISTS p1_raw_trg ON p1_data"
+            )
+            cleanup_cur.execute(
+                "DROP FUNCTION IF EXISTS p1_raw_notify()"
+            )
         except Exception:
             pass
         try:
