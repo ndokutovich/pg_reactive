@@ -93,6 +93,10 @@ pgr_recompute_for_table(Oid table_oid)
  * Build a JSON delta object by comparing the snapshot table against
  * a fresh execution of the query.
  *
+ * Optimization: the user query is executed once into a temp table, then
+ * the cached result is used for EXCEPT comparisons and snapshot refresh.
+ * This avoids re-executing the (potentially expensive) user query 3 times.
+ *
  * Returns a palloc'd JSON string like:
  * {"query_id":"q1","inserted":[...],"deleted":[...]}
  *
@@ -114,15 +118,43 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 	appendStringInfo(&snap_name, "pgr.\"_snap_%s\"", query_id);
 
 	/*
-	 * Compute inserted rows: new EXCEPT old
-	 * (rows in current query result but not in snapshot)
+	 * Cache the user query result in a session-local temp table.
+	 * This is the only execution of the user query — all subsequent
+	 * operations use table scans on the cached result.
+	 *
+	 * Suppress NOTICE from DROP TABLE IF EXISTS when table doesn't exist.
 	 */
+	SPI_execute("SET LOCAL client_min_messages TO warning", false, 0);
+	SPI_execute("DROP TABLE IF EXISTS _pgr_recompute", false, 0);
+	SPI_execute("RESET client_min_messages", false, 0);
+
 	initStringInfo(&sql);
 	appendStringInfo(&sql,
-					 "(%s) EXCEPT (SELECT * FROM %s)",
-					 query_text, snap_name.data);
+					 "CREATE TEMP TABLE _pgr_recompute AS %s",
+					 query_text);
+	ret = SPI_execute(sql.data, false, 0);
+	if (ret < 0)
+	{
+		elog(WARNING, "pg_reactive: failed to cache query for %s", query_id);
+		pfree(snap_name.data);
+		pfree(sql.data);
+		return NULL;
+	}
 
-	ret = SPI_execute(sql.data, true, 0);
+	/*
+	 * Compute inserted rows: cached EXCEPT snapshot (table scans only)
+	 */
+	resetStringInfo(&sql);
+	appendStringInfo(&sql,
+					 "(SELECT * FROM _pgr_recompute) EXCEPT (SELECT * FROM %s)",
+					 snap_name.data);
+
+	/*
+	 * Use read_only=false so SPI gets a fresh GetTransactionSnapshot()
+	 * that can see the temp table data (the active snapshot was pushed
+	 * before CREATE TEMP TABLE and has a stale command counter).
+	 */
+	ret = SPI_execute(sql.data, false, 0);
 	if (ret == SPI_OK_SELECT && SPI_processed > 0)
 	{
 		ins_count = SPI_processed;
@@ -131,15 +163,14 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 	}
 
 	/*
-	 * Compute deleted rows: old EXCEPT new
-	 * (rows in snapshot but not in current query result)
+	 * Compute deleted rows: snapshot EXCEPT cached (table scans only)
 	 */
 	resetStringInfo(&sql);
 	appendStringInfo(&sql,
-					 "(SELECT * FROM %s) EXCEPT (%s)",
-					 snap_name.data, query_text);
+					 "(SELECT * FROM %s) EXCEPT (SELECT * FROM _pgr_recompute)",
+					 snap_name.data);
 
-	ret = SPI_execute(sql.data, true, 0);
+	ret = SPI_execute(sql.data, false, 0);
 	if (ret == SPI_OK_SELECT && SPI_processed > 0)
 	{
 		del_count = SPI_processed;
@@ -147,15 +178,18 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 											  SPI_tuptable->tupdesc);
 	}
 
-	/* If no changes, skip notification */
+	/* If no changes, skip notification and cleanup */
 	if (ins_count == 0 && del_count == 0)
 	{
+		SPI_execute("SET LOCAL client_min_messages TO warning", false, 0);
+		SPI_execute("DROP TABLE IF EXISTS _pgr_recompute", false, 0);
+		SPI_execute("RESET client_min_messages", false, 0);
 		pfree(snap_name.data);
 		pfree(sql.data);
 		return NULL;
 	}
 
-	/* Update the snapshot to the current state */
+	/* Refresh snapshot: DELETE + copy from cached result */
 	resetStringInfo(&sql);
 	appendStringInfo(&sql,
 					 "DELETE FROM %s", snap_name.data);
@@ -166,11 +200,17 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 
 	resetStringInfo(&sql);
 	appendStringInfo(&sql,
-					 "INSERT INTO %s %s", snap_name.data, query_text);
+					 "INSERT INTO %s SELECT * FROM _pgr_recompute",
+					 snap_name.data);
 	ret = SPI_execute(sql.data, false, 0);
 	if (ret < 0)
-		elog(WARNING, "pg_reactive: failed to update snapshot %s (SPI error %d)",
+		elog(WARNING, "pg_reactive: failed to refresh snapshot %s (SPI error %d)",
 			 snap_name.data, ret);
+
+	/* Cleanup temp table */
+	SPI_execute("SET LOCAL client_min_messages TO warning", false, 0);
+	SPI_execute("DROP TABLE IF EXISTS _pgr_recompute", false, 0);
+	SPI_execute("RESET client_min_messages", false, 0);
 
 	/* Build result JSON */
 	initStringInfo(&result);
