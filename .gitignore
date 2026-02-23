@@ -41,6 +41,12 @@ pgdata/
 Thumbs.db
 ~$*
 
+# Logs
+*.log
+
+# Playwright MCP
+.playwright-mcp/
+
 # Env
 .env
 .env.local
