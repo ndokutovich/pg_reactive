@@ -5,9 +5,9 @@ CREATE TABLE t1 (id serial PRIMARY KEY, val text);
 CREATE TABLE t2 (id serial PRIMARY KEY, val text);
 -- Subscribe to a query on t1
 SELECT pgr.subscribe('inv_q1', 'SELECT * FROM t1');
-                          subscribe                          
--------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "inv_q1"}
+                                  subscribe                                   
+------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "inv_q1"}
 (1 row)
 
 -- Verify triggers were auto-installed on t1
@@ -32,9 +32,9 @@ WHERE tgrelid = 't2'::regclass
 
 -- Subscribe to a query that references both t1 and t2
 SELECT pgr.subscribe('inv_q2', 'SELECT t1.id, t2.val FROM t1 JOIN t2 ON t1.id = t2.id');
-                          subscribe                          
--------------------------------------------------------------
- {"status": "subscribed", "tables": 2, "query_id": "inv_q2"}
+                                  subscribe                                   
+------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 2, "query_id": "inv_q2"}
 (1 row)
 
 -- Now t2 should also have triggers
@@ -108,9 +108,9 @@ WHERE tgrelid = 't1'::regclass
 
 -- TRUNCATE DDL hook test: subscribe, truncate, check invalidation
 SELECT pgr.subscribe('inv_q3', 'SELECT * FROM t1');
-                          subscribe                          
--------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "inv_q3"}
+                                  subscribe                                   
+------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "inv_q3"}
 (1 row)
 
 -- Record current invalidation count before TRUNCATE
@@ -133,9 +133,9 @@ SELECT pgr.unsubscribe('inv_q3');
 
 -- ALTER TABLE DDL hook test: subscribe, alter table, check invalidation
 SELECT pgr.subscribe('inv_q4', 'SELECT id, val FROM t1');
-                          subscribe                          
--------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "inv_q4"}
+                                  subscribe                                   
+------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "inv_q4"}
 (1 row)
 
 -- Record current invalidation count before ALTER TABLE

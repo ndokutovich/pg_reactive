@@ -58,6 +58,26 @@ pgr_recompute_for_table(Oid table_oid)
 		if (entry == NULL)
 			continue;
 
+		/* Notify mode: lightweight invalidation, no query execution */
+		if (entry->mode == 'n')
+		{
+			StringInfoData inv;
+
+			initStringInfo(&inv);
+			appendStringInfo(&inv,
+							 "{\"type\":\"invalidated\",\"query_id\":\"%s\"}",
+							 entry->query_id);
+			Async_Notify(PGR_NOTIFY_CHANNEL, inv.data);
+			pfree(inv.data);
+
+			LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
+			entry->last_invalidated = GetCurrentTimestamp();
+			entry->invalidation_count++;
+			LWLockRelease(pgr_state->lock);
+			continue;
+		}
+
+		/* Delta mode: full EXCEPT-based diff computation */
 		delta_json = pgr_build_delta_json(entry->query_id,
 										  entry->query_text);
 

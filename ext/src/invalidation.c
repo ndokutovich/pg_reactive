@@ -506,6 +506,7 @@ pgr_remove_update_trigger(Oid table_oid, const char *query_id)
 		quote_identifier(relname));
 
 	SPI_connect();
+	SPI_execute("SET LOCAL client_min_messages TO warning", false, 0);
 	SPI_execute(buf.data, false, 0);
 	SPI_finish();
 	pfree(buf.data);

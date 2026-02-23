@@ -39,6 +39,7 @@ typedef struct PgrDepEntry
 	TimestampTz	subscribed_at;
 	TimestampTz	last_invalidated;
 	int64		invalidation_count;
+	char		mode;			/* 'd' = delta, 'n' = notify */
 } PgrDepEntry;
 
 /*
@@ -62,6 +63,7 @@ typedef struct PgrEvictedInfo
 	char		query_id[PGR_QUERY_ID_LEN];
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
 	int			num_tables;
+	char		mode;			/* mode of evicted entry */
 } PgrEvictedInfo;
 
 /* Global pointers to shared memory structures */
@@ -73,7 +75,7 @@ extern void pgr_shmem_request(void);
 extern void pgr_shmem_startup(void);
 extern PgrDepEntry *pgr_dep_add(const char *query_id, const char *query_text,
 								Oid *table_oids, uint64 *col_masks,
-								int num_tables,
+								int num_tables, char mode,
 								PgrEvictedInfo *evicted);
 extern bool pgr_dep_remove(const char *query_id);
 extern PgrDepEntry *pgr_dep_find(const char *query_id);

@@ -387,7 +387,7 @@ pgr_extract_deps(const char *query_text, Oid *table_oids,
 }
 
 /*
- * SQL function: pgr.subscribe(query_id text, query text) -> jsonb
+ * SQL function: pgr.subscribe(query_id text, query text, mode text DEFAULT 'delta') -> jsonb
  */
 PG_FUNCTION_INFO_V1(pgr_subscribe);
 Datum
@@ -397,11 +397,29 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	text	   *query_text = PG_GETARG_TEXT_PP(1);
 	char	   *query_id = text_to_cstring(query_id_text);
 	char	   *query_str = text_to_cstring(query_text);
+	char	   *mode_str;
+	char		mode_char;
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
 	uint64		col_masks[PGR_MAX_DEPS_PER_QUERY];
 	int			num_tables;
 	PgrEvictedInfo evicted;
 	StringInfoData buf;
+
+	/* Parse and validate mode parameter (default: 'delta') */
+	if (PG_NARGS() >= 3 && !PG_ARGISNULL(2))
+		mode_str = text_to_cstring(PG_GETARG_TEXT_PP(2));
+	else
+		mode_str = "delta";
+
+	if (strcmp(mode_str, "delta") == 0)
+		mode_char = 'd';
+	else if (strcmp(mode_str, "notify") == 0)
+		mode_char = 'n';
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid mode \"%s\": must be 'delta' or 'notify'",
+						mode_str)));
 
 	/* Validate query_id length */
 	if (strlen(query_id) >= PGR_QUERY_ID_LEN)
@@ -427,14 +445,16 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("could not extract any table references from query")));
 
-	/* Create snapshot table first — validates the query and fails early
-	 * if the query is invalid (before we touch shared memory). */
-	pgr_snapshot_create(query_id, query_str);
+	/* Create snapshot table for delta mode — validates the query and fails
+	 * early if the query is invalid (before we touch shared memory).
+	 * Notify mode skips snapshot creation entirely. */
+	if (mode_char == 'd')
+		pgr_snapshot_create(query_id, query_str);
 
 	/* Register in shared memory (only after snapshot succeeds).
 	 * If shmem is full, pgr_dep_add evicts the oldest entry. */
 	pgr_dep_add(query_id, query_str, table_oids, col_masks, num_tables,
-				&evicted);
+				mode_char, &evicted);
 
 	/* Clean up evicted subscription if one was evicted */
 	if (evicted.evicted)
@@ -442,8 +462,9 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 		int		i;
 		char	dummy[1][PGR_QUERY_ID_LEN];
 
-		/* Drop the evicted subscription's snapshot table */
-		pgr_snapshot_drop(evicted.query_id);
+		/* Drop the evicted subscription's snapshot table (delta mode only) */
+		if (evicted.mode == 'd')
+			pgr_snapshot_drop(evicted.query_id);
 
 		/* Remove its per-query UPDATE triggers and clean up base triggers */
 		for (i = 0; i < evicted.num_tables; i++)
@@ -460,13 +481,16 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	}
 
 	/* Install triggers on any tables that don't have them yet.
-	 * For UPDATE triggers, install per-query column-specific triggers. */
+	 * For UPDATE triggers, drop existing per-query trigger first (re-subscribe),
+	 * then install per-query column-specific triggers. */
 	{
 		int		i;
 		for (i = 0; i < num_tables; i++)
 		{
 			if (!pgr_has_triggers(table_oids[i]))
 				pgr_install_triggers(table_oids[i]);
+			/* Drop existing per-query trigger if re-subscribing */
+			pgr_remove_update_trigger(table_oids[i], query_id);
 			/* Install per-query UPDATE trigger with column list */
 			pgr_install_update_trigger(table_oids[i], query_id,
 									   col_masks[i]);
@@ -476,8 +500,8 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	/* Build JSON result */
 	initStringInfo(&buf);
 	appendStringInfo(&buf,
-					 "{\"query_id\": \"%s\", \"tables\": %d, \"status\": \"subscribed\"}",
-					 query_id, num_tables);
+					 "{\"query_id\": \"%s\", \"tables\": %d, \"mode\": \"%s\", \"status\": \"subscribed\"}",
+					 query_id, num_tables, mode_str);
 
 	PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
 										CStringGetDatum(buf.data)));
@@ -494,16 +518,22 @@ pgr_unsubscribe(PG_FUNCTION_ARGS)
 	char	   *query_id = text_to_cstring(query_id_text);
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
 	int			num_tables = 0;
+	char		entry_mode = 'd';
 	bool		found;
+	PgrDepEntry *entry;
 
-	/* Copy table OIDs under lock before removing (avoids race with eviction) */
+	/* Read mode and copy table OIDs under lock before removing */
+	entry = pgr_dep_find(query_id);
+	if (entry != NULL)
+		entry_mode = entry->mode;
+
 	num_tables = pgr_dep_copy_tables(query_id, table_oids,
 									 PGR_MAX_DEPS_PER_QUERY);
 
 	found = pgr_dep_remove(query_id);
 
-	/* Drop the snapshot table */
-	if (found)
+	/* Drop the snapshot table (delta mode only — notify has no snapshot) */
+	if (found && entry_mode == 'd')
 		pgr_snapshot_drop(query_id);
 
 	/* Remove per-query UPDATE triggers and check if base triggers can go */
@@ -549,7 +579,7 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-		tupdesc = CreateTemplateTupleDesc(5);
+		tupdesc = CreateTemplateTupleDesc(6);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "query_id",
 						   TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "query_text",
@@ -560,6 +590,8 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 						   TIMESTAMPTZOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 5, "invalidation_count",
 						   INT8OID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 6, "mode",
+						   TEXTOID, -1, 0);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
@@ -579,8 +611,8 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 
 	if (entry != NULL)
 	{
-		Datum		values[5];
-		bool		nulls[5];
+		Datum		values[6];
+		bool		nulls[6];
 		HeapTuple	tuple;
 
 		memset(nulls, 0, sizeof(nulls));
@@ -589,6 +621,7 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 		values[2] = Int32GetDatum(entry->num_tables);
 		values[3] = TimestampTzGetDatum(entry->subscribed_at);
 		values[4] = Int64GetDatum(entry->invalidation_count);
+		values[5] = CStringGetTextDatum(entry->mode == 'n' ? "notify" : "delta");
 
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));

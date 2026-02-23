@@ -4,9 +4,9 @@ CREATE EXTENSION pg_reactive;
 CREATE TABLE big_data (id serial PRIMARY KEY, payload text);
 -- Subscribe
 SELECT pgr.subscribe('overflow_q', 'SELECT id, payload FROM big_data');
-                            subscribe                            
------------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "overflow_q"}
+                                    subscribe                                     
+----------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "overflow_q"}
 (1 row)
 
 -- Insert a small row — should produce a normal delta notification

@@ -98,7 +98,7 @@ pgr_shmem_startup(void)
 PgrDepEntry *
 pgr_dep_add(const char *query_id, const char *query_text,
 			Oid *table_oids, uint64 *col_masks, int num_tables,
-			PgrEvictedInfo *evicted)
+			char mode, PgrEvictedInfo *evicted)
 {
 	PgrDepEntry *entry;
 	bool		found;
@@ -161,6 +161,7 @@ pgr_dep_add(const char *query_id, const char *query_text,
 			evicted->num_tables = oldest->num_tables;
 			memcpy(evicted->table_oids, oldest->table_oids,
 				   oldest->num_tables * sizeof(Oid));
+			evicted->mode = oldest->mode;
 		}
 
 		/* Remove the oldest entry */
@@ -184,6 +185,8 @@ pgr_dep_add(const char *query_id, const char *query_text,
 	memcpy(entry->table_oids, table_oids, num_tables * sizeof(Oid));
 	memset(entry->col_masks, 0, sizeof(entry->col_masks));
 	memcpy(entry->col_masks, col_masks, num_tables * sizeof(uint64));
+
+	entry->mode = mode;
 
 	if (!found)
 	{

@@ -30,6 +30,7 @@ export interface PgReactiveAdminOptions {
 export interface RegisteredQuery {
   query_id: string;
   tables: number;
+  mode: string;
   status: string;
 }
 
@@ -37,6 +38,7 @@ export interface Subscription {
   query_id: string;
   query_text: string;
   num_tables: number;
+  mode: string;
 }
 
 export class PgReactiveAdmin {
@@ -53,17 +55,20 @@ export class PgReactiveAdmin {
 
   /**
    * Register a live query subscription in PostgreSQL.
-   * Calls pgr.subscribe(query_id, sql).
+   * Calls pgr.subscribe(query_id, sql, mode).
+   *
+   * @param mode - 'delta' (default) for full diff, 'notify' for lightweight invalidation
    */
-  async register(queryId: string, sql: string): Promise<RegisteredQuery> {
+  async register(queryId: string, sql: string, mode: "delta" | "notify" = "delta"): Promise<RegisteredQuery> {
     const result = await this.pool.query(
-      "SELECT pgr.subscribe($1, $2) AS result",
-      [queryId, sql],
+      "SELECT pgr.subscribe($1, $2, $3) AS result",
+      [queryId, sql, mode],
     );
     const jsonb = result.rows[0].result;
     return {
       query_id: jsonb.query_id,
       tables: jsonb.tables,
+      mode: jsonb.mode,
       status: jsonb.status,
     };
   }
@@ -85,12 +90,13 @@ export class PgReactiveAdmin {
    */
   async listSubscriptions(): Promise<Subscription[]> {
     const result = await this.pool.query(
-      "SELECT query_id, query_text, num_tables FROM pgr.subscriptions ORDER BY query_id",
+      "SELECT query_id, query_text, num_tables, mode FROM pgr.subscriptions ORDER BY query_id",
     );
     return result.rows.map((row) => ({
       query_id: row.query_id,
       query_text: row.query_text,
       num_tables: row.num_tables,
+      mode: row.mode,
     }));
   }
 

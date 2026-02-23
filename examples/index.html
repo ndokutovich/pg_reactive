@@ -44,7 +44,7 @@
 
 <header>
   <h1><span>pg_reactive</span> Examples</h1>
-  <p>10 live applications showing real-time SQL subscriptions — from simple filters to executive dashboards.</p>
+  <p>11 live applications showing real-time SQL subscriptions — from simple filters to executive dashboards.</p>
 </header>
 
 <div class="examples">
@@ -146,6 +146,16 @@
     </div>
     <div class="card-desc">Single-row aggregate KPI dashboard with 6 computed metrics. Every order updates all cards simultaneously: revenue, customers, avg value, and more.</div>
     <span class="card-sql">COUNT(DISTINCT ...) + SUM/AVG + NULLIF ratio</span>
+  </a>
+
+  <a class="card" href="11-notify-mode/app.html" style="border-color: #d29922;">
+    <div class="card-header">
+      <div class="card-num" style="background:#d29922;">11</div>
+      <div class="card-title">Notify Mode vs Delta Mode</div>
+      <span class="card-badge" style="background:#d2992233;color:#d29922;">New</span>
+    </div>
+    <div class="card-desc">Side-by-side comparison of notify mode (lightweight invalidation) vs delta mode (full row diffs). Watch the byte difference — notify sends ~50B per event vs hundreds for deltas.</div>
+    <span class="card-sql">pgr.subscribe('q', 'SELECT ...', 'notify')</span>
   </a>
 </div>
 

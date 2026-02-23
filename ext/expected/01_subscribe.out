@@ -5,9 +5,9 @@ CREATE TABLE orders (id serial PRIMARY KEY, customer_id int, total numeric, stat
 CREATE TABLE customers (id serial PRIMARY KEY, name text);
 -- Subscribe to a simple query
 SELECT pgr.subscribe('q1', 'SELECT * FROM orders WHERE status = ''pending''');
-                        subscribe                        
----------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "q1"}
+                                subscribe                                 
+--------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "q1"}
 (1 row)
 
 -- Verify it appears in subscriptions
@@ -19,9 +19,9 @@ SELECT query_id, num_tables FROM pgr.subscriptions;
 
 -- Subscribe to a multi-table query
 SELECT pgr.subscribe('q2', 'SELECT o.id, c.name FROM orders o JOIN customers c ON o.customer_id = c.id');
-                        subscribe                        
----------------------------------------------------------
- {"status": "subscribed", "tables": 2, "query_id": "q2"}
+                                subscribe                                 
+--------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 2, "query_id": "q2"}
 (1 row)
 
 -- Should now have 2 subscriptions
@@ -62,9 +62,9 @@ SELECT pgr.unsubscribe('does_not_exist');
 
 -- Re-subscribe q1 (should work, updating the entry)
 SELECT pgr.subscribe('q1', 'SELECT * FROM orders');
-                        subscribe                        
----------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "q1"}
+                                subscribe                                 
+--------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "q1"}
 (1 row)
 
 SELECT query_id, num_tables FROM pgr.subscriptions ORDER BY query_id;

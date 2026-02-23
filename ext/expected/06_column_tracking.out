@@ -9,9 +9,9 @@ INSERT INTO coltrack (name, val, status) VALUES
     ('charlie', 30, 'active');
 -- Subscribe to a query that only uses id and name columns
 SELECT pgr.subscribe('ct_partial', 'SELECT id, name FROM coltrack');
-                            subscribe                            
------------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "ct_partial"}
+                                    subscribe                                     
+----------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "ct_partial"}
 (1 row)
 
 -- Verify snapshot was created
@@ -66,9 +66,9 @@ SELECT pgr.unsubscribe('ct_partial');
 
 -- Test 2: SELECT * should track all columns
 SELECT pgr.subscribe('ct_star', 'SELECT * FROM coltrack');
-                          subscribe                           
---------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "ct_star"}
+                                   subscribe                                   
+-------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "ct_star"}
 (1 row)
 
 SELECT value::bigint AS inv_before3 FROM pgr.stats() WHERE metric = 'total_invalidations' \gset
@@ -88,9 +88,9 @@ SELECT pgr.unsubscribe('ct_star');
 
 -- Test 3: WHERE clause column tracking
 SELECT pgr.subscribe('ct_where', 'SELECT id, name FROM coltrack WHERE status = ''active''');
-                           subscribe                           
----------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "ct_where"}
+                                   subscribe                                    
+--------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "ct_where"}
 (1 row)
 
 SELECT value::bigint AS inv_before4 FROM pgr.stats() WHERE metric = 'total_invalidations' \gset
@@ -117,9 +117,9 @@ SELECT pgr.unsubscribe('ct_where');
 
 -- Test 4: INSERT always invalidates (regardless of column tracking)
 SELECT pgr.subscribe('ct_insert', 'SELECT id, name FROM coltrack');
-                           subscribe                            
-----------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "ct_insert"}
+                                    subscribe                                    
+---------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "ct_insert"}
 (1 row)
 
 SELECT value::bigint AS inv_before5 FROM pgr.stats() WHERE metric = 'total_invalidations' \gset
@@ -138,9 +138,9 @@ SELECT pgr.unsubscribe('ct_insert');
 
 -- Test 5: DELETE always invalidates
 SELECT pgr.subscribe('ct_delete', 'SELECT id, name FROM coltrack');
-                           subscribe                            
-----------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "ct_delete"}
+                                    subscribe                                    
+---------------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "ct_delete"}
 (1 row)
 
 SELECT value::bigint AS inv_before6 FROM pgr.stats() WHERE metric = 'total_invalidations' \gset

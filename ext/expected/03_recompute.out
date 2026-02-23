@@ -3,9 +3,9 @@ CREATE EXTENSION pg_reactive;
 CREATE TABLE items (id serial PRIMARY KEY, name text, price numeric);
 -- Subscribe to a query
 SELECT pgr.subscribe('rc_q1', 'SELECT * FROM items');
-                         subscribe                          
-------------------------------------------------------------
- {"status": "subscribed", "tables": 1, "query_id": "rc_q1"}
+                                  subscribe                                  
+-----------------------------------------------------------------------------
+ {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "rc_q1"}
 (1 row)
 
 -- Verify snapshot table was created

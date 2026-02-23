@@ -20,11 +20,15 @@ export interface Delta {
  * - Overflow: {"type":"overflow","query_id":"...","fetch":true}
  */
 export interface LiveQueryMessage {
-  type?: "subscribed" | "overflow" | "error";
+  type?: "subscribed" | "overflow" | "error" | "invalidated";
   query_id: string;
   inserted?: DeltaRow[];
   deleted?: DeltaRow[];
   fetch?: boolean;
+}
+
+export interface Invalidation {
+  query_id: string;
 }
 
 export interface Overflow {
@@ -32,9 +36,9 @@ export interface Overflow {
   fetch: boolean;
 }
 
-export type LiveQueryEventType = "delta" | "overflow" | "connected" | "disconnected" | "error";
+export type LiveQueryEventType = "delta" | "overflow" | "invalidated" | "connected" | "disconnected" | "error";
 
-export type LiveQueryListener = (event: LiveQueryEventType, data?: Delta | Overflow | Error) => void;
+export type LiveQueryListener = (event: LiveQueryEventType, data?: Delta | Overflow | Invalidation | Error) => void;
 
 export interface LiveQueryClientOptions {
   /** WebSocket proxy URL, e.g. "ws://127.0.0.1:8080" */
@@ -167,6 +171,12 @@ export class LiveQuery {
       return;
     }
 
+    // Invalidated: notify-mode signal, data changed but no delta provided
+    if (msg.type === "invalidated") {
+      this.emit("invalidated", { query_id: msg.query_id });
+      return;
+    }
+
     // Delta messages are flat: {query_id, inserted, deleted}
     if (msg.inserted || msg.deleted) {
       const delta: Delta = {
@@ -209,7 +219,7 @@ export class LiveQuery {
     }, delay);
   }
 
-  private emit(event: LiveQueryEventType, data?: Delta | Overflow | Error): void {
+  private emit(event: LiveQueryEventType, data?: Delta | Overflow | Invalidation | Error): void {
     for (const listener of this.listeners) {
       try {
         listener(event, data);
