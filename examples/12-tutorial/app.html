@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_reactive Tutorial Console</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --purple: #bc8cff;
+    --terminal-bg: #010409;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+
+  header { padding: 24px 24px 16px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 22px; margin-bottom: 4px; }
+  header h1 span { color: var(--accent); }
+  header p { color: var(--muted); font-size: 13px; }
+
+  .step-nav { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--surface); flex-wrap: wrap; }
+  .step-nav button { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 16px; cursor: pointer; font-size: 13px; transition: border-color 0.2s; }
+  .step-nav button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .step-nav button:disabled { opacity: 0.3; cursor: default; }
+  .step-counter { font-size: 13px; color: var(--muted); }
+  .step-title { font-size: 15px; font-weight: 600; flex: 1; min-width: 120px; }
+  .step-badges { display: flex; gap: 6px; }
+  .badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .badge-subscribe { background: #58a6ff22; color: var(--accent); }
+  .badge-dml { background: #3fb95022; color: var(--green); }
+  .badge-join { background: #bc8cff22; color: var(--purple); }
+  .badge-agg { background: #d2992222; color: var(--yellow); }
+  .badge-window { background: #f8514922; color: var(--red); }
+  .badge-notify { background: #d2992222; color: var(--yellow); }
+  .badge-admin { background: #8b949e22; color: var(--muted); }
+
+  .progress { height: 2px; background: var(--border); }
+  .progress-fill { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+
+  .content { flex: 1; overflow-y: auto; padding: 24px; }
+  .step-wrap { max-width: 960px; margin: 0 auto; }
+  .step-card { display: none; }
+  .step-card.active { display: block; }
+  .all-mode .step-card { display: block; margin-bottom: 32px; padding-bottom: 32px; border-bottom: 1px solid var(--border); }
+  .all-mode .step-card:last-child { border-bottom: none; }
+
+  .explanation { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 20px; font-size: 14px; line-height: 1.6; }
+
+  .terminal { background: var(--terminal-bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
+  .terminal.ws-delta { border-left: 3px solid var(--green); }
+  .terminal.ws-notify { border-left: 3px solid var(--yellow); }
+  .term-head { display: flex; align-items: center; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .dots { display: flex; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .dot-r { background: #f85149; } .dot-y { background: #d29922; } .dot-g { background: #3fb950; }
+  .term-label { margin-left: 12px; font-size: 12px; color: var(--muted); }
+  .term-copy { margin-left: auto; background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; transition: all 0.2s; }
+  .term-copy:hover { border-color: var(--accent); color: var(--accent); }
+  .term-copy.copied { border-color: var(--green); color: var(--green); }
+  .term-body { padding: 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+
+  .ws-tag { font-weight: 600; margin-bottom: 8px; display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .ws-tag-delta { color: var(--green); }
+  .ws-tag-notify { color: var(--yellow); }
+
+  .c-prompt { color: var(--accent); }
+  .c-input { color: var(--green); }
+  .c-comment { color: #6e7681; }
+  .c-output { color: var(--text); }
+  .c-key { color: var(--accent); }
+  .c-str { color: #a5d6ff; }
+  .c-num { color: #79c0ff; }
+  .c-brace { color: var(--muted); }
+
+  .all-step-head { font-size: 18px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+  .all-step-num { background: var(--accent); color: var(--bg); width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+
+  .feat-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .feat-table th { text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .feat-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .feat-table tr:hover td { background: var(--surface); }
+  .feat-yes { color: var(--green); }
+  .feat-no { color: var(--red); }
+  .feat-na { color: var(--muted); }
+  .feat-step { color: var(--accent); }
+
+  @media (max-width: 700px) { .step-badges { display: none; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>pg_reactive</span> Tutorial Console</h1>
+  <p>15-step walkthrough of every feature. Open a psql session, copy each command, and watch real-time notifications flow.</p>
+</header>
+
+<div class="step-nav">
+  <button id="prevBtn">&larr; Prev</button>
+  <span class="step-counter" id="stepCounter"></span>
+  <span class="step-title" id="stepTitle"></span>
+  <div class="step-badges" id="stepBadges"></div>
+  <button id="viewToggle">Show All</button>
+  <button id="nextBtn">Next &rarr;</button>
+</div>
+<div class="progress"><div class="progress-fill" id="progressFill"></div></div>
+
+<div class="content">
+  <div class="step-wrap" id="stepWrap"></div>
+</div>
+
+<script>
+// -- Step data --
+// Each block: { label, type: sql|ws|info|summary, cls?: 'notify', copyText?, lines[] }
+// lines: array of { cls: 'c-prompt'|'c-input'|..., text } or plain string
+// Using arrays of text segments instead of HTML strings for safe DOM rendering.
+
+var STEPS = [
+  {
+    title: 'Connect to PostgreSQL',
+    badges: ['admin'],
+    explain: 'First, open a psql session inside the running Docker container. This gives you a live connection to the pg_reactive-enabled database.',
+    blocks: [
+      { label: 'Terminal', type: 'info', lines: [
+        { cls: 'c-comment', text: '# From your host machine:' },
+        { cls: 'c-input', text: 'docker compose exec db psql -U postgres -d pg_reactive_test' },
+        '',
+        { cls: 'c-comment', text: '# You should see:' },
+        { cls: 'c-output', text: 'psql (16.x)\nType "help" for help.\n\npg_reactive_test=#' }
+      ]}
+    ]
+  },
+  {
+    title: 'Verify Extension Is Loaded',
+    badges: ['admin'],
+    explain: 'pg_reactive loads via shared_preload_libraries at server start. The pgr schema contains all functions. Confirm it\'s available.',
+    blocks: [
+      { label: 'psql', type: 'sql',
+        copyText: "SELECT extname, extversion FROM pg_extension WHERE extname = 'pg_reactive';",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT extname, extversion FROM pg_extension WHERE extname = 'pg_reactive';" },
+          '',
+          { cls: 'c-output', text: '   extname    | extversion\n--------------+------------\n pg_reactive  | 0.1\n(1 row)' }
+        ]
+      }
+    ]
+  },
+  {
+    title: 'Subscribe \u2014 Basic WHERE Filter (Delta Mode)',
+    badges: ['subscribe', 'dml'],
+    explain: 'Create a live query tracking electronics products. pgr.subscribe() parses SQL, identifies tables, installs AFTER STATEMENT triggers, takes a snapshot, and returns metadata. Default mode is delta \u2014 full row-level diffs.',
+    blocks: [
+      { label: 'psql \u2014 Subscribe', type: 'sql',
+        copyText: "SELECT pgr.subscribe('tut_electronics', 'SELECT id, name, price FROM tut_products WHERE category = ''electronics''');",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.subscribe('tut_electronics',\n  'SELECT id, name, price FROM tut_products WHERE category = ''electronics''');" },
+          '',
+          { cls: 'c-output', text: '                          subscribe\n--------------------------------------------------------------\n {"query_id": "tut_electronics", "tables": 1, "mode": "delta"}\n(1 row)' }
+        ]
+      },
+      { label: 'What happened internally', type: 'info', lines: [
+        { cls: 'c-comment', text: '1. Parsed the SELECT to extract table OID for tut_products' },
+        { cls: 'c-comment', text: '2. Registered dependency in shared memory hash table' },
+        { cls: 'c-comment', text: '3. Installed AFTER INSERT/UPDATE/DELETE triggers on tut_products' },
+        { cls: 'c-comment', text: '4. Created snapshot: pgr._snap_tut_electronics (UNLOGGED table)' },
+        { cls: 'c-comment', text: '5. Populated snapshot with current query results (3 rows)' }
+      ]}
+    ]
+  },
+  {
+    title: 'INSERT \u2014 Delta Notification',
+    badges: ['dml'],
+    explain: 'Insert a new electronics product. The AFTER INSERT trigger fires, recomputes the query using EXCEPT against the snapshot, detects the new row, and sends a delta via pg_notify(\'pgr\', ...).',
+    blocks: [
+      { label: 'psql \u2014 Insert a product', type: 'sql',
+        copyText: "INSERT INTO tut_products (name, category, price) VALUES ('Monitor', 'electronics', 499.99);",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "INSERT INTO tut_products (name, category, price)\nVALUES ('Monitor', 'electronics', 499.99);" },
+          '', { cls: 'c-output', text: 'INSERT 0 1' }
+        ]
+      },
+      { label: 'WebSocket notification (delta)', type: 'ws', lines: [
+        { cls: 'c-brace', text: '{' },
+        { text: '  "query_id": "tut_electronics",' },
+        { text: '  "inserted": [' },
+        { text: '    {"id": 6, "name": "Monitor", "price": 499.99}' },
+        { text: '  ],' },
+        { text: '  "deleted": []' },
+        { cls: 'c-brace', text: '}' }
+      ]}
+    ]
+  },
+  {
+    title: 'UPDATE \u2014 Delete + Insert Pair',
+    badges: ['dml'],
+    explain: 'Update a product\'s price. EXCEPT-based delta sees the old row disappeared and a new one appeared. The notification has both deleted and inserted \u2014 this is how UPDATEs look in delta mode.',
+    blocks: [
+      { label: 'psql \u2014 Update price', type: 'sql',
+        copyText: "UPDATE tut_products SET price = 899.99 WHERE name = 'Monitor';",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "UPDATE tut_products SET price = 899.99 WHERE name = 'Monitor';" },
+          '', { cls: 'c-output', text: 'UPDATE 1' }
+        ]
+      },
+      { label: 'WebSocket notification (delta)', type: 'ws', lines: [
+        { cls: 'c-brace', text: '{' },
+        { text: '  "query_id": "tut_electronics",' },
+        { text: '  "inserted": [' },
+        { text: '    {"id": 6, "name": "Monitor", "price": 899.99}' },
+        { text: '  ],' },
+        { text: '  "deleted": [' },
+        { text: '    {"id": 6, "name": "Monitor", "price": 499.99}' },
+        { text: '  ]' },
+        { cls: 'c-brace', text: '}' }
+      ]}
+    ]
+  },
+  {
+    title: 'DELETE \u2014 Row Removal',
+    badges: ['dml'],
+    explain: 'Delete the product. Only the deleted array is populated \u2014 the row disappeared from the result set.',
+    blocks: [
+      { label: 'psql \u2014 Delete product', type: 'sql',
+        copyText: "DELETE FROM tut_products WHERE name = 'Monitor';",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "DELETE FROM tut_products WHERE name = 'Monitor';" },
+          '', { cls: 'c-output', text: 'DELETE 1' }
+        ]
+      },
+      { label: 'WebSocket notification (delta)', type: 'ws', lines: [
+        { cls: 'c-brace', text: '{' },
+        { text: '  "query_id": "tut_electronics",' },
+        { text: '  "inserted": [],' },
+        { text: '  "deleted": [' },
+        { text: '    {"id": 6, "name": "Monitor", "price": 899.99}' },
+        { text: '  ]' },
+        { cls: 'c-brace', text: '}' }
+      ]}
+    ]
+  },
+  {
+    title: 'Subscribe \u2014 Multi-Table JOIN',
+    badges: ['subscribe', 'join'],
+    explain: 'Subscribe to a 3-table JOIN. pg_reactive finds all 3 table OIDs and installs triggers on each. A change to any joined table triggers recomputation. CDC tools like Debezium cannot do this.',
+    blocks: [
+      { label: 'psql \u2014 Subscribe to JOIN', type: 'sql',
+        copyText: "SELECT pgr.subscribe('tut_order_feed',\n  'SELECT o.id, c.name AS customer, p.name AS product, o.quantity, o.total\n   FROM tut_orders o\n   JOIN tut_customers c ON c.id = o.customer_id\n   JOIN tut_products p ON p.id = o.product_id\n   ORDER BY o.id');",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.subscribe('tut_order_feed',\n  'SELECT o.id, c.name AS customer, p.name AS product, o.quantity, o.total\n   FROM tut_orders o\n   JOIN tut_customers c ON c.id = o.customer_id\n   JOIN tut_products p ON p.id = o.product_id\n   ORDER BY o.id');" },
+          '',
+          { cls: 'c-output', text: '                        subscribe\n----------------------------------------------------------\n {"query_id": "tut_order_feed", "tables": 3, "mode": "delta"}\n(1 row)' }
+        ]
+      },
+      { label: 'What happened internally', type: 'info', lines: [
+        { cls: 'c-comment', text: 'Triggers installed on: tut_orders, tut_customers, tut_products' },
+        { cls: 'c-comment', text: 'A change to ANY of these 3 tables recomputes the join query.' }
+      ]}
+    ]
+  },
+  {
+    title: 'Cross-Table Invalidation',
+    badges: ['join', 'dml'],
+    explain: 'Update a customer name \u2014 the subscription is on the orders query but pg_reactive tracks all joined tables. The delta shows old rows (old name) deleted and new rows (new name) inserted.',
+    blocks: [
+      { label: 'psql \u2014 Update customer name', type: 'sql',
+        copyText: "UPDATE tut_customers SET name = 'Alice (VIP)' WHERE name = 'Alice';",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "UPDATE tut_customers SET name = 'Alice (VIP)' WHERE name = 'Alice';" },
+          '', { cls: 'c-output', text: 'UPDATE 1' }
+        ]
+      },
+      { label: 'WebSocket \u2014 order feed updates!', type: 'ws', lines: [
+        { cls: 'c-brace', text: '{' },
+        { text: '  "query_id": "tut_order_feed",' },
+        { text: '  "inserted": [' },
+        { text: '    {"id":1, "customer":"Alice (VIP)", "product":"Laptop", "quantity":1, "total":999.99},' },
+        { text: '    {"id":2, "customer":"Alice (VIP)", "product":"Keyboard", "quantity":2, "total":159.98}' },
+        { text: '  ],' },
+        { text: '  "deleted": [' },
+        { text: '    {"id":1, "customer":"Alice", "product":"Laptop", "quantity":1, "total":999.99},' },
+        { text: '    {"id":2, "customer":"Alice", "product":"Keyboard", "quantity":2, "total":159.98}' },
+        { text: '  ]' },
+        { cls: 'c-brace', text: '}' }
+      ]}
+    ]
+  },
+  {
+    title: 'Subscribe \u2014 GROUP BY + Aggregates',
+    badges: ['subscribe', 'agg'],
+    explain: 'Subscribe to GROUP BY + SUM + COUNT. When orders change, aggregated totals update live. CDC tools and pg_ivm cannot handle this \u2014 pg_reactive re-executes full SQL and diffs the result.',
+    blocks: [
+      { label: 'psql \u2014 Subscribe to aggregate', type: 'sql',
+        copyText: "SELECT pgr.subscribe('tut_revenue',\n  'SELECT c.name AS customer,\n          COUNT(*) AS order_count,\n          SUM(o.total) AS revenue\n   FROM tut_orders o\n   JOIN tut_customers c ON c.id = o.customer_id\n   GROUP BY c.name\n   ORDER BY revenue DESC');",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.subscribe('tut_revenue',\n  'SELECT c.name AS customer,\n          COUNT(*) AS order_count,\n          SUM(o.total) AS revenue\n   FROM tut_orders o\n   JOIN tut_customers c ON c.id = o.customer_id\n   GROUP BY c.name\n   ORDER BY revenue DESC');" },
+          '',
+          { cls: 'c-output', text: '                        subscribe\n---------------------------------------------------------\n {"query_id": "tut_revenue", "tables": 2, "mode": "delta"}\n(1 row)' }
+        ]
+      },
+      { label: 'psql \u2014 Insert an order', type: 'sql',
+        copyText: "INSERT INTO tut_orders (customer_id, product_id, quantity, total) VALUES (2, 1, 1, 999.99);",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "INSERT INTO tut_orders (customer_id, product_id, quantity, total)\nVALUES (2, 1, 1, 999.99);" },
+          '', { cls: 'c-output', text: 'INSERT 0 1' }
+        ]
+      },
+      { label: 'WebSocket \u2014 aggregate delta', type: 'ws', lines: [
+        { cls: 'c-brace', text: '{' },
+        { text: '  "query_id": "tut_revenue",' },
+        { text: '  "inserted": [' },
+        { text: '    {"customer":"Bob", "order_count":2, "revenue":1089.96}' },
+        { text: '  ],' },
+        { text: '  "deleted": [' },
+        { text: '    {"customer":"Bob", "order_count":1, "revenue":89.97}' },
+        { text: '  ]' },
+        { cls: 'c-brace', text: '}' }
+      ]}
+    ]
+  },
+  {
+    title: 'Subscribe \u2014 Window Function (RANK)',
+    badges: ['subscribe', 'window'],
+    explain: 'Subscribe with RANK() OVER (ORDER BY price DESC). Window functions compute rankings across the full result set. Price changes cause rankings to shift \u2014 pg_reactive sends deltas for every affected row.',
+    blocks: [
+      { label: 'psql \u2014 Subscribe to ranking', type: 'sql',
+        copyText: "SELECT pgr.subscribe('tut_price_rank',\n  'SELECT id, name, price,\n          RANK() OVER (ORDER BY price DESC) AS price_rank\n   FROM tut_products\n   WHERE category = ''electronics''');",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.subscribe('tut_price_rank',\n  'SELECT id, name, price,\n          RANK() OVER (ORDER BY price DESC) AS price_rank\n   FROM tut_products\n   WHERE category = ''electronics''');" },
+          '',
+          { cls: 'c-output', text: '                          subscribe\n--------------------------------------------------------------\n {"query_id": "tut_price_rank", "tables": 1, "mode": "delta"}\n(1 row)' }
+        ]
+      },
+      { label: 'Current snapshot', type: 'info', lines: [
+        { cls: 'c-output', text: ' id |   name   |  price  | price_rank\n----+----------+---------+-----------\n  1 | Laptop   |  999.99 |         1\n  2 | Keyboard |   79.99 |         2\n  3 | Mouse    |   29.99 |         3' },
+        '',
+        { cls: 'c-comment', text: 'Change any price -> all ranks may shift -> multiple rows in delta.' }
+      ]}
+    ]
+  },
+  {
+    title: 'Subscribe \u2014 Notify Mode (Lightweight)',
+    badges: ['subscribe', 'notify'],
+    explain: 'Subscribe with mode = \'notify\' for lightweight invalidation. No snapshot, no EXCEPT diff. On DML, the extension sends a tiny {"type":"invalidated"} signal (~50 bytes). Ideal for high-frequency tables where the client just needs "something changed".',
+    blocks: [
+      { label: 'psql \u2014 Subscribe in notify mode', type: 'sql',
+        copyText: "SELECT pgr.subscribe('tut_notify_demo',\n  'SELECT * FROM tut_products ORDER BY id',\n  'notify');",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.subscribe('tut_notify_demo',\n  'SELECT * FROM tut_products ORDER BY id',\n  'notify');" },
+          '',
+          { cls: 'c-output', text: '                            subscribe\n-----------------------------------------------------------------\n {"query_id": "tut_notify_demo", "tables": 1, "mode": "notify"}\n(1 row)' }
+        ]
+      },
+      { label: 'Key differences from delta mode', type: 'info', lines: [
+        { cls: 'c-comment', text: 'Delta mode:  creates snapshot table, re-executes query, computes EXCEPT diff' },
+        { cls: 'c-comment', text: 'Notify mode: NO snapshot, NO query re-execution, NO diff computation' },
+        '',
+        { cls: 'c-comment', text: 'Delta payload:  ~200-2000 bytes (full row data)' },
+        { cls: 'c-comment', text: 'Notify payload: ~50 bytes (just "invalidated" signal)' },
+        '',
+        { cls: 'c-comment', text: 'Use notify when: client will re-fetch on its own, or just needs a stale flag.' }
+      ]}
+    ]
+  },
+  {
+    title: 'Notify vs Delta \u2014 Side by Side',
+    badges: ['notify', 'dml'],
+    explain: 'Both tut_electronics (delta) and tut_notify_demo (notify) track tut_products. A single INSERT fires both \u2014 but the payloads are completely different.',
+    blocks: [
+      { label: 'psql \u2014 Insert (fires both subscriptions)', type: 'sql',
+        copyText: "INSERT INTO tut_products (name, category, price) VALUES ('Webcam', 'electronics', 59.99);",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "INSERT INTO tut_products (name, category, price)\nVALUES ('Webcam', 'electronics', 59.99);" },
+          '', { cls: 'c-output', text: 'INSERT 0 1' }
+        ]
+      },
+      { label: 'Delta mode (tut_electronics) ~150 bytes', type: 'ws', lines: [
+        { cls: 'c-brace', text: '{' },
+        { text: '  "query_id": "tut_electronics",' },
+        { text: '  "inserted": [' },
+        { text: '    {"id": 7, "name": "Webcam", "price": 59.99}' },
+        { text: '  ],' },
+        { text: '  "deleted": []' },
+        { cls: 'c-brace', text: '}' }
+      ]},
+      { label: 'Notify mode (tut_notify_demo) ~50 bytes', type: 'ws', cls: 'notify', lines: [
+        { cls: 'c-brace', text: '{' },
+        { text: '  "type": "invalidated",' },
+        { text: '  "query_id": "tut_notify_demo"' },
+        { cls: 'c-brace', text: '}' }
+      ]}
+    ]
+  },
+  {
+    title: 'Introspection \u2014 List All Subscriptions',
+    badges: ['admin'],
+    explain: 'pgr.get_subscriptions() returns all active subscriptions from shared memory \u2014 query text, table count, invalidation count, and mode.',
+    blocks: [
+      { label: 'psql \u2014 List subscriptions', type: 'sql',
+        copyText: 'SELECT query_id, num_tables, invalidation_count, mode FROM pgr.get_subscriptions();',
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: 'SELECT query_id, num_tables, invalidation_count, mode\nFROM pgr.get_subscriptions();' },
+          '',
+          { cls: 'c-output', text: '    query_id      | num_tables | invalidation_count |  mode\n------------------+------------+--------------------+--------\n tut_electronics  |          1 |                  3 | delta\n tut_order_feed   |          3 |                  1 | delta\n tut_revenue      |          2 |                  1 | delta\n tut_price_rank   |          1 |                  1 | delta\n tut_notify_demo  |          1 |                  1 | notify\n(5 rows)' }
+        ]
+      }
+    ]
+  },
+  {
+    title: 'Cleanup \u2014 Unsubscribe',
+    badges: ['admin'],
+    explain: 'pgr.unsubscribe() removes triggers, drops the snapshot table (delta mode only), and frees the shared memory slot. Always clean up subscriptions you no longer need.',
+    blocks: [
+      { label: 'psql \u2014 Unsubscribe all', type: 'sql',
+        copyText: "SELECT pgr.unsubscribe('tut_electronics');\nSELECT pgr.unsubscribe('tut_order_feed');\nSELECT pgr.unsubscribe('tut_revenue');\nSELECT pgr.unsubscribe('tut_price_rank');\nSELECT pgr.unsubscribe('tut_notify_demo');",
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.unsubscribe('tut_electronics');" },
+          { cls: 'c-output', text: ' unsubscribe\n-------------\n t\n(1 row)' }, '',
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.unsubscribe('tut_order_feed');" },
+          { cls: 'c-output', text: ' unsubscribe\n-------------\n t\n(1 row)' }, '',
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.unsubscribe('tut_revenue');" },
+          { cls: 'c-output', text: ' unsubscribe\n-------------\n t\n(1 row)' }, '',
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.unsubscribe('tut_price_rank');" },
+          { cls: 'c-output', text: ' unsubscribe\n-------------\n t\n(1 row)' }, '',
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: "SELECT pgr.unsubscribe('tut_notify_demo');" },
+          { cls: 'c-output', text: ' unsubscribe\n-------------\n t\n(1 row)' }
+        ]
+      },
+      { label: 'Verify', type: 'sql',
+        copyText: 'SELECT count(*) FROM pgr.get_subscriptions();',
+        lines: [
+          { cls: 'c-prompt', text: 'pg_reactive_test=# ' }, { cls: 'c-input', text: 'SELECT count(*) FROM pgr.get_subscriptions();' },
+          '',
+          { cls: 'c-output', text: ' count\n-------\n     0\n(1 row)' }
+        ]
+      }
+    ]
+  },
+  {
+    title: 'Feature Summary',
+    badges: ['subscribe', 'dml', 'join', 'agg', 'window', 'notify'],
+    explain: 'Everything you just saw \u2014 and what sets pg_reactive apart from CDC tools, pg_ivm, and Hasura subscriptions.',
+    blocks: [
+      { label: 'Feature Comparison', type: 'summary' }
+    ]
+  }
+];
+
+var BADGE_CLS = {
+  subscribe: 'badge-subscribe', dml: 'badge-dml', join: 'badge-join',
+  agg: 'badge-agg', window: 'badge-window', notify: 'badge-notify', admin: 'badge-admin'
+};
+
+var FEATURES = [
+  ['WHERE filter',           'Yes', 'Yes', 'Yes', 'Yes', 'Steps 3-6'],
+  ['Multi-table JOIN',       'Yes', 'No',  'No',  'No',  'Steps 7-8'],
+  ['GROUP BY + SUM/COUNT',   'Yes', 'No',  'No',  'No',  'Step 9'],
+  ['Window functions',       'Yes', 'No',  'No',  'No',  'Step 10'],
+  ['Notify (lightweight)',   'Yes', 'N/A', 'N/A', 'N/A', 'Steps 11-12'],
+  ['Cross-table invalidation','Yes','No',  'No',  'Partial','Step 8'],
+  ['Row-level delta (EXCEPT)','Yes','No',  'No',  'No',  'Steps 4-6'],
+  ['Column-level tracking',  'Yes', 'No',  'No',  'No',  'Built-in'],
+  ['No client-side setup',   'Yes', 'No',  'Yes', 'Yes', 'Just SQL'],
+  ['Works with any SQL',     'Yes', 'No',  'No',  'No',  'Any SELECT']
+];
+
+var currentStep = 0;
+var allMode = false;
+
+function el(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function buildTerminal(block, stepIdx, blockIdx) {
+  var wsType = block.cls === 'notify' ? 'ws-notify' : (block.type === 'ws' ? 'ws-delta' : '');
+  var wrap = el('div', 'terminal' + (wsType ? ' ' + wsType : ''));
+
+  var head = el('div', 'term-head');
+  var dots = el('div', 'dots');
+  dots.appendChild(el('div', 'dot dot-r'));
+  dots.appendChild(el('div', 'dot dot-y'));
+  dots.appendChild(el('div', 'dot dot-g'));
+  head.appendChild(dots);
+  head.appendChild(el('span', 'term-label', block.label));
+
+  if (block.copyText) {
+    var btn = el('button', 'term-copy', 'Copy');
+    btn.dataset.stepIdx = stepIdx;
+    btn.dataset.blockIdx = blockIdx;
+    btn.addEventListener('click', handleCopy);
+    head.appendChild(btn);
+  }
+  wrap.appendChild(head);
+
+  var body = el('div', 'term-body');
+  if (block.type === 'ws') {
+    var tag = el('span', 'ws-tag ' + (block.cls === 'notify' ? 'ws-tag-notify' : 'ws-tag-delta'),
+      block.cls === 'notify' ? 'NOTIFY EVENT' : 'WEBSOCKET EVENT');
+    body.appendChild(tag);
+    body.appendChild(document.createElement('br'));
+  }
+
+  renderLines(body, block.lines);
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function renderLines(container, lines) {
+  lines.forEach(function(line, i) {
+    if (line === '') {
+      container.appendChild(document.createElement('br'));
+      return;
+    }
+    if (typeof line === 'string') {
+      container.appendChild(document.createTextNode(line));
+      container.appendChild(document.createElement('br'));
+      return;
+    }
+    var span = el('span', line.cls || '');
+    // Handle multi-line text
+    var parts = line.text.split('\n');
+    parts.forEach(function(part, j) {
+      span.appendChild(document.createTextNode(part));
+      if (j < parts.length - 1) span.appendChild(document.createElement('br'));
+    });
+    container.appendChild(span);
+    // Add line break after each line entry unless next is also same-line (prompt+input pair)
+    var next = lines[i + 1];
+    if (next && typeof next === 'object' && next.cls === 'c-input' && line.cls === 'c-prompt') {
+      // prompt + input on same visual line, no br
+    } else {
+      container.appendChild(document.createElement('br'));
+    }
+  });
+}
+
+function buildSummaryTable() {
+  var wrap = el('div', 'terminal');
+  var head = el('div', 'term-head');
+  var dots = el('div', 'dots');
+  dots.appendChild(el('div', 'dot dot-r'));
+  dots.appendChild(el('div', 'dot dot-y'));
+  dots.appendChild(el('div', 'dot dot-g'));
+  head.appendChild(dots);
+  head.appendChild(el('span', 'term-label', 'Feature Comparison'));
+  wrap.appendChild(head);
+
+  var tbody_wrap = el('div', 'term-body');
+  tbody_wrap.style.padding = '0';
+  var table = el('table', 'feat-table');
+
+  var thead = document.createElement('thead');
+  var hrow = document.createElement('tr');
+  ['Feature', 'pg_reactive', 'Debezium CDC', 'pg_ivm', 'Hasura', 'Tutorial Step'].forEach(function(h) {
+    hrow.appendChild(el('th', '', h));
+  });
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  FEATURES.forEach(function(row) {
+    var tr = document.createElement('tr');
+    tr.appendChild(el('td', '', row[0]));
+    for (var c = 1; c <= 4; c++) {
+      var td = document.createElement('td');
+      if (row[c] === 'Yes') { td.className = 'feat-yes'; td.textContent = '\u2713 Yes'; }
+      else if (row[c] === 'No') { td.className = 'feat-no'; td.textContent = '\u2717 No'; }
+      else { td.className = 'feat-na'; td.textContent = row[c]; }
+      tr.appendChild(td);
+    }
+    var stepTd = el('td', 'feat-step', row[5]);
+    tr.appendChild(stepTd);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  tbody_wrap.appendChild(table);
+  wrap.appendChild(tbody_wrap);
+  return wrap;
+}
+
+function buildStepCard(step, idx) {
+  var card = el('div', 'step-card');
+  card.dataset.step = idx;
+
+  var expl = el('div', 'explanation', step.explain);
+  card.appendChild(expl);
+
+  step.blocks.forEach(function(block, bi) {
+    if (block.type === 'summary') {
+      card.appendChild(buildSummaryTable());
+    } else {
+      card.appendChild(buildTerminal(block, idx, bi));
+    }
+  });
+  return card;
+}
+
+function render() {
+  var wrap = document.getElementById('stepWrap');
+  while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+
+  STEPS.forEach(function(step, i) {
+    if (allMode) {
+      var header = el('div', 'all-step-head');
+      header.appendChild(el('div', 'all-step-num', String(i + 1)));
+      header.appendChild(document.createTextNode(step.title));
+      var card = buildStepCard(step, i);
+      card.insertBefore(header, card.firstChild);
+      card.classList.add('active');
+      wrap.appendChild(card);
+    } else {
+      var card2 = buildStepCard(step, i);
+      if (i === currentStep) card2.classList.add('active');
+      wrap.appendChild(card2);
+    }
+  });
+}
+
+function updateNav() {
+  var step = STEPS[currentStep];
+  document.getElementById('stepCounter').textContent = 'Step ' + (currentStep + 1) + ' / ' + STEPS.length;
+  document.getElementById('stepTitle').textContent = step.title;
+  document.getElementById('prevBtn').disabled = allMode || currentStep === 0;
+  document.getElementById('nextBtn').disabled = allMode || currentStep === STEPS.length - 1;
+  document.getElementById('progressFill').style.width = ((currentStep + 1) / STEPS.length * 100) + '%';
+
+  var badgeWrap = document.getElementById('stepBadges');
+  while (badgeWrap.firstChild) badgeWrap.removeChild(badgeWrap.firstChild);
+  step.badges.forEach(function(b) {
+    badgeWrap.appendChild(el('span', 'badge ' + (BADGE_CLS[b] || ''), b));
+  });
+}
+
+function navigate(dir) {
+  if (allMode) return;
+  currentStep = Math.max(0, Math.min(STEPS.length - 1, currentStep + dir));
+  // Update active class without full re-render
+  var cards = document.querySelectorAll('#stepWrap .step-card');
+  cards.forEach(function(c, i) {
+    if (i === currentStep) c.classList.add('active');
+    else c.classList.remove('active');
+  });
+  updateNav();
+}
+
+function toggleView() {
+  allMode = !allMode;
+  document.getElementById('viewToggle').textContent = allMode ? 'Step View' : 'Show All';
+  render();
+  updateNav();
+}
+
+function handleCopy(e) {
+  var btn = e.currentTarget;
+  var si = parseInt(btn.dataset.stepIdx);
+  var bi = parseInt(btn.dataset.blockIdx);
+  var text = STEPS[si].blocks[bi].copyText;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(function() {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+// Keyboard navigation
+document.addEventListener('keydown', function(e) {
+  if (allMode) return;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); navigate(1); }
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); navigate(-1); }
+});
+
+document.getElementById('prevBtn').addEventListener('click', function() { navigate(-1); });
+document.getElementById('nextBtn').addEventListener('click', function() { navigate(1); });
+document.getElementById('viewToggle').addEventListener('click', toggleView);
+
+// Init
+render();
+updateNav();
+</script>
+
+</body>
+</html>

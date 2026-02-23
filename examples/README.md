@@ -1,8 +1,8 @@
 # pg_reactive Examples
 
-Eleven progressive examples demonstrating pg_reactive's live query capabilities,
+Twelve progressive examples demonstrating pg_reactive's live query capabilities,
 from simple single-table filters to a full CRM dashboard with CTEs, window
-functions, multiple concurrent subscriptions, and notify mode.
+functions, notify mode, and an interactive step-by-step tutorial.
 
 ## Quick Start (One Command)
 
@@ -32,7 +32,7 @@ If you prefer using the root docker-compose:
 # From the project root
 docker compose up -d --build
 
-# Run all setup scripts (glob handles all 11 examples automatically)
+# Run all setup scripts (glob handles all 12 examples automatically)
 for f in /examples/*/setup.sql; do
   docker compose exec -T db psql -U postgres -d pg_reactive_test -f "$f"
 done
@@ -56,6 +56,7 @@ a psql session.
 | 9 | **Price Comparison** | `RANK, NTILE, ratio` | Window functions: ranking, quartiles, ratios to avg/max |
 | 10 | **Executive Scorecard** | `COUNT DISTINCT, SUM, AVG, NULLIF` | Single-row aggregate KPIs, dashboard metrics |
 | 11 | **Notify Mode vs Delta** | `subscribe(..., 'notify')` | Lightweight invalidation (~50B) vs full diffs side-by-side |
+| 12 | **Tutorial Console** | All of the above | 15-step interactive walkthrough of every feature |
 
 ## How It Works
 
@@ -113,4 +114,5 @@ SELECT pgr.unsubscribe('price_matrix');
 SELECT pgr.unsubscribe('exec_kpis');
 SELECT pgr.unsubscribe('sensor_notify');
 SELECT pgr.unsubscribe('sensor_delta');
+-- Tutorial (12) subs are created/cleaned interactively
 ```
