@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_reactive Example 7 — Multi-Filter Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --text-bright: #f0f6fc;
+    --accent-blue: #58a6ff;
+    --accent-green: #39d353;
+    --accent-red: #f85149;
+    --accent-orange: #f0883e;
+    --accent-purple: #a371f7;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ===== Header ===== */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .header-left .example-tag {
+    font-size: 0.75rem;
+    color: var(--accent-blue);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  .header-left h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-bright);
+  }
+
+  .header-left .subtitle {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .conn-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-red);
+    flex-shrink: 0;
+    transition: background 0.3s ease;
+  }
+
+  .status-dot.connected {
+    background: var(--accent-green);
+    box-shadow: 0 0 8px rgba(57, 211, 83, 0.4);
+  }
+
+  /* ===== Main Content ===== */
+  main {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 32px;
+  }
+
+  /* ===== Three-Column Grid ===== */
+  .tier-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    margin-bottom: 32px;
+  }
+
+  @media (max-width: 960px) {
+    .tier-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* ===== Tier Column ===== */
+  .tier-column {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .tier-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .tier-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .tier-header .price-range {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+
+  .tier-count {
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 12px;
+    background: var(--bg);
+  }
+
+  /* Tier accent colors */
+  .tier-column.budget .tier-header { border-top: 3px solid var(--accent-blue); }
+  .tier-column.budget .tier-count { color: var(--accent-blue); }
+
+  .tier-column.midrange .tier-header { border-top: 3px solid var(--accent-green); }
+  .tier-column.midrange .tier-count { color: var(--accent-green); }
+
+  .tier-column.premium .tier-header { border-top: 3px solid var(--accent-purple); }
+  .tier-column.premium .tier-count { color: var(--accent-purple); }
+
+  .tier-body {
+    padding: 16px;
+    flex: 1;
+    overflow-y: auto;
+    max-height: 600px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* ===== Product Cards ===== */
+  .product-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    position: relative;
+    animation: cardIn 0.4s ease-out both;
+  }
+
+  .product-card .product-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 6px;
+  }
+
+  .product-card .product-price {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .product-card .product-price.price-blue { color: var(--accent-blue); }
+  .product-card .product-price.price-green { color: var(--accent-green); }
+  .product-card .product-price.price-purple { color: var(--accent-purple); }
+
+  .product-card .category-badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: lowercase;
+  }
+
+  /* Animations */
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .product-card.removing {
+    animation: cardOut 0.4s ease-in forwards;
+    border-color: var(--accent-red);
+    background: rgba(248, 81, 73, 0.05);
+  }
+
+  @keyframes cardOut {
+    from { opacity: 1; transform: scale(1); }
+    to   { opacity: 0; transform: scale(0.95); }
+  }
+
+  /* ===== Empty State ===== */
+  .empty-state {
+    text-align: center;
+    padding: 40px 16px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+
+  /* ===== Callout ===== */
+  .callout {
+    background: rgba(88, 166, 255, 0.08);
+    border: 1px solid rgba(88, 166, 255, 0.25);
+    border-left: 4px solid var(--accent-blue);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-bottom: 28px;
+    font-size: 0.9rem;
+    line-height: 1.7;
+    color: var(--text);
+  }
+
+  .callout strong {
+    color: var(--accent-blue);
+  }
+
+  /* ===== Demo Commands ===== */
+  .demo-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 28px;
+    overflow: hidden;
+  }
+
+  .demo-toggle {
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--text-bright);
+    font-family: var(--font-sans);
+    font-size: 0.95rem;
+    font-weight: 600;
+    padding: 16px 22px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.2s;
+  }
+
+  .demo-toggle:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .demo-toggle .arrow {
+    transition: transform 0.3s ease;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  .demo-toggle.open .arrow {
+    transform: rotate(90deg);
+  }
+
+  .demo-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s ease;
+  }
+
+  .demo-content.open {
+    max-height: 800px;
+  }
+
+  .demo-content pre {
+    margin: 0;
+    padding: 16px 22px 22px;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1.7;
+    color: var(--text);
+  }
+
+  .demo-content .comment { color: var(--text-muted); }
+  .demo-content .keyword { color: #ff7b72; }
+  .demo-content .string { color: #a5d6ff; }
+  .demo-content .number { color: #79c0ff; }
+
+  /* ===== Footer ===== */
+  footer {
+    padding: 24px 32px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="example-tag">pg_reactive Example 7 &mdash; Multiple WHERE Filters</div>
+    <h1>Multi-Filter Dashboard</h1>
+    <div class="subtitle">Three live subscriptions on the same table &mdash; products move between tiers as prices change</div>
+  </div>
+  <div class="header-right">
+    <div class="conn-indicator">
+      <div class="status-dot" id="dot-budget"></div>
+      <span>Budget</span>
+    </div>
+    <div class="conn-indicator">
+      <div class="status-dot" id="dot-midrange"></div>
+      <span>Mid-Range</span>
+    </div>
+    <div class="conn-indicator">
+      <div class="status-dot" id="dot-premium"></div>
+      <span>Premium</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="tier-grid">
+
+    <!-- Budget Column -->
+    <div class="tier-column budget">
+      <div class="tier-header">
+        <h2>Budget <span class="price-range">&lt; $50</span></h2>
+        <span class="tier-count" id="count-budget">0</span>
+      </div>
+      <div class="tier-body" id="body-budget">
+        <div class="empty-state">Waiting for data...</div>
+      </div>
+    </div>
+
+    <!-- Mid-Range Column -->
+    <div class="tier-column midrange">
+      <div class="tier-header">
+        <h2>Mid-Range <span class="price-range">$50 &ndash; $200</span></h2>
+        <span class="tier-count" id="count-midrange">0</span>
+      </div>
+      <div class="tier-body" id="body-midrange">
+        <div class="empty-state">Waiting for data...</div>
+      </div>
+    </div>
+
+    <!-- Premium Column -->
+    <div class="tier-column premium">
+      <div class="tier-header">
+        <h2>Premium <span class="price-range">$200+</span></h2>
+        <span class="tier-count" id="count-premium">0</span>
+      </div>
+      <div class="tier-body" id="body-premium">
+        <div class="empty-state">Waiting for data...</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="callout">
+    This demonstrates <strong>parameterized live queries</strong>. The same products table powers
+    three independent subscriptions with different WHERE filters. When a product's price changes,
+    it disappears from one tier and appears in another &mdash; entirely driven by the SQL delta engine.
+  </div>
+
+  <div class="demo-section">
+    <button class="demo-toggle" id="demo-toggle">
+      <span class="arrow">&#9654;</span>
+      Demo Commands (run in psql)
+    </button>
+    <div class="demo-content" id="demo-content">
+      <pre><span class="comment">-- Connect to the database</span>
+<span class="comment">-- docker compose exec -T db psql -U postgres -d pg_reactive_test</span>
+
+<span class="comment">-- Add a budget product (appears in left column)</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+<span class="keyword">VALUES</span> (<span class="string">'USB Cable'</span>, <span class="number">12.99</span>, <span class="string">'accessories'</span>);
+
+<span class="comment">-- Add a mid-range product (appears in center column)</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+<span class="keyword">VALUES</span> (<span class="string">'Wireless Speaker'</span>, <span class="number">89.99</span>, <span class="string">'audio'</span>);
+
+<span class="comment">-- Add a premium product (appears in right column)</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+<span class="keyword">VALUES</span> (<span class="string">'4K Monitor'</span>, <span class="number">549.99</span>, <span class="string">'displays'</span>);
+
+<span class="comment">-- Move a product between tiers by changing its price</span>
+<span class="comment">-- (disappears from one column, appears in another)</span>
+<span class="keyword">UPDATE</span> products <span class="keyword">SET</span> price = <span class="number">249.99</span>
+<span class="keyword">WHERE</span> name = <span class="string">'Wireless Speaker'</span>;
+
+<span class="comment">-- Remove a product</span>
+<span class="keyword">DELETE FROM</span> products
+<span class="keyword">WHERE</span> name = <span class="string">'USB Cable'</span>;</pre>
+    </div>
+  </div>
+</main>
+
+<footer>
+  pg_reactive &mdash; SQL SELECTs as live queries
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Tier configuration ──
+  var TIERS = [
+    {
+      queryId: 'budget_products',
+      dotId: 'dot-budget',
+      bodyId: 'body-budget',
+      countId: 'count-budget',
+      priceClass: 'price-blue'
+    },
+    {
+      queryId: 'midrange_products',
+      dotId: 'dot-midrange',
+      bodyId: 'body-midrange',
+      countId: 'count-midrange',
+      priceClass: 'price-green'
+    },
+    {
+      queryId: 'premium_products',
+      dotId: 'dot-premium',
+      bodyId: 'body-premium',
+      countId: 'count-premium',
+      priceClass: 'price-purple'
+    }
+  ];
+
+  var WS_BASE = 'ws://127.0.0.1:8080/ws/';
+
+  // ── Per-tier state ──
+  var tierState = {};
+  TIERS.forEach(function (t) {
+    tierState[t.queryId] = [];
+  });
+
+  // ── Formatting ──
+  function formatPrice(v) {
+    var n = parseFloat(v);
+    return isNaN(n) ? '$0.00' : '$' + n.toFixed(2);
+  }
+
+  // ── Safe DOM helpers ──
+  function clearElement(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  function createCard(row, priceClass) {
+    var card = document.createElement('div');
+    card.className = 'product-card';
+    card.setAttribute('data-id', String(row.id));
+
+    var nameEl = document.createElement('div');
+    nameEl.className = 'product-name';
+    nameEl.textContent = row.name;
+    card.appendChild(nameEl);
+
+    var priceEl = document.createElement('div');
+    priceEl.className = 'product-price ' + priceClass;
+    priceEl.textContent = formatPrice(row.price);
+    card.appendChild(priceEl);
+
+    if (row.category) {
+      var badge = document.createElement('span');
+      badge.className = 'category-badge';
+      badge.textContent = row.category;
+      card.appendChild(badge);
+    }
+
+    return card;
+  }
+
+  // ── Rendering for a single tier ──
+  function renderTier(tier) {
+    var rows = tierState[tier.queryId];
+    var body = document.getElementById(tier.bodyId);
+    var countEl = document.getElementById(tier.countId);
+
+    clearElement(body);
+    countEl.textContent = String(rows.length);
+
+    if (rows.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = 'No products in this tier';
+      body.appendChild(empty);
+      return;
+    }
+
+    rows.forEach(function (row) {
+      body.appendChild(createCard(row, tier.priceClass));
+    });
+  }
+
+  // ── Animated delta application for a single tier ──
+  function applyDelta(tier, msg) {
+    var rows = tierState[tier.queryId];
+    var body = document.getElementById(tier.bodyId);
+    var countEl = document.getElementById(tier.countId);
+    var deleted = msg.deleted || [];
+    var inserted = msg.inserted || [];
+
+    // Build set of deleted ids
+    var deletedIds = {};
+    deleted.forEach(function (r) { deletedIds[String(r.id)] = true; });
+
+    // Remove from state
+    tierState[tier.queryId] = rows.filter(function (r) {
+      return !deletedIds[String(r.id)];
+    });
+
+    // Animate removals
+    deleted.forEach(function (r) {
+      var card = body.querySelector('[data-id="' + r.id + '"]');
+      if (!card) return;
+      card.classList.add('removing');
+      card.addEventListener('animationend', function () {
+        card.remove();
+      });
+    });
+
+    // Add new rows to state
+    inserted.forEach(function (r) {
+      tierState[tier.queryId].push(r);
+    });
+
+    // Short delay so removal animation starts before inserts appear
+    setTimeout(function () {
+      // Remove empty state if present
+      var empty = body.querySelector('.empty-state');
+      if (empty && tierState[tier.queryId].length > 0) {
+        empty.remove();
+      }
+
+      inserted.forEach(function (r) {
+        body.appendChild(createCard(r, tier.priceClass));
+      });
+
+      countEl.textContent = String(tierState[tier.queryId].length);
+
+      // Show empty state if no products remain
+      if (tierState[tier.queryId].length === 0) {
+        var emptyDiv = document.createElement('div');
+        emptyDiv.className = 'empty-state';
+        emptyDiv.textContent = 'No products in this tier';
+        body.appendChild(emptyDiv);
+      }
+    }, 50);
+  }
+
+  // ── WebSocket connection per tier ──
+  function connectTier(tier) {
+    var dot = document.getElementById(tier.dotId);
+    var ws = null;
+    var reconnectAttempts = 0;
+    var reconnectTimer = null;
+    var BASE_DELAY = 1000;
+    var MAX_DELAY = 30000;
+
+    function connect() {
+      if (ws) {
+        try { ws.close(); } catch (e) { /* noop */ }
+      }
+
+      ws = new WebSocket(WS_BASE + tier.queryId);
+
+      ws.onopen = function () {
+        reconnectAttempts = 0;
+        dot.classList.add('connected');
+      };
+
+      ws.onmessage = function (event) {
+        var msg;
+        try { msg = JSON.parse(event.data); } catch (e) { return; }
+
+        if (msg.type === 'subscribed') {
+          return;
+        }
+
+        if (msg.type === 'overflow') {
+          tierState[tier.queryId] = [];
+          renderTier(tier);
+          return;
+        }
+
+        if (msg.query_id === tier.queryId && (msg.inserted || msg.deleted)) {
+          var rows = tierState[tier.queryId];
+          // Initial full snapshot: all inserts, no deletes, state is empty
+          if (rows.length === 0 && (!msg.deleted || msg.deleted.length === 0)) {
+            tierState[tier.queryId] = msg.inserted || [];
+            renderTier(tier);
+          } else {
+            applyDelta(tier, msg);
+          }
+        }
+      };
+
+      ws.onclose = function () {
+        dot.classList.remove('connected');
+        scheduleReconnect();
+      };
+
+      ws.onerror = function () {
+        // onclose fires after onerror -- reconnect handled there
+      };
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectAttempts++;
+      var delay = Math.min(
+        BASE_DELAY * Math.pow(2, reconnectAttempts - 1) + Math.random() * 500,
+        MAX_DELAY
+      );
+      reconnectTimer = setTimeout(connect, delay);
+    }
+
+    connect();
+  }
+
+  // ── Demo toggle ──
+  var demoToggle = document.getElementById('demo-toggle');
+  var demoContent = document.getElementById('demo-content');
+
+  demoToggle.addEventListener('click', function () {
+    demoToggle.classList.toggle('open');
+    demoContent.classList.toggle('open');
+  });
+
+  // ── Boot: connect all three tiers ──
+  TIERS.forEach(function (tier) {
+    connectTier(tier);
+  });
+
+})();
+</script>
+
+<script>
+window.DEMO_ACTIONS = [
+  { action: 'insert_product', label: 'Add Product' },
+  { action: 'update_price', label: 'Update Price' },
+  { action: 'delete_demo_product', label: 'Remove Demo Product' },
+];
+</script>
+<script src="/demo-panel.js"></script>
+</body>
+</html>

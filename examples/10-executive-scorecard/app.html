@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_reactive - Executive Scorecard</title>
+<style>
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --text-bright: #f0f6fc;
+  --accent-blue: #58a6ff;
+  --accent-green: #39d353;
+  --accent-red: #f85149;
+  --accent-orange: #f0883e;
+  --accent-purple: #a371f7;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  min-height: 100vh;
+  padding: 0;
+}
+
+/* ===== Header ===== */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.header-left h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.header-left .subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.header-left .example-tag {
+  font-size: 0.75rem;
+  color: var(--accent-blue);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  transition: background 0.3s ease;
+  flex-shrink: 0;
+}
+
+.status-dot.connected {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px rgba(57, 211, 83, 0.4);
+}
+
+/* ===== Main Content ===== */
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+.description {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin-bottom: 32px;
+}
+
+/* ===== KPI Grid ===== */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+@media (max-width: 900px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px 28px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.3s ease, border-color 0.3s ease;
+}
+
+.kpi-card:hover {
+  border-color: rgba(88, 166, 255, 0.3);
+}
+
+.kpi-card .accent-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 12px 12px 0 0;
+}
+
+.kpi-card .kpi-icon {
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.kpi-card .kpi-value {
+  font-size: 2.25rem;
+  font-weight: 700;
+  color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  margin-bottom: 4px;
+  transition: transform 0.3s ease;
+}
+
+.kpi-card .kpi-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.kpi-card .kpi-delta {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 6px;
+  min-height: 1.2em;
+  font-variant-numeric: tabular-nums;
+  transition: opacity 0.5s ease;
+}
+
+.kpi-delta.positive {
+  color: var(--accent-green);
+}
+
+.kpi-delta.negative {
+  color: var(--accent-red);
+}
+
+.kpi-delta.fading {
+  opacity: 0;
+}
+
+/* Accent bar colors */
+.kpi-card[data-color="blue"] .accent-bar { background: var(--accent-blue); }
+.kpi-card[data-color="green"] .accent-bar { background: var(--accent-green); }
+.kpi-card[data-color="orange"] .accent-bar { background: var(--accent-orange); }
+.kpi-card[data-color="purple"] .accent-bar { background: var(--accent-purple); }
+
+/* Value color tinting */
+.kpi-card[data-color="blue"] .kpi-value { color: var(--accent-blue); }
+.kpi-card[data-color="green"] .kpi-value { color: var(--accent-green); }
+.kpi-card[data-color="orange"] .kpi-value { color: var(--accent-orange); }
+.kpi-card[data-color="purple"] .kpi-value { color: var(--accent-purple); }
+
+/* Pulse animation */
+@keyframes kpi-pulse {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+.kpi-value.pulse {
+  animation: kpi-pulse 0.5s ease-out;
+}
+
+/* Card entrance */
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.kpi-card.entering {
+  animation: card-enter 0.5s ease-out;
+}
+
+/* ===== Empty State ===== */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+/* ===== Callout Box ===== */
+.callout {
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.25);
+  border-left: 4px solid var(--accent-blue);
+  border-radius: 8px;
+  padding: 18px 22px;
+  margin-bottom: 28px;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.callout strong {
+  color: var(--accent-blue);
+}
+
+/* ===== Demo Commands ===== */
+.demo-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 28px;
+  overflow: hidden;
+}
+
+.demo-toggle {
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-bright);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 16px 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.2s;
+}
+
+.demo-toggle:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.demo-toggle .arrow {
+  transition: transform 0.3s ease;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.demo-toggle.open .arrow {
+  transform: rotate(180deg);
+}
+
+.demo-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.4s ease;
+}
+
+.demo-content.open {
+  max-height: 600px;
+}
+
+.demo-content pre {
+  margin: 0;
+  padding: 16px 22px 22px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.demo-content code {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.demo-content .comment { color: var(--text-muted); }
+.demo-content .keyword { color: #ff7b72; }
+.demo-content .string { color: #a5d6ff; }
+.demo-content .number { color: #79c0ff; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="example-tag">pg_reactive Example 10 -- Complex Aggregates</div>
+    <h1>Executive Scorecard</h1>
+    <div class="subtitle">All KPIs derived from a single live SQL query</div>
+  </div>
+  <div class="header-right">
+    <span id="status-text">Disconnected</span>
+    <div class="status-dot" id="status-dot"></div>
+  </div>
+</header>
+
+<main>
+  <div class="kpi-grid" id="kpi-grid">
+    <div class="empty-state" id="empty-state">Waiting for data...</div>
+  </div>
+
+  <p class="description">
+    Monitoring 6 aggregate metrics from a single SQL subscription -- every INSERT, UPDATE,
+    or DELETE recomputes all KPIs atomically.
+  </p>
+
+  <div class="callout">
+    This single-row aggregate query demonstrates <strong>pg_reactive's ability to track computed
+    metrics</strong> like COUNT(DISTINCT), SUM/AVG ratios, and NULLIF-guarded divisions.
+    Unlike CDC tools which only emit row-level changes, pg_reactive recomputes the full aggregate
+    and delivers the exact delta.
+  </div>
+
+  <div class="demo-section">
+    <button class="demo-toggle" id="demo-toggle" onclick="toggleDemo()">
+      Demo Commands (run in psql)
+      <span class="arrow">&#9660;</span>
+    </button>
+    <div class="demo-content" id="demo-content">
+      <pre><code><span class="comment">-- Connect to the database</span>
+<span class="comment">-- docker compose exec -T db psql -U postgres -d pg_reactive_test</span>
+
+<span class="comment">-- Place a new order (increases total_orders, total_revenue, avg_order_value)</span>
+<span class="keyword">INSERT INTO</span> orders (customer_id, product_id, qty, total)
+  <span class="keyword">VALUES</span> (<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">449.97</span>);
+
+<span class="comment">-- Add a new customer (increases active_customers, changes revenue_per_customer)</span>
+<span class="keyword">INSERT INTO</span> customers (name, region)
+  <span class="keyword">VALUES</span> (<span class="string">'Eve'</span>, <span class="string">'eu-west'</span>);
+
+<span class="comment">-- Add a new product (increases products_sold)</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+  <span class="keyword">VALUES</span> (<span class="string">'Ergonomic Keyboard'</span>, <span class="number">189.99</span>, <span class="string">'electronics'</span>);
+
+<span class="comment">-- Delete an order (decreases totals)</span>
+<span class="keyword">DELETE FROM</span> orders
+  <span class="keyword">WHERE</span> customer_id = <span class="number">2</span> <span class="keyword">LIMIT</span> <span class="number">1</span>;</code></pre>
+    </div>
+  </div>
+</main>
+
+<!-- SDK equivalent -->
+<!--
+  import { useLiveQuery } from 'pg-reactive/react';
+
+  function ExecutiveScorecard() {
+    const { rows, status } = useLiveQuery('exec_kpis', {
+      url: 'ws://127.0.0.1:8080'
+    });
+
+    // Single-row aggregate: rows[0] contains all KPIs
+    const kpis = rows[0];
+    if (!kpis) return <Loading />;
+
+    return (
+      <KPIGrid>
+        <KPICard label="Active Customers" value={kpis.active_customers} />
+        <KPICard label="Total Orders" value={kpis.total_orders} />
+        <KPICard label="Total Revenue" value={kpis.total_revenue} format="currency" />
+        <KPICard label="Avg Order Value" value={kpis.avg_order_value} format="currency" />
+        <KPICard label="Revenue / Customer" value={kpis.revenue_per_customer} format="currency" />
+        <KPICard label="Products Sold" value={kpis.products_sold} />
+      </KPIGrid>
+    );
+  }
+-->
+
+<script>
+(function() {
+  'use strict';
+
+  // ===== Configuration =====
+  var QUERY_ID = 'exec_kpis';
+  var WS_URL = 'ws://127.0.0.1:8080/ws/' + QUERY_ID;
+  var DELTA_FADE_MS = 3000;
+
+  // ===== KPI Definitions =====
+  var KPI_DEFS = [
+    { key: 'active_customers',    label: 'Active Customers',    icon: '\uD83D\uDC65', color: 'blue',   format: 'number' },
+    { key: 'total_orders',        label: 'Total Orders',        icon: '\uD83D\uDCCB', color: 'green',  format: 'number' },
+    { key: 'total_revenue',       label: 'Total Revenue',       icon: '\uD83D\uDCB2', color: 'green',  format: 'currency' },
+    { key: 'avg_order_value',     label: 'Avg Order Value',     icon: '\uD83D\uDCC8', color: 'orange', format: 'currency' },
+    { key: 'revenue_per_customer',label: 'Revenue / Customer',  icon: '\uD83D\uDCC8', color: 'purple', format: 'currency' },
+    { key: 'products_sold',       label: 'Products Sold',       icon: '\uD83D\uDCE6', color: 'blue',   format: 'number' }
+  ];
+
+  // ===== State =====
+  var kpis = null;
+  var prevKpis = null;
+  var ws = null;
+  var reconnectAttempts = 0;
+  var reconnectTimer = null;
+  var deltaFadeTimers = {};
+  var BASE_DELAY = 1000;
+  var MAX_DELAY = 30000;
+
+  // ===== Formatting =====
+  function formatValue(value, format) {
+    var num = parseFloat(value);
+    if (isNaN(num)) return '--';
+    if (format === 'currency') {
+      return num.toLocaleString('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+    return num.toLocaleString('en-US');
+  }
+
+  function formatDelta(value, format) {
+    var num = parseFloat(value);
+    if (isNaN(num) || num === 0) return '';
+    var sign = num > 0 ? '+' : '';
+    if (format === 'currency') {
+      return sign + num.toLocaleString('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+    return sign + num.toLocaleString('en-US');
+  }
+
+  // ===== Status =====
+  function setStatus(connected) {
+    var dot = document.getElementById('status-dot');
+    var text = document.getElementById('status-text');
+    if (connected) {
+      dot.classList.add('connected');
+      text.textContent = 'Connected';
+    } else {
+      dot.classList.remove('connected');
+      text.textContent = 'Disconnected';
+    }
+  }
+
+  // ===== Rendering =====
+  function renderKpis() {
+    var grid = document.getElementById('kpi-grid');
+    var emptyEl = document.getElementById('empty-state');
+
+    if (!kpis) {
+      // Show empty state
+      while (grid.firstChild) {
+        grid.removeChild(grid.firstChild);
+      }
+      if (!emptyEl) {
+        emptyEl = document.createElement('div');
+        emptyEl.className = 'empty-state';
+        emptyEl.id = 'empty-state';
+        emptyEl.textContent = 'Waiting for data...';
+      }
+      grid.appendChild(emptyEl);
+      return;
+    }
+
+    // Remove empty state if present
+    if (emptyEl && emptyEl.parentNode) {
+      emptyEl.parentNode.removeChild(emptyEl);
+    }
+
+    KPI_DEFS.forEach(function(def) {
+      var cardId = 'kpi-card-' + def.key;
+      var card = document.getElementById(cardId);
+      var currentValue = kpis[def.key];
+      var previousValue = prevKpis ? prevKpis[def.key] : null;
+      var delta = (previousValue !== null && previousValue !== undefined)
+        ? parseFloat(currentValue) - parseFloat(previousValue)
+        : 0;
+
+      if (!card) {
+        // Create card
+        card = document.createElement('div');
+        card.className = 'kpi-card entering';
+        card.id = cardId;
+        card.setAttribute('data-color', def.color);
+
+        var accentBar = document.createElement('div');
+        accentBar.className = 'accent-bar';
+        card.appendChild(accentBar);
+
+        var iconEl = document.createElement('span');
+        iconEl.className = 'kpi-icon';
+        iconEl.textContent = def.icon;
+        card.appendChild(iconEl);
+
+        var valueEl = document.createElement('div');
+        valueEl.className = 'kpi-value';
+        valueEl.id = 'kpi-value-' + def.key;
+        valueEl.textContent = formatValue(currentValue, def.format);
+        card.appendChild(valueEl);
+
+        var labelEl = document.createElement('div');
+        labelEl.className = 'kpi-label';
+        labelEl.textContent = def.label;
+        card.appendChild(labelEl);
+
+        var deltaEl = document.createElement('div');
+        deltaEl.className = 'kpi-delta';
+        deltaEl.id = 'kpi-delta-' + def.key;
+        card.appendChild(deltaEl);
+
+        grid.appendChild(card);
+      } else {
+        // Update existing card
+        var valueEl = document.getElementById('kpi-value-' + def.key);
+        if (valueEl) {
+          valueEl.textContent = formatValue(currentValue, def.format);
+
+          // Pulse animation on value change
+          if (delta !== 0) {
+            valueEl.classList.remove('pulse');
+            // Force reflow to restart animation
+            void valueEl.offsetWidth;
+            valueEl.classList.add('pulse');
+          }
+        }
+      }
+
+      // Update delta indicator
+      var deltaEl = document.getElementById('kpi-delta-' + def.key);
+      if (deltaEl && delta !== 0) {
+        var deltaText = formatDelta(delta, def.format);
+        if (deltaText) {
+          deltaEl.textContent = deltaText;
+          deltaEl.classList.remove('fading', 'positive', 'negative');
+          if (delta > 0) {
+            deltaEl.classList.add('positive');
+          } else {
+            deltaEl.classList.add('negative');
+          }
+
+          // Clear previous fade timer for this key
+          if (deltaFadeTimers[def.key]) {
+            clearTimeout(deltaFadeTimers[def.key]);
+          }
+
+          // Fade delta after 3 seconds
+          deltaFadeTimers[def.key] = setTimeout(function() {
+            deltaEl.classList.add('fading');
+          }, DELTA_FADE_MS);
+        }
+      } else if (deltaEl && delta === 0 && prevKpis === null) {
+        // Initial load, no delta to show
+        deltaEl.textContent = '';
+      }
+    });
+  }
+
+  // ===== WebSocket =====
+  function connect() {
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = function() {
+      setStatus(true);
+      reconnectAttempts = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    ws.onmessage = function(event) {
+      var msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {
+        console.warn('Invalid JSON:', event.data);
+        return;
+      }
+
+      if (msg.type === 'subscribed') {
+        console.log('Subscribed to', msg.query_id);
+        return;
+      }
+
+      if (msg.type === 'overflow') {
+        console.warn('Overflow for', msg.query_id, '-- full refresh needed');
+        return;
+      }
+
+      // Delta message for single-row aggregate
+      if (msg.query_id === QUERY_ID && (msg.inserted || msg.deleted)) {
+        if (msg.inserted && msg.inserted.length > 0) {
+          prevKpis = kpis;
+          kpis = msg.inserted[0];
+          renderKpis();
+        }
+      }
+    };
+
+    ws.onclose = function() {
+      setStatus(false);
+      scheduleReconnect();
+    };
+
+    ws.onerror = function() {
+      setStatus(false);
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectAttempts++;
+    var delay = Math.min(
+      BASE_DELAY * Math.pow(2, reconnectAttempts - 1) + Math.random() * 500,
+      MAX_DELAY
+    );
+    reconnectTimer = setTimeout(function() {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  }
+
+  // ===== Demo Toggle =====
+  window.toggleDemo = function() {
+    var btn = document.getElementById('demo-toggle');
+    var content = document.getElementById('demo-content');
+    btn.classList.toggle('open');
+    content.classList.toggle('open');
+  };
+
+  // ===== Init =====
+  document.addEventListener('DOMContentLoaded', function() {
+    renderKpis();
+    connect();
+  });
+
+})();
+</script>
+
+<script>
+window.DEMO_ACTIONS = [
+  { action: 'insert_order', label: 'Place Order' },
+  { action: 'insert_customer', label: 'Add Customer' },
+  { action: 'insert_product', label: 'Add Product' },
+];
+</script>
+<script src="/demo-panel.js"></script>
+</body>
+</html>

@@ -44,7 +44,7 @@
 
 <header>
   <h1><span>pg_reactive</span> Examples</h1>
-  <p>5 live applications showing real-time SQL subscriptions — from simple filters to full CRM dashboards.</p>
+  <p>10 live applications showing real-time SQL subscriptions — from simple filters to executive dashboards.</p>
 </header>
 
 <div class="examples">
@@ -96,6 +96,56 @@
     </div>
     <div class="card-desc">Three live queries: CTE-based top customers, LIMIT-constrained recent orders, and regional revenue rollup. A single INSERT updates all three panels simultaneously.</div>
     <span class="card-sql">WITH cte AS (...) &nbsp;+&nbsp; LIMIT 10 &nbsp;+&nbsp; GROUP BY region</span>
+  </a>
+
+  <a class="card" href="06-inventory-monitor/app.html">
+    <div class="card-header">
+      <div class="card-num">6</div>
+      <div class="card-title">Inventory Monitor</div>
+      <span class="card-badge badge-intermediate">Intermediate</span>
+    </div>
+    <div class="card-desc">Stock-level dashboard with color-coded alerts. Uses CASE expressions to classify inventory status and JOIN to combine product and stock data.</div>
+    <span class="card-sql">CASE WHEN stock_qty &lt;= 0 THEN 'out_of_stock' ... END</span>
+  </a>
+
+  <a class="card" href="07-multi-filter/app.html">
+    <div class="card-header">
+      <div class="card-num">7</div>
+      <div class="card-title">Multi-Filter Dashboard</div>
+      <span class="card-badge badge-advanced">Advanced</span>
+    </div>
+    <div class="card-desc">Three simultaneous subscriptions on the same table with different WHERE filters. Products visually "jump" between price tiers as prices change.</div>
+    <span class="card-sql">WHERE price &lt; 50 &nbsp;+&nbsp; WHERE price &gt;= 50 AND &lt; 200 &nbsp;+&nbsp; WHERE price &gt;= 200</span>
+  </a>
+
+  <a class="card" href="08-order-analytics/app.html">
+    <div class="card-header">
+      <div class="card-num">8</div>
+      <div class="card-title">Order Analytics</div>
+      <span class="card-badge badge-advanced">Advanced</span>
+    </div>
+    <div class="card-desc">Time-series chart of orders bucketed by hour. Uses date_trunc for temporal grouping with live-updating bar heights as new orders arrive.</div>
+    <span class="card-sql">GROUP BY date_trunc('hour', created_at)</span>
+  </a>
+
+  <a class="card" href="09-price-comparison/app.html">
+    <div class="card-header">
+      <div class="card-num">9</div>
+      <div class="card-title">Price Comparison</div>
+      <span class="card-badge badge-expert">Expert</span>
+    </div>
+    <div class="card-desc">Rich comparison matrix with four window functions: overall rank, quartile placement, ratio to average, and percentage of max price. Rankings shift live.</div>
+    <span class="card-sql">RANK() + NTILE(4) + price/AVG() OVER () + price/MAX() OVER ()</span>
+  </a>
+
+  <a class="card" href="10-executive-scorecard/app.html">
+    <div class="card-header">
+      <div class="card-num" style="background:#bc8cff;">10</div>
+      <div class="card-title">Executive Scorecard</div>
+      <span class="card-badge badge-fullstack">Full-Stack</span>
+    </div>
+    <div class="card-desc">Single-row aggregate KPI dashboard with 6 computed metrics. Every order updates all cards simultaneously: revenue, customers, avg value, and more.</div>
+    <span class="card-sql">COUNT(DISTINCT ...) + SUM/AVG + NULLIF ratio</span>
   </a>
 </div>
 

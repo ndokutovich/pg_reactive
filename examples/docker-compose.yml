@@ -50,7 +50,7 @@ services:
     command:
       - |
         echo "Initializing examples..."
-        for f in /examples/0*/setup.sql; do
+        for f in /examples/*/setup.sql; do
           echo "  Running $$f"
           psql -f "$$f"
         done

@@ -428,6 +428,15 @@ fn demo_action_sql(action: &str) -> Option<&'static str> {
              AND id = (SELECT id FROM customers WHERE name LIKE 'Demo %' \
              ORDER BY id DESC LIMIT 1)"
         ),
+        "reduce_stock" => Some(
+            "UPDATE inventory SET stock_qty = GREATEST(stock_qty - floor(random()*15+1)::int, 0) \
+             WHERE id = (SELECT id FROM inventory ORDER BY random() LIMIT 1)"
+        ),
+        "restock" => Some(
+            "UPDATE inventory SET stock_qty = stock_qty + 50 \
+             WHERE id = (SELECT id FROM inventory WHERE stock_qty <= reorder_point \
+             ORDER BY stock_qty ASC LIMIT 1)"
+        ),
         _ => None,
     }
 }
