@@ -72,6 +72,22 @@ docker compose exec -T db bash -c 'cd /ext && python3 tests/integration/test_shm
 docker compose exec -T db bash -c 'cd /ext && python3 tests/integration/test_notify_throughput.py'
 ```
 
+### Performance Tests
+
+```bash
+bash tests/perf/runner.sh    # Full suite (~10 min): P1-P6 with PASS/FAIL thresholds
+
+# Individual container tests (Python)
+docker compose exec -T db bash -c 'python3 /ext/tests/perf/p1_write_throughput.py'
+docker compose exec -T db bash -c 'python3 /ext/tests/perf/p2_snapshot_stress.py'
+docker compose exec -T db bash -c 'python3 /ext/tests/perf/p6_cascade.py'
+
+# Individual host tests (Node.js, require ws package)
+node tests/perf/p3_e2e_latency.mjs
+node tests/perf/p4_fanout_scale.mjs
+node tests/perf/p5_soak.mjs
+```
+
 ## Architecture
 
 ### C Extension (`ext/src/`)

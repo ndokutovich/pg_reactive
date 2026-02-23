@@ -223,7 +223,7 @@ All messages are JSON, sent over the `pgr` NOTIFY channel (extension to proxy) a
 
 ## Testing
 
-The project includes six levels of testing.
+The project includes seven levels of testing.
 
 ### Extension tests (pg_regress)
 
@@ -274,6 +274,16 @@ pgbench baseline vs subscribed workloads:
 docker compose exec db bash -c 'cd /ext && bash ext/bench/bench_runner.sh'
 ```
 
+### Performance Tests
+
+6 stress tests measuring real-world limits (write throughput, snapshot scaling, E2E latency, fan-out, sustained load, multi-table cascade):
+
+```bash
+bash tests/perf/runner.sh                # Full suite (~10 min)
+node tests/perf/p3_e2e_latency.mjs       # Individual host test
+docker compose exec -T db bash -c 'python3 /ext/tests/perf/p1_write_throughput.py'  # Individual container test
+```
+
 ## Project Structure
 
 ```
@@ -306,6 +316,19 @@ tests/                        End-to-end and integration tests
   e2e_fanout_test.mjs         Multi-client fan-out
   e2e_jwt_test.mjs            JWT authentication (5 scenarios)
   integration/                Stress and throughput tests
+  perf/                       Performance stress tests (6 tests + runner)
+
+examples/                     10 interactive demo applications
+  01-live-products/           Basic WHERE filter
+  02-order-feed/              Multi-table JOIN (x3)
+  03-revenue-dashboard/       LEFT JOIN + GROUP BY + SUM aggregates
+  04-category-leaderboard/    HAVING + RANK() window function
+  05-realtime-crm/            CTE + LIMIT + multi-query dashboard
+  06-inventory-monitor/       CASE + JOIN computed status
+  07-multi-filter/            Multiple WHERE filters on same table
+  08-order-analytics/         date_trunc + GROUP BY time buckets
+  09-price-comparison/        RANK, NTILE, ratio window functions
+  10-executive-scorecard/     Single-row aggregate KPIs
 
 docker-compose.yml            Dev environment (PostgreSQL + proxy)
 Dockerfile.dev                PostgreSQL 16 with build tools

@@ -1,6 +1,6 @@
 # pg_reactive Examples
 
-Five progressive examples demonstrating pg_reactive's live query capabilities,
+Ten progressive examples demonstrating pg_reactive's live query capabilities,
 from simple single-table filters to a full CRM dashboard with CTEs, window
 functions, and multiple concurrent subscriptions.
 
@@ -14,7 +14,11 @@ docker compose up --build
 This starts PostgreSQL + pg_reactive extension, the WebSocket proxy, runs all
 setup SQL, and serves the examples at **http://127.0.0.1:3000**.
 
-Then open a psql session and run demo commands:
+Each example includes a toolbar with demo buttons (Insert, Update, Delete
+actions) powered by the proxy's `POST /api/demo` endpoint. No psql session
+needed for basic interaction.
+
+For advanced usage, open a psql session and run demo commands directly:
 
 ```bash
 docker compose exec db psql -U postgres -d pg_reactive_test
@@ -28,12 +32,10 @@ If you prefer using the root docker-compose:
 # From the project root
 docker compose up -d --build
 
-# Run setup scripts
-docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/01-live-products/setup.sql
-docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/02-order-feed/setup.sql
-docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/03-revenue-dashboard/setup.sql
-docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/04-category-leaderboard/setup.sql
-docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/05-realtime-crm/setup.sql
+# Run all setup scripts (glob handles all 10 examples automatically)
+for f in /examples/*/setup.sql; do
+  docker compose exec -T db psql -U postgres -d pg_reactive_test -f "$f"
+done
 ```
 
 Then open any `app.html` in your browser and run the demo SQL commands from
@@ -48,6 +50,11 @@ a psql session.
 | 3 | **Revenue Dashboard** | `LEFT JOIN + GROUP BY + SUM` | Live aggregates -- neither CDC nor Hasura can express this |
 | 4 | **Category Leaderboard** | `HAVING + RANK() OVER` | Advanced SQL -- pg_ivm also fails on these |
 | 5 | **Real-Time CRM** | `CTE + LIMIT + Multi-Query` | Full dashboard with 3 simultaneous subscriptions |
+| 6 | **Inventory Monitor** | `CASE + JOIN` | Computed status columns, conditional logic in live queries |
+| 7 | **Multi-Filter Dashboard** | `3x WHERE` | Multiple subscriptions on same table with different filters |
+| 8 | **Order Analytics** | `date_trunc + GROUP BY` | Time-bucketed aggregates, temporal analysis |
+| 9 | **Price Comparison** | `RANK, NTILE, ratio` | Window functions: ranking, quartiles, ratios to avg/max |
+| 10 | **Executive Scorecard** | `COUNT DISTINCT, SUM, AVG, NULLIF` | Single-row aggregate KPIs, dashboard metrics |
 
 ## How It Works
 
@@ -95,4 +102,11 @@ SELECT pgr.unsubscribe('product_rankings');
 SELECT pgr.unsubscribe('top_customers');
 SELECT pgr.unsubscribe('recent_orders');
 SELECT pgr.unsubscribe('revenue_by_region');
+SELECT pgr.unsubscribe('inventory_status');
+SELECT pgr.unsubscribe('budget_products');
+SELECT pgr.unsubscribe('midrange_products');
+SELECT pgr.unsubscribe('premium_products');
+SELECT pgr.unsubscribe('hourly_orders');
+SELECT pgr.unsubscribe('price_matrix');
+SELECT pgr.unsubscribe('exec_kpis');
 ```
