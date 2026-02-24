@@ -373,6 +373,14 @@ async fn handle_request(
             handle_demo(req, state).await
         }
 
+        "/api/sql" if req.method() == Method::OPTIONS => {
+            Ok(cors_response(204, ""))
+        }
+
+        "/api/sql" if req.method() == Method::POST => {
+            handle_sql(req, state).await
+        }
+
         _ => Ok(Response::builder()
             .status(404)
             .body(http_body_util::Full::new(hyper::body::Bytes::from(
@@ -437,6 +445,23 @@ fn demo_action_sql(action: &str) -> Option<&'static str> {
              WHERE id = (SELECT id FROM inventory WHERE stock_qty <= reorder_point \
              ORDER BY stock_qty ASC LIMIT 1)"
         ),
+        "insert_sensor_reading" => Some(
+            "INSERT INTO sensor_readings (sensor_id, temperature, humidity) \
+             VALUES ('sensor-' || chr(65 + (random()*3)::int), \
+             round((20 + random()*10)::numeric,2), \
+             round((30 + random()*40)::numeric,2))"
+        ),
+        "insert_sensor_burst" => Some(
+            "INSERT INTO sensor_readings (sensor_id, temperature, humidity) \
+             SELECT 'sensor-' || chr(65 + (i % 3)), \
+             round((20 + random()*10)::numeric,2), \
+             round((30 + random()*40)::numeric,2) \
+             FROM generate_series(1, 10) AS s(i)"
+        ),
+        "update_sensor" => Some(
+            "UPDATE sensor_readings SET temperature = round((15 + random()*20)::numeric,2) \
+             WHERE id = (SELECT id FROM sensor_readings ORDER BY random() LIMIT 1)"
+        ),
         _ => None,
     }
 }
@@ -491,6 +516,77 @@ async fn handle_demo(
             warn!("demo action '{}' failed: {}", action, e);
             let body = format!(r#"{{"error":"sql error: {}"}}"#, e);
             Ok(cors_response(500, &body))
+        }
+    }
+}
+
+async fn handle_sql(
+    req: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<http_body_util::Full<hyper::body::Bytes>>, hyper::Error> {
+    let body_bytes = match req.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(_) => {
+            return Ok(cors_response(400, r#"{"error":"failed to read body"}"#));
+        }
+    };
+
+    let payload: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(cors_response(400, r#"{"error":"invalid JSON"}"#));
+        }
+    };
+
+    let sql = match payload.get("sql").and_then(|v| v.as_str()) {
+        Some(s) => s.trim(),
+        None => {
+            return Ok(cors_response(400, r#"{"error":"missing sql field"}"#));
+        }
+    };
+
+    if sql.is_empty() {
+        return Ok(cors_response(400, r#"{"error":"empty sql"}"#));
+    }
+
+    let upper = sql.trim_start().to_uppercase();
+    let is_select = upper.starts_with("SELECT") || upper.starts_with("WITH");
+
+    if is_select {
+        let trimmed = sql.trim_end_matches(';');
+        let wrapped = format!(
+            "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({}) t",
+            trimmed
+        );
+        match sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(&wrapped)
+            .fetch_one(&state.pg_pool)
+            .await
+        {
+            Ok(rows) => {
+                let body = serde_json::json!({
+                    "ok": true,
+                    "rows": rows,
+                });
+                Ok(cors_response(200, &body.to_string()))
+            }
+            Err(e) => {
+                let body = serde_json::json!({ "error": e.to_string() });
+                Ok(cors_response(500, &body.to_string()))
+            }
+        }
+    } else {
+        match sqlx::query(sql).execute(&state.pg_pool).await {
+            Ok(result) => {
+                let body = serde_json::json!({
+                    "ok": true,
+                    "rows_affected": result.rows_affected(),
+                });
+                Ok(cors_response(200, &body.to_string()))
+            }
+            Err(e) => {
+                let body = serde_json::json!({ "error": e.to_string() });
+                Ok(cors_response(500, &body.to_string()))
+            }
         }
     }
 }
