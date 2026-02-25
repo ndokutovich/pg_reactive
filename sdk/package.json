@@ -17,6 +17,14 @@
     "./server": {
       "import": "./dist/server.js",
       "types": "./dist/server.d.ts"
+    },
+    "./pgstack": {
+      "import": "./dist/pgstack.js",
+      "types": "./dist/pgstack.d.ts"
+    },
+    "./pgstack-react": {
+      "import": "./dist/pgstack-react.js",
+      "types": "./dist/pgstack-react.d.ts"
     }
   },
   "scripts": {
