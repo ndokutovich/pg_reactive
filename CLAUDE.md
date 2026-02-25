@@ -8,11 +8,11 @@ pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries
 
 ## Development Environment
 
-Everything runs in Docker. PG data is on tmpfs (ephemeral).
+Everything runs in Docker. PG data is on tmpfs (ephemeral). Extension source is COPY'd into the image at build time (no bind mounts — they cause OOM on WSL2).
 
 ```bash
-docker compose up -d --build        # Start PG + proxy
-docker compose restart db && sleep 10  # Rebuild extension (tmpfs needs ~10s)
+docker compose up -d --build        # Start PG + proxy (rebuilds if code changed)
+docker compose build --no-cache db  # Force full rebuild (after Docker prune)
 ```
 
 Host access: PG at `127.0.0.1:15432`, WebSocket proxy at `127.0.0.1:8080`.
@@ -120,9 +120,9 @@ Single-file server using hyper + tokio-tungstenite. Listens on PG `NOTIFY pgr` c
 
 AFTER STATEMENT triggers can't see the triggering DML via SPI. Fix: after `SPI_connect()`, call `PopActiveSnapshot(); CommandCounterIncrement(); PushActiveSnapshot(GetTransactionSnapshot());`
 
-### Docker Volume Mounts
+### Docker Build (No Bind Mounts)
 
-Mount `./ext:/ext/ext` and `./tests:/ext/tests` separately. Do NOT mount the entire project root (`.:/ext`) — it exposes `proxy/target/` and causes "readdir: Cannot allocate memory" errors.
+Do NOT use bind mounts for volumes on WSL2 — they cause OOM regardless of file count. Instead, files are COPY'd into the Docker image at build time (`Dockerfile.dev`). After code changes to `ext/`, rebuild with `docker compose up -d --build`.
 
 ### Git Bash Path Rewriting
 
