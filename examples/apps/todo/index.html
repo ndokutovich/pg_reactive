@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task Manager - pgStack Demo</title>
+<style>
+  /* ── CSS Variables ── */
+  :root {
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --primary-light: #e0e7ff;
+    --primary-bg: #eef2ff;
+    --danger: #ef4444;
+    --danger-hover: #dc2626;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+    --radius-sm: 6px;
+    --radius: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 20px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+    --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.06);
+    --shadow-lg: 0 10px 15px rgba(0,0,0,0.1), 0 4px 6px rgba(0,0,0,0.05);
+    --transition: 0.2s ease;
+  }
+
+  /* ── Reset & Base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: var(--gray-50);
+    color: var(--gray-800);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  .app-shell {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 24px 16px;
+  }
+
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition);
+    text-decoration: none;
+  }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  .btn-primary {
+    background: var(--primary);
+    color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--gray-600);
+  }
+  .btn-ghost:hover:not(:disabled) { background: var(--gray-100); color: var(--gray-800); }
+
+  .btn-danger {
+    background: transparent;
+    color: var(--gray-400);
+    padding: 6px 8px;
+  }
+  .btn-danger:hover:not(:disabled) { color: var(--danger); background: #fef2f2; }
+
+  .btn-sm { padding: 6px 14px; font-size: 13px; }
+
+  /* ── Inputs ── */
+  .input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1.5px solid var(--gray-200);
+    border-radius: var(--radius);
+    font-size: 14px;
+    color: var(--gray-800);
+    background: #fff;
+    transition: border-color var(--transition), box-shadow var(--transition);
+    outline: none;
+  }
+  .input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+  }
+  .input::placeholder { color: var(--gray-400); }
+
+  select.input {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2 4 4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+  }
+
+  /* ── Card ── */
+  .card {
+    background: #fff;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .card-body {
+    padding: 24px;
+  }
+
+  /* ── Setup Screen ── */
+  .setup-hero {
+    text-align: center;
+    padding: 60px 24px 40px;
+  }
+
+  .setup-hero h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--gray-900);
+    margin-bottom: 8px;
+  }
+
+  .setup-hero p {
+    color: var(--gray-500);
+    font-size: 15px;
+    margin-bottom: 32px;
+    max-width: 400px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .setup-icon {
+    width: 64px;
+    height: 64px;
+    background: var(--primary-bg);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 20px;
+    font-size: 28px;
+  }
+
+  .setup-log {
+    background: var(--gray-900);
+    color: #a5f3ab;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12px;
+    padding: 16px;
+    border-radius: var(--radius);
+    max-height: 200px;
+    overflow-y: auto;
+    text-align: left;
+    margin-top: 20px;
+    display: none;
+    line-height: 1.8;
+  }
+  .setup-log.visible { display: block; }
+  .setup-log .error { color: #fca5a5; }
+  .setup-log .ok { color: #a5f3ab; }
+
+  /* ── Auth Screen ── */
+  .auth-container {
+    padding: 60px 0 40px;
+  }
+
+  .auth-card {
+    max-width: 400px;
+    margin: 0 auto;
+  }
+
+  .auth-card h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--gray-900);
+    margin-bottom: 4px;
+  }
+
+  .auth-card .subtitle {
+    color: var(--gray-500);
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--gray-700);
+    margin-bottom: 6px;
+  }
+
+  .auth-toggle {
+    text-align: center;
+    margin-top: 16px;
+    font-size: 14px;
+    color: var(--gray-500);
+  }
+  .auth-toggle a {
+    color: var(--primary);
+    cursor: pointer;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .auth-toggle a:hover { text-decoration: underline; }
+
+  /* ── Alert ── */
+  .alert {
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .alert.visible { display: block; }
+  .alert-error {
+    background: #fef2f2;
+    color: var(--danger);
+    border: 1px solid #fecaca;
+  }
+  .alert-success {
+    background: #f0fdf4;
+    color: #15803d;
+    border: 1px solid #bbf7d0;
+  }
+
+  /* ── App Header ── */
+  .app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 0;
+    margin-bottom: 20px;
+  }
+
+  .app-header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--gray-900);
+  }
+
+  .user-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .user-email {
+    font-size: 13px;
+    color: var(--gray-500);
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  /* ── RLS Banner ── */
+  .rls-banner {
+    background: var(--primary-bg);
+    border: 1px solid #c7d2fe;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--primary-hover);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .rls-banner svg { flex-shrink: 0; }
+
+  /* ── Add Task ── */
+  .add-task-form {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+
+  .add-task-form .input { flex: 1; }
+
+  .add-task-form select.input {
+    flex: 0 0 140px;
+  }
+
+  @media (max-width: 540px) {
+    .add-task-form {
+      flex-wrap: wrap;
+    }
+    .add-task-form .input { flex: 1 1 100%; }
+    .add-task-form select.input { flex: 1 1 auto; }
+    .add-task-form .btn { flex: 1 1 auto; }
+  }
+
+  /* ── Filter Bar ── */
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+
+  .filter-tabs {
+    display: flex;
+    background: var(--gray-100);
+    border-radius: var(--radius);
+    padding: 3px;
+    gap: 2px;
+  }
+
+  .filter-tab {
+    padding: 6px 14px;
+    border-radius: calc(var(--radius) - 2px);
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--gray-500);
+    cursor: pointer;
+    transition: all var(--transition);
+    white-space: nowrap;
+  }
+  .filter-tab:hover { color: var(--gray-700); }
+  .filter-tab.active {
+    background: #fff;
+    color: var(--gray-800);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .filter-tab .count {
+    background: var(--gray-200);
+    color: var(--gray-600);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-left: 4px;
+  }
+  .filter-tab.active .count {
+    background: var(--primary-light);
+    color: var(--primary);
+  }
+
+  .filter-spacer { flex: 1; }
+
+  .category-filter select.input {
+    padding: 6px 32px 6px 10px;
+    font-size: 13px;
+    min-width: 130px;
+  }
+
+  /* ── Task List ── */
+  .task-list {
+    list-style: none;
+  }
+
+  .task-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--gray-100);
+    transition: background var(--transition);
+  }
+  .task-item:last-child { border-bottom: none; }
+  .task-item:hover { background: var(--gray-50); }
+
+  .task-checkbox {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--gray-300);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all var(--transition);
+    flex-shrink: 0;
+    position: relative;
+  }
+  .task-checkbox:checked {
+    background: var(--primary);
+    border-color: var(--primary);
+  }
+  .task-checkbox:checked::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 5px;
+    width: 5px;
+    height: 9px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+  .task-checkbox:hover:not(:checked) { border-color: var(--primary); }
+
+  .task-color-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .task-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .task-title {
+    font-size: 14px;
+    color: var(--gray-800);
+    transition: all var(--transition);
+  }
+  .task-item.done .task-title {
+    text-decoration: line-through;
+    color: var(--gray-400);
+  }
+
+  .task-meta {
+    font-size: 11px;
+    color: var(--gray-400);
+    margin-top: 2px;
+  }
+
+  .task-delete {
+    opacity: 0;
+    transition: opacity var(--transition);
+  }
+  .task-item:hover .task-delete { opacity: 1; }
+
+  /* ── Empty State ── */
+  .empty-state {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--gray-400);
+  }
+  .empty-state .empty-icon {
+    margin-bottom: 12px;
+    opacity: 0.5;
+  }
+  .empty-state p {
+    font-size: 14px;
+  }
+
+  /* ── Loading Spinner ── */
+  .spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--gray-200);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px;
+    gap: 10px;
+    color: var(--gray-500);
+    font-size: 14px;
+  }
+
+  /* ── Footer ── */
+  .app-footer {
+    text-align: center;
+    padding: 24px 0;
+    font-size: 12px;
+    color: var(--gray-400);
+  }
+
+  /* ── Transitions ── */
+  .fade-in {
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- SETUP SCREEN -->
+  <div id="screen-setup" class="screen active">
+    <div class="setup-hero">
+      <div class="setup-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
+      </div>
+      <h1>Task Manager</h1>
+      <p>A full-stack demo powered by pgStack with PostgreSQL Row Level Security. Set up the database schema to get started.</p>
+      <button id="btn-setup" class="btn btn-primary">
+        Setup Database
+      </button>
+      <div id="setup-log" class="setup-log"></div>
+    </div>
+  </div>
+
+  <!-- AUTH SCREEN -->
+  <div id="screen-auth" class="screen">
+    <div class="auth-container fade-in">
+      <div class="auth-card card">
+        <div class="card-body">
+          <h2 id="auth-title">Sign Up</h2>
+          <p class="subtitle" id="auth-subtitle">Create an account to manage your tasks</p>
+
+          <div id="auth-alert" class="alert alert-error"></div>
+
+          <form id="auth-form">
+            <div class="form-group">
+              <label for="auth-email">Email</label>
+              <input type="email" id="auth-email" class="input" placeholder="you@example.com" required autocomplete="email">
+            </div>
+            <div class="form-group">
+              <label for="auth-password">Password</label>
+              <input type="password" id="auth-password" class="input" placeholder="At least 6 characters" required minlength="6" autocomplete="current-password">
+            </div>
+            <button type="submit" id="auth-submit" class="btn btn-primary" style="width:100%; margin-top:8px;">
+              Sign Up
+            </button>
+          </form>
+
+          <div class="auth-toggle">
+            <span id="auth-toggle-text">Already have an account?</span>
+            <a id="auth-toggle-link">Log In</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN APP SCREEN -->
+  <div id="screen-app" class="screen">
+    <div class="fade-in">
+
+      <!-- Header -->
+      <div class="app-header">
+        <h1>Tasks</h1>
+        <div class="user-info">
+          <span class="user-email" id="app-user-email"></span>
+          <div class="avatar" id="app-avatar"></div>
+          <button class="btn btn-ghost btn-sm" id="btn-logout">Log out</button>
+        </div>
+      </div>
+
+      <!-- RLS Banner -->
+      <div class="rls-banner">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Your tasks are isolated by Row Level Security &mdash; other users cannot see them.
+      </div>
+
+      <!-- Add Task Form -->
+      <form class="add-task-form" id="add-task-form">
+        <input type="text" id="task-input" class="input" placeholder="What needs to be done?" required>
+        <select id="task-category" class="input">
+          <option value="">No category</option>
+        </select>
+        <button type="submit" class="btn btn-primary" id="btn-add-task">Add</button>
+      </form>
+
+      <!-- Filters -->
+      <div class="filter-bar">
+        <div class="filter-tabs" id="filter-tabs">
+          <button class="filter-tab active" data-filter="all">All <span class="count" id="count-all">0</span></button>
+          <button class="filter-tab" data-filter="active">Active <span class="count" id="count-active">0</span></button>
+          <button class="filter-tab" data-filter="done">Done <span class="count" id="count-done">0</span></button>
+        </div>
+        <div class="filter-spacer"></div>
+        <div class="category-filter">
+          <select id="filter-category" class="input">
+            <option value="">All categories</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Task List Card -->
+      <div class="card">
+        <div id="task-loading" class="loading-overlay">
+          <div class="spinner"></div>
+          Loading tasks...
+        </div>
+        <ul id="task-list" class="task-list"></ul>
+        <div id="task-empty" class="empty-state" style="display:none;">
+          <div class="empty-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          </div>
+          <p id="empty-text">No tasks yet. Add one above!</p>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="app-footer">
+        Built with pgStack &mdash; PostgreSQL + Rust + Row Level Security
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ═══════════════════════════════════════════════════════════
+  // Configuration
+  // ═══════════════════════════════════════════════════════════
+
+  var API_BASE = 'http://127.0.0.1:8080';
+
+  var ANON_KEY = 'anon-key-12345';
+
+  // ═══════════════════════════════════════════════════════════
+  // State
+  // ═══════════════════════════════════════════════════════════
+
+  var accessToken = null;
+  var currentUser = null;
+  var tasks = [];
+  var categories = [];
+  var currentFilter = 'all';
+  var currentCategoryFilter = '';
+  var isSignUp = true;
+
+  // ═══════════════════════════════════════════════════════════
+  // DOM references
+  // ═══════════════════════════════════════════════════════════
+
+  var $ = function(id) { return document.getElementById(id); };
+
+  // ═══════════════════════════════════════════════════════════
+  // Utilities
+  // ═══════════════════════════════════════════════════════════
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(String(str)));
+    return div.textContent;
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '';
+    try {
+      var d = new Date(iso);
+      var now = new Date();
+      var diff = now - d;
+      if (diff < 60000) return 'just now';
+      if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+      if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+      if (diff < 604800000) return Math.floor(diff / 86400000) + 'd ago';
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function showScreen(name) {
+    var screens = document.querySelectorAll('.screen');
+    for (var i = 0; i < screens.length; i++) {
+      screens[i].classList.remove('active');
+    }
+    $('screen-' + name).classList.add('active');
+  }
+
+  function showAlert(id, message, type) {
+    var el = $(id);
+    el.textContent = message;
+    el.className = 'alert visible alert-' + (type || 'error');
+  }
+
+  function hideAlert(id) {
+    $(id).className = 'alert';
+  }
+
+  // Parse JWT payload (base64url decode)
+  function parseJwt(token) {
+    try {
+      var payload = token.split('.')[1];
+      var b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+      var padded = b64 + '=='.slice(0, (4 - b64.length % 4) % 4);
+      return JSON.parse(atob(padded));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // API Helpers
+  // ═══════════════════════════════════════════════════════════
+
+  function authHeaders() {
+    var h = { 'Content-Type': 'application/json', 'apikey': ANON_KEY };
+    if (accessToken) h['Authorization'] = 'Bearer ' + accessToken;
+    return h;
+  }
+
+  function apiSql(sql) {
+    return fetch(API_BASE + '/api/sql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql: sql }),
+    }).then(function(res) { return res.json(); });
+  }
+
+  function apiRest(method, path, body) {
+    var opts = {
+      method: method,
+      headers: authHeaders(),
+    };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    return fetch(API_BASE + '/rest/v1/' + path, opts).then(function(res) {
+      if (res.status === 204) return null;
+      return res.json().then(function(data) {
+        if (!res.ok) {
+          throw new Error(data.error || data.message || JSON.stringify(data));
+        }
+        return data;
+      });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Setup Screen
+  // ═══════════════════════════════════════════════════════════
+
+  var MIGRATION_SQL = [
+    "CREATE TABLE IF NOT EXISTS categories (\n  id serial PRIMARY KEY,\n  name text NOT NULL UNIQUE,\n  color text DEFAULT '#6366f1'\n)",
+    "INSERT INTO categories (name, color) VALUES\n  ('Personal', '#6366f1'),\n  ('Work', '#f59e0b'),\n  ('Shopping', '#10b981'),\n  ('Health', '#ef4444')\nON CONFLICT (name) DO NOTHING",
+    "CREATE TABLE IF NOT EXISTS tasks (\n  id serial PRIMARY KEY,\n  user_id uuid NOT NULL,\n  category_id integer REFERENCES categories(id),\n  title text NOT NULL,\n  done boolean DEFAULT false,\n  created_at timestamptz DEFAULT now()\n)",
+    "GRANT ALL ON tasks TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE tasks_id_seq TO authenticated",
+    "GRANT SELECT ON categories TO anon, authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE categories_id_seq TO anon, authenticated",
+    "ALTER TABLE tasks ENABLE ROW LEVEL SECURITY",
+    "DROP POLICY IF EXISTS tasks_owner ON tasks",
+    "CREATE POLICY tasks_owner ON tasks\n  FOR ALL TO authenticated\n  USING (user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)\n  WITH CHECK (user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)"
+  ];
+
+  function appendLog(el, text, cls) {
+    var line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function runSetup() {
+    var btn = $('btn-setup');
+    var log = $('setup-log');
+
+    btn.disabled = true;
+    btn.textContent = 'Setting up...';
+    log.classList.add('visible');
+    log.textContent = '';
+
+    var allOk = true;
+    var idx = 0;
+
+    function runNext() {
+      if (idx >= MIGRATION_SQL.length) {
+        if (allOk) {
+          appendLog(log, '\nDatabase setup complete!', 'ok');
+          btn.textContent = 'Done! Proceeding...';
+          setTimeout(function() { showScreen('auth'); }, 800);
+        } else {
+          appendLog(log, '\nSetup finished with errors. You may retry or proceed.', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Retry Setup';
+          if (!$('btn-skip-setup')) {
+            var skipBtn = document.createElement('button');
+            skipBtn.id = 'btn-skip-setup';
+            skipBtn.className = 'btn btn-ghost btn-sm';
+            skipBtn.style.cssText = 'margin:12px auto 0; display:block;';
+            skipBtn.textContent = 'Continue anyway';
+            skipBtn.addEventListener('click', function() { showScreen('auth'); });
+            btn.parentNode.insertBefore(skipBtn, log);
+          }
+        }
+        return;
+      }
+
+      var stmt = MIGRATION_SQL[idx];
+      var short = stmt.replace(/\n/g, ' ');
+      if (short.length > 70) short = short.substring(0, 70) + '...';
+      appendLog(log, '> ' + short);
+
+      apiSql(stmt).then(function(result) {
+        if (result.error) {
+          if (result.error.indexOf('already exists') !== -1 || result.error.indexOf('duplicate') !== -1) {
+            appendLog(log, '  (skipped, already exists)', 'ok');
+          } else {
+            appendLog(log, '  ERROR: ' + result.error, 'error');
+            allOk = false;
+          }
+        } else {
+          appendLog(log, '  OK', 'ok');
+        }
+        idx++;
+        runNext();
+      }).catch(function(err) {
+        appendLog(log, '  NETWORK ERROR: ' + err.message, 'error');
+        allOk = false;
+        idx++;
+        runNext();
+      });
+    }
+
+    runNext();
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Auth Screen
+  // ═══════════════════════════════════════════════════════════
+
+  function toggleAuthMode() {
+    isSignUp = !isSignUp;
+    $('auth-title').textContent = isSignUp ? 'Sign Up' : 'Log In';
+    $('auth-subtitle').textContent = isSignUp
+      ? 'Create an account to manage your tasks'
+      : 'Welcome back! Enter your credentials';
+    $('auth-submit').textContent = isSignUp ? 'Sign Up' : 'Log In';
+    $('auth-toggle-text').textContent = isSignUp
+      ? 'Already have an account?'
+      : 'Need an account?';
+    $('auth-toggle-link').textContent = isSignUp ? 'Log In' : 'Sign Up';
+    hideAlert('auth-alert');
+  }
+
+  function handleAuth(e) {
+    e.preventDefault();
+    var email = $('auth-email').value.trim();
+    var password = $('auth-password').value;
+    var btn = $('auth-submit');
+
+    hideAlert('auth-alert');
+    btn.disabled = true;
+    var originalText = btn.textContent;
+    var spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    btn.textContent = '';
+    btn.appendChild(spinner);
+
+    var url, body;
+    if (isSignUp) {
+      url = API_BASE + '/auth/v1/signup';
+      body = { email: email, password: password };
+    } else {
+      url = API_BASE + '/auth/v1/token';
+      body = { grant_type: 'password', email: email, password: password };
+    }
+
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || data.message || 'Authentication failed');
+        return data;
+      });
+    })
+    .then(function(data) {
+      accessToken = data.access_token;
+      currentUser = data.user;
+      enterApp();
+    })
+    .catch(function(err) {
+      showAlert('auth-alert', err.message, 'error');
+    })
+    .finally(function() {
+      btn.disabled = false;
+      btn.textContent = isSignUp ? 'Sign Up' : 'Log In';
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Main App
+  // ═══════════════════════════════════════════════════════════
+
+  function enterApp() {
+    showScreen('app');
+
+    var email = currentUser.email;
+    $('app-user-email').textContent = email;
+    $('app-avatar').textContent = email.charAt(0).toUpperCase();
+
+    // Load categories and tasks in parallel
+    Promise.all([loadCategories(), loadTasks()]);
+  }
+
+  function loadCategories() {
+    return apiRest('GET', 'categories?select=id,name,color&order=id.asc')
+      .then(function(data) {
+        categories = Array.isArray(data) ? data : [];
+        populateCategoryDropdowns();
+      })
+      .catch(function(err) {
+        console.error('Failed to load categories:', err);
+      });
+  }
+
+  function populateCategoryDropdowns() {
+    var addSelect = $('task-category');
+    var filterSelect = $('filter-category');
+
+    var addVal = addSelect.value;
+    var filterVal = filterSelect.value;
+
+    // Rebuild add-task dropdown
+    while (addSelect.firstChild) addSelect.removeChild(addSelect.firstChild);
+    var defOpt = document.createElement('option');
+    defOpt.value = '';
+    defOpt.textContent = 'No category';
+    addSelect.appendChild(defOpt);
+
+    categories.forEach(function(c) {
+      var opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.name;
+      addSelect.appendChild(opt);
+    });
+    addSelect.value = addVal;
+
+    // Rebuild filter dropdown
+    while (filterSelect.firstChild) filterSelect.removeChild(filterSelect.firstChild);
+    var defOpt2 = document.createElement('option');
+    defOpt2.value = '';
+    defOpt2.textContent = 'All categories';
+    filterSelect.appendChild(defOpt2);
+
+    categories.forEach(function(c) {
+      var opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.name;
+      filterSelect.appendChild(opt);
+    });
+    filterSelect.value = filterVal;
+  }
+
+  function loadTasks() {
+    var loading = $('task-loading');
+    var list = $('task-list');
+    var empty = $('task-empty');
+
+    loading.style.display = 'flex';
+    list.style.display = 'none';
+    empty.style.display = 'none';
+
+    return apiRest('GET', 'tasks?select=*,categories(name,color)&order=created_at.desc')
+      .then(function(data) {
+        tasks = Array.isArray(data) ? data : [];
+      })
+      .catch(function(err) {
+        console.error('Failed to load tasks:', err);
+        tasks = [];
+      })
+      .finally(function() {
+        loading.style.display = 'none';
+        renderTasks();
+      });
+  }
+
+  function renderTasks() {
+    var list = $('task-list');
+    var empty = $('task-empty');
+    var emptyText = $('empty-text');
+
+    // Apply filters
+    var filtered = tasks.slice();
+    if (currentFilter === 'active') {
+      filtered = tasks.filter(function(t) { return !t.done; });
+    } else if (currentFilter === 'done') {
+      filtered = tasks.filter(function(t) { return t.done; });
+    }
+    if (currentCategoryFilter) {
+      filtered = filtered.filter(function(t) { return String(t.category_id) === currentCategoryFilter; });
+    }
+
+    // Update counts
+    $('count-all').textContent = tasks.length;
+    $('count-active').textContent = tasks.filter(function(t) { return !t.done; }).length;
+    $('count-done').textContent = tasks.filter(function(t) { return t.done; }).length;
+
+    if (filtered.length === 0) {
+      list.style.display = 'none';
+      empty.style.display = 'block';
+      emptyText.textContent = tasks.length === 0
+        ? 'No tasks yet. Add one above!'
+        : 'No tasks match the current filters.';
+      return;
+    }
+
+    empty.style.display = 'none';
+    list.style.display = 'block';
+
+    // Build task items using safe DOM methods
+    while (list.firstChild) list.removeChild(list.firstChild);
+    filtered.forEach(function(task) {
+      list.appendChild(buildTaskElement(task));
+    });
+  }
+
+  function buildTaskElement(task) {
+    var cat = task.categories;
+    var catColor = cat ? cat.color : '#d1d5db';
+    var catName = cat ? cat.name : '';
+    var created = formatDate(task.created_at);
+
+    var li = document.createElement('li');
+    li.className = 'task-item' + (task.done ? ' done' : '');
+    li.setAttribute('data-id', task.id);
+
+    // Checkbox
+    var checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'task-checkbox';
+    checkbox.checked = task.done;
+    checkbox.title = 'Toggle done';
+    checkbox.addEventListener('change', function() {
+      toggleTask(task.id, !task.done);
+    });
+
+    // Color dot
+    var dot = document.createElement('span');
+    dot.className = 'task-color-dot';
+    dot.style.background = catColor;
+    if (catName) dot.title = catName;
+
+    // Content wrapper
+    var content = document.createElement('div');
+    content.className = 'task-content';
+
+    var titleEl = document.createElement('div');
+    titleEl.className = 'task-title';
+    titleEl.textContent = task.title;
+
+    var metaEl = document.createElement('div');
+    metaEl.className = 'task-meta';
+    metaEl.textContent = (catName ? catName + ' \u00B7 ' : '') + created;
+
+    content.appendChild(titleEl);
+    content.appendChild(metaEl);
+
+    // Delete button
+    var delBtn = document.createElement('button');
+    delBtn.className = 'btn btn-danger task-delete';
+    delBtn.title = 'Delete';
+    delBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+    delBtn.addEventListener('click', function() {
+      deleteTask(task.id);
+    });
+
+    li.appendChild(checkbox);
+    li.appendChild(dot);
+    li.appendChild(content);
+    li.appendChild(delBtn);
+
+    return li;
+  }
+
+  function handleAddTask(e) {
+    e.preventDefault();
+    var input = $('task-input');
+    var catSelect = $('task-category');
+    var btn = $('btn-add-task');
+    var title = input.value.trim();
+    if (!title) return;
+
+    var claims = parseJwt(accessToken);
+    if (!claims || !claims.sub) {
+      alert('Session expired. Please log in again.');
+      handleLogout();
+      return;
+    }
+
+    btn.disabled = true;
+    var origText = btn.textContent;
+    btn.textContent = '';
+    var spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    btn.appendChild(spinner);
+
+    var body = {
+      title: title,
+      user_id: claims.sub,
+      done: false,
+    };
+    if (catSelect.value) body.category_id = parseInt(catSelect.value, 10);
+
+    apiRest('POST', 'tasks', body)
+      .then(function(created) {
+        // Enrich with category embed info
+        if (created.category_id) {
+          var cat = categories.find(function(c) { return c.id === created.category_id; });
+          if (cat) created.categories = { name: cat.name, color: cat.color };
+          else created.categories = null;
+        } else {
+          created.categories = null;
+        }
+        tasks.unshift(created);
+        renderTasks();
+        input.value = '';
+      })
+      .catch(function(err) {
+        alert('Failed to add task: ' + err.message);
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = origText;
+      });
+  }
+
+  function toggleTask(id, done) {
+    var task = tasks.find(function(t) { return t.id === id; });
+    if (!task) return;
+    var prevDone = task.done;
+    task.done = done;
+    renderTasks();
+
+    apiRest('PATCH', 'tasks?id=eq.' + id, { done: done })
+      .catch(function(err) {
+        task.done = prevDone;
+        renderTasks();
+        alert('Failed to update task: ' + err.message);
+      });
+  }
+
+  function deleteTask(id) {
+    var idx = -1;
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i].id === id) { idx = i; break; }
+    }
+    if (idx === -1) return;
+    var removed = tasks.splice(idx, 1)[0];
+    renderTasks();
+
+    apiRest('DELETE', 'tasks?id=eq.' + id)
+      .catch(function(err) {
+        tasks.splice(idx, 0, removed);
+        renderTasks();
+        alert('Failed to delete task: ' + err.message);
+      });
+  }
+
+  function handleLogout() {
+    fetch(API_BASE + '/auth/v1/logout', {
+      method: 'POST',
+      headers: authHeaders(),
+    }).catch(function() { /* ignore */ });
+
+    accessToken = null;
+    currentUser = null;
+    tasks = [];
+    currentFilter = 'all';
+    currentCategoryFilter = '';
+    showScreen('auth');
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Filters
+  // ═══════════════════════════════════════════════════════════
+
+  function setFilter(filter, tabEl) {
+    currentFilter = filter;
+    var tabs = document.querySelectorAll('.filter-tab');
+    for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
+    tabEl.classList.add('active');
+    renderTasks();
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Event Binding
+  // ═══════════════════════════════════════════════════════════
+
+  document.addEventListener('DOMContentLoaded', function() {
+    $('btn-setup').addEventListener('click', runSetup);
+    $('auth-form').addEventListener('submit', handleAuth);
+    $('auth-toggle-link').addEventListener('click', toggleAuthMode);
+    $('add-task-form').addEventListener('submit', handleAddTask);
+    $('btn-logout').addEventListener('click', handleLogout);
+
+    $('filter-category').addEventListener('change', function() {
+      currentCategoryFilter = this.value;
+      renderTasks();
+    });
+
+    // Filter tabs via delegation
+    $('filter-tabs').addEventListener('click', function(e) {
+      var tab = e.target.closest('.filter-tab');
+      if (!tab) return;
+      var filter = tab.getAttribute('data-filter');
+      if (filter) setFilter(filter, tab);
+    });
+  });
+
+})();
+</script>
+
+</body>
+</html>
