@@ -7,6 +7,8 @@ mod rest;
 mod routes;
 mod state;
 
+use std::net::SocketAddr;
+
 use axum::routing::{get, post};
 use axum::Router;
 use sqlx::PgPool;
@@ -65,8 +67,11 @@ async fn main() {
         config.listen_addr, config.max_connections
     );
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server error");
 
@@ -74,14 +79,23 @@ async fn main() {
 }
 
 fn build_router(state: AppState) -> Router {
+    // Auth routes with rate limiting (signup + token are brute-force targets)
+    let auth_rate_limited = Router::new()
+        .route("/auth/v1/signup", post(auth::routes::signup))
+        .route("/auth/v1/token", post(auth::routes::token))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::rate_limit::rate_limit_auth,
+        ));
+
     Router::new()
         // Health check
         .route("/health", get(routes::health::health))
         // WebSocket (pg_reactive)
         .route("/ws/{query_id}", get(ws_handler))
-        // Auth (stubs for now, will be implemented in C3)
-        .route("/auth/v1/signup", post(auth::routes::signup))
-        .route("/auth/v1/token", post(auth::routes::token))
+        // Auth (rate-limited signup + token)
+        .merge(auth_rate_limited)
+        // Auth (non-rate-limited)
         .route("/auth/v1/user", get(auth::routes::get_user).patch(auth::routes::update_user))
         .route("/auth/v1/logout", post(auth::routes::logout))
         // OAuth

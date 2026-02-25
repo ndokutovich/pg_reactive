@@ -1,6 +1,7 @@
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Redirect};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
 use crate::auth::routes::{base64_url_encode, generate_token_pair};
@@ -33,7 +34,6 @@ pub struct AuthorizeParams {
 pub struct CallbackParams {
     code: String,
     state: String,
-    provider: String,
 }
 
 // ---------- Provider response types ----------
@@ -92,6 +92,18 @@ fn generate_csrf_state() -> String {
     base64_url_encode(&bytes)
 }
 
+fn generate_code_verifier() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    base64_url_encode(&bytes)
+}
+
+fn compute_code_challenge(verifier: &str) -> String {
+    let hash = Sha256::digest(verifier.as_bytes());
+    base64_url_encode(&hash)
+}
+
 // ---------- GET /auth/v1/authorize ----------
 
 pub async fn authorize(
@@ -101,6 +113,19 @@ pub async fn authorize(
     let site = site_url(&state.config);
     let callback_uri = format!("{}/auth/v1/callback", site);
     let csrf_state = generate_csrf_state();
+    let code_verifier = generate_code_verifier();
+    let code_challenge = compute_code_challenge(&code_verifier);
+
+    // Store session in DB for state validation + PKCE
+    sqlx::query(
+        "INSERT INTO pgstack.oauth_sessions (state, code_verifier, provider)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(&csrf_state)
+    .bind(&code_verifier)
+    .bind(&params.provider)
+    .execute(&state.pg_pool)
+    .await?;
 
     match params.provider.as_str() {
         "google" => {
@@ -109,12 +134,13 @@ pub async fn authorize(
             })?;
 
             let url = format!(
-                "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&provider=google",
+                "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
                 GOOGLE_AUTH_URL,
                 urlencoding::encode(client_id),
                 urlencoding::encode(&callback_uri),
                 urlencoding::encode("openid email profile"),
                 urlencoding::encode(&csrf_state),
+                urlencoding::encode(&code_challenge),
             );
 
             info!(provider = "google", "OAuth authorize redirect");
@@ -126,7 +152,7 @@ pub async fn authorize(
             })?;
 
             let url = format!(
-                "{}?client_id={}&redirect_uri={}&scope={}&state={}&provider=github",
+                "{}?client_id={}&redirect_uri={}&scope={}&state={}",
                 GITHUB_AUTH_URL,
                 urlencoding::encode(client_id),
                 urlencoding::encode(&callback_uri),
@@ -163,7 +189,8 @@ pub async fn callback(
                 | AppError::Internal(ref msg)
                 | AppError::NotFound(ref msg)
                 | AppError::Forbidden(ref msg)
-                | AppError::Conflict(ref msg) => msg.clone(),
+                | AppError::Conflict(ref msg)
+                | AppError::TooManyRequests(ref msg) => msg.clone(),
             };
             error_redirect(&site, "server_error", &description)
         }
@@ -179,9 +206,23 @@ async fn callback_inner(
         AppError::Internal("JWT_SECRET not configured".into())
     })?;
 
+    // Validate state parameter and retrieve PKCE verifier (one-time use)
+    let session = sqlx::query_as::<_, (String, String)>(
+        "DELETE FROM pgstack.oauth_sessions
+         WHERE state = $1 AND expires_at > now()
+         RETURNING code_verifier, provider",
+    )
+    .bind(&params.state)
+    .fetch_optional(&state.pg_pool)
+    .await?;
+
+    let (code_verifier, provider) = session.ok_or_else(|| {
+        AppError::Unauthorized("invalid or expired OAuth state".into())
+    })?;
+
     // Exchange code for access token and fetch user info
-    let (email, name, provider) = match params.provider.as_str() {
-        "google" => exchange_google(state, &params.code, site).await?,
+    let (email, name, provider) = match provider.as_str() {
+        "google" => exchange_google(state, &params.code, site, Some(&code_verifier)).await?,
         "github" => exchange_github(state, &params.code, site).await?,
         other => {
             return Err(AppError::BadRequest(format!(
@@ -222,7 +263,7 @@ async fn callback_inner(
 
     // Generate token pair
     let (access_token, refresh_token) =
-        generate_token_pair(state, secret, &user_id, &user_email, &role).await?;
+        generate_token_pair(state, secret, &user_id, &user_email, &role, None).await?;
 
     // Redirect with tokens in fragment (Supabase-compatible)
     let fragment = format!(
@@ -246,6 +287,7 @@ async fn exchange_google(
     state: &AppState,
     code: &str,
     site: &str,
+    code_verifier: Option<&str>,
 ) -> Result<(String, Option<String>, String), AppError> {
     let client_id = state.config.google_client_id.as_ref().ok_or_else(|| {
         AppError::Internal("GOOGLE_CLIENT_ID not configured".into())
@@ -258,16 +300,23 @@ async fn exchange_google(
 
     let http = reqwest::Client::new();
 
-    // Exchange code for access token
+    // Exchange code for access token (with PKCE code_verifier)
+    let mut form_params = vec![
+        ("code", code),
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret.as_str()),
+        ("redirect_uri", callback_uri.as_str()),
+        ("grant_type", "authorization_code"),
+    ];
+    let verifier_owned;
+    if let Some(v) = code_verifier {
+        verifier_owned = v.to_string();
+        form_params.push(("code_verifier", verifier_owned.as_str()));
+    }
+
     let token_resp = http
         .post(GOOGLE_TOKEN_URL)
-        .form(&[
-            ("code", code),
-            ("client_id", client_id.as_str()),
-            ("client_secret", client_secret.as_str()),
-            ("redirect_uri", callback_uri.as_str()),
-            ("grant_type", "authorization_code"),
-        ])
+        .form(&form_params)
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("Google token exchange failed: {}", e)))?;

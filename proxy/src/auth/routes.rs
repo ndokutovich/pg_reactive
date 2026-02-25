@@ -121,9 +121,9 @@ pub async fn signup(
 
     let (user_id, email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = row;
 
-    // Generate tokens
+    // Generate tokens (new family)
     let (access_token, refresh_token) =
-        generate_token_pair(&state, secret, &user_id, &email, &role).await?;
+        generate_token_pair(&state, secret, &user_id, &email, &role, None).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -208,9 +208,9 @@ async fn token_password(
         ));
     }
 
-    // Generate tokens
+    // Generate tokens (new family)
     let (access_token, refresh_token) =
-        generate_token_pair(&state, secret, &user_id, &user_email, &role).await?;
+        generate_token_pair(&state, secret, &user_id, &user_email, &role, None).await?;
 
     Ok((
         StatusCode::OK,
@@ -241,18 +241,37 @@ async fn token_refresh(
         AppError::BadRequest("refresh_token is required".into())
     })?;
 
-    // Find and validate refresh token (not revoked, not expired)
-    let token_row = sqlx::query_as::<_, (i64, String)>(
-        "SELECT id, user_id::text FROM pgstack.refresh_tokens
-         WHERE token = $1 AND NOT revoked AND expires_at > now()",
+    // Find refresh token (including revoked, for reuse detection)
+    let token_row = sqlx::query_as::<_, (i64, String, bool, Option<String>)>(
+        "SELECT id, user_id::text, revoked, family_id::text FROM pgstack.refresh_tokens
+         WHERE token = $1 AND expires_at > now()",
     )
     .bind(refresh)
     .fetch_optional(&state.pg_pool)
     .await?;
 
-    let (token_id, user_id) = token_row.ok_or_else(|| {
+    let (token_id, user_id, revoked, family_id) = token_row.ok_or_else(|| {
         AppError::Unauthorized("invalid or expired refresh token".into())
     })?;
+
+    // Token reuse detection: if already revoked, this indicates a breach
+    if revoked {
+        if let Some(ref fid) = family_id {
+            sqlx::query(
+                "UPDATE pgstack.refresh_tokens SET revoked = true WHERE family_id = $1::uuid",
+            )
+            .bind(fid)
+            .execute(&state.pg_pool)
+            .await?;
+        }
+        tracing::warn!(
+            family_id = ?family_id,
+            "refresh token reuse detected — entire family revoked"
+        );
+        return Err(AppError::Unauthorized(
+            "refresh token already used".into(),
+        ));
+    }
 
     // Revoke the old refresh token (rotation)
     sqlx::query("UPDATE pgstack.refresh_tokens SET revoked = true WHERE id = $1")
@@ -271,9 +290,9 @@ async fn token_refresh(
 
     let (email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = user;
 
-    // Generate new token pair
+    // Generate new token pair (same family for reuse detection)
     let (access_token, new_refresh_token) =
-        generate_token_pair(&state, secret, &user_id, &email, &role).await?;
+        generate_token_pair(&state, secret, &user_id, &email, &role, family_id.as_deref()).await?;
 
     Ok((
         StatusCode::OK,
@@ -452,12 +471,15 @@ fn extract_claims_from_headers(
 }
 
 /// Generate access token + refresh token pair.
+/// If `family_id` is Some, the new refresh token inherits the family (rotation).
+/// If None, a new family is created (fresh login).
 pub(crate) async fn generate_token_pair(
     state: &AppState,
     secret: &str,
     user_id: &str,
     email: &str,
     role: &str,
+    family_id: Option<&str>,
 ) -> Result<(String, String), AppError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -478,13 +500,14 @@ pub(crate) async fn generate_token_pair(
     // Generate opaque refresh token
     let refresh_token = generate_refresh_token();
 
-    // Store refresh token in DB
+    // Store refresh token in DB (inherit family_id for rotation, or create new)
     sqlx::query(
-        "INSERT INTO pgstack.refresh_tokens (token, user_id, expires_at)
-         VALUES ($1, $2::uuid, now() + $3 * interval '1 day')",
+        "INSERT INTO pgstack.refresh_tokens (token, user_id, family_id, expires_at)
+         VALUES ($1, $2::uuid, COALESCE($3::uuid, gen_random_uuid()), now() + $4 * interval '1 day')",
     )
     .bind(&refresh_token)
     .bind(user_id)
+    .bind(family_id)
     .bind(REFRESH_TOKEN_EXPIRY_DAYS)
     .execute(&state.pg_pool)
     .await?;

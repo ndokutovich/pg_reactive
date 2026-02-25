@@ -40,9 +40,18 @@ CREATE TABLE IF NOT EXISTS pgstack.refresh_tokens (
   id bigserial PRIMARY KEY,
   token text UNIQUE NOT NULL,
   user_id uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
+  family_id uuid DEFAULT gen_random_uuid(),
   revoked boolean DEFAULT false,
   expires_at timestamptz NOT NULL,
   created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS pgstack.oauth_sessions (
+  state text PRIMARY KEY,
+  code_verifier text NOT NULL,
+  provider text NOT NULL,
+  created_at timestamptz DEFAULT now(),
+  expires_at timestamptz DEFAULT now() + interval '10 minutes'
 );
 
 -- Default grants for public schema

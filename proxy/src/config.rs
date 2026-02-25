@@ -14,6 +14,8 @@ pub struct Config {
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
     pub site_url: Option<String>,
+    pub auth_rate_limit: usize,
+    pub auth_rate_window_secs: u64,
 }
 
 impl Config {
@@ -27,6 +29,15 @@ impl Config {
             .expect("invalid LISTEN_ADDR");
 
         let jwt_secret = std::env::var("JWT_SECRET").ok().filter(|s| !s.is_empty());
+        if let Some(ref s) = jwt_secret {
+            if s.len() < 32 {
+                panic!(
+                    "JWT_SECRET must be at least 32 characters (got {}). \
+                     Use a cryptographically random string for security.",
+                    s.len()
+                );
+            }
+        }
         let anon_key = std::env::var("ANON_KEY").ok().filter(|s| !s.is_empty());
         let service_role_key = std::env::var("SERVICE_ROLE_KEY").ok().filter(|s| !s.is_empty());
 
@@ -41,6 +52,16 @@ impl Config {
         let github_client_secret = std::env::var("GITHUB_CLIENT_SECRET").ok().filter(|s| !s.is_empty());
         let site_url = std::env::var("SITE_URL").ok().filter(|s| !s.is_empty());
 
+        let auth_rate_limit: usize = std::env::var("AUTH_RATE_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30); // 30 requests per window
+
+        let auth_rate_window_secs: u64 = std::env::var("AUTH_RATE_WINDOW")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60); // 60 second window
+
         Self {
             database_url,
             listen_addr,
@@ -53,6 +74,8 @@ impl Config {
             github_client_id,
             github_client_secret,
             site_url,
+            auth_rate_limit,
+            auth_rate_window_secs,
         }
     }
 }
