@@ -7,6 +7,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-psycopg2 \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy extension source, tests, and examples at build time
+# (bind mounts cause OOM on WSL2)
+COPY --chown=postgres:postgres ext/ /ext/ext/
+COPY --chown=postgres:postgres tests/ /ext/tests/
+COPY --chown=postgres:postgres examples/ /examples/
+
+# Init SQL runs on every fresh start (tmpfs wipes state)
+COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
+
 COPY docker/entrypoint-dev.sh /usr/local/bin/entrypoint-dev.sh
 RUN chmod +x /usr/local/bin/entrypoint-dev.sh
 

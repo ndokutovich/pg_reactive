@@ -1,4 +1,9 @@
 proxy/target
 sdk/node_modules
 sdk/dist
+cli/node_modules
+cli/dist
 .git
+docs/
+*.md
+*.docx

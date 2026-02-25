@@ -10,10 +10,6 @@ services:
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "15432:5432"
-    volumes:
-      - ./ext:/ext/ext
-      - ./tests:/ext/tests
-      - ./examples:/examples
     command: >
       postgres
         -c shared_preload_libraries=pg_reactive
@@ -32,8 +28,10 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
-      RUST_LOG: pg_reactive_proxy=info
-      JWT_SECRET: ${JWT_SECRET:-}
+      RUST_LOG: pgstack_proxy=info,tower_http=info
+      JWT_SECRET: ${JWT_SECRET:-test-secret-key-for-development-only}
+      ANON_KEY: ${ANON_KEY:-anon-key-12345}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-srv-key-99999}
     ports:
       - "8080:8080"
     depends_on:
