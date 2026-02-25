@@ -87,20 +87,25 @@ pub async fn call_rpc(
 
     tx.commit().await?;
 
-    // If the result is a single-element array, unwrap for scalar functions
-    match &result {
-        serde_json::Value::Array(arr) if arr.len() == 1 => {
-            let item = &arr[0];
-            // If the item only has one unnamed column, unwrap it
-            if let serde_json::Value::Object(map) = item {
-                if map.len() == 1 {
-                    let val = map.values().next().unwrap().clone();
-                    return Ok(Json(val));
+    // Set-returning functions (RETURNS TABLE / RETURNS SETOF) -> always return array.
+    // Scalar functions -> unwrap single-element array to bare value.
+    if fn_meta.returns_set {
+        Ok(Json(result))
+    } else {
+        match result {
+            serde_json::Value::Array(ref arr) if arr.len() == 1 => {
+                let item = &arr[0];
+                // Scalar: unwrap {"fn_name": value} to just value
+                if let serde_json::Value::Object(map) = item {
+                    if map.len() == 1 {
+                        let val = map.values().next().unwrap().clone();
+                        return Ok(Json(val));
+                    }
                 }
+                Ok(Json(item.clone()))
             }
-            Ok(Json(item.clone()))
+            _ => Ok(Json(result)),
         }
-        _ => Ok(Json(result)),
     }
 }
 
@@ -178,6 +183,7 @@ fn is_valid_fn_name(s: &str) -> bool {
 
 struct FunctionMeta {
     params: Vec<FnParam>,
+    returns_set: bool,
 }
 
 struct FnParam {
@@ -194,7 +200,8 @@ async fn lookup_function(
     let row = sqlx::query(
         "SELECT
             p.proargnames AS arg_names,
-            p.proargtypes AS arg_type_oids
+            p.proargtypes AS arg_type_oids,
+            p.proretset AS returns_set
          FROM pg_proc p
          JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE p.proname = $1
@@ -209,6 +216,7 @@ async fn lookup_function(
         Some(row) => {
             let arg_names: Option<Vec<String>> = row.get("arg_names");
             let arg_names = arg_names.unwrap_or_default();
+            let returns_set: bool = row.get("returns_set");
             // proargtypes is oidvector — fetch as Vec<u32> via a secondary query
             // Simpler: just get type names via a joined query
             let type_rows = sqlx::query(
@@ -235,11 +243,11 @@ async fn lookup_function(
                 .map(|(name, pg_type)| FnParam { name, pg_type })
                 .collect();
 
-            Ok(FunctionMeta { params })
+            Ok(FunctionMeta { params, returns_set })
         }
         None => {
             // Function not found — return empty params, let PG produce the error
-            Ok(FunctionMeta { params: Vec::new() })
+            Ok(FunctionMeta { params: Vec::new(), returns_set: false })
         }
     }
 }

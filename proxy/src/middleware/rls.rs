@@ -59,11 +59,11 @@ impl RequestClaims {
 /// Resolution order:
 /// 1. Bearer token matching service_role_key -> service_role
 /// 2. apikey header matching service_role_key -> service_role
-/// 3. Bearer token matching anon_key -> anon
-/// 4. apikey header matching anon_key -> anon
-/// 5. Bearer token as JWT -> validate -> authenticated claims
-/// 6. No auth + JWT_SECRET not set -> anon (auth disabled)
-/// 7. No auth + JWT_SECRET set -> 401
+/// 3. Bearer token as JWT -> validate -> authenticated claims
+/// 4. Bearer token matching anon_key -> anon
+/// 5. apikey header matching anon_key -> anon
+/// 6. No valid auth + JWT_SECRET set -> 401
+/// 7. No auth + JWT_SECRET not set -> anon (auth disabled)
 pub fn resolve_claims(headers: &HeaderMap, state: &AppState) -> Result<RequestClaims, AppError> {
     let auth_header = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -95,7 +95,22 @@ pub fn resolve_claims(headers: &HeaderMap, state: &AppState) -> Result<RequestCl
         }
     }
 
-    // 3. Check if bearer token is anon_key
+    // 3. Try to validate bearer token as JWT (before anon key fallback)
+    if let Some(ref secret) = state.config.jwt_secret {
+        if let Some(token) = bearer_token {
+            match jwt::validate_token(token, secret) {
+                Ok(claims) => {
+                    debug!(sub = %claims.sub, role = %claims.role, "request authenticated via JWT");
+                    return Ok(RequestClaims::from_jwt(&claims));
+                }
+                Err(_) => {
+                    // Not a valid JWT — fall through to anon key checks
+                }
+            }
+        }
+    }
+
+    // 4. Check if bearer token is anon_key
     if let Some(token) = bearer_token {
         if let Some(ref ak) = state.config.anon_key {
             if token == ak {
@@ -105,7 +120,7 @@ pub fn resolve_claims(headers: &HeaderMap, state: &AppState) -> Result<RequestCl
         }
     }
 
-    // 4. Check if apikey header is anon_key
+    // 5. Check if apikey header is anon_key
     if let Some(key) = apikey_header {
         if let Some(ref ak) = state.config.anon_key {
             if key == ak {
@@ -115,16 +130,8 @@ pub fn resolve_claims(headers: &HeaderMap, state: &AppState) -> Result<RequestCl
         }
     }
 
-    // 5. Try to validate as JWT
-    if let Some(ref secret) = state.config.jwt_secret {
-        if let Some(token) = bearer_token {
-            let claims = jwt::validate_token(token, secret)
-                .map_err(AppError::Unauthorized)?;
-            debug!(sub = %claims.sub, role = %claims.role, "request authenticated via JWT");
-            return Ok(RequestClaims::from_jwt(&claims));
-        }
-
-        // No token provided and auth is enabled -> 401
+    // 6. Auth enabled but no valid credentials -> 401
+    if state.config.jwt_secret.is_some() {
         return Err(AppError::Unauthorized("authentication required".into()));
     }
 
@@ -164,9 +171,14 @@ pub async fn rls_transaction(
 ) -> Result<sqlx::Transaction<'static, Postgres>, AppError> {
     let mut tx = pool.begin().await?;
 
-    // SET LOCAL role — scoped to this transaction
-    sqlx::query("SELECT set_config('role', $1, true)")
-        .bind(&claims.role)
+    // SET LOCAL ROLE — switch effective PG role for this transaction.
+    // Cannot use bind parameter with SET ROLE, so we whitelist valid roles.
+    let role_sql = match claims.role.as_str() {
+        "authenticated" => "SET LOCAL ROLE authenticated",
+        "service_role" => "SET LOCAL ROLE service_role",
+        _ => "SET LOCAL ROLE anon",
+    };
+    sqlx::query(role_sql)
         .execute(&mut *tx)
         .await?;
 
