@@ -358,8 +358,9 @@
 (function () {
   'use strict';
 
-  var WS_NOTIFY = 'ws://127.0.0.1:8080/ws/sensor_notify';
-  var WS_DELTA  = 'ws://127.0.0.1:8080/ws/sensor_delta';
+  var _wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  var WS_NOTIFY = _wsBase + '/ws/sensor_notify';
+  var WS_DELTA  = _wsBase + '/ws/sensor_delta';
 
   // ── State ──
   var notifyCount = 0, notifyBytes = 0;

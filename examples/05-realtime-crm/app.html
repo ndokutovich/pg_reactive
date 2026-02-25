@@ -452,7 +452,7 @@
 
 <script>
 // ─── Configuration ───
-var WS_BASE = 'ws://127.0.0.1:8080/ws';
+var WS_BASE = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 var QUERIES = {
   top_customers:     { dot: 'dot-top-customers',     key: 'name' },
   recent_orders:     { dot: 'dot-recent-orders',      key: 'id' },

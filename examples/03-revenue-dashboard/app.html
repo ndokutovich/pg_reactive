@@ -408,7 +408,7 @@ tbody td {
   var reconnectTimer = null;
 
   var QUERY_ID = 'revenue_by_customer';
-  var WS_URL = 'ws://127.0.0.1:8080/ws/' + QUERY_ID;
+  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
 
   var REGION_COLORS = {
     'us-east':  '#58a6ff',

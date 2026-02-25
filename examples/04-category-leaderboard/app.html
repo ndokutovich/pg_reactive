@@ -556,8 +556,9 @@ main {
 
   var CATEGORIES_ID = 'premium_categories';
   var RANKINGS_ID = 'product_rankings';
-  var WS_CAT_URL = 'ws://127.0.0.1:8080/ws/' + CATEGORIES_ID;
-  var WS_RANK_URL = 'ws://127.0.0.1:8080/ws/' + RANKINGS_ID;
+  var _wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  var WS_CAT_URL = _wsBase + '/ws/' + CATEGORIES_ID;
+  var WS_RANK_URL = _wsBase + '/ws/' + RANKINGS_ID;
 
   // ===== Utility =====
   function formatCurrency(value) {

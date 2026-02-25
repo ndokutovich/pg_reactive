@@ -1036,7 +1036,7 @@ function executeSequential(stmts, idx, afterEl, cls, btn) {
     btn.textContent = 'Execute';
     return;
   }
-  fetch('http://127.0.0.1:8080/api/sql', {
+  fetch(location.origin + '/api/sql', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sql: stmts[idx] })

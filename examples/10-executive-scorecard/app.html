@@ -411,7 +411,7 @@ main {
 
   // ===== Configuration =====
   var QUERY_ID = 'exec_kpis';
-  var WS_URL = 'ws://127.0.0.1:8080/ws/' + QUERY_ID;
+  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
   var DELTA_FADE_MS = 3000;
 
   // ===== KPI Definitions =====

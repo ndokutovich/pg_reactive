@@ -540,7 +540,7 @@ main {
 
   // ===== Configuration =====
   var QUERY_ID = 'price_matrix';
-  var WS_URL = 'ws://127.0.0.1:8080/ws/' + QUERY_ID;
+  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
 
   // ===== State =====
   var rows = [];

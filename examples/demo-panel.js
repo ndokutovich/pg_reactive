@@ -11,7 +11,7 @@
 (function () {
   'use strict';
 
-  var API = 'http://127.0.0.1:8080/api/demo';
+  var API = location.origin + '/api/demo';
   var actions = window.DEMO_ACTIONS || [];
   if (!actions.length) return;
 
