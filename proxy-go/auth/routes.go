@@ -109,7 +109,7 @@ func Signup(d *Deps) http.HandlerFunc {
 		var emailConfirmedAt *time.Time
 
 		err = d.Pool.QueryRow(ctx, `
-			INSERT INTO pgstack.users (email, encrypted_password, user_metadata)
+			INSERT INTO pgstack.users (email, encrypted_password, raw_user_meta)
 			VALUES ($1, $2, $3)
 			RETURNING id, role, created_at, updated_at, email_confirmed_at
 		`, body.Email, hashed, userMeta).Scan(&userID, &role, &createdAt, &updatedAt, &emailConfirmedAt)
@@ -155,7 +155,7 @@ func Signup(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, AuthResponse{
+		writeJSON(w, http.StatusCreated, AuthResponse{
 			AccessToken:  access,
 			TokenType:    "bearer",
 			ExpiresIn:    d.AccessTokenExpirySecs,
@@ -211,8 +211,8 @@ func handlePasswordGrant(w http.ResponseWriter, r *http.Request, ctx context.Con
 
 	row := d.Pool.QueryRow(ctx, `
 		SELECT id, encrypted_password, role,
-		       COALESCE(user_metadata, '{}')::jsonb,
-		       COALESCE(app_metadata, '{}')::jsonb,
+		       COALESCE(raw_user_meta, '{}')::jsonb,
+		       COALESCE(raw_app_meta, '{}')::jsonb,
 		       created_at, updated_at, email_confirmed_at, provider
 		FROM pgstack.users
 		WHERE email = $1
@@ -474,7 +474,7 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 
 		if len(body.Data) > 0 && string(body.Data) != "null" {
 			_, err := d.Pool.Exec(ctx, `
-				UPDATE pgstack.users SET user_metadata = $1, updated_at = now() WHERE id = $2
+				UPDATE pgstack.users SET raw_user_meta = $1, updated_at = now() WHERE id = $2
 			`, body.Data, claims.Sub)
 			if err != nil {
 				log.Error().Err(err).Msg("update user metadata")
@@ -922,8 +922,8 @@ func AdminListUsers(d *Deps) http.HandlerFunc {
 
 		rows, err := d.Pool.Query(r.Context(), `
 			SELECT id, email, role,
-			       COALESCE(user_metadata, '{}')::jsonb,
-			       COALESCE(app_metadata, '{}')::jsonb,
+			       COALESCE(raw_user_meta, '{}')::jsonb,
+			       COALESCE(raw_app_meta, '{}')::jsonb,
 			       created_at, updated_at, email_confirmed_at, provider
 			FROM pgstack.users
 			ORDER BY created_at DESC
@@ -1095,8 +1095,8 @@ func fetchUserByID(ctx context.Context, pool *pgxpool.Pool, userID string) (*Use
 
 	err := pool.QueryRow(ctx, `
 		SELECT id, email, role,
-		       COALESCE(user_metadata, '{}')::jsonb,
-		       COALESCE(app_metadata, '{}')::jsonb,
+		       COALESCE(raw_user_meta, '{}')::jsonb,
+		       COALESCE(raw_app_meta, '{}')::jsonb,
 		       created_at, updated_at, email_confirmed_at, provider
 		FROM pgstack.users
 		WHERE id = $1

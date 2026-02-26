@@ -34,7 +34,7 @@ services:
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"
     ports:
-      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       db:
         condition: service_healthy
@@ -47,14 +47,12 @@ services:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
       RUST_LOG: pgstack_proxy=info,tower_http=info
-      # WARNING: These are DEVELOPMENT-ONLY defaults. NEVER use in production.
-      # For production, set these via environment variables or a .env file with strong random secrets.
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-do-not-use-in-production}
       ANON_KEY: ${ANON_KEY:-dev-only-anon-key-do-not-use-in-production}
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
-      ENABLE_SQL_ENDPOINT: "true"  # Dev only — allows /api/sql without service_role auth
+      ENABLE_SQL_ENDPOINT: "true"
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8080"
     depends_on:
       db:
         condition: service_healthy

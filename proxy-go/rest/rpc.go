@@ -147,8 +147,8 @@ SELECT
     p.proargnames,
     ARRAY(
         SELECT t.typname
-        FROM unnest(p.proargtypes) AS oid
-        JOIN pg_type t ON t.oid = oid
+        FROM unnest(p.proargtypes) AS type_oid
+        JOIN pg_type t ON t.oid = type_oid
     ) AS arg_types,
     p.proretset
 FROM pg_proc p

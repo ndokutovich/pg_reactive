@@ -67,7 +67,7 @@ func beginRLSTx(ctx context.Context, pool *pgxpool.Pool, claims *RequestClaims) 
 		return nil, err
 	}
 
-	if _, err = tx.Exec(ctx, "SET LOCAL request.jwt.claims = $1", claims.ClaimsJSON); err != nil {
+	if _, err = tx.Exec(ctx, "SELECT set_config('request.jwt.claims', $1, true)", claims.ClaimsJSON); err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, err
 	}
