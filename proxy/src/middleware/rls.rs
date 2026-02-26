@@ -1,23 +1,15 @@
 use axum::http::HeaderMap;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row};
-use subtle::ConstantTimeEq;
 use tracing::debug;
 
 use crate::auth::jwt;
+use crate::auth::keys::constant_time_eq;
 use crate::error::AppError;
 use crate::state::AppState;
 
 /// Maximum size for claims_json passed to set_config (8 KB).
 const MAX_CLAIMS_JSON_LEN: usize = 8192;
-
-/// Constant-time string comparison to prevent timing attacks on key checks.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.as_bytes().ct_eq(b.as_bytes()).into()
-}
 
 /// Represents the authenticated identity for a request.
 /// Extracted from JWT, anon key, or service role key.
@@ -204,7 +196,12 @@ pub async fn rls_transaction(
     // SET LOCAL request.jwt.claims — used by RLS policies.
     // Truncate to MAX_CLAIMS_JSON_LEN to prevent oversized GUC values.
     let truncated_claims = if claims.claims_json.len() > MAX_CLAIMS_JSON_LEN {
-        &claims.claims_json[..MAX_CLAIMS_JSON_LEN]
+        // Find a safe UTF-8 boundary
+        let mut end = MAX_CLAIMS_JSON_LEN;
+        while end > 0 && !claims.claims_json.is_char_boundary(end) {
+            end -= 1;
+        }
+        &claims.claims_json[..end]
     } else {
         &claims.claims_json
     };

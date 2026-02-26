@@ -4,6 +4,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use crate::auth::jwt::{self, Claims};
+use crate::auth::keys::constant_time_eq;
 use crate::auth::password;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -482,9 +483,9 @@ fn extract_claims_from_headers(
     let token = jwt::extract_token_from_header(auth_header, None, None)
         .ok_or_else(|| AppError::Unauthorized("missing authorization header".into()))?;
 
-    // Check if it's the anon key (not a JWT)
+    // Check if it's the anon key (not a JWT) — constant-time comparison
     if let Some(ref anon_key) = state.config.anon_key {
-        if token == *anon_key {
+        if constant_time_eq(&token, anon_key) {
             return Err(AppError::Unauthorized(
                 "anon key cannot access user endpoints".into(),
             ));

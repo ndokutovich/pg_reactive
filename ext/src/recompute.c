@@ -275,11 +275,24 @@ pgr_json_escape_string(StringInfo buf, const char *value)
 			case '\r':
 				appendStringInfoString(buf, "\\r");
 				break;
+			case '\b':
+				appendStringInfoString(buf, "\\b");
+				break;
+			case '\f':
+				appendStringInfoString(buf, "\\f");
+				break;
 			case '\t':
 				appendStringInfoString(buf, "\\t");
 				break;
 			default:
-				appendStringInfoChar(buf, *p);
+				if ((unsigned char)*p < 0x20)
+				{
+					char escape[7];
+					snprintf(escape, sizeof(escape), "\\u%04x", (unsigned char)*p);
+					appendStringInfoString(buf, escape);
+				}
+				else
+					appendStringInfoChar(buf, *p);
 				break;
 		}
 	}

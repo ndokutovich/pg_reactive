@@ -10,7 +10,7 @@
  * import { PgReactiveAdmin } from "pg-reactive-sdk/server";
  *
  * const admin = new PgReactiveAdmin({
- *   connectionString: "postgres://user:pass@localhost:5432/mydb",
+ *   connectionString: "postgres://user:pass@127.0.0.1:5432/mydb",
  * });
  *
  * await admin.register("orders_q", "SELECT id, total FROM orders WHERE status = 'pending'");

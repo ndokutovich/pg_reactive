@@ -22,6 +22,10 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
         HeaderName::from_static("referrer-policy"),
         HeaderValue::from_static("strict-origin-when-cross-origin"),
     );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static("default-src 'none'"),
+    );
 
     response
 }

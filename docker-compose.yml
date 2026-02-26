@@ -36,7 +36,7 @@ services:
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"  # Dev only — allows /api/sql without service_role auth
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       db:
         condition: service_healthy

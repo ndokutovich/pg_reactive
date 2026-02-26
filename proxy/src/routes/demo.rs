@@ -2,42 +2,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
-use subtle::ConstantTimeEq;
-use tracing::warn;
-
+use crate::auth::keys::is_service_role;
 use crate::state::AppState;
-
-/// Constant-time string comparison to prevent timing attacks on key checks.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.as_bytes().ct_eq(b.as_bytes()).into()
-}
-
-/// Check if the request carries a valid service_role key.
-fn is_service_role(state: &AppState, headers: &HeaderMap) -> bool {
-    let srv_key = match &state.config.service_role_key {
-        Some(k) => k,
-        None => return false,
-    };
-
-    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(token) = auth.strip_prefix("Bearer ") {
-            if constant_time_eq(token, srv_key) {
-                return true;
-            }
-        }
-    }
-
-    if let Some(key) = headers.get("apikey").and_then(|v| v.to_str().ok()) {
-        if constant_time_eq(key, srv_key) {
-            return true;
-        }
-    }
-
-    false
-}
 
 /// POST /api/demo — execute a predefined demo action.
 /// Requires service_role key OR ENABLE_SQL_ENDPOINT=true.
@@ -47,7 +13,12 @@ pub async fn demo_action(
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     // Require service_role key OR explicit ENABLE_SQL_ENDPOINT=true
-    if !state.config.enable_sql_endpoint && !is_service_role(&state, &headers) {
+    let has_service_role = state
+        .config
+        .service_role_key
+        .as_deref()
+        .map_or(false, |k| is_service_role(&headers, k));
+    if !state.config.enable_sql_endpoint && !has_service_role {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "service_role key required for /api/demo (or set ENABLE_SQL_ENDPOINT=true)"})),
@@ -84,10 +55,10 @@ pub async fn demo_action(
             })),
         ),
         Err(e) => {
-            warn!("demo action '{}' failed: {}", action, e);
+            tracing::error!("demo action '{}' failed: {}", action, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("sql error: {}", e)})),
+                Json(serde_json::json!({"error": "SQL execution failed"})),
             )
         }
     }
