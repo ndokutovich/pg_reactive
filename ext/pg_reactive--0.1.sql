@@ -36,11 +36,15 @@ LANGUAGE C STRICT;
 CREATE VIEW pgr.subscriptions AS
     SELECT * FROM pgr.get_subscriptions();
 
--- Trigger function for DML interception on tracked tables
+-- Trigger function for DML interception on tracked tables.
+-- SECURITY DEFINER so recompute/snapshot SPI calls run as the extension owner
+-- regardless of which role is performing the DML on tracked tables.
 CREATE FUNCTION pgr.trigger_func()
 RETURNS trigger
 AS 'MODULE_PATHNAME', 'pgr_trigger_func'
-LANGUAGE C;
+LANGUAGE C
+SECURITY DEFINER
+SET search_path = pgr, pg_catalog, public;
 
 -- Extension stats
 CREATE FUNCTION pgr.stats(
@@ -49,6 +53,10 @@ CREATE FUNCTION pgr.stats(
 ) RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'pgr_stats'
 LANGUAGE C STRICT;
+
+-- Allow all roles to see the pgr schema (needed for RLS policy expressions
+-- and for trigger_func SPI calls which run SECURITY DEFINER).
+GRANT USAGE ON SCHEMA pgr TO PUBLIC;
 
 -- Restrict subscribe/unsubscribe to database owner by default.
 -- Grant to specific roles as needed (e.g., the proxy connection role).
