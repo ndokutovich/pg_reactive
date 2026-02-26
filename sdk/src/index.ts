@@ -240,12 +240,85 @@ export function subscribe(
   return new LiveQuery(queryId, options);
 }
 
+// ---- RealtimeChannel ----
+
+export type ChannelEvent = 'message' | 'error' | 'connected' | 'disconnected';
+export type ChannelCallback = (event: ChannelEvent, data?: unknown) => void;
+
+/**
+ * A general-purpose WebSocket channel for pub/sub messaging.
+ *
+ * @example
+ * ```ts
+ * const ch = client.channel('presence');
+ * ch.subscribe((event, data) => console.log(event, data));
+ * ch.send({ user: 'alice', status: 'online' });
+ * // later:
+ * ch.unsubscribe();
+ * ```
+ */
+export class RealtimeChannel {
+  private ws: WebSocket | null = null;
+  private listeners: ChannelCallback[] = [];
+  private channelName: string;
+  private wsUrl: string;
+  private token: string | undefined;
+
+  constructor(channelName: string, wsUrl: string, token?: string) {
+    this.channelName = channelName;
+    this.wsUrl = wsUrl;
+    this.token = token;
+  }
+
+  /** Register a callback and connect if this is the first subscriber. */
+  subscribe(callback: ChannelCallback): this {
+    this.listeners.push(callback);
+    if (this.listeners.length === 1) this.connect();
+    return this;
+  }
+
+  /** Send a payload to the channel. No-op if the socket is not yet open. */
+  send(payload: unknown): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ channel: this.channelName, payload }));
+    }
+  }
+
+  /** Remove all callbacks and close the WebSocket connection. */
+  unsubscribe(): void {
+    this.listeners = [];
+    this.ws?.close();
+    this.ws = null;
+  }
+
+  private connect(): void {
+    const url = new URL(this.wsUrl.replace(/^http/, 'ws') + `/ws/_channel_${this.channelName}`);
+    if (this.token) url.searchParams.set('token', this.token);
+    this.ws = new WebSocket(url.toString());
+
+    this.ws.onopen = () => this.emit('connected');
+    this.ws.onclose = () => this.emit('disconnected');
+    this.ws.onerror = () => this.emit('error');
+    this.ws.onmessage = (e) => {
+      try { this.emit('message', JSON.parse(e.data as string)); }
+      catch { this.emit('message', e.data); }
+    };
+  }
+
+  private emit(event: ChannelEvent, data?: unknown): void {
+    this.listeners.forEach(cb => cb(event, data));
+  }
+}
+
 /**
  * A client that manages multiple live query subscriptions with shared options.
  */
 export interface LiveQueryClient {
   /** Subscribe to a live query by ID */
   subscribe(queryId: string): LiveQuery;
+
+  /** Create a general-purpose realtime channel */
+  channel(name: string): RealtimeChannel;
 
   /** Close all active subscriptions */
   close(): void;
@@ -271,6 +344,10 @@ export function createClient(options: LiveQueryClientOptions): LiveQueryClient {
       const lq = new LiveQuery(queryId, options);
       queries.push(lq);
       return lq;
+    },
+
+    channel(name: string): RealtimeChannel {
+      return new RealtimeChannel(name, options.url, options.token);
     },
 
     close(): void {

@@ -23,6 +23,8 @@ pub struct AppState {
     pub auth_rate_limiter: RateLimiter,
     /// Semaphore to limit concurrent WebSocket connections.
     pub ws_semaphore: Arc<Semaphore>,
+    /// SMTP mailer (logs to console when SMTP not configured).
+    pub mailer: Arc<crate::auth::mailer::Mailer>,
 }
 
 impl AppState {
@@ -32,6 +34,7 @@ impl AppState {
             config.auth_rate_window_secs,
         );
         let ws_semaphore = Arc::new(Semaphore::new(config.max_connections));
+        let mailer = Arc::new(crate::auth::mailer::Mailer::from_env());
         Self {
             channels: Arc::new(RwLock::new(HashMap::new())),
             config,
@@ -40,6 +43,7 @@ impl AppState {
             catalog: Catalog::new(),
             auth_rate_limiter: rate_limiter,
             ws_semaphore,
+            mailer,
         }
     }
 }

@@ -20,7 +20,7 @@ export interface PgStackError {
 
 type HeadersFn = () => Record<string, string>;
 
-export class PgStackQueryBuilder {
+export class PgStackQueryBuilder<T = Record<string, unknown>> {
   private baseUrl: string;
   private table: string;
   private headersFn: HeadersFn;
@@ -51,14 +51,15 @@ export class PgStackQueryBuilder {
   async insert(
     values: Record<string, unknown> | Record<string, unknown>[],
     options?: { defaultToNull?: boolean },
-  ): Promise<PgStackResponse> {
+  ): Promise<PgStackResponse<T>> {
+    void options;
     return this.mutate('POST', values);
   }
 
   /** UPDATE rows matching filters. */
   async update(
     values: Record<string, unknown>,
-  ): Promise<PgStackResponse> {
+  ): Promise<PgStackResponse<T>> {
     return this.mutate('PATCH', values);
   }
 
@@ -66,7 +67,7 @@ export class PgStackQueryBuilder {
   async upsert(
     values: Record<string, unknown> | Record<string, unknown>[],
     options?: { onConflict?: string; ignoreDuplicates?: boolean },
-  ): Promise<PgStackResponse> {
+  ): Promise<PgStackResponse<T>> {
     const resolution = options?.ignoreDuplicates
       ? 'ignore-duplicates'
       : 'merge-duplicates';
@@ -81,7 +82,7 @@ export class PgStackQueryBuilder {
   }
 
   /** DELETE rows matching filters. */
-  async delete(): Promise<PgStackResponse> {
+  async delete(): Promise<PgStackResponse<T>> {
     return this.mutate('DELETE');
   }
 
@@ -188,8 +189,8 @@ export class PgStackQueryBuilder {
   // ---- Execute (for SELECT, called via .then() or await) ----
 
   /** Execute the query. For SELECT, returns data. */
-  async then<TResult1 = PgStackResponse, TResult2 = never>(
-    resolve?: (value: PgStackResponse) => TResult1 | PromiseLike<TResult1>,
+  async then<TResult1 = PgStackResponse<T>, TResult2 = never>(
+    resolve?: (value: PgStackResponse<T>) => TResult1 | PromiseLike<TResult1>,
     reject?: (reason: unknown) => TResult2 | PromiseLike<TResult2>,
   ): Promise<TResult1 | TResult2> {
     try {
@@ -201,7 +202,7 @@ export class PgStackQueryBuilder {
     }
   }
 
-  private async execute(): Promise<PgStackResponse> {
+  private async execute(): Promise<PgStackResponse<T>> {
     const qs = this.buildQueryString();
     const url = `${this.baseUrl}/rest/v1/${enc(this.table)}${qs ? '?' + qs : ''}`;
     const headers = this.headersFn();
@@ -263,7 +264,7 @@ export class PgStackQueryBuilder {
     body?: unknown,
     extraHeaders?: Record<string, string>,
     extraParams?: string[],
-  ): Promise<PgStackResponse> {
+  ): Promise<PgStackResponse<T>> {
     let qs = this.buildQueryString();
     if (extraParams && extraParams.length > 0) {
       const extra = extraParams.join('&');

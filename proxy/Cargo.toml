@@ -36,6 +36,12 @@ reqwest = { version = "0.12", features = ["json"] }
 # URL parsing
 urlencoding = "2"
 
+# Email
+lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls", "smtp-transport", "builder"], default-features = false }
+
+# Error handling
+anyhow = "1"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

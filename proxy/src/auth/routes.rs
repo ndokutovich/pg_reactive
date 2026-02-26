@@ -1,10 +1,10 @@
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Redirect};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use crate::auth::jwt::{self, Claims};
-use crate::auth::keys::constant_time_eq;
+use crate::auth::keys::{constant_time_eq, is_service_role};
 use crate::auth::password;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -545,4 +545,516 @@ pub(crate) fn generate_refresh_token() -> String {
 pub(crate) fn base64_url_encode(data: &[u8]) -> String {
     use base64ct::{Base64UrlUnpadded, Encoding};
     Base64UrlUnpadded::encode_string(data)
+}
+
+// ---------- Token generation ----------
+
+/// Generate a cryptographically random hex token (32 bytes = 64 hex chars).
+fn generate_token() -> String {
+    use std::fmt::Write;
+    let bytes: [u8; 32] = rand::random();
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        write!(s, "{:02x}", b).unwrap();
+    }
+    s
+}
+
+// ---------- Email template helpers ----------
+
+fn reset_email_html(site_url: &str, token: &str) -> String {
+    format!(
+        "<p>Hi,</p>\
+         <p>You requested a password reset. Click the link below (expires in 1 hour):</p>\
+         <p><a href=\"{site_url}/auth/v1/recover/confirm?token={token}\">Reset Password</a></p>\
+         <p>If you didn't request this, ignore this email.</p>"
+    )
+}
+
+fn magic_link_email_html(site_url: &str, token: &str) -> String {
+    format!(
+        "<p>Hi,</p>\
+         <p>Click the link below to sign in (expires in 15 minutes):</p>\
+         <p><a href=\"{site_url}/auth/v1/magiclink/verify?token={token}\">Sign In</a></p>\
+         <p>If you didn't request this, ignore this email.</p>"
+    )
+}
+
+#[allow(dead_code)]
+fn verify_email_html(site_url: &str, token: &str) -> String {
+    format!(
+        "<p>Hi,</p>\
+         <p>Please verify your email address:</p>\
+         <p><a href=\"{site_url}/auth/v1/verify?token={token}\">Verify Email</a></p>"
+    )
+}
+
+// ---------- Password recovery ----------
+
+#[derive(Deserialize)]
+pub struct RecoverRequest {
+    pub email: String,
+}
+
+/// POST /auth/v1/recover — send password reset email
+pub async fn recover(
+    State(state): State<AppState>,
+    Json(body): Json<RecoverRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let site_url = state
+        .config
+        .site_url
+        .as_deref()
+        .unwrap_or("http://127.0.0.1:3000");
+
+    // Look up user — do not reveal whether the email exists
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT id::text FROM pgstack.users WHERE email = $1",
+    )
+    .bind(&body.email)
+    .fetch_optional(&state.pg_pool)
+    .await?;
+
+    if let Some((user_id,)) = row {
+        let token = generate_token();
+
+        sqlx::query(
+            "INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+             VALUES ($1::uuid, $2, 'reset', now() + interval '1 hour')",
+        )
+        .bind(&user_id)
+        .bind(&token)
+        .execute(&state.pg_pool)
+        .await?;
+
+        let html = reset_email_html(site_url, &token);
+        if let Err(e) = state.mailer.send(&body.email, "Reset your password", &html).await {
+            tracing::warn!("Failed to send reset email to {}: {}", body.email, e);
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "message": "If this email exists, a reset link has been sent"
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct RecoverConfirmRequest {
+    pub token: String,
+    pub password: String,
+}
+
+/// POST /auth/v1/recover/confirm — verify reset token and set new password
+pub async fn recover_confirm(
+    State(state): State<AppState>,
+    Json(body): Json<RecoverConfirmRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    if body.password.len() < 8 {
+        return Err(AppError::BadRequest(
+            "password must be at least 8 characters".into(),
+        ));
+    }
+    if body.password.len() > 256 {
+        return Err(AppError::BadRequest(
+            "password must be at most 256 characters".into(),
+        ));
+    }
+
+    // Look up the reset token
+    let row = sqlx::query_as::<_, (String, String)>(
+        "SELECT id::text, user_id::text FROM pgstack.email_tokens
+         WHERE token = $1
+           AND token_type = 'reset'
+           AND used_at IS NULL
+           AND expires_at > now()",
+    )
+    .bind(&body.token)
+    .fetch_optional(&state.pg_pool)
+    .await?;
+
+    let (token_id, user_id) = row.ok_or_else(|| {
+        AppError::BadRequest("Invalid or expired reset token".into())
+    })?;
+
+    // Hash new password
+    let pwd = body.password.clone();
+    let hash = tokio::task::spawn_blocking(move || password::hash_password(&pwd))
+        .await
+        .map_err(|e| AppError::Internal(format!("hash task failed: {}", e)))?
+        .map_err(AppError::Internal)?;
+
+    // Update password
+    sqlx::query(
+        "UPDATE pgstack.users SET encrypted_password = $1, updated_at = now()
+         WHERE id = $2::uuid",
+    )
+    .bind(&hash)
+    .bind(&user_id)
+    .execute(&state.pg_pool)
+    .await?;
+
+    // Mark token used
+    sqlx::query(
+        "UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid",
+    )
+    .bind(&token_id)
+    .execute(&state.pg_pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({ "message": "Password updated" })))
+}
+
+// ---------- Magic link ----------
+
+#[derive(Deserialize)]
+pub struct MagiclinkRequest {
+    pub email: String,
+}
+
+/// POST /auth/v1/magiclink — send magic link (creates passwordless user if needed)
+pub async fn magiclink(
+    State(state): State<AppState>,
+    Json(body): Json<MagiclinkRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    if !is_valid_email(&body.email) {
+        return Err(AppError::BadRequest("invalid email".into()));
+    }
+
+    let site_url = state
+        .config
+        .site_url
+        .as_deref()
+        .unwrap_or("http://127.0.0.1:3000");
+
+    // Look up user; create passwordless user if not found
+    let user_id: String = {
+        let existing = sqlx::query_as::<_, (String,)>(
+            "SELECT id::text FROM pgstack.users WHERE email = $1",
+        )
+        .bind(&body.email)
+        .fetch_optional(&state.pg_pool)
+        .await?;
+
+        if let Some((id,)) = existing {
+            id
+        } else {
+            let row = sqlx::query_as::<_, (String,)>(
+                "INSERT INTO pgstack.users (email, provider, providers, email_confirmed_at)
+                 VALUES ($1, 'magic_link', '{magic_link}', now())
+                 RETURNING id::text",
+            )
+            .bind(&body.email)
+            .fetch_one(&state.pg_pool)
+            .await?;
+            row.0
+        }
+    };
+
+    let token = generate_token();
+
+    sqlx::query(
+        "INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+         VALUES ($1::uuid, $2, 'magic_link', now() + interval '15 minutes')",
+    )
+    .bind(&user_id)
+    .bind(&token)
+    .execute(&state.pg_pool)
+    .await?;
+
+    let html = magic_link_email_html(site_url, &token);
+    if let Err(e) = state.mailer.send(&body.email, "Your sign-in link", &html).await {
+        tracing::warn!("Failed to send magic link email to {}: {}", body.email, e);
+    }
+
+    Ok(Json(serde_json::json!({ "message": "Magic link sent" })))
+}
+
+#[derive(Deserialize)]
+pub struct MagiclinkVerifyParams {
+    pub token: String,
+}
+
+/// GET /auth/v1/magiclink/verify?token=xxx — verify magic link and issue JWT
+pub async fn magiclink_verify(
+    State(state): State<AppState>,
+    Query(params): Query<MagiclinkVerifyParams>,
+) -> Result<impl IntoResponse, AppError> {
+    let site_url = state
+        .config
+        .site_url
+        .as_deref()
+        .unwrap_or("http://127.0.0.1:3000");
+
+    let secret = match state.config.jwt_secret.as_ref() {
+        Some(s) => s.clone(),
+        None => {
+            let redirect_url = format!("{}#error=jwt_not_configured", site_url);
+            return Ok(Redirect::to(&redirect_url).into_response());
+        }
+    };
+
+    // Look up token
+    let row = sqlx::query_as::<_, (String, String)>(
+        "SELECT id::text, user_id::text FROM pgstack.email_tokens
+         WHERE token = $1
+           AND token_type = 'magic_link'
+           AND used_at IS NULL
+           AND expires_at > now()",
+    )
+    .bind(&params.token)
+    .fetch_optional(&state.pg_pool)
+    .await?;
+
+    let (token_id, user_id) = match row {
+        Some(r) => r,
+        None => {
+            let redirect_url = format!("{}#error=invalid_magic_link", site_url);
+            return Ok(Redirect::to(&redirect_url).into_response());
+        }
+    };
+
+    // Fetch user
+    let user = sqlx::query_as::<_, (String, String, String, String, String)>(
+        "SELECT email, role, created_at::text, updated_at::text, id::text
+         FROM pgstack.users WHERE id = $1::uuid",
+    )
+    .bind(&user_id)
+    .fetch_one(&state.pg_pool)
+    .await?;
+
+    let (email, role, _created_at, _updated_at, uid) = user;
+
+    // Mark token used
+    sqlx::query(
+        "UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid",
+    )
+    .bind(&token_id)
+    .execute(&state.pg_pool)
+    .await?;
+
+    // Create session + token pair
+    let (access_token, refresh_token) =
+        generate_token_pair(&state, &secret, &uid, &email, &role, None).await?;
+
+    let redirect_url = format!(
+        "{}#access_token={}&refresh_token={}",
+        site_url,
+        urlencoding::encode(&access_token),
+        urlencoding::encode(&refresh_token),
+    );
+
+    Ok(Redirect::to(&redirect_url).into_response())
+}
+
+// ---------- Email verification ----------
+
+#[derive(Deserialize)]
+pub struct VerifyEmailParams {
+    pub token: String,
+}
+
+/// GET /auth/v1/verify?token=xxx — verify email address
+pub async fn verify_email(
+    State(state): State<AppState>,
+    Query(params): Query<VerifyEmailParams>,
+) -> Result<impl IntoResponse, AppError> {
+    let row = sqlx::query_as::<_, (String, String)>(
+        "SELECT id::text, user_id::text FROM pgstack.email_tokens
+         WHERE token = $1
+           AND token_type = 'verify'
+           AND used_at IS NULL
+           AND expires_at > now()",
+    )
+    .bind(&params.token)
+    .fetch_optional(&state.pg_pool)
+    .await?;
+
+    let (token_id, user_id) = row.ok_or_else(|| {
+        AppError::BadRequest("Invalid or expired verification token".into())
+    })?;
+
+    sqlx::query(
+        "UPDATE pgstack.users SET email_confirmed_at = now(), updated_at = now()
+         WHERE id = $1::uuid",
+    )
+    .bind(&user_id)
+    .execute(&state.pg_pool)
+    .await?;
+
+    sqlx::query(
+        "UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid",
+    )
+    .bind(&token_id)
+    .execute(&state.pg_pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({ "message": "Email verified" })))
+}
+
+// ---------- Admin endpoints ----------
+
+#[derive(Deserialize)]
+pub struct AdminListParams {
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct AdminUserRow {
+    id: String,
+    email: String,
+    role: String,
+    created_at: String,
+    email_confirmed_at: Option<String>,
+}
+
+/// GET /auth/v1/admin/users — list users (service_role only)
+pub async fn admin_list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<AdminListParams>,
+) -> Result<impl IntoResponse, AppError> {
+    let srk = state.config.service_role_key.as_deref().ok_or_else(|| {
+        AppError::Internal("SERVICE_ROLE_KEY not configured".into())
+    })?;
+    if !is_service_role(&headers, srk) {
+        return Err(AppError::Forbidden(
+            "service_role key required".into(),
+        ));
+    }
+
+    let page_size = params.page_size.unwrap_or(50).clamp(1, 1000);
+    let page = params.page.unwrap_or(0).max(0);
+    let offset = page * page_size;
+
+    let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
+        "SELECT id::text, email, role, created_at::text, email_confirmed_at::text
+         FROM pgstack.users
+         ORDER BY created_at DESC
+         LIMIT $1 OFFSET $2",
+    )
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(&state.pg_pool)
+    .await?;
+
+    let users: Vec<AdminUserRow> = rows
+        .into_iter()
+        .map(|(id, email, role, created_at, email_confirmed_at)| AdminUserRow {
+            id,
+            email,
+            role,
+            created_at,
+            email_confirmed_at,
+        })
+        .collect();
+
+    Ok(Json(users))
+}
+
+/// DELETE /auth/v1/admin/users/:id — delete user (service_role only)
+pub async fn admin_delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let srk = state.config.service_role_key.as_deref().ok_or_else(|| {
+        AppError::Internal("SERVICE_ROLE_KEY not configured".into())
+    })?;
+    if !is_service_role(&headers, srk) {
+        return Err(AppError::Forbidden(
+            "service_role key required".into(),
+        ));
+    }
+
+    let result = sqlx::query(
+        "DELETE FROM pgstack.users WHERE id = $1::uuid",
+    )
+    .bind(&user_id)
+    .execute(&state.pg_pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("user not found".into()));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct AdminCreateUserRequest {
+    pub email: String,
+    pub password: Option<String>,
+    pub role: Option<String>,
+    pub email_confirm: Option<bool>,
+}
+
+/// POST /auth/v1/admin/users — create user (service_role only)
+pub async fn admin_create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AdminCreateUserRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let srk = state.config.service_role_key.as_deref().ok_or_else(|| {
+        AppError::Internal("SERVICE_ROLE_KEY not configured".into())
+    })?;
+    if !is_service_role(&headers, srk) {
+        return Err(AppError::Forbidden(
+            "service_role key required".into(),
+        ));
+    }
+
+    if !is_valid_email(&body.email) {
+        return Err(AppError::BadRequest("invalid email".into()));
+    }
+
+    let hash: Option<String> = if let Some(pwd) = body.password {
+        if pwd.len() < 8 {
+            return Err(AppError::BadRequest(
+                "password must be at least 8 characters".into(),
+            ));
+        }
+        if pwd.len() > 256 {
+            return Err(AppError::BadRequest(
+                "password must be at most 256 characters".into(),
+            ));
+        }
+        let h = tokio::task::spawn_blocking(move || password::hash_password(&pwd))
+            .await
+            .map_err(|e| AppError::Internal(format!("hash task failed: {}", e)))?
+            .map_err(AppError::Internal)?;
+        Some(h)
+    } else {
+        None
+    };
+
+    let role = body.role.as_deref().unwrap_or("authenticated");
+    let email_confirm = body.email_confirm.unwrap_or(false);
+
+    let row = sqlx::query_as::<_, (String, String, String, String, String)>(
+        "INSERT INTO pgstack.users (email, encrypted_password, role, email_confirmed_at)
+         VALUES ($1, $2, $3, CASE WHEN $4 THEN now() ELSE NULL END)
+         RETURNING id::text, email, role, created_at::text, updated_at::text",
+    )
+    .bind(&body.email)
+    .bind(&hash)
+    .bind(role)
+    .bind(email_confirm)
+    .fetch_one(&state.pg_pool)
+    .await?;
+
+    let (id, email, user_role, created_at, updated_at) = row;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(UserResponse {
+            id,
+            email,
+            role: user_role,
+            user_metadata: Some(serde_json::json!({})),
+            app_metadata: Some(serde_json::json!({})),
+            created_at,
+            updated_at,
+        }),
+    ))
 }

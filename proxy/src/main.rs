@@ -9,7 +9,7 @@ mod state;
 
 use std::net::SocketAddr;
 
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
@@ -108,6 +108,18 @@ fn build_router(state: AppState) -> Router {
         // Auth (non-rate-limited)
         .route("/auth/v1/user", get(auth::routes::get_user).patch(auth::routes::update_user))
         .route("/auth/v1/logout", post(auth::routes::logout))
+        // Email auth flows
+        .route("/auth/v1/recover", post(auth::routes::recover))
+        .route("/auth/v1/recover/confirm", post(auth::routes::recover_confirm))
+        .route("/auth/v1/verify", get(auth::routes::verify_email))
+        .route("/auth/v1/magiclink", post(auth::routes::magiclink))
+        .route("/auth/v1/magiclink/verify", get(auth::routes::magiclink_verify))
+        // Admin
+        .route(
+            "/auth/v1/admin/users",
+            get(auth::routes::admin_list_users).post(auth::routes::admin_create_user),
+        )
+        .route("/auth/v1/admin/users/:id", delete(auth::routes::admin_delete_user))
         // OAuth
         .route("/auth/v1/authorize", get(auth::oauth::authorize))
         .route("/auth/v1/callback", get(auth::oauth::callback))

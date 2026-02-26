@@ -9,6 +9,7 @@
 
 import { PgStackAuth, type AuthSession } from './auth-client.js';
 import { PgStackQueryBuilder } from './query-builder.js';
+import { RealtimeChannel } from './index.js';
 
 export interface PgStackClientOptions {
   /** Custom headers to include in all requests */
@@ -39,9 +40,14 @@ export class PgStackClient {
     });
   }
 
-  /** Start building a query on a table. */
-  from(table: string): PgStackQueryBuilder {
-    return new PgStackQueryBuilder(this.url, table, () => this.getHeaders());
+  /** Start building a query on a table with an optional row type parameter. */
+  from<T = Record<string, unknown>>(table: string): PgStackQueryBuilder<T> {
+    return new PgStackQueryBuilder<T>(this.url, table, () => this.getHeaders());
+  }
+
+  /** Create a general-purpose realtime channel. */
+  channel(name: string): RealtimeChannel {
+    return new RealtimeChannel(name, this.url, this._accessToken ?? undefined);
   }
 
   /** Call an RPC (PostgreSQL function). */
@@ -121,3 +127,6 @@ export function createClient(
 ): PgStackClient {
   return new PgStackClient(url, anonKey, options);
 }
+
+// Re-export RealtimeChannel so consumers can import from pgstack entry point
+export { RealtimeChannel } from './index.js';

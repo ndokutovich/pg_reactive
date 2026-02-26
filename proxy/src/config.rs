@@ -26,6 +26,10 @@ pub struct Config {
     pub enable_sql_endpoint: bool,
     /// Comma-separated allowed origins for CORS, or None for permissive (dev mode).
     pub allowed_origins: Option<String>,
+    /// SMTP_FROM address for outbound email.
+    pub smtp_from: String,
+    /// When true, users must verify email before logging in.
+    pub require_email_verification: bool,
 }
 
 impl Config {
@@ -106,6 +110,14 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
+        let smtp_from = std::env::var("SMTP_FROM")
+            .unwrap_or_else(|_| "noreply@pgstack.local".to_string());
+
+        let require_email_verification = std::env::var("REQUIRE_EMAIL_VERIFICATION")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
         Self {
             database_url,
             listen_addr,
@@ -127,6 +139,8 @@ impl Config {
             pg_reconnect_max_backoff_secs,
             enable_sql_endpoint,
             allowed_origins,
+            smtp_from,
+            require_email_verification,
         }
     }
 }
@@ -154,6 +168,8 @@ impl fmt::Debug for Config {
             .field("pg_reconnect_max_backoff_secs", &self.pg_reconnect_max_backoff_secs)
             .field("enable_sql_endpoint", &self.enable_sql_endpoint)
             .field("allowed_origins", &self.allowed_origins)
+            .field("smtp_from", &self.smtp_from)
+            .field("require_email_verification", &self.require_email_verification)
             .finish()
     }
 }

@@ -395,5 +395,6 @@ export function useMutation(table: string): UseMutationResult {
   return { insert, update, remove, loading, error };
 }
 
-// Re-export the live query hook from react.ts
+// Re-export live query hook and standalone auth hook from react.ts
 export { useLiveQuery, type UseLiveQueryResult, type ConnectionState } from './react.js';
+export { useAuth as useStandaloneAuth, type User, type Session, type AuthState } from './react.js';

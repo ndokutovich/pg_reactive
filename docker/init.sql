@@ -54,6 +54,19 @@ CREATE TABLE IF NOT EXISTS pgstack.oauth_sessions (
   expires_at timestamptz DEFAULT now() + interval '10 minutes'
 );
 
+-- Email tokens for verification, password reset, and magic links
+CREATE TABLE IF NOT EXISTS pgstack.email_tokens (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
+    token       text NOT NULL UNIQUE,
+    token_type  text NOT NULL CHECK (token_type IN ('verify', 'reset', 'magic_link')),
+    used_at     timestamptz,
+    expires_at  timestamptz NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_email_tokens_token ON pgstack.email_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON pgstack.email_tokens(user_id);
+
 -- Default grants for public schema
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;

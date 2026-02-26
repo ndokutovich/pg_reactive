@@ -9,6 +9,174 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { LiveQuery, LiveQueryClientOptions, DeltaRow, Delta } from "./index.js";
 import type { PgStackClient } from "./pgstack.js";
 
+// ---- useAuth ----
+
+export interface User {
+  id: string;
+  email: string;
+  role: string;
+  user_metadata: Record<string, unknown>;
+}
+
+export interface Session {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number; // unix timestamp
+}
+
+export interface AuthState {
+  user: User | null;
+  session: Session | null;
+  loading: boolean;
+}
+
+const SESSION_KEY = 'pgstack-session';
+
+function loadSession(): Session | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as Session;
+    if (Date.now() / 1000 > s.expires_at) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return s;
+  } catch { return null; }
+}
+
+function saveSession(s: Session | null) {
+  if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+  else localStorage.removeItem(SESSION_KEY);
+}
+
+/**
+ * Standalone auth hook that manages session in localStorage.
+ *
+ * @param baseUrl - The pgStack proxy URL (e.g. 'http://127.0.0.1:8080')
+ * @param anonKey - The anonymous API key
+ *
+ * @example
+ * ```tsx
+ * const { user, session, loading, signInWithPassword, signOut } = useAuth(
+ *   'http://127.0.0.1:8080',
+ *   'anon-key',
+ * );
+ * ```
+ */
+export function useAuth(baseUrl: string, anonKey: string) {
+  const [state, setState] = useState<AuthState>({
+    user: null,
+    session: loadSession(),
+    loading: true,
+  });
+
+  // On mount: if session exists, fetch user; otherwise loading=false
+  useEffect(() => {
+    const session = loadSession();
+    if (!session) { setState(s => ({ ...s, loading: false })); return; }
+    fetch(`${baseUrl}/auth/v1/user`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    })
+      .then(r => r.ok ? r.json() as Promise<User> : null)
+      .then(user => setState({ user, session, loading: false }))
+      .catch(() => setState({ user: null, session: null, loading: false }));
+  }, [baseUrl]);
+
+  async function signUp(email: string, password: string): Promise<{ error: string | null }> {
+    try {
+      const r = await fetch(`${baseUrl}/auth/v1/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await r.json() as Record<string, unknown>;
+      if (!r.ok) return { error: (data.error as string) || 'Signup failed' };
+      const session: Session = {
+        access_token: data.access_token as string,
+        refresh_token: data.refresh_token as string,
+        expires_at: Math.floor(Date.now() / 1000) + ((data.expires_in as number) ?? 3600),
+      };
+      saveSession(session);
+      setState({ user: data.user as User, session, loading: false });
+      return { error: null };
+    } catch (e) { return { error: String(e) }; }
+  }
+
+  async function signInWithPassword(email: string, password: string): Promise<{ error: string | null }> {
+    try {
+      const r = await fetch(`${baseUrl}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await r.json() as Record<string, unknown>;
+      if (!r.ok) return { error: (data.error as string) || 'Sign in failed' };
+      const session: Session = {
+        access_token: data.access_token as string,
+        refresh_token: data.refresh_token as string,
+        expires_at: Math.floor(Date.now() / 1000) + ((data.expires_in as number) ?? 3600),
+      };
+      saveSession(session);
+      setState({ user: data.user as User, session, loading: false });
+      return { error: null };
+    } catch (e) { return { error: String(e) }; }
+  }
+
+  async function signOut(): Promise<void> {
+    const session = loadSession();
+    if (session) {
+      await fetch(`${baseUrl}/auth/v1/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      }).catch(() => {});
+    }
+    saveSession(null);
+    setState({ user: null, session: null, loading: false });
+  }
+
+  async function resetPassword(email: string): Promise<{ error: string | null }> {
+    try {
+      const r = await fetch(`${baseUrl}/auth/v1/recover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      return { error: r.ok ? null : 'Failed to send reset email' };
+    } catch (e) { return { error: String(e) }; }
+  }
+
+  // Auto-refresh: check every minute, refresh 5 minutes before expiry
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const session = loadSession();
+      if (!session) return;
+      const expiresIn = session.expires_at - Math.floor(Date.now() / 1000);
+      if (expiresIn > 300) return;
+      try {
+        const r = await fetch(`${baseUrl}/auth/v1/token?grant_type=refresh_token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${anonKey}` },
+          body: JSON.stringify({ refresh_token: session.refresh_token }),
+        });
+        if (r.ok) {
+          const data = await r.json() as Record<string, unknown>;
+          const newSession: Session = {
+            access_token: data.access_token as string,
+            refresh_token: data.refresh_token as string,
+            expires_at: Math.floor(Date.now() / 1000) + ((data.expires_in as number) ?? 3600),
+          };
+          saveSession(newSession);
+          setState(s => ({ ...s, session: newSession }));
+        }
+      } catch { /* ignore refresh errors */ }
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [baseUrl, anonKey]);
+
+  return { ...state, signUp, signInWithPassword, signOut, resetPassword };
+}
+
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
 export interface UseLiveQueryResult {
