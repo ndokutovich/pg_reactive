@@ -53,10 +53,14 @@ func SQL(pool *pgxpool.Pool, cfg SQLConfig) http.HandlerFunc {
 
 		upper := strings.ToUpper(strings.TrimSpace(sql))
 		isSelect := strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "WITH")
+		// pgr. functions (subscribe, unsubscribe) do DML internally via SPI.
+		// They must not run inside a READ ONLY transaction.
+		callsPGR := strings.Contains(upper, "PGR.")
+		useReadOnly := isSelect && !callsPGR
 
 		ctx := r.Context()
 
-		if isSelect {
+		if useReadOnly {
 			trimmed := strings.TrimRight(sql, ";")
 			wrapped := "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM (" + trimmed + ") t"
 
@@ -90,6 +94,17 @@ func SQL(pool *pgxpool.Pool, cfg SQLConfig) http.HandlerFunc {
 
 			writeJSONOK(w, map[string]any{"ok": true, "rows": raw})
 
+		} else if isSelect {
+			// SELECT calling pgr. functions — must run read-write (pgr funcs do DML internally).
+			trimmed := strings.TrimRight(sql, ";")
+			wrapped := "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM (" + trimmed + ") t"
+			var raw json.RawMessage
+			if err := pool.QueryRow(ctx, wrapped).Scan(&raw); err != nil {
+				log.Error().Err(err).Msg("SQL SELECT (pgr) execution failed")
+				writeJSONError(w, http.StatusInternalServerError, "SQL execution failed")
+				return
+			}
+			writeJSONOK(w, map[string]any{"ok": true, "rows": raw})
 		} else {
 			ct, err := pool.Exec(context.Background(), sql)
 			if err != nil {

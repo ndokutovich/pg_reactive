@@ -38,8 +38,12 @@ pub async fn sql_execute(
 
     let upper = sql.trim_start().to_uppercase();
     let is_select = upper.starts_with("SELECT") || upper.starts_with("WITH");
+    // pgr. functions (subscribe, unsubscribe) do DML internally via SPI and
+    // must not run inside a READ ONLY transaction.
+    let calls_pgr = upper.contains("PGR.");
+    let use_read_only = is_select && !calls_pgr;
 
-    if is_select {
+    if use_read_only {
         let trimmed = sql.trim_end_matches(';');
         let wrapped = format!(
             "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({}) t",
@@ -63,6 +67,26 @@ pub async fn sql_execute(
             Ok(rows) => (StatusCode::OK, Json(serde_json::json!({"ok": true, "rows": rows}))),
             Err(e) => {
                 tracing::error!("SQL SELECT execution failed: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "SQL execution failed"})),
+                )
+            }
+        }
+    } else if is_select {
+        // SELECT calling pgr. functions — run read-write (pgr funcs do DML internally).
+        let trimmed = sql.trim_end_matches(';');
+        let wrapped = format!(
+            "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({}) t",
+            trimmed
+        );
+        match sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(&wrapped)
+            .fetch_one(&state.pg_pool)
+            .await
+        {
+            Ok(rows) => (StatusCode::OK, Json(serde_json::json!({"ok": true, "rows": rows}))),
+            Err(e) => {
+                tracing::error!("SQL SELECT (pgr) execution failed: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "SQL execution failed"})),
