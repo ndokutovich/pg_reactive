@@ -31,6 +31,7 @@ services:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
       ENABLE_SQL_ENDPOINT: "true"
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key}
     ports:
       - "8080:8080"
     depends_on:
