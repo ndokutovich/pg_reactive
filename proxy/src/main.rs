@@ -119,7 +119,7 @@ fn build_router(state: AppState) -> Router {
             "/auth/v1/admin/users",
             get(auth::routes::admin_list_users).post(auth::routes::admin_create_user),
         )
-        .route("/auth/v1/admin/users/:id", delete(auth::routes::admin_delete_user))
+        .route("/auth/v1/admin/users/{id}", delete(auth::routes::admin_delete_user))
         // OAuth
         .route("/auth/v1/authorize", get(auth::oauth::authorize))
         .route("/auth/v1/callback", get(auth::oauth::callback))

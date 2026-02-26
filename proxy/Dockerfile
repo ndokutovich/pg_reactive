@@ -9,8 +9,8 @@ RUN npm run build
 # Stage 2: Build Rust proxy
 FROM rust:1.88-bookworm AS builder
 WORKDIR /app
-COPY Cargo.toml .
-COPY src/ src/
+COPY proxy/Cargo.toml proxy/Cargo.lock ./
+COPY proxy/src/ src/
 RUN cargo build --release
 
 # Stage 3: Runtime image
