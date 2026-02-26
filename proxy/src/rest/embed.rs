@@ -200,6 +200,16 @@ fn resolve_embed_recursive<'a>(
                 ))
             })?;
 
+        // Validate user-supplied embed columns against the target table's actual columns
+        for col in &embed.columns {
+            if !target.columns.iter().any(|c| c.name == *col) {
+                return Err(AppError::BadRequest(format!(
+                    "column '{}' not found in embedded relation '{}'",
+                    col, embed.relation
+                )));
+            }
+        }
+
         // Recursively resolve children
         let mut resolved_children = Vec::new();
         for child in &embed.children {

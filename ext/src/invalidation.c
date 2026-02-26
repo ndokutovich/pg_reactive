@@ -391,11 +391,11 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 			"CREATE TRIGGER pgr_upd_%u_%s "
 			"AFTER UPDATE ON %s.%s "
 			"FOR EACH STATEMENT "
-			"EXECUTE FUNCTION pgr.trigger_func('%s')",
+			"EXECUTE FUNCTION pgr.trigger_func(%s)",
 			table_oid, safe_id,
 			quote_identifier(nspname),
 			quote_identifier(relname),
-			query_id);
+			quote_literal_cstr(query_id));
 	}
 	else
 	{
@@ -439,11 +439,11 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 				"CREATE TRIGGER pgr_upd_%u_%s "
 				"AFTER UPDATE ON %s.%s "
 				"FOR EACH STATEMENT "
-				"EXECUTE FUNCTION pgr.trigger_func('%s')",
+				"EXECUTE FUNCTION pgr.trigger_func(%s)",
 				table_oid, safe_id,
 				quote_identifier(nspname),
 				quote_identifier(relname),
-				query_id);
+				quote_literal_cstr(query_id));
 		}
 		else
 		{
@@ -451,12 +451,12 @@ pgr_install_update_trigger(Oid table_oid, const char *query_id,
 				"CREATE TRIGGER pgr_upd_%u_%s "
 				"AFTER UPDATE OF %s ON %s.%s "
 				"FOR EACH STATEMENT "
-				"EXECUTE FUNCTION pgr.trigger_func('%s')",
+				"EXECUTE FUNCTION pgr.trigger_func(%s)",
 				table_oid, safe_id,
 				collist.data,
 				quote_identifier(nspname),
 				quote_identifier(relname),
-				query_id);
+				quote_literal_cstr(query_id));
 		}
 
 		pfree(collist.data);

@@ -45,10 +45,21 @@ pub async fn sql_execute(
             "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({}) t",
             trimmed
         );
-        match sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(&wrapped)
-            .fetch_one(&state.pg_pool)
-            .await
-        {
+        // Wrap in a read-only transaction so PostgreSQL itself rejects any
+        // DML/DDL hidden inside CTEs (e.g. WITH x AS (DELETE ...) SELECT ...).
+        let tx_result: Result<serde_json::Value, sqlx::Error> = async {
+            let mut tx = state.pg_pool.begin().await?;
+            sqlx::query("SET TRANSACTION READ ONLY")
+                .execute(&mut *tx)
+                .await?;
+            let row = sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(&wrapped)
+                .fetch_one(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            Ok(row)
+        }
+        .await;
+        match tx_result {
             Ok(rows) => (StatusCode::OK, Json(serde_json::json!({"ok": true, "rows": rows}))),
             Err(e) => {
                 tracing::error!("SQL SELECT execution failed: {}", e);

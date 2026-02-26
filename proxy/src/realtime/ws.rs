@@ -8,17 +8,19 @@ use crate::state::Channels;
 
 /// Fetch the current snapshot for a query_id from PG.
 async fn fetch_snapshot(pool: &PgPool, query_id: &str) -> Vec<serde_json::Value> {
-    // Sanitize query_id: only alphanumeric + underscore
+    // Sanitize query_id: only alphanumeric, underscore, or hyphen
     if !query_id
         .chars()
-        .all(|c| c.is_alphanumeric() || c == '_')
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
     {
         return vec![];
     }
 
+    // Use proper identifier quoting to prevent SQL injection
+    let safe_id = query_id.replace('"', "\"\"");
     let sql = format!(
-        "SELECT row_to_json(t) AS doc FROM pgr._snap_{} t",
-        query_id
+        "SELECT row_to_json(t) AS doc FROM pgr.\"_snap_{}\" t",
+        safe_id
     );
     match sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(&sql)
         .fetch_all(pool)
