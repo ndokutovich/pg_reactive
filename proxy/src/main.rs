@@ -35,6 +35,10 @@ async fn main() {
         warn!("JWT_SECRET not set — authentication disabled");
     }
 
+    if config.enable_sql_endpoint {
+        warn!("ENABLE_SQL_ENDPOINT=true — /api/sql accepts unauthenticated requests (disable in production!)");
+    }
+
     let pg_pool = PgPool::connect(&config.database_url)
         .await
         .expect("failed to connect to PostgreSQL");

@@ -16,6 +16,8 @@ pub struct Config {
     pub site_url: Option<String>,
     pub auth_rate_limit: usize,
     pub auth_rate_window_secs: u64,
+    /// Allow /api/sql without service_role auth (dev/tutorial only).
+    pub enable_sql_endpoint: bool,
 }
 
 impl Config {
@@ -62,6 +64,11 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(60); // 60 second window
 
+        let enable_sql_endpoint = std::env::var("ENABLE_SQL_ENDPOINT")
+            .ok()
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
         Self {
             database_url,
             listen_addr,
@@ -76,6 +83,7 @@ impl Config {
             site_url,
             auth_rate_limit,
             auth_rate_window_secs,
+            enable_sql_endpoint,
         }
     }
 }

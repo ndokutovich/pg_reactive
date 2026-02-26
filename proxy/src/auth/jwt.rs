@@ -36,9 +36,9 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, String> {
     let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
     // Allow tokens without exp claim for backwards compatibility.
-    // If exp IS present, jsonwebtoken will still validate it.
+    // When exp IS present, it will be validated (rejects expired tokens).
     validation.required_spec_claims.remove("exp");
-    validation.validate_exp = false;
+    validation.validate_exp = true;
 
     decode::<Claims>(token, &key, &validation)
         .map(|data| data.claims)
