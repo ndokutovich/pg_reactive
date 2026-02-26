@@ -44,6 +44,45 @@ export async function applyMigration(client, name, sql) {
         throw err;
     }
 }
+/**
+ * Roll back a single migration inside a transaction.
+ * Executes the provided down SQL and removes the record from pgstack.migrations.
+ */
+export async function rollbackMigration(client, name, downSql) {
+    await client.query("BEGIN");
+    try {
+        await client.query(downSql);
+        await client.query("DELETE FROM pgstack.migrations WHERE name = $1", [name]);
+        await client.query("COMMIT");
+    }
+    catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    }
+}
+/**
+ * Get the last N applied migrations ordered most-recent first.
+ */
+export async function getLastAppliedMigrations(client, count) {
+    const { rows } = await client.query(`SELECT id, name, applied_at::text
+     FROM pgstack.migrations
+     ORDER BY applied_at DESC, id DESC
+     LIMIT $1`, [count]);
+    return rows;
+}
+/**
+ * Get the active subscription count from pgr.get_subscriptions().
+ * Returns null if the function doesn't exist (extension not loaded).
+ */
+export async function getSubscriptionCount(client) {
+    try {
+        const { rows } = await client.query(`SELECT COUNT(*)::text AS count FROM pgr.get_subscriptions()`);
+        return parseInt(rows[0]?.count ?? "0", 10);
+    }
+    catch {
+        return null;
+    }
+}
 export async function introspectSchema(client, schemas = ["public"]) {
     const placeholders = schemas.map((_, i) => `$${i + 1}`).join(", ");
     const { rows } = await client.query(`SELECT

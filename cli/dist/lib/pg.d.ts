@@ -22,6 +22,20 @@ export declare function getAppliedMigrations(client: pg.Client): Promise<Migrati
  */
 export declare function applyMigration(client: pg.Client, name: string, sql: string): Promise<void>;
 /**
+ * Roll back a single migration inside a transaction.
+ * Executes the provided down SQL and removes the record from pgstack.migrations.
+ */
+export declare function rollbackMigration(client: pg.Client, name: string, downSql: string): Promise<void>;
+/**
+ * Get the last N applied migrations ordered most-recent first.
+ */
+export declare function getLastAppliedMigrations(client: pg.Client, count: number): Promise<MigrationRecord[]>;
+/**
+ * Get the active subscription count from pgr.get_subscriptions().
+ * Returns null if the function doesn't exist (extension not loaded).
+ */
+export declare function getSubscriptionCount(client: pg.Client): Promise<number | null>;
+/**
  * Introspect public schema tables and columns for type generation.
  */
 export interface ColumnInfo {

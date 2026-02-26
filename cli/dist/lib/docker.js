@@ -59,4 +59,29 @@ export async function isComposeUp(opts) {
         return false;
     }
 }
+/**
+ * Run `docker compose ps --format json` and return parsed container entries.
+ * Docker Compose v2 outputs one JSON object per line (JSON Lines format).
+ */
+export async function composePsJson(opts) {
+    try {
+        const { stdout } = await execFileAsync("docker", composeArgs(opts, "ps", "--format", "json"), { cwd: opts.cwd, timeout: 10_000 });
+        const trimmed = stdout.trim();
+        if (!trimmed)
+            return [];
+        // Docker Compose v2 outputs JSON Lines (one object per line).
+        // Older versions may output a JSON array — handle both.
+        if (trimmed.startsWith("[")) {
+            return JSON.parse(trimmed);
+        }
+        return trimmed
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+            .map((line) => JSON.parse(line));
+    }
+    catch {
+        return [];
+    }
+}
 //# sourceMappingURL=docker.js.map
