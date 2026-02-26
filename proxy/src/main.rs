@@ -97,7 +97,8 @@ fn build_router(state: AppState) -> Router {
             middleware::rate_limit::rate_limit_auth,
         ));
 
-    Router::new()
+    // All API routes with strict CSP
+    let api_router = Router::new()
         // Health check
         .route("/health", get(routes::health::health))
         // WebSocket (pg_reactive)
@@ -132,15 +133,28 @@ fn build_router(state: AppState) -> Router {
         .route("/api/catalog/refresh", post(routes::catalog_refresh::catalog_refresh))
         // Request body size limit
         .layer(tower_http::limit::RequestBodyLimitLayer::new(state.config.max_body_size))
-        // Security headers
+        // Strict security headers for API
         .layer(axum::middleware::from_fn(
             middleware::security_headers::security_headers,
         ))
-        // CORS
+        .with_state(state.clone());
+
+    // Studio SPA routes with relaxed CSP
+    let studio_router = Router::new()
+        .route("/studio", get(routes::studio::studio_redirect))
+        .nest_service("/studio/", routes::studio::studio_service())
+        .layer(axum::middleware::from_fn(
+            middleware::security_headers::studio_security_headers,
+        ));
+
+    // Merge: studio checked first, then API.
+    // CORS goes on the outer router so it applies to both.
+    Router::new()
+        .merge(studio_router)
+        .merge(api_router)
         .layer(middleware::cors::cors_layer(
             state.config.allowed_origins.as_deref(),
         ))
-        .with_state(state)
 }
 
 /// WebSocket handler wrapper — axum needs `Request` parts for extractors.

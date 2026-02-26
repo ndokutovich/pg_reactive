@@ -1,0 +1,92 @@
+version: "3.9"
+
+# Production docker-compose for pgStack.
+# Uses pre-built images from GHCR, persistent volumes, resource limits.
+#
+# Usage:
+#   cp .env.example .env   # fill in real secrets
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Required env vars (see .env.example):
+#   POSTGRES_PASSWORD, JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY
+
+services:
+  db:
+    image: ghcr.io/ndokutovich/pgstack-postgres:latest
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/migrations:ro
+    command: >
+      postgres
+        -c shared_preload_libraries=pg_reactive
+        -c pg_reactive.max_subscriptions=1024
+        -c max_connections=200
+        -c shared_buffers=256MB
+        -c effective_cache_size=768MB
+        -c log_min_messages=warning
+        -c log_statement=none
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  proxy:
+    image: ghcr.io/ndokutovich/pgstack-proxy:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-app}
+      LISTEN_ADDR: "0.0.0.0:8080"
+      RUST_LOG: pgstack_proxy=info
+      JWT_SECRET: ${JWT_SECRET}
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SITE_URL: ${SITE_URL}
+      # OAuth (optional)
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      # SMTP for email verification (optional)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@example.com}
+      # Tuning
+      MAX_CONNECTIONS: ${MAX_CONNECTIONS:-10000}
+      ACCESS_TOKEN_EXPIRY_SECS: ${ACCESS_TOKEN_EXPIRY_SECS:-3600}
+      REFRESH_TOKEN_EXPIRY_DAYS: ${REFRESH_TOKEN_EXPIRY_DAYS:-30}
+      MAX_BODY_SIZE: ${MAX_BODY_SIZE:-1048576}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      ENABLE_SQL_ENDPOINT: "false"
+    ports:
+      - "${PROXY_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+    driver: local
