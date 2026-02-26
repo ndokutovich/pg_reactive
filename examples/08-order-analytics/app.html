@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive - Order Analytics</title>
 <style>
@@ -358,6 +358,7 @@ main {
 .demo-content .string { color: #a5d6ff; }
 .demo-content .number { color: #79c0ff; }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -470,7 +471,7 @@ main {
   var MAX_RECONNECT_DELAY = 30000;
 
   var QUERY_ID = 'hourly_orders';
-  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
+  var WS_URL = PGR.wsBase + '/' + QUERY_ID;
 
   // ===== Formatting =====
   function formatCurrency(value) {
@@ -790,6 +791,6 @@ window.DEMO_ACTIONS = [
   { action: 'insert_customer', label: 'Add Customer' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>

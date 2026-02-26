@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive Interactive Tutorial</title>
 <style>
@@ -188,6 +188,7 @@
   .live-error .err-badge { font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 700; text-transform: uppercase; background: rgba(248,81,73,0.15); color: var(--red); }
   .live-error .err-msg { font-family: var(--mono); font-size: 12px; color: var(--red); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -1036,7 +1037,7 @@ function executeSequential(stmts, idx, afterEl, cls, btn) {
     btn.textContent = 'Execute';
     return;
   }
-  fetch(location.origin + '/api/sql', {
+  fetch(PGR.apiBase + '/sql', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sql: stmts[idx] })

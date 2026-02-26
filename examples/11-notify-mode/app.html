@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Notify Mode — pg_reactive Example 11</title>
 <style>
@@ -245,6 +245,7 @@
   }
   footer a { color: var(--accent); text-decoration: none; }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -358,7 +359,7 @@
 (function () {
   'use strict';
 
-  var _wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  var _wsBase = PGR.wsBase.slice(0, PGR.wsBase.lastIndexOf('/ws'));
   var WS_NOTIFY = _wsBase + '/ws/sensor_notify';
   var WS_DELTA  = _wsBase + '/ws/sensor_delta';
 
@@ -523,6 +524,6 @@ window.DEMO_ACTIONS = [
   { action: 'update_sensor', label: 'Update Sensor' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>

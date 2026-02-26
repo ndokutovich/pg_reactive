@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Live Product Catalog — pg_reactive Example 1</title>
 <style>
@@ -192,6 +192,7 @@
   footer a { color: var(--accent); text-decoration: none; }
   footer a:hover { text-decoration: underline; }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -273,7 +274,7 @@ ws.<span class="fn">onmessage</span> = (e) =&gt; {
   'use strict';
 
   var QUERY_ID = 'electronics';
-  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
+  var WS_URL = PGR.wsBase + '/' + QUERY_ID;
 
   // ── State ──
   var rows = [];
@@ -452,6 +453,6 @@ window.DEMO_ACTIONS = [
   { action: 'delete_demo_product', label: 'Remove Demo Product' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>

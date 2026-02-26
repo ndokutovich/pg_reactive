@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive - Revenue Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -304,6 +304,7 @@ tbody td {
   font-size: 0.95rem;
 }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -408,7 +409,7 @@ tbody td {
   var reconnectTimer = null;
 
   var QUERY_ID = 'revenue_by_customer';
-  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
+  var WS_URL = PGR.wsBase + '/' + QUERY_ID;
 
   var REGION_COLORS = {
     'us-east':  '#58a6ff',
@@ -717,6 +718,6 @@ window.DEMO_ACTIONS = [
   { action: 'delete_demo_customer', label: 'Remove Demo Customer' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>

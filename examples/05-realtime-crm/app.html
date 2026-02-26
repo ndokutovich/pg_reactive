@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive Example 5 — Real-Time CRM Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -328,6 +328,7 @@
     .panel-body { max-height: 360px; }
   }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -452,7 +453,7 @@
 
 <script>
 // ─── Configuration ───
-var WS_BASE = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+var WS_BASE = PGR.wsBase;
 var QUERIES = {
   top_customers:     { dot: 'dot-top-customers',     key: 'name' },
   recent_orders:     { dot: 'dot-recent-orders',      key: 'id' },
@@ -851,6 +852,6 @@ window.DEMO_ACTIONS = [
   { action: 'delete_demo_customer', label: 'Remove Demo Customer' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>

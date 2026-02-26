@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive - Category Leaderboard</title>
 <style>
@@ -429,6 +429,7 @@ main {
   text-align: center;
 }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -556,7 +557,7 @@ main {
 
   var CATEGORIES_ID = 'premium_categories';
   var RANKINGS_ID = 'product_rankings';
-  var _wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  var _wsBase = PGR.wsBase.slice(0, PGR.wsBase.lastIndexOf('/ws'));
   var WS_CAT_URL = _wsBase + '/ws/' + CATEGORIES_ID;
   var WS_RANK_URL = _wsBase + '/ws/' + RANKINGS_ID;
 
@@ -876,6 +877,6 @@ window.DEMO_ACTIONS = [
   { action: 'delete_demo_product', label: 'Remove Demo Product' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>

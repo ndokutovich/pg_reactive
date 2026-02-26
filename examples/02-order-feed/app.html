@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Order Feed — pg_reactive Example 2</title>
 <style>
@@ -215,6 +215,7 @@
   footer a { color: var(--accent); text-decoration: none; }
   footer a:hover { text-decoration: underline; }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -296,7 +297,7 @@
   'use strict';
 
   var QUERY_ID = 'order_feed';
-  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
+  var WS_URL = PGR.wsBase + '/' + QUERY_ID;
 
   // ── State ──
   var rows = [];
@@ -536,6 +537,6 @@ window.DEMO_ACTIONS = [
   { action: 'insert_customer', label: 'Add Customer' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>

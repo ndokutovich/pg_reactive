@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive Example 6 — Inventory Monitor</title>
 <style>
@@ -425,6 +425,7 @@ footer {
   font-size: 13px;
 }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -538,7 +539,7 @@ footer {
 
   // ===== Configuration =====
   var QUERY_ID = 'inventory_status';
-  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
+  var WS_URL = PGR.wsBase + '/' + QUERY_ID;
 
   // ===== State =====
   var rows = [];
@@ -852,6 +853,6 @@ window.DEMO_ACTIONS = [
   { action: 'insert_product', label: 'Add Product' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>

@@ -11,7 +11,7 @@
 (function () {
   'use strict';
 
-  var API = location.origin + '/api/demo';
+  var API = (window.PGR ? PGR.apiBase : location.origin + '/api') + '/demo';
   var actions = window.DEMO_ACTIONS || [];
   if (!actions.length) return;
 

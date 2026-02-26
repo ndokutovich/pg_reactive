@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive - Executive Scorecard</title>
 <style>
@@ -319,6 +319,7 @@ main {
 .demo-content .string { color: #a5d6ff; }
 .demo-content .number { color: #79c0ff; }
 </style>
+<script src="../config.js"></script>
 </head>
 <body>
 
@@ -411,7 +412,7 @@ main {
 
   // ===== Configuration =====
   var QUERY_ID = 'exec_kpis';
-  var WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + QUERY_ID;
+  var WS_URL = PGR.wsBase + '/' + QUERY_ID;
   var DELTA_FADE_MS = 3000;
 
   // ===== KPI Definitions =====
@@ -683,6 +684,6 @@ window.DEMO_ACTIONS = [
   { action: 'insert_product', label: 'Add Product' },
 ];
 </script>
-<script src="/demo-panel.js"></script>
+<script src="../demo-panel.js"></script>
 </body>
 </html>
