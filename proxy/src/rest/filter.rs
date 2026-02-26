@@ -227,3 +227,319 @@ impl FilterOp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- parse_filter operator tests ----
+
+    #[test]
+    fn test_eq_operator() {
+        let q = RestQuery::parse(Some("id=eq.42")).unwrap();
+        assert_eq!(q.filters.len(), 1);
+        let f = &q.filters[0];
+        assert_eq!(f.column, "id");
+        assert_eq!(f.operator, FilterOp::Eq);
+        assert_eq!(f.value, "42");
+        assert!(!f.negate);
+    }
+
+    #[test]
+    fn test_neq_operator() {
+        let q = RestQuery::parse(Some("status=neq.inactive")).unwrap();
+        let f = &q.filters[0];
+        assert_eq!(f.operator, FilterOp::Neq);
+        assert_eq!(f.value, "inactive");
+    }
+
+    #[test]
+    fn test_lt_operator() {
+        let q = RestQuery::parse(Some("age=lt.18")).unwrap();
+        assert_eq!(q.filters[0].operator, FilterOp::Lt);
+        assert_eq!(q.filters[0].value, "18");
+    }
+
+    #[test]
+    fn test_lte_operator() {
+        let q = RestQuery::parse(Some("score=lte.100")).unwrap();
+        assert_eq!(q.filters[0].operator, FilterOp::Lte);
+    }
+
+    #[test]
+    fn test_gt_operator() {
+        let q = RestQuery::parse(Some("price=gt.0")).unwrap();
+        assert_eq!(q.filters[0].operator, FilterOp::Gt);
+    }
+
+    #[test]
+    fn test_gte_operator() {
+        let q = RestQuery::parse(Some("rank=gte.1")).unwrap();
+        assert_eq!(q.filters[0].operator, FilterOp::Gte);
+    }
+
+    #[test]
+    fn test_like_operator() {
+        let q = RestQuery::parse(Some("name=like.*foo*")).unwrap();
+        let f = &q.filters[0];
+        assert_eq!(f.operator, FilterOp::Like);
+        assert_eq!(f.value, "*foo*");
+    }
+
+    #[test]
+    fn test_ilike_operator() {
+        let q = RestQuery::parse(Some("email=ilike.*@example.com")).unwrap();
+        assert_eq!(q.filters[0].operator, FilterOp::Ilike);
+    }
+
+    #[test]
+    fn test_is_null_operator() {
+        let q = RestQuery::parse(Some("deleted_at=is.null")).unwrap();
+        let f = &q.filters[0];
+        assert_eq!(f.operator, FilterOp::Is);
+        assert_eq!(f.value, "null");
+    }
+
+    #[test]
+    fn test_is_true_operator() {
+        let q = RestQuery::parse(Some("active=is.true")).unwrap();
+        assert_eq!(q.filters[0].value, "true");
+    }
+
+    #[test]
+    fn test_is_false_operator() {
+        let q = RestQuery::parse(Some("enabled=is.false")).unwrap();
+        assert_eq!(q.filters[0].value, "false");
+    }
+
+    #[test]
+    fn test_in_operator() {
+        let q = RestQuery::parse(Some("status=in.(active,pending,draft)")).unwrap();
+        let f = &q.filters[0];
+        assert_eq!(f.operator, FilterOp::In);
+        assert_eq!(f.value, "(active,pending,draft)");
+    }
+
+    #[test]
+    fn test_cs_operator() {
+        let q = RestQuery::parse(Some("tags=cs.(news,tech)")).unwrap();
+        assert_eq!(q.filters[0].operator, FilterOp::Cs);
+    }
+
+    #[test]
+    fn test_cd_operator() {
+        let q = RestQuery::parse(Some("tags=cd.(news,tech)")).unwrap();
+        assert_eq!(q.filters[0].operator, FilterOp::Cd);
+    }
+
+    #[test]
+    fn test_fts_operator() {
+        let q = RestQuery::parse(Some("body=fts.hello")).unwrap();
+        assert_eq!(q.filters[0].operator, FilterOp::Fts);
+    }
+
+    // ---- negate (not.) prefix ----
+
+    #[test]
+    fn test_not_eq_operator() {
+        let q = RestQuery::parse(Some("id=not.eq.5")).unwrap();
+        let f = &q.filters[0];
+        assert_eq!(f.operator, FilterOp::Eq);
+        assert!(f.negate);
+        assert_eq!(f.value, "5");
+    }
+
+    #[test]
+    fn test_not_in_operator() {
+        let q = RestQuery::parse(Some("role=not.in.(admin,superadmin)")).unwrap();
+        let f = &q.filters[0];
+        assert_eq!(f.operator, FilterOp::In);
+        assert!(f.negate);
+        assert_eq!(f.value, "(admin,superadmin)");
+    }
+
+    // ---- multiple filters ----
+
+    #[test]
+    fn test_multiple_filters() {
+        let q = RestQuery::parse(Some("age=gte.18&age=lte.65&active=is.true")).unwrap();
+        assert_eq!(q.filters.len(), 3);
+        assert_eq!(q.filters[0].operator, FilterOp::Gte);
+        assert_eq!(q.filters[1].operator, FilterOp::Lte);
+        assert_eq!(q.filters[2].operator, FilterOp::Is);
+    }
+
+    // ---- unknown operator ----
+
+    #[test]
+    fn test_unknown_operator_returns_error() {
+        let result = RestQuery::parse(Some("id=fuzzy.5"));
+        assert!(result.is_err());
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(msg.contains("unknown filter operator"));
+    }
+
+    // ---- missing operator.value format ----
+
+    #[test]
+    fn test_missing_dot_separator_returns_error() {
+        let result = RestQuery::parse(Some("id=42"));
+        assert!(result.is_err());
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(msg.contains("invalid filter") || msg.contains("expected operator.value"));
+    }
+
+    // ---- column name validation (injection prevention) ----
+
+    #[test]
+    fn test_sql_injection_in_column_name_rejected() {
+        let result = RestQuery::parse(Some("id;DROP TABLE users=eq.1"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_column_with_quote_rejected() {
+        let result = RestQuery::parse(Some("\"id\"=eq.1"));
+        // URL-decoded the column becomes "id" with quotes — invalid identifier
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_column_starting_with_digit_rejected() {
+        let result = RestQuery::parse(Some("1col=eq.value"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_column_too_long_rejected() {
+        // 64-char column name exceeds 63-char PG limit
+        let long_col = "a".repeat(64);
+        let qs = format!("{}=eq.1", long_col);
+        let result = RestQuery::parse(Some(&qs));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_valid_column_with_underscore() {
+        let q = RestQuery::parse(Some("created_at=eq.2024")).unwrap();
+        assert_eq!(q.filters[0].column, "created_at");
+    }
+
+    // ---- limit / offset parsing ----
+
+    #[test]
+    fn test_limit_parsed() {
+        let q = RestQuery::parse(Some("limit=10")).unwrap();
+        assert_eq!(q.limit, Some(10));
+    }
+
+    #[test]
+    fn test_offset_parsed() {
+        let q = RestQuery::parse(Some("offset=20")).unwrap();
+        assert_eq!(q.offset, Some(20));
+    }
+
+    #[test]
+    fn test_negative_limit_rejected() {
+        let result = RestQuery::parse(Some("limit=-1"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_negative_offset_rejected() {
+        let result = RestQuery::parse(Some("offset=-5"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_non_numeric_limit_rejected() {
+        let result = RestQuery::parse(Some("limit=abc"));
+        assert!(result.is_err());
+    }
+
+    // ---- order parsing ----
+
+    #[test]
+    fn test_order_asc() {
+        let q = RestQuery::parse(Some("order=created_at.asc")).unwrap();
+        assert_eq!(q.order.len(), 1);
+        assert_eq!(q.order[0].column, "created_at");
+        assert!(q.order[0].ascending);
+    }
+
+    #[test]
+    fn test_order_desc() {
+        let q = RestQuery::parse(Some("order=id.desc")).unwrap();
+        assert!(!q.order[0].ascending);
+    }
+
+    #[test]
+    fn test_order_nullsfirst() {
+        let q = RestQuery::parse(Some("order=name.asc.nullsfirst")).unwrap();
+        assert_eq!(q.order[0].nulls_first, Some(true));
+    }
+
+    #[test]
+    fn test_order_nullslast() {
+        let q = RestQuery::parse(Some("order=name.desc.nullslast")).unwrap();
+        assert_eq!(q.order[0].nulls_first, Some(false));
+    }
+
+    #[test]
+    fn test_order_multiple_columns() {
+        let q = RestQuery::parse(Some("order=name.asc,id.desc")).unwrap();
+        assert_eq!(q.order.len(), 2);
+        assert_eq!(q.order[0].column, "name");
+        assert_eq!(q.order[1].column, "id");
+        assert!(!q.order[1].ascending);
+    }
+
+    #[test]
+    fn test_order_invalid_modifier_rejected() {
+        let result = RestQuery::parse(Some("order=name.random"));
+        assert!(result.is_err());
+    }
+
+    // ---- select passthrough ----
+
+    #[test]
+    fn test_select_param_stored() {
+        let q = RestQuery::parse(Some("select=id,name,email")).unwrap();
+        assert_eq!(q.select.as_deref(), Some("id,name,email"));
+    }
+
+    // ---- empty / None query string ----
+
+    #[test]
+    fn test_empty_query_string() {
+        let q = RestQuery::parse(Some("")).unwrap();
+        assert!(q.filters.is_empty());
+        assert!(q.order.is_empty());
+        assert!(q.limit.is_none());
+    }
+
+    #[test]
+    fn test_none_query_string() {
+        let q = RestQuery::parse(None).unwrap();
+        assert!(q.filters.is_empty());
+    }
+
+    // ---- FilterOp::sql_op ----
+
+    #[test]
+    fn test_sql_op_strings() {
+        assert_eq!(FilterOp::Eq.sql_op(), "=");
+        assert_eq!(FilterOp::Neq.sql_op(), "!=");
+        assert_eq!(FilterOp::Gt.sql_op(), ">");
+        assert_eq!(FilterOp::Gte.sql_op(), ">=");
+        assert_eq!(FilterOp::Lt.sql_op(), "<");
+        assert_eq!(FilterOp::Lte.sql_op(), "<=");
+        assert_eq!(FilterOp::Like.sql_op(), "LIKE");
+        assert_eq!(FilterOp::Ilike.sql_op(), "ILIKE");
+        assert_eq!(FilterOp::Is.sql_op(), "IS");
+        assert_eq!(FilterOp::In.sql_op(), "= ANY");
+        assert_eq!(FilterOp::Cs.sql_op(), "@>");
+        assert_eq!(FilterOp::Cd.sql_op(), "<@");
+        assert_eq!(FilterOp::Fts.sql_op(), "@@");
+    }
+}
