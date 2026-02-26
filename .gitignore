@@ -21,6 +21,7 @@ proxy/target/
 # Node
 node_modules/
 sdk/dist/
+cli/dist/
 
 # Python
 __pycache__/
