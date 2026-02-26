@@ -6,7 +6,7 @@
  */
 
 const BASE = 'http://127.0.0.1:8080';
-const SRV = 'srv-key-99999';
+const SRV = process.env.SERVICE_ROLE_KEY || 'dev-only-service-role-key-do-not-use-in-production';
 
 let passed = 0;
 let failed = 0;

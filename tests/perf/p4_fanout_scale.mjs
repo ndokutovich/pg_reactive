@@ -13,6 +13,7 @@ import WebSocket from 'ws';
 import { execFileSync } from 'child_process';
 
 const WS_URL = 'ws://127.0.0.1:8080/ws/p4_q';
+const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const LEVELS = [10, 50, 100, 200, 500];
 const INSERTS_PER_LEVEL = 20;
 const INSERT_INTERVAL_MS = 200;
@@ -38,7 +39,7 @@ function sleep(ms) {
 
 function connectOne() {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(WS_URL, { headers: { Authorization: `Bearer ${ANON_KEY}` } });
     const timer = setTimeout(() => {
       ws.terminate();
       reject(new Error('connect timeout'));

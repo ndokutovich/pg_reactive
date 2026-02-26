@@ -6,8 +6,7 @@
  *   GET  /rest/v1/rpc/{function}   — with query-string params
  *
  * Requires: docker compose running with:
- *   JWT_SECRET=test-secret-key-for-development-only
- *   SERVICE_ROLE_KEY=srv-key-99999
+ *   JWT_SECRET, SERVICE_ROLE_KEY (reads from env, defaults to docker-compose values)
  *
  * Functions created in setup (via /api/sql):
  *   public.rpc_add(a int, b int) RETURNS int
@@ -20,7 +19,7 @@
  */
 
 const BASE = 'http://127.0.0.1:8080';
-const SRV = 'srv-key-99999';
+const SRV = process.env.SERVICE_ROLE_KEY || 'dev-only-service-role-key-do-not-use-in-production';
 
 let passed = 0;
 let failed = 0;
@@ -49,7 +48,7 @@ async function api(method, path, body, token) {
 }
 
 async function sql(query) {
-  return api('POST', '/api/sql', { sql: query });
+  return api('POST', '/api/sql', { sql: query }, SRV);
 }
 
 // ---- Setup ----

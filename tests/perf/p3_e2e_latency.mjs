@@ -14,6 +14,7 @@ import { performance } from 'perf_hooks';
 const execFileAsync = promisify(execFileCb);
 
 const WS_URL = 'ws://127.0.0.1:8080/ws/p3_q';
+const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const QUERY_ID = 'p3_q';
 
 const LEVELS = [
@@ -56,7 +57,7 @@ function fmtMs(v) {
 }
 
 async function connectWs() {
-  const ws = new WebSocket(WS_URL);
+  const ws = new WebSocket(WS_URL, { headers: { Authorization: `Bearer ${ANON_KEY}` } });
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('WS connect timeout')), 10000);
     ws.on('open', () => { clearTimeout(timer); resolve(); });

@@ -5,6 +5,7 @@ import WebSocket from 'ws';
 import { execFileSync } from 'child_process';
 
 const PROXY_URL = 'ws://127.0.0.1:8080/ws/fanout_q';
+const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const NUM_CLIENTS = 3;
 
 function psql(sql) {
@@ -16,7 +17,7 @@ function psql(sql) {
 }
 
 async function connectClient(id) {
-  const ws = new WebSocket(PROXY_URL);
+  const ws = new WebSocket(PROXY_URL, { headers: { Authorization: `Bearer ${ANON_KEY}` } });
   const messages = [];
 
   await new Promise((resolve, reject) => {

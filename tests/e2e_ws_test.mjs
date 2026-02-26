@@ -9,6 +9,7 @@ import WebSocket from 'ws';
 import { execFileSync } from 'child_process';
 
 const PROXY_URL = 'ws://127.0.0.1:8080/ws/e2e_q1';
+const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const TIMEOUT_MS = 10000;
 
 function psql(sql) {
@@ -23,7 +24,7 @@ async function main() {
   console.log('--- E2E WebSocket Test ---');
 
   // 1. Connect WebSocket
-  const ws = new WebSocket(PROXY_URL);
+  const ws = new WebSocket(PROXY_URL, { headers: { Authorization: `Bearer ${ANON_KEY}` } });
   const messages = [];
 
   const connected = new Promise((resolve, reject) => {

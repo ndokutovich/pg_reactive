@@ -3,12 +3,12 @@
  * works correctly so RLS policies are enforced per-request.
  *
  * Requires:
- *   JWT_SECRET=test-secret-key
- *   ANON_KEY=anon-key-12345
- *   SERVICE_ROLE_KEY=srv-key-99999
+ *   JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY (reads from env, defaults to docker-compose values)
  */
 
 const BASE = 'http://127.0.0.1:8080';
+const ANON = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
+const SRV = process.env.SERVICE_ROLE_KEY || 'dev-only-service-role-key-do-not-use-in-production';
 const PG_URL = 'postgres://postgres:postgres@127.0.0.1:15432/pg_reactive_test';
 
 let passed = 0;
@@ -40,36 +40,30 @@ async function api(method, path, body, token) {
 // ---- Tests ----
 
 async function testRlsDebugAnon() {
-  console.log('\nTest 1: RLS debug with anon key');
-  const r = await api('GET', '/rest/v1/rls-debug', null, 'anon-key-12345');
-  assert(r.status === 200, `status 200 (got ${r.status})`);
-  assert(r.json.pg_role === 'anon', `pg_role = anon (got ${r.json.pg_role})`);
-  assert(r.json.request_sub === null, 'no sub for anon');
+  console.log('\nTest 1: RLS debug with anon key (restricted to service_role)');
+  const r = await api('GET', '/rest/v1/rls-debug', null, ANON);
+  assert(r.status === 403, `anon -> 403 Forbidden (got ${r.status})`);
 }
 
 async function testRlsDebugServiceRole() {
   console.log('\nTest 2: RLS debug with service_role key');
-  const r = await api('GET', '/rest/v1/rls-debug', null, 'srv-key-99999');
+  const r = await api('GET', '/rest/v1/rls-debug', null, SRV);
   assert(r.status === 200, `status 200 (got ${r.status})`);
   assert(r.json.pg_role === 'service_role', `pg_role = service_role (got ${r.json.pg_role})`);
 }
 
 async function testRlsDebugJwt() {
-  console.log('\nTest 3: RLS debug with JWT');
+  console.log('\nTest 3: RLS debug with JWT (restricted to service_role)');
 
   // Signup to get a JWT
   const email = `rls-${Date.now()}@test.com`;
   const signup = await api('POST', '/auth/v1/signup', { email, password: 'test123456' });
   const token = signup.json.access_token;
-  const userId = signup.json.user.id;
 
   const r = await api('GET', '/rest/v1/rls-debug', null, token);
-  assert(r.status === 200, `status 200 (got ${r.status})`);
-  assert(r.json.pg_role === 'authenticated', `pg_role = authenticated (got ${r.json.pg_role})`);
-  assert(r.json.request_sub === userId, `sub matches user id`);
-  assert(r.json.jwt_claims?.email === email, 'claims contain email');
+  assert(r.status === 403, `authenticated JWT -> 403 Forbidden (got ${r.status})`);
 
-  return { token, userId, email };
+  return { token, userId: signup.json.user.id, email };
 }
 
 async function testRlsDebugNoAuth() {
@@ -79,32 +73,30 @@ async function testRlsDebugNoAuth() {
 }
 
 async function testRlsDebugApiKeyHeader() {
-  console.log('\nTest 5: RLS debug with apikey header');
-  const headers = { 'Content-Type': 'application/json', 'apikey': 'anon-key-12345' };
+  console.log('\nTest 5: RLS debug with apikey header (restricted to service_role)');
+  const headers = { 'Content-Type': 'application/json', 'apikey': ANON };
   const res = await fetch(`${BASE}/rest/v1/rls-debug`, { headers });
-  const json = await res.json();
-  assert(res.status === 200, `apikey header -> 200 (got ${res.status})`);
-  assert(json.pg_role === 'anon', `pg_role = anon via apikey (got ${json.pg_role})`);
+  assert(res.status === 403, `apikey (anon) -> 403 Forbidden (got ${res.status})`);
 }
 
 async function testRlsIsolation() {
-  console.log('\nTest 6: RLS context isolation between requests');
+  console.log('\nTest 6: RLS context isolation via service_role debug endpoint');
 
-  // Two different users
-  const email1 = `rls-iso1-${Date.now()}@test.com`;
-  const email2 = `rls-iso2-${Date.now()}@test.com`;
-  const signup1 = await api('POST', '/auth/v1/signup', { email: email1, password: 'test123456' });
-  const signup2 = await api('POST', '/auth/v1/signup', { email: email2, password: 'test123456' });
+  // Verify service_role can access rls-debug and sees correct role
+  const r = await api('GET', '/rest/v1/rls-debug', null, SRV);
+  assert(r.status === 200, `service_role -> 200 (got ${r.status})`);
+  assert(r.json.pg_role === 'service_role', `pg_role = service_role (got ${r.json.pg_role})`);
 
-  // Concurrent requests — each should see their own user
+  // Verify two concurrent service_role requests both succeed and see correct role
   const [r1, r2] = await Promise.all([
-    api('GET', '/rest/v1/rls-debug', null, signup1.json.access_token),
-    api('GET', '/rest/v1/rls-debug', null, signup2.json.access_token),
+    api('GET', '/rest/v1/rls-debug', null, SRV),
+    api('GET', '/rest/v1/rls-debug', null, SRV),
   ]);
 
-  assert(r1.json.request_sub === signup1.json.user.id, `user1 sees own sub`);
-  assert(r2.json.request_sub === signup2.json.user.id, `user2 sees own sub`);
-  assert(r1.json.request_sub !== r2.json.request_sub, 'subs are different (no leaking)');
+  assert(r1.status === 200, `concurrent req 1 -> 200 (got ${r1.status})`);
+  assert(r2.status === 200, `concurrent req 2 -> 200 (got ${r2.status})`);
+  assert(r1.json.pg_role === 'service_role', `req 1 pg_role = service_role`);
+  assert(r2.json.pg_role === 'service_role', `req 2 pg_role = service_role`);
 }
 
 // ---- Main ----

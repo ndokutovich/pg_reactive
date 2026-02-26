@@ -128,6 +128,8 @@ fn build_router(state: AppState) -> Router {
         // Legacy/demo routes (backwards compatibility with pg_reactive tutorial)
         .route("/api/demo", post(routes::demo::demo_action))
         .route("/api/sql", post(routes::sql::sql_execute))
+        // Catalog refresh (force-reload table metadata)
+        .route("/api/catalog/refresh", post(routes::catalog_refresh::catalog_refresh))
         // Request body size limit
         .layer(tower_http::limit::RequestBodyLimitLayer::new(state.config.max_body_size))
         // Security headers
@@ -161,22 +163,23 @@ async fn ws_handler(
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
         let query_str = req.0.query();
-        let token = auth::jwt::extract_token_from_header(auth_header, None, query_str);
 
-        match token {
-            Some(t) => {
-                if let Err(e) = auth::jwt::validate_token(&t, secret) {
-                    return Err(error::AppError::Unauthorized(e));
+        // Check anon key first (it's not a JWT, so don't try to validate it as one)
+        let is_anon_key = state.config.anon_key.as_ref().map_or(false, |ak| {
+            auth_header
+                .and_then(|h| h.strip_prefix("Bearer "))
+                .map_or(false, |t| auth::keys::constant_time_eq(t, ak))
+        });
+
+        if !is_anon_key {
+            let token = auth::jwt::extract_token_from_header(auth_header, None, query_str);
+            match token {
+                Some(t) => {
+                    if let Err(e) = auth::jwt::validate_token(&t, secret) {
+                        return Err(error::AppError::Unauthorized(e));
+                    }
                 }
-            }
-            None => {
-                // Check if it's the anon key
-                let is_anon_key = state.config.anon_key.as_ref().map_or(false, |ak| {
-                    auth_header
-                        .and_then(|h| h.strip_prefix("Bearer "))
-                        .map_or(false, |t| t == ak)
-                });
-                if !is_anon_key {
+                None => {
                     return Err(error::AppError::Unauthorized(
                         "authentication required".into(),
                     ));

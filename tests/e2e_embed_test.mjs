@@ -5,8 +5,7 @@
  *   GET /rest/v1/table?select=*,related_table(col1,col2)
  *
  * Requires: docker compose running with:
- *   JWT_SECRET=test-secret-key-for-development-only
- *   SERVICE_ROLE_KEY=srv-key-99999
+ *   JWT_SECRET, SERVICE_ROLE_KEY (reads from env, defaults to docker-compose values)
  *
  * Tables created in setup (via /api/sql):
  *   public.embed_authors  (id serial PK, name text, active bool)
@@ -17,7 +16,7 @@
  */
 
 const BASE = 'http://127.0.0.1:8080';
-const SRV = 'srv-key-99999';
+const SRV = process.env.SERVICE_ROLE_KEY || 'dev-only-service-role-key-do-not-use-in-production';
 
 let passed = 0;
 let failed = 0;
@@ -46,7 +45,7 @@ async function api(method, path, body, token) {
 }
 
 async function sql(query) {
-  return api('POST', '/api/sql', { sql: query });
+  return api('POST', '/api/sql', { sql: query }, SRV);
 }
 
 // ---- Setup ----
@@ -83,6 +82,13 @@ async function setup() {
       body    text NOT NULL
     )
   `);
+
+  // Refresh proxy catalog so it knows about the new tables
+  const refreshRes = await api('POST', '/api/catalog/refresh', {}, SRV);
+  if (refreshRes.status !== 200) {
+    throw new Error(`Catalog refresh failed: ${JSON.stringify(refreshRes.json)}`);
+  }
+  console.log('  catalog refreshed');
 
   // Insert authors
   const authorsRes = await api('POST', '/rest/v1/embed_authors', [
@@ -277,6 +283,8 @@ async function teardown() {
   await sql('DROP TABLE IF EXISTS public.embed_comments CASCADE');
   await sql('DROP TABLE IF EXISTS public.embed_posts CASCADE');
   await sql('DROP TABLE IF EXISTS public.embed_authors CASCADE');
+  // Refresh catalog so dropped tables are removed
+  await api('POST', '/api/catalog/refresh', {}, SRV);
   console.log('\nTeardown complete.');
 }
 

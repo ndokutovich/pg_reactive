@@ -1,7 +1,7 @@
 /**
  * E2E test: Auth endpoints (signup, login, refresh, get/update user, logout).
  *
- * Requires: proxy running with JWT_SECRET=test-secret-key
+ * Requires: proxy running with JWT_SECRET set (defaults to docker-compose value)
  *           + pgstack schema bootstrapped in pg_reactive_test DB
  */
 

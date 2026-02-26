@@ -2,16 +2,14 @@
  * E2E test: REST API (PostgREST-compatible CRUD).
  *
  * Requires: docker compose running with:
- *   JWT_SECRET=test-secret-key
- *   ANON_KEY=anon-key-12345
- *   SERVICE_ROLE_KEY=srv-key-99999
+ *   JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY (reads from env, defaults to docker-compose values)
  *
  * And a 'todos' table in public schema with: id serial, user_id uuid, title text, done boolean
  */
 
 const BASE = 'http://127.0.0.1:8080';
-const ANON = 'anon-key-12345';
-const SRV = 'srv-key-99999';
+const ANON = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
+const SRV = process.env.SERVICE_ROLE_KEY || 'dev-only-service-role-key-do-not-use-in-production';
 
 let passed = 0;
 let failed = 0;

@@ -39,7 +39,8 @@ const BASE = 'http://127.0.0.1:8080';
 const GOOGLE_AUTH_HOST = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GITHUB_AUTH_HOST = 'https://github.com/login/oauth/authorize';
 
-// Default SITE_URL used when env var is not set (see oauth.rs DEFAULT_SITE_URL)
+// SITE_URL must be set in the proxy env for OAuth to work.
+// When not set, all OAuth endpoints return 500 (SITE_URL not configured).
 const DEFAULT_SITE_URL = 'http://127.0.0.1:3000';
 
 let passed = 0;
@@ -91,11 +92,18 @@ async function testAuthorizeGoogle() {
 
   const r = await fetchNoFollow('/auth/v1/authorize?provider=google');
 
-  if (r.status === 400) {
-    // Unconfigured: proxy returns 400 with JSON error (no GOOGLE_CLIENT_ID)
+  if (r.status === 500) {
+    // SITE_URL not configured: proxy returns 500 before checking provider
+    console.log('  INFO: SITE_URL not configured — OAuth unavailable (expected in default docker-compose)');
+    const errBody = r.text || '';
+    assert(
+      errBody.includes('SITE_URL') || errBody.includes('not configured'),
+      `error mentions SITE_URL or not configured (got: ${errBody.slice(0, 120)})`
+    );
+  } else if (r.status === 400) {
+    // SITE_URL is set but GOOGLE_CLIENT_ID missing
     console.log('  INFO: Google OAuth not configured — testing unconfigured behaviour');
     assert(r.status === 400, `unconfigured -> 400 (got ${r.status})`);
-    // r.text is the raw response body captured by fetchNoFollow
     const errBody = r.text || '';
     assert(
       errBody.includes('not configured') || errBody.includes('Google'),
@@ -127,8 +135,16 @@ async function testAuthorizeGitHub() {
 
   const r = await fetchNoFollow('/auth/v1/authorize?provider=github');
 
-  if (r.status === 400) {
-    // Unconfigured: proxy returns 400 (no GITHUB_CLIENT_ID)
+  if (r.status === 500) {
+    // SITE_URL not configured: proxy returns 500 before checking provider
+    console.log('  INFO: SITE_URL not configured — OAuth unavailable (expected in default docker-compose)');
+    const errBody = r.text || '';
+    assert(
+      errBody.includes('SITE_URL') || errBody.includes('not configured'),
+      `error mentions SITE_URL or not configured (got: ${errBody.slice(0, 120)})`
+    );
+  } else if (r.status === 400) {
+    // SITE_URL is set but GITHUB_CLIENT_ID missing
     console.log('  INFO: GitHub OAuth not configured — testing unconfigured behaviour');
     assert(r.status === 400, `unconfigured -> 400 (got ${r.status})`);
     const errBody = r.text || '';
@@ -157,13 +173,10 @@ async function testAuthorizeGitHub() {
 async function testAuthorizeInvalidProvider() {
   console.log('\nTest O3: GET /auth/v1/authorize?provider=invalid');
 
-  // The proxy rejects unsupported providers with 400 before inserting an oauth_session row.
-  // However, it first tries to INSERT the session (before the match on provider), so this
-  // actually depends on whether pgstack.oauth_sessions exists.
-  //
-  // From oauth.rs: INSERT INTO pgstack.oauth_sessions happens BEFORE the match on provider.
-  // If the schema is missing, we get a 500. If it exists, we get a 400.
-  // Either way the response is not a redirect.
+  // The authorize endpoint calls site_url() first (returns 500 if SITE_URL is not set),
+  // then inserts into pgstack.oauth_sessions (returns 500 if schema missing),
+  // then matches on provider (returns 400 for unsupported).
+  // Any non-redirect response is acceptable.
   const r = await fetchNoFollow('/auth/v1/authorize?provider=invalid');
 
   assert(
@@ -198,9 +211,9 @@ async function testAuthorizeMissingProvider() {
 async function testCallbackInvalidState() {
   console.log('\nTest O5: GET /auth/v1/callback?code=fake&state=fake (invalid state)');
 
-  // The proxy looks up the state in pgstack.oauth_sessions; a fake state won't be found.
-  // callback() maps AppError::Unauthorized -> error_redirect(site, "server_error", description)
-  // so we expect a 307 redirect to SITE_URL#error=server_error&error_description=...
+  // The callback endpoint calls site_url() first — returns 500 if SITE_URL is not set.
+  // When SITE_URL is set: looks up state in pgstack.oauth_sessions, fake state -> error redirect.
+  // When SITE_URL is not set or schema is missing: returns 500.
   const r = await fetchNoFollow('/auth/v1/callback?code=fake_code&state=fake_state');
 
   if (r.status === 307 || r.status === 302) {
@@ -223,10 +236,10 @@ async function testCallbackInvalidState() {
       `Location fragment contains error_description= (got: ${r.location.slice(0, 200)})`
     );
   } else if (r.status === 500 || r.status === 400) {
-    // If pgstack schema is not bootstrapped, we get a DB error instead of a redirect.
-    // Accept this as a valid outcome in a partially-configured environment.
-    console.log(`  INFO: pgstack schema may not be bootstrapped (got ${r.status}), skipping redirect check`);
-    assert(true, `callback returns error status ${r.status} (schema not bootstrapped)`);
+    // SITE_URL not configured or pgstack schema not bootstrapped.
+    // Accept this as valid in a partially-configured environment.
+    console.log(`  INFO: SITE_URL not configured or pgstack schema missing (got ${r.status}), skipping redirect check`);
+    assert(true, `callback returns error status ${r.status} (expected without SITE_URL)`);
   } else {
     assert(false, `unexpected status ${r.status} for invalid callback state`);
   }
@@ -248,10 +261,11 @@ async function testCallbackExpiredState() {
   console.log('\nTest O7: GET /auth/v1/callback with empty-string state (never valid)');
 
   // An empty state string will never match a real oauth_session row.
-  // Should behave the same as fake_state.
+  // Without SITE_URL: returns 500 before even checking state.
+  // With SITE_URL: redirects to error page.
   const r = await fetchNoFollow('/auth/v1/callback?code=somecode&state=');
 
-  // Either a redirect to error page or a JSON error — never a success
+  // Either a redirect to error page, a JSON error, or 500 — never a success
   assert(
     r.status !== 200,
     `empty state must not return 200 (got ${r.status})`
@@ -270,7 +284,8 @@ async function testCallbackExpiredState() {
 async function testStateUniqueness() {
   console.log('\nTest O8: Two authorize requests generate different state values (CSRF check)');
 
-  // Only meaningful when Google OAuth is configured (otherwise we get 400s).
+  // Only meaningful when Google OAuth is fully configured (SITE_URL + GOOGLE_CLIENT_ID).
+  // Without SITE_URL we get 500; without GOOGLE_CLIENT_ID we get 400.
   const r1 = await fetchNoFollow('/auth/v1/authorize?provider=google');
   const r2 = await fetchNoFollow('/auth/v1/authorize?provider=google');
 
@@ -291,9 +306,9 @@ async function testStateUniqueness() {
       assert(challenge1 !== challenge2, 'code_challenge values are unique per request (PKCE)');
     }
   } else {
-    // Unconfigured: both return 400 — the state uniqueness test is not applicable
-    console.log(`  INFO: Google not configured (${r1.status}/${r2.status}) — state uniqueness test skipped`);
-    assert(true, 'state uniqueness test skipped (OAuth unconfigured)');
+    // Unconfigured: SITE_URL or provider not set — state uniqueness test is not applicable
+    console.log(`  INFO: OAuth not fully configured (${r1.status}/${r2.status}) — state uniqueness test skipped`);
+    assert(true, 'state uniqueness test skipped (OAuth not fully configured)');
   }
 }
 

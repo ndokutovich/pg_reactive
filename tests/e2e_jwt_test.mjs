@@ -6,7 +6,7 @@
  * 2. Connection with invalid token is rejected (401)
  * 3. Connection with valid token succeeds
  *
- * Requires: proxy running with JWT_SECRET=test-secret-key
+ * Requires: proxy running with JWT_SECRET set (reads from env, defaults to docker-compose value)
  */
 import WebSocket from 'ws';
 import http from 'http';
@@ -14,7 +14,7 @@ import crypto from 'crypto';
 
 const PROXY_HOST = '127.0.0.1';
 const PROXY_PORT = 8080;
-const JWT_SECRET = 'test-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-jwt-secret-do-not-use-in-production';
 
 /**
  * Create a minimal HS256 JWT token.

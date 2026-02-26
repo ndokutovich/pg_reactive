@@ -15,6 +15,7 @@ import { performance } from 'perf_hooks';
 const execFileAsync = promisify(execFileCb);
 
 const WS_URL = 'ws://127.0.0.1:8080/ws/p5_q';
+const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const NUM_CLIENTS = 5;
 const WRITES_PER_SEC = 50;
 const DURATION_SEC = 180;
@@ -39,7 +40,7 @@ function pad(n, w) { return String(n).padStart(w, ' '); }
 function fms(v) { return v.toFixed(1) + 'ms'; }
 
 async function connectClient(id) {
-  const ws = new WebSocket(WS_URL);
+  const ws = new WebSocket(WS_URL, { headers: { Authorization: `Bearer ${ANON_KEY}` } });
   const state = { ws, id, msgCount: 0 };
 
   await new Promise((resolve, reject) => {

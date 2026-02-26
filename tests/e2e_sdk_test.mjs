@@ -9,8 +9,8 @@
 // We'll test via HTTP directly to match what the SDK does.
 
 const BASE = 'http://127.0.0.1:8080';
-const ANON = 'anon-key-12345';
-const SRV = 'srv-key-99999';
+const ANON = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
+const SRV = process.env.SERVICE_ROLE_KEY || 'dev-only-service-role-key-do-not-use-in-production';
 
 let passed = 0;
 let failed = 0;
