@@ -24,7 +24,8 @@ services:
 
   proxy:
     build:
-      context: ../proxy
+      context: ..
+      dockerfile: proxy/Dockerfile
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
