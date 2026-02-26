@@ -27,19 +27,19 @@ export async function composeExec(opts, service, command) {
     const { stdout, stderr } = await execFileAsync("docker", composeArgs(opts, "exec", "-T", service, ...command), { cwd: opts.cwd, timeout: 60_000 });
     return stdout + stderr;
 }
-export async function composePsql(opts, sql) {
+export async function composePsql(opts, sql, dbName = "postgres") {
     return composeExec(opts, "db", [
         "psql",
         "-U",
         "postgres",
         "-d",
-        "app",
+        dbName,
         "-c",
         sql,
     ]);
 }
-export function composePsqlInteractive(opts) {
-    return spawn("docker", composeArgs(opts, "exec", "db", "psql", "-U", "postgres", "-d", "app"), { cwd: opts.cwd, stdio: "inherit" });
+export function composePsqlInteractive(opts, dbName = "postgres") {
+    return spawn("docker", composeArgs(opts, "exec", "db", "psql", "-U", "postgres", "-d", dbName), { cwd: opts.cwd, stdio: "inherit" });
 }
 export async function isDockerRunning() {
     try {

@@ -59,8 +59,9 @@ async fn main() {
     let pg_channels = state.channels.clone();
     let pg_connected = state.pg_connected.clone();
     let pg_url = config.database_url.clone();
+    let pg_max_backoff = config.pg_reconnect_max_backoff_secs;
     tokio::spawn(async move {
-        realtime::listener::pg_listener_loop(&pg_url, pg_channels, pg_connected).await;
+        realtime::listener::pg_listener_loop(&pg_url, pg_channels, pg_connected, pg_max_backoff).await;
     });
 
     // Build router
@@ -85,9 +86,6 @@ async fn main() {
 
     info!("shutdown complete");
 }
-
-/// Maximum request body size: 1 MB.
-const MAX_BODY_SIZE: usize = 1024 * 1024;
 
 fn build_router(state: AppState) -> Router {
     // Auth routes with rate limiting (signup + token are brute-force targets)
@@ -130,8 +128,8 @@ fn build_router(state: AppState) -> Router {
         // Legacy/demo routes (backwards compatibility with pg_reactive tutorial)
         .route("/api/demo", post(routes::demo::demo_action))
         .route("/api/sql", post(routes::sql::sql_execute))
-        // Request body size limit (1 MB)
-        .layer(tower_http::limit::RequestBodyLimitLayer::new(MAX_BODY_SIZE))
+        // Request body size limit
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(state.config.max_body_size))
         // Security headers
         .layer(axum::middleware::from_fn(
             middleware::security_headers::security_headers,
@@ -198,12 +196,13 @@ async fn ws_handler(
 
     let channels = state.channels.clone();
     let pg_pool = state.pg_pool.clone();
+    let broadcast_capacity = state.config.broadcast_capacity;
 
     Ok(ws.on_upgrade(move |socket| {
         // The permit is moved into the async block and held for the connection lifetime.
         // It is released automatically when the future completes and permit is dropped.
         async move {
-            realtime::ws::handle_websocket(socket, query_id, channels, pg_pool).await;
+            realtime::ws::handle_websocket(socket, query_id, channels, pg_pool, broadcast_capacity).await;
             drop(permit);
         }
     }))

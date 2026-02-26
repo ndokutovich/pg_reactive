@@ -17,3 +17,8 @@ export declare function loadConfig(projectRoot?: string): Promise<PgStackConfig>
  * Resolve DATABASE_URL from .env or environment
  */
 export declare function getDatabaseUrl(projectRoot?: string): string;
+/**
+ * Extract the database name from a DATABASE_URL.
+ * e.g. "postgres://user:pass@host:5432/mydb" → "mydb"
+ */
+export declare function parseDatabaseName(databaseUrl: string): string;

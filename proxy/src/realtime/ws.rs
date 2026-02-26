@@ -38,6 +38,7 @@ pub async fn handle_websocket(
     query_id: String,
     channels: Channels,
     pg_pool: PgPool,
+    broadcast_capacity: usize,
 ) {
     info!("WebSocket connected: query_id={}", query_id);
 
@@ -47,7 +48,7 @@ pub async fn handle_websocket(
         let tx = channels_write
             .entry(query_id.clone())
             .or_insert_with(|| {
-                let (tx, _) = broadcast::channel(1024);
+                let (tx, _) = broadcast::channel(broadcast_capacity);
                 tx
             });
         tx.subscribe()

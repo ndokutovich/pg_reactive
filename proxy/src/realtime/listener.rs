@@ -6,8 +6,13 @@ use tracing::{error, info, warn};
 use crate::state::Channels;
 
 /// Connects to PG and listens on `pgr` channel, dispatching to broadcast channels.
-/// Uses exponential backoff on connection failures (1s -> 2s -> 4s -> ... -> 30s max).
-pub async fn pg_listener_loop(pg_url: &str, channels: Channels, pg_connected: Arc<AtomicBool>) {
+/// Uses exponential backoff on connection failures (1s -> 2s -> 4s -> ... -> max_backoff_secs).
+pub async fn pg_listener_loop(
+    pg_url: &str,
+    channels: Channels,
+    pg_connected: Arc<AtomicBool>,
+    max_backoff_secs: u64,
+) {
     let mut backoff_secs: u64 = 1;
     loop {
         pg_connected.store(false, Ordering::Relaxed);
@@ -25,7 +30,7 @@ pub async fn pg_listener_loop(pg_url: &str, channels: Channels, pg_connected: Ar
         }
         pg_connected.store(false, Ordering::Relaxed);
         tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-        backoff_secs = (backoff_secs * 2).min(30);
+        backoff_secs = (backoff_secs * 2).min(max_backoff_secs);
     }
 }
 

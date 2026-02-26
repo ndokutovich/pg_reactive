@@ -10,8 +10,6 @@ use crate::state::AppState;
 
 // ---------- Constants ----------
 
-const DEFAULT_SITE_URL: &str = "http://127.0.0.1:3000";
-
 // Google OAuth endpoints
 const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
@@ -69,11 +67,11 @@ struct GitHubEmail {
 
 // ---------- Helpers ----------
 
-fn site_url(config: &crate::config::Config) -> String {
+fn site_url(config: &crate::config::Config) -> Result<String, AppError> {
     config
         .site_url
         .clone()
-        .unwrap_or_else(|| DEFAULT_SITE_URL.to_string())
+        .ok_or_else(|| AppError::Internal("SITE_URL not configured (required for OAuth)".into()))
 }
 
 fn error_redirect(site: &str, error: &str, description: &str) -> Redirect {
@@ -110,7 +108,7 @@ pub async fn authorize(
     State(state): State<AppState>,
     Query(params): Query<AuthorizeParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    let site = site_url(&state.config);
+    let site = site_url(&state.config)?;
     let callback_uri = format!("{}/auth/v1/callback", site);
     let csrf_state = generate_csrf_state();
     let code_verifier = generate_code_verifier();
@@ -175,12 +173,12 @@ pub async fn authorize(
 pub async fn callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackParams>,
-) -> impl IntoResponse {
-    let site = site_url(&state.config);
+) -> Result<impl IntoResponse, AppError> {
+    let site = site_url(&state.config)?;
 
     // Delegate to inner function so we can map errors to redirects
     match callback_inner(&state, &params, &site).await {
-        Ok(redirect) => redirect,
+        Ok(redirect) => Ok(redirect),
         Err(e) => {
             warn!(error = ?e, "OAuth callback failed");
             let description = match e {
@@ -192,7 +190,7 @@ pub async fn callback(
                 | AppError::Conflict(ref msg)
                 | AppError::TooManyRequests(ref msg) => msg.clone(),
             };
-            error_redirect(&site, "server_error", &description)
+            Ok(error_redirect(&site, "server_error", &description))
         }
     }
 }
@@ -267,9 +265,10 @@ async fn callback_inner(
 
     // Redirect with tokens in fragment (Supabase-compatible)
     let fragment = format!(
-        "access_token={}&refresh_token={}&token_type=bearer&expires_in=3600",
+        "access_token={}&refresh_token={}&token_type=bearer&expires_in={}",
         urlencoding::encode(&access_token),
         urlencoding::encode(&refresh_token),
+        state.config.access_token_expiry_secs,
     );
 
     info!(

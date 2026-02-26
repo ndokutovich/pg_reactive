@@ -62,11 +62,6 @@ struct UserResponse {
     updated_at: String,
 }
 
-// ---------- Constants ----------
-
-const ACCESS_TOKEN_EXPIRY_SECS: u64 = 3600; // 1 hour
-const REFRESH_TOKEN_EXPIRY_DAYS: i64 = 30;
-
 // ---------- Handlers ----------
 
 /// POST /auth/v1/signup
@@ -136,7 +131,7 @@ pub async fn signup(
         Json(AuthResponse {
             access_token,
             token_type: "bearer".into(),
-            expires_in: ACCESS_TOKEN_EXPIRY_SECS,
+            expires_in: state.config.access_token_expiry_secs,
             refresh_token,
             user: UserResponse {
                 id: user_id,
@@ -223,7 +218,7 @@ async fn token_password(
         Json(AuthResponse {
             access_token,
             token_type: "bearer".into(),
-            expires_in: ACCESS_TOKEN_EXPIRY_SECS,
+            expires_in: state.config.access_token_expiry_secs,
             refresh_token,
             user: UserResponse {
                 id: user_id,
@@ -305,7 +300,7 @@ async fn token_refresh(
         Json(AuthResponse {
             access_token,
             token_type: "bearer".into(),
-            expires_in: ACCESS_TOKEN_EXPIRY_SECS,
+            expires_in: state.config.access_token_expiry_secs,
             refresh_token: new_refresh_token,
             user: UserResponse {
                 id: user_id,
@@ -516,7 +511,7 @@ pub(crate) async fn generate_token_pair(
         role: role.to_string(),
         email: Some(email.to_string()),
         iat: Some(now),
-        exp: Some(now + ACCESS_TOKEN_EXPIRY_SECS),
+        exp: Some(now + state.config.access_token_expiry_secs),
     };
 
     let access_token =
@@ -533,7 +528,7 @@ pub(crate) async fn generate_token_pair(
     .bind(&refresh_token)
     .bind(user_id)
     .bind(family_id)
-    .bind(REFRESH_TOKEN_EXPIRY_DAYS)
+    .bind(state.config.refresh_token_expiry_days)
     .execute(&state.pg_pool)
     .await?;
 

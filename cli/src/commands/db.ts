@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import chalk from "chalk";
 import ora from "ora";
-import { findProjectRoot, getDatabaseUrl } from "../lib/config.js";
+import { findProjectRoot, getDatabaseUrl, parseDatabaseName } from "../lib/config.js";
 import { connectPg, ensureMigrationsTable, applyMigration } from "../lib/pg.js";
 import { composePsqlInteractive } from "../lib/docker.js";
 import { readdir } from "node:fs/promises";
@@ -22,7 +22,9 @@ export function registerDbCommand(program: Command): void {
         process.exit(1);
       }
 
-      const child = composePsqlInteractive({ cwd: root });
+      const dbUrl = getDatabaseUrl(root);
+      const dbName = parseDatabaseName(dbUrl);
+      const child = composePsqlInteractive({ cwd: root }, dbName);
       child.on("error", (err) => {
         console.error(chalk.red("Failed to open shell:", err.message));
         process.exit(1);
@@ -43,11 +45,12 @@ export function registerDbCommand(program: Command): void {
       }
 
       const dbUrl = getDatabaseUrl(root);
+      const dbName = parseDatabaseName(dbUrl);
       const spinner = ora("Resetting database...").start();
 
       let client;
       try {
-        // Connect to 'postgres' db to drop/create 'app'
+        // Connect to 'postgres' db to drop/create the target database
         const adminUrl = dbUrl.replace(/\/[^/]+$/, "/postgres");
         client = await connectPg(adminUrl);
 
@@ -55,14 +58,15 @@ export function registerDbCommand(program: Command): void {
         await client.query(`
           SELECT pg_terminate_backend(pid)
           FROM pg_stat_activity
-          WHERE datname = 'app' AND pid <> pg_backend_pid()
-        `);
+          WHERE datname = $1 AND pid <> pg_backend_pid()
+        `, [dbName]);
 
-        await client.query("DROP DATABASE IF EXISTS app");
-        await client.query("CREATE DATABASE app");
+        // Use double-quote identifier quoting for safety
+        await client.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+        await client.query(`CREATE DATABASE "${dbName}"`);
         await client.end();
 
-        // Now connect to fresh 'app' db and run migrations
+        // Now connect to the fresh database and run migrations
         spinner.text = "Running migrations...";
         client = await connectPg(dbUrl);
         await ensureMigrationsTable(client);

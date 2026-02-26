@@ -3,6 +3,9 @@ import { resolve, join, basename } from "node:path";
 import { existsSync } from "node:fs";
 import chalk from "chalk";
 import { generateJwtSecret, generateApiKey } from "../lib/crypto.js";
+const DEFAULT_DB_PORT = 15432;
+const DEFAULT_PROXY_PORT = 3000;
+const DEFAULT_DB_NAME = "app";
 export function registerInitCommand(program) {
     program
         .command("init <name>")
@@ -32,8 +35,8 @@ export function registerInitCommand(program) {
         // Write pgstack.config.json
         await writeFile(join(projectDir, "pgstack.config.json"), JSON.stringify({
             projectName,
-            dbPort: 15432,
-            proxyPort: 3000,
+            dbPort: DEFAULT_DB_PORT,
+            proxyPort: DEFAULT_PROXY_PORT,
             pgVersion: "16",
             schemas: ["public"],
         }, null, 2) + "\n");
@@ -49,9 +52,9 @@ export function registerInitCommand(program) {
         console.log(chalk.cyan("  npx pgstack dev"));
         console.log(chalk.cyan("  npx pgstack migration run"));
         console.log();
-        console.log(`REST API:   ${chalk.yellow("http://127.0.0.1:3000/rest/v1/")}`);
-        console.log(`WebSocket:  ${chalk.yellow("ws://127.0.0.1:3000/ws/")}`);
-        console.log(`Health:     ${chalk.yellow("http://127.0.0.1:3000/health")}`);
+        console.log(`REST API:   ${chalk.yellow(`http://127.0.0.1:${DEFAULT_PROXY_PORT}/rest/v1/`)}`);
+        console.log(`WebSocket:  ${chalk.yellow(`ws://127.0.0.1:${DEFAULT_PROXY_PORT}/ws/`)}`);
+        console.log(`Health:     ${chalk.yellow(`http://127.0.0.1:${DEFAULT_PROXY_PORT}/health`)}`);
     });
 }
 function generateDockerCompose() {
@@ -59,10 +62,10 @@ function generateDockerCompose() {
   db:
     image: postgres:16-bookworm
     ports:
-      - "\${PG_PORT:-15432}:5432"
+      - "\${PG_PORT:-${DEFAULT_DB_PORT}}:5432"
     environment:
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: \${POSTGRES_DB:-app}
+      POSTGRES_DB: \${POSTGRES_DB:-${DEFAULT_DB_NAME}}
     volumes:
       - pgdata:/var/lib/postgresql/data
     command: >
@@ -79,13 +82,13 @@ function generateDockerCompose() {
   proxy:
     image: pgstack/proxy:latest
     ports:
-      - "\${PROXY_PORT:-3000}:3000"
+      - "\${PROXY_PORT:-${DEFAULT_PROXY_PORT}}:${DEFAULT_PROXY_PORT}"
     environment:
-      DATABASE_URL: postgres://postgres:\${POSTGRES_PASSWORD:-postgres}@db:5432/\${POSTGRES_DB:-app}
+      DATABASE_URL: postgres://postgres:\${POSTGRES_PASSWORD:-postgres}@db:5432/\${POSTGRES_DB:-${DEFAULT_DB_NAME}}
       JWT_SECRET: \${JWT_SECRET}
       ANON_KEY: \${ANON_KEY}
       SERVICE_ROLE_KEY: \${SERVICE_ROLE_KEY}
-      LISTEN_ADDR: 0.0.0.0:3000
+      LISTEN_ADDR: 0.0.0.0:${DEFAULT_PROXY_PORT}
     depends_on:
       db:
         condition: service_healthy
@@ -100,11 +103,11 @@ function generateEnv(keys) {
 
 # PostgreSQL
 POSTGRES_PASSWORD=postgres
-POSTGRES_DB=app
-PG_PORT=15432
+POSTGRES_DB=${DEFAULT_DB_NAME}
+PG_PORT=${DEFAULT_DB_PORT}
 
 # Proxy
-PROXY_PORT=3000
+PROXY_PORT=${DEFAULT_PROXY_PORT}
 
 # Auth secrets (auto-generated, keep safe)
 JWT_SECRET=${keys.jwtSecret}
@@ -112,7 +115,7 @@ ANON_KEY=${keys.anonKey}
 SERVICE_ROLE_KEY=${keys.serviceRoleKey}
 
 # Derived (used by CLI and proxy)
-DATABASE_URL=postgres://postgres:postgres@127.0.0.1:15432/app
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:${DEFAULT_DB_PORT}/${DEFAULT_DB_NAME}
 
 # OAuth (uncomment and fill to enable)
 # GOOGLE_CLIENT_ID=
@@ -126,15 +129,15 @@ function generateEnvExample() {
 # Copy to .env and fill in values
 
 POSTGRES_PASSWORD=postgres
-POSTGRES_DB=app
-PG_PORT=15432
-PROXY_PORT=3000
+POSTGRES_DB=${DEFAULT_DB_NAME}
+PG_PORT=${DEFAULT_DB_PORT}
+PROXY_PORT=${DEFAULT_PROXY_PORT}
 
 JWT_SECRET=<generate-a-random-secret-min-32-chars>
 ANON_KEY=<generate-a-random-api-key>
 SERVICE_ROLE_KEY=<generate-a-random-api-key>
 
-DATABASE_URL=postgres://postgres:postgres@127.0.0.1:15432/app
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:${DEFAULT_DB_PORT}/${DEFAULT_DB_NAME}
 
 # GOOGLE_CLIENT_ID=
 # GOOGLE_CLIENT_SECRET=

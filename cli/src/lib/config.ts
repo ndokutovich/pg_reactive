@@ -79,5 +79,33 @@ export function getDatabaseUrl(projectRoot?: string): string {
     }
   }
 
-  return "postgres://postgres:postgres@127.0.0.1:15432/app";
+  throw new Error(
+    "DATABASE_URL is not set. Add it to your .env file or set it as an environment variable.\n" +
+    "Example: DATABASE_URL=postgres://postgres:postgres@127.0.0.1:15432/mydb"
+  );
+}
+
+/**
+ * Extract the database name from a DATABASE_URL.
+ * e.g. "postgres://user:pass@host:5432/mydb" → "mydb"
+ */
+export function parseDatabaseName(databaseUrl: string): string {
+  let pathname: string | undefined;
+  try {
+    pathname = new URL(databaseUrl).pathname;
+  } catch {
+    // URL constructor may fail for some postgres:// URLs, fall back to regex
+    const match = databaseUrl.match(/\/([^/?]+)(?:\?.*)?$/);
+    if (match) {
+      pathname = match[0];
+    }
+  }
+
+  const dbName = pathname?.replace(/^\//, "");
+  if (!dbName) {
+    throw new Error(
+      `Cannot extract database name from DATABASE_URL: ${databaseUrl}`
+    );
+  }
+  return dbName;
 }

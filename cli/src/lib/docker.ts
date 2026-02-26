@@ -57,25 +57,27 @@ export async function composeExec(
 
 export async function composePsql(
   opts: DockerComposeOptions,
-  sql: string
+  sql: string,
+  dbName: string = "postgres"
 ): Promise<string> {
   return composeExec(opts, "db", [
     "psql",
     "-U",
     "postgres",
     "-d",
-    "app",
+    dbName,
     "-c",
     sql,
   ]);
 }
 
 export function composePsqlInteractive(
-  opts: DockerComposeOptions
+  opts: DockerComposeOptions,
+  dbName: string = "postgres"
 ): ChildProcess {
   return spawn(
     "docker",
-    composeArgs(opts, "exec", "db", "psql", "-U", "postgres", "-d", "app"),
+    composeArgs(opts, "exec", "db", "psql", "-U", "postgres", "-d", dbName),
     { cwd: opts.cwd, stdio: "inherit" }
   );
 }

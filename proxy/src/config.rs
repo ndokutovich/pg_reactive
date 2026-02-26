@@ -17,6 +17,11 @@ pub struct Config {
     pub site_url: Option<String>,
     pub auth_rate_limit: usize,
     pub auth_rate_window_secs: u64,
+    pub access_token_expiry_secs: u64,
+    pub refresh_token_expiry_days: i64,
+    pub broadcast_capacity: usize,
+    pub max_body_size: usize,
+    pub pg_reconnect_max_backoff_secs: u64,
     /// Allow /api/sql without service_role auth (dev/tutorial only).
     pub enable_sql_endpoint: bool,
     /// Comma-separated allowed origins for CORS, or None for permissive (dev mode).
@@ -67,6 +72,31 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(60); // 60 second window
 
+        let access_token_expiry_secs: u64 = std::env::var("ACCESS_TOKEN_EXPIRY_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600); // 1 hour
+
+        let refresh_token_expiry_days: i64 = std::env::var("REFRESH_TOKEN_EXPIRY_DAYS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30); // 30 days
+
+        let broadcast_capacity: usize = std::env::var("BROADCAST_CAPACITY")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1024);
+
+        let max_body_size: usize = std::env::var("MAX_BODY_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1024 * 1024); // 1 MB
+
+        let pg_reconnect_max_backoff_secs: u64 = std::env::var("PG_RECONNECT_MAX_BACKOFF")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30); // 30 seconds
+
         let enable_sql_endpoint = std::env::var("ENABLE_SQL_ENDPOINT")
             .ok()
             .map(|v| v == "true" || v == "1")
@@ -90,6 +120,11 @@ impl Config {
             site_url,
             auth_rate_limit,
             auth_rate_window_secs,
+            access_token_expiry_secs,
+            refresh_token_expiry_days,
+            broadcast_capacity,
+            max_body_size,
+            pg_reconnect_max_backoff_secs,
             enable_sql_endpoint,
             allowed_origins,
         }
@@ -112,6 +147,11 @@ impl fmt::Debug for Config {
             .field("site_url", &self.site_url)
             .field("auth_rate_limit", &self.auth_rate_limit)
             .field("auth_rate_window_secs", &self.auth_rate_window_secs)
+            .field("access_token_expiry_secs", &self.access_token_expiry_secs)
+            .field("refresh_token_expiry_days", &self.refresh_token_expiry_days)
+            .field("broadcast_capacity", &self.broadcast_capacity)
+            .field("max_body_size", &self.max_body_size)
+            .field("pg_reconnect_max_backoff_secs", &self.pg_reconnect_max_backoff_secs)
             .field("enable_sql_endpoint", &self.enable_sql_endpoint)
             .field("allowed_origins", &self.allowed_origins)
             .finish()

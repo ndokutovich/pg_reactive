@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomHex, generateJwtSecret, generateApiKey } from "./crypto.js";
-import { findProjectRoot, loadConfig } from "./config.js";
+import { findProjectRoot, loadConfig, getDatabaseUrl, parseDatabaseName } from "./config.js";
 import { pgTypeToTs } from "./pg.js";
 
 // ---- crypto ----
@@ -98,6 +98,58 @@ describe("loadConfig", () => {
     const config = await loadConfig(tempDir);
     expect(config.projectName).toBe("pgstack-app");
     expect(config.schemas).toEqual(["public"]);
+  });
+});
+
+// ---- getDatabaseUrl ----
+
+describe("getDatabaseUrl", () => {
+  const originalEnv = process.env.DATABASE_URL;
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env.DATABASE_URL = originalEnv;
+    } else {
+      delete process.env.DATABASE_URL;
+    }
+  });
+
+  it("returns DATABASE_URL from environment", () => {
+    process.env.DATABASE_URL = "postgres://u:p@host:5432/testdb";
+    expect(getDatabaseUrl()).toBe("postgres://u:p@host:5432/testdb");
+  });
+
+  it("throws when DATABASE_URL is not set and no .env exists", () => {
+    delete process.env.DATABASE_URL;
+    let tempDir: string;
+    tempDir = mkdtempSync(join(tmpdir(), "pgstack-dburl-test-"));
+    writeFileSync(join(tempDir, "pgstack.config.json"), "{}");
+    expect(() => getDatabaseUrl(tempDir)).toThrow("DATABASE_URL is not set");
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+});
+
+// ---- parseDatabaseName ----
+
+describe("parseDatabaseName", () => {
+  it("extracts database name from standard URL", () => {
+    expect(parseDatabaseName("postgres://user:pass@host:5432/mydb")).toBe("mydb");
+  });
+
+  it("extracts database name from URL without port", () => {
+    expect(parseDatabaseName("postgres://user:pass@host/mydb")).toBe("mydb");
+  });
+
+  it("extracts database name from URL with query params", () => {
+    expect(parseDatabaseName("postgres://user:pass@host:5432/mydb?sslmode=require")).toBe("mydb");
+  });
+
+  it("throws for URL without database name", () => {
+    expect(() => parseDatabaseName("postgres://user:pass@host:5432/")).toThrow();
+  });
+
+  it("throws for URL without path", () => {
+    expect(() => parseDatabaseName("postgres://user:pass@host:5432")).toThrow();
   });
 });
 

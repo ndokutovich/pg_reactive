@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import ora from "ora";
-import { findProjectRoot, loadConfig } from "../lib/config.js";
+import { findProjectRoot, loadConfig, getDatabaseUrl, parseDatabaseName } from "../lib/config.js";
 import { composeUp, composeDown, composeLogs, isDockerRunning, } from "../lib/docker.js";
 export function registerDevCommand(program) {
     program
@@ -17,12 +17,14 @@ export function registerDevCommand(program) {
             process.exit(1);
         }
         const config = await loadConfig(root);
+        const dbUrl = getDatabaseUrl(root);
+        const dbName = parseDatabaseName(dbUrl);
         const spinner = ora("Starting pgStack...").start();
         try {
             await composeUp({ cwd: root });
             spinner.succeed(chalk.green("pgStack is running!"));
             console.log();
-            console.log(`  PostgreSQL:  ${chalk.cyan(`postgresql://postgres:postgres@127.0.0.1:${config.dbPort}/app`)}`);
+            console.log(`  PostgreSQL:  ${chalk.cyan(`postgresql://postgres:postgres@127.0.0.1:${config.dbPort}/${dbName}`)}`);
             console.log(`  REST API:    ${chalk.cyan(`http://127.0.0.1:${config.proxyPort}/rest/v1/`)}`);
             console.log(`  WebSocket:   ${chalk.cyan(`ws://127.0.0.1:${config.proxyPort}/ws/`)}`);
             console.log(`  Health:      ${chalk.cyan(`http://127.0.0.1:${config.proxyPort}/health`)}`);
