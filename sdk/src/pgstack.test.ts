@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PgStackClient, createClient } from './pgstack.js';
-import { PgStackAuth } from './auth-client.js';
-import { PgStackQueryBuilder } from './query-builder.js';
 
 // ---- Mock fetch ----
 
@@ -42,13 +40,13 @@ describe('PgStackClient', () => {
 
   it('provides auth instance', () => {
     const client = createClient('http://127.0.0.1:8080', 'key');
-    expect(client.auth).toBeInstanceOf(PgStackAuth);
+    expect(client.auth.constructor.name).toBe('PgStackAuth');
   });
 
   it('from() returns a PgStackQueryBuilder', () => {
     const client = createClient('http://127.0.0.1:8080', 'key');
     const builder = client.from('todos');
-    expect(builder).toBeInstanceOf(PgStackQueryBuilder);
+    expect(builder.constructor.name).toBe('PgStackQueryBuilder');
   });
 
   describe('rpc()', () => {

@@ -21,5 +21,10 @@
     "@angular/cli": "^19.2.0",
     "@angular/compiler-cli": "^19.2.0",
     "typescript": "~5.7.0"
+  },
+  "overrides": {
+    "rollup": "4.59.0",
+    "tar": "7.5.9",
+    "ajv": "8.18.0"
   }
 }

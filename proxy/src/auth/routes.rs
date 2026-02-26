@@ -541,8 +541,8 @@ pub(crate) async fn generate_token_pair(
 
 pub(crate) fn generate_refresh_token() -> String {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
     base64_url_encode(&bytes)
 }
 

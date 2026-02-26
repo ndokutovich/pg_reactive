@@ -87,15 +87,15 @@ fn error_redirect(site: &str, error: &str, description: &str) -> Redirect {
 
 fn generate_csrf_state() -> String {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
     base64_url_encode(&bytes)
 }
 
 fn generate_code_verifier() -> String {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
     base64_url_encode(&bytes)
 }
 
