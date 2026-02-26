@@ -1,0 +1,48 @@
+/**
+ * CSS modules for the pgStack homepage.
+ */
+
+.heroBanner {
+  padding: 5rem 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 2rem;
+  }
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.features {
+  display: flex;
+  align-items: center;
+  padding: 3rem 0;
+  width: 100%;
+  background: var(--ifm-background-surface-color);
+}
+
+.codeSection {
+  padding: 3rem 0 4rem;
+  background: var(--ifm-background-color);
+}
+
+.codeBlock {
+  background: var(--ifm-code-background);
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: var(--ifm-code-border-radius);
+  padding: 1rem;
+  font-size: 0.85rem;
+  overflow-x: auto;
+  white-space: pre;
+  margin-top: 0.5rem;
+}

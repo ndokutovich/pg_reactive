@@ -1,0 +1,215 @@
+---
+title: Docker Deployment
+sidebar_position: 1
+description: Deploy pgStack to production using Docker Compose.
+---
+
+# Docker Deployment
+
+pgStack is designed to run as two Docker containers managed by Docker Compose. This page covers deploying to a single server or VM using the production compose file.
+
+## Requirements
+
+- A Linux server (Ubuntu 22.04+, Debian 12+, or similar)
+- Docker Engine 24.0+ and Docker Compose Plugin
+- At least 1 GB RAM (2 GB recommended)
+- A domain name with DNS pointed to your server (for HTTPS)
+
+## Initial setup
+
+### 1. Install Docker
+
+```bash
+curl -fsSL https://get.docker.com | sh
+```
+
+### 2. Pull the compose file
+
+```bash
+mkdir pgstack && cd pgstack
+curl -O https://raw.githubusercontent.com/ndokutovich/pg_reactive/master/docker-compose.prod.yml
+curl -O https://raw.githubusercontent.com/ndokutovich/pg_reactive/master/.env.example
+```
+
+### 3. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in required values:
+
+```env
+# Database
+POSTGRES_DB=app
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=<generate with: openssl rand -base64 32>
+
+# JWT (signing key for access tokens)
+JWT_SECRET=<generate with: openssl rand -base64 32>
+
+# API keys
+ANON_KEY=<generate with: openssl rand -base64 32>
+SERVICE_ROLE_KEY=<generate with: openssl rand -base64 32>
+
+# Your app's public URL
+SITE_URL=https://your-app.example.com
+```
+
+### 4. Start the stack
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### 5. Verify
+
+```bash
+# Check containers are healthy
+docker compose -f docker-compose.prod.yml ps
+
+# Check the health endpoint
+curl http://127.0.0.1:8080/health
+```
+
+## HTTPS with a reverse proxy
+
+Never expose pgStack directly on port 80/443. Use a reverse proxy like Caddy (easiest), nginx, or Traefik.
+
+### Caddy (recommended)
+
+Install Caddy:
+
+```bash
+apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" | tee /etc/apt/sources.list.d/caddy-stable.list
+apt update && apt install caddy
+```
+
+Create `/etc/caddy/Caddyfile`:
+
+```
+your-app.example.com {
+    reverse_proxy 127.0.0.1:8080
+
+    # Restrict Studio to trusted IPs (optional)
+    @studio path /studio/*
+    handle @studio {
+        # Allow only specific IPs
+        # remote_ip 1.2.3.4
+        reverse_proxy 127.0.0.1:8080
+    }
+}
+```
+
+```bash
+systemctl enable --now caddy
+```
+
+Caddy automatically obtains and renews Let's Encrypt certificates.
+
+### nginx
+
+```bash
+apt install nginx certbot python3-certbot-nginx
+```
+
+`/etc/nginx/sites-available/pgstack`:
+
+```nginx
+server {
+    server_name your-app.example.com;
+    listen 80;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```bash
+ln -s /etc/nginx/sites-available/pgstack /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+certbot --nginx -d your-app.example.com
+```
+
+## Running migrations in production
+
+Copy your migration files to the server and run them:
+
+```bash
+scp -r migrations/ user@your-server:~/pgstack/
+docker compose -f docker-compose.prod.yml exec db psql -U postgres -d app -f /migrations/00001_init.sql
+```
+
+Or use the CLI from your local machine:
+
+```bash
+DATABASE_URL=postgres://postgres:password@your-server:5432/app pgstack migration up
+```
+
+## Updating pgStack
+
+```bash
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Database data is persisted in the `pgdata` Docker volume and is not affected by image updates.
+
+## Backups
+
+Back up the PostgreSQL data volume regularly:
+
+```bash
+# Dump the database
+docker compose -f docker-compose.prod.yml exec db pg_dump -U postgres app > backup_$(date +%Y%m%d_%H%M%S).sql
+
+# Or dump with compression
+docker compose -f docker-compose.prod.yml exec db pg_dump -U postgres -Fc app > backup_$(date +%Y%m%d_%H%M%S).dump
+```
+
+Restore from backup:
+
+```bash
+# Text dump
+docker compose -f docker-compose.prod.yml exec -T db psql -U postgres app < backup_20250114.sql
+
+# Custom format dump
+docker compose -f docker-compose.prod.yml exec -T db pg_restore -U postgres -d app < backup_20250114.dump
+```
+
+Consider automating backups with a cron job and shipping them to object storage (S3, Backblaze B2, etc.).
+
+## Resource limits
+
+The production compose file sets resource limits:
+
+| Service | Memory limit |
+|---------|-------------|
+| `db` | 1 GB |
+| `proxy` | 512 MB |
+
+Adjust in `docker-compose.prod.yml` under `deploy.resources.limits.memory`.
+
+## Firewall
+
+Expose only the necessary ports:
+
+```bash
+# Allow HTTPS and SSH only
+ufw allow 22/tcp
+ufw allow 443/tcp
+ufw allow 80/tcp  # for Let's Encrypt HTTP challenge
+ufw deny 5432     # PostgreSQL should NOT be public
+ufw deny 8080     # pgStack proxy behind reverse proxy only
+ufw enable
+```
