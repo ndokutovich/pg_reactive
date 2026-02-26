@@ -25,6 +25,10 @@
     "./pgstack-react": {
       "import": "./dist/pgstack-react.js",
       "types": "./dist/pgstack-react.d.ts"
+    },
+    "./dbos": {
+      "import": "./dist/dbos/index.js",
+      "types": "./dist/dbos/index.d.ts"
     }
   },
   "files": [
