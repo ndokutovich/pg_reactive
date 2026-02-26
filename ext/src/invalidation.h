@@ -34,4 +34,23 @@ extern int pgr_get_dirty_queries(char query_ids[][64], int max_results);
 /* Clear the dirty list (called on abort) */
 extern void pgr_clear_dirty(void);
 
+/*
+ * Check whether any column in updated_mask overlaps with registered_mask.
+ * registered_mask == PGR_COL_MASK_ALL means all columns are tracked.
+ * Returns true if a recompute is warranted.
+ *
+ * This is a zero-overhead inline — no function call overhead in triggers.
+ */
+static inline bool
+pgr_columns_overlap(uint64 registered_mask, uint64 updated_mask)
+{
+	/* All-columns mask: always overlaps */
+	if (registered_mask == (uint64) ~0ULL)
+		return true;
+	/* updated_mask == 0 means no column info available — conservatively recompute */
+	if (updated_mask == 0)
+		return true;
+	return (registered_mask & updated_mask) != 0;
+}
+
 #endif /* PGR_INVALIDATION_H */

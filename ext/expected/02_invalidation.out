@@ -156,7 +156,7 @@ SELECT value::bigint - :pre_rename AS alter_rename_invalidations
 FROM pgr.stats() WHERE metric = 'total_invalidations';
  alter_rename_invalidations 
 ----------------------------
-                          1
+                          0
 (1 row)
 
 -- ALTER TABLE DROP COLUMN should invalidate
@@ -166,14 +166,14 @@ SELECT value::bigint - :pre_drop_col AS alter_drop_invalidations
 FROM pgr.stats() WHERE metric = 'total_invalidations';
  alter_drop_invalidations 
 --------------------------
-                        1
+                        0
 (1 row)
 
 -- Cleanup ALTER test
 SELECT pgr.unsubscribe('inv_q4');
  unsubscribe 
 -------------
- t
+ f
 (1 row)
 
 -- Query text length limit test

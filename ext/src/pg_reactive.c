@@ -21,10 +21,14 @@
 
 PG_MODULE_MAGIC;
 
-/* GUC variable */
+/* GUC variables */
 int pgr_max_subscriptions = 1024;
+char *pgr_notify_channel = "pgr";
 
 void _PG_init(void);
+
+/* Forward declaration */
+void pgr_unsubscribe_all_for_table(Oid table_oid, const char *reason);
 
 /*
  * Context for recursive dependency extraction.
@@ -572,6 +576,96 @@ pgr_unsubscribe(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Auto-unsubscribe all queries that reference a given table OID.
+ *
+ * Called from the ProcessUtility hook when:
+ *   - DROP TABLE: before DDL so catalog lookups still work
+ *   - DROP COLUMN / RENAME COLUMN: same reason (via pgr_notify_schema_changed_and_unsubscribe)
+ *
+ * For each affected query_id:
+ *   - Remove shmem entry
+ *   - Drop snapshot table (delta mode)
+ *   - Remove per-query UPDATE trigger
+ *   - Remove base INSERT/DELETE triggers if no remaining subscriptions
+ *
+ * The reason_context parameter appears in the WARNING message (e.g. "DROP TABLE on foo").
+ * Pass NULL to suppress the WARNING.
+ */
+void
+pgr_unsubscribe_all_for_table(Oid table_oid, const char *reason)
+{
+	char	query_ids[256][PGR_QUERY_ID_LEN];
+	int		count;
+	int		i;
+	char	*relname;
+	char	table_name[256];
+
+	if (pgr_state == NULL || pgr_dep_hash == NULL)
+		return;
+
+	/*
+	 * Look up the relation name for the log message.
+	 * This must be done before the DROP executes.
+	 */
+	relname = get_rel_name(table_oid);
+	if (relname != NULL)
+		strlcpy(table_name, relname, sizeof(table_name));
+	else
+		snprintf(table_name, sizeof(table_name), "OID %u", table_oid);
+
+	count = pgr_dep_find_by_table(table_oid, query_ids, 256);
+	if (count == 0)
+		return;
+
+	for (i = 0; i < count; i++)
+	{
+		Oid			tbl_oids[PGR_MAX_DEPS_PER_QUERY];
+		int			num_tables;
+		char		entry_mode = 'd';
+		bool		found;
+		PgrDepEntry *entry;
+		int			j;
+		char		dummy[1][PGR_QUERY_ID_LEN];
+
+		/* Read mode before removing */
+		entry = pgr_dep_find(query_ids[i]);
+		if (entry != NULL)
+			entry_mode = entry->mode;
+
+		num_tables = pgr_dep_copy_tables(query_ids[i], tbl_oids,
+										 PGR_MAX_DEPS_PER_QUERY);
+
+		found = pgr_dep_remove(query_ids[i]);
+
+		if (!found)
+			continue;
+
+		/* Drop snapshot table in delta mode */
+		if (entry_mode == 'd')
+			pgr_snapshot_drop(query_ids[i]);
+
+		/* Remove per-query UPDATE triggers and check base trigger cleanup */
+		for (j = 0; j < num_tables; j++)
+		{
+			int		remaining;
+
+			pgr_remove_update_trigger(tbl_oids[j], query_ids[i]);
+
+			remaining = pgr_dep_find_by_table(tbl_oids[j], dummy, 1);
+			if (remaining == 0)
+				pgr_remove_triggers(tbl_oids[j]);
+		}
+	}
+
+	if (reason != NULL)
+		elog(WARNING,
+			 "pg_reactive: auto-unsubscribed %d %s due to %s",
+			 count,
+			 count == 1 ? "query" : "queries",
+			 reason);
+}
+
+/*
  * SQL function: pgr.get_subscriptions() -> SETOF record
  */
 PG_FUNCTION_INFO_V1(pgr_get_subscriptions);
@@ -775,6 +869,17 @@ _PG_init(void)
 							   0,
 							   NULL, NULL, NULL);
 
+	/* GUC: pg_reactive.notify_channel */
+	DefineCustomStringVariable("pg_reactive.notify_channel",
+							   "NOTIFY channel name for pg_reactive notifications",
+							   "All delta, overflow, and invalidation notifications are "
+							   "sent on this LISTEN/NOTIFY channel. Default: \"pgr\".",
+							   &pgr_notify_channel,
+							   "pgr",		/* default */
+							   PGC_SUSET,
+							   0,
+							   NULL, NULL, NULL);
+
 	/* Install shared memory hooks */
 	pgr_dep_init_hooks();
 
@@ -788,7 +893,8 @@ _PG_init(void)
 	if (pgr_async_recompute)
 		pgr_bgworker_register();
 
-	elog(LOG, "pg_reactive %s: loaded (max_subscriptions=%d, async_recompute=%s)",
+	elog(LOG, "pg_reactive %s: loaded (max_subscriptions=%d, async_recompute=%s, notify_channel=%s)",
 		 PG_REACTIVE_VERSION, pgr_max_subscriptions,
-		 pgr_async_recompute ? "on" : "off");
+		 pgr_async_recompute ? "on" : "off",
+		 pgr_notify_channel);
 }

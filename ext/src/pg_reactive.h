@@ -17,6 +17,7 @@
 
 /* GUC variables */
 extern int pgr_max_subscriptions;
+extern char *pgr_notify_channel;
 
 /*
  * Column bitmask: bit N corresponds to attnum (N+1).
@@ -40,6 +41,7 @@ typedef struct PgrDepEntry
 	TimestampTz	last_invalidated;
 	int64		invalidation_count;
 	char		mode;			/* 'd' = delta, 'n' = notify */
+	int64		notify_seq;		/* per-query sequence number for gap detection */
 } PgrDepEntry;
 
 /*
@@ -110,5 +112,10 @@ extern int pgr_dep_find_by_table(Oid table_oid, char query_ids[][PGR_QUERY_ID_LE
 								 int max_results);
 extern int pgr_dep_count(void);
 extern void pgr_dep_init_hooks(void);
+extern int64 pgr_dep_increment_seq(const char *query_id);
+
+/* pg_reactive.c — DDL auto-cleanup */
+/* reason is appended to the log WARNING (e.g. "DROP TABLE on foo"); NULL suppresses WARNING */
+extern void pgr_unsubscribe_all_for_table(Oid table_oid, const char *reason);
 
 #endif /* PG_REACTIVE_H */

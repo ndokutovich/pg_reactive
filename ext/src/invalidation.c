@@ -6,6 +6,7 @@
 #include "utils/snapmgr.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_trigger.h"
+#include "commands/async.h"
 #include "commands/trigger.h"
 #include "executor/spi.h"
 #include "nodes/nodes.h"
@@ -589,7 +590,65 @@ pgr_has_triggers(Oid table_oid)
 }
 
 /*
+ * Emit a schema_changed NOTIFY for all subscriptions referencing a table.
+ * Used when DROP COLUMN or RENAME COLUMN is detected on a tracked table.
+ * The notification tells connected clients to re-subscribe with the new schema.
+ * After notifying, each affected subscription is unsubscribed automatically.
+ *
+ * Must be called BEFORE the DDL executes so that catalog lookups still work.
+ */
+static void
+pgr_notify_schema_changed_and_unsubscribe(Oid table_oid, const char *table_name)
+{
+	char		query_ids[256][PGR_QUERY_ID_LEN];
+	int			count;
+	int			i;
+
+	if (pgr_state == NULL || pgr_dep_hash == NULL)
+		return;
+
+	count = pgr_dep_find_by_table(table_oid, query_ids, 256);
+	if (count == 0)
+		return;
+
+	for (i = 0; i < count; i++)
+	{
+		StringInfoData payload;
+
+		/* Emit schema_changed notification on the configured channel */
+		initStringInfo(&payload);
+		appendStringInfoString(&payload, "{\"type\":\"schema_changed\",\"query_id\":");
+		pgr_json_escape_string(&payload, query_ids[i]);
+		appendStringInfoString(&payload, ",\"table\":");
+		pgr_json_escape_string(&payload, table_name);
+		appendStringInfoChar(&payload, '}');
+
+		Async_Notify(pgr_notify_channel, payload.data);
+		pfree(payload.data);
+
+		elog(DEBUG1,
+			 "pg_reactive: schema_changed emitted for query %s on table %s",
+			 query_ids[i], table_name);
+	}
+
+	/*
+	 * Unsubscribe all affected queries — their snapshots and triggers are
+	 * now stale due to the column structure change.
+	 * Pass NULL for reason to suppress a redundant WARNING; the schema_changed
+	 * NOTIFY above already informs clients to re-subscribe.
+	 */
+	pgr_unsubscribe_all_for_table(table_oid, NULL);
+}
+
+/*
  * ProcessUtility hook: intercept DDL on tracked tables.
+ *
+ * Execution order matters:
+ *   - DROP TABLE: resolve OIDs and clean up BEFORE DDL executes (catalog
+ *     entries disappear after DROP).
+ *   - DROP COLUMN / RENAME COLUMN: notify and unsubscribe BEFORE DDL (same
+ *     reason — column metadata needs to be readable).
+ *   - TRUNCATE / general ALTER / RENAME TABLE: invalidate AFTER DDL.
  */
 static void
 pgr_ProcessUtility(PlannedStmt *pstmt,
@@ -603,7 +662,141 @@ pgr_ProcessUtility(PlannedStmt *pstmt,
 {
 	Node	   *parsetree = pstmt->utilityStmt;
 
-	/* Execute the DDL first (so the action happens), then invalidate */
+	/* Guard: skip if extension shmem not yet initialised */
+	if (pgr_state == NULL || pgr_dep_hash == NULL)
+		goto run_ddl;
+
+	/*
+	 * PRE-DDL phase: handle operations where we need the catalog intact.
+	 *
+	 * DROP TABLE — resolve table OIDs and auto-unsubscribe tracked queries
+	 * before the table disappears from the catalog.
+	 *
+	 * ALTER TABLE DROP COLUMN / RENAME COLUMN — emit schema_changed NOTIFY
+	 * and unsubscribe before the column metadata is gone.
+	 */
+	switch (nodeTag(parsetree))
+	{
+		case T_DropStmt:
+			{
+				DropStmt   *stmt = (DropStmt *) parsetree;
+
+				if (stmt->removeType == OBJECT_TABLE)
+				{
+					ListCell   *lc;
+
+					foreach(lc, stmt->objects)
+					{
+						List	   *names = lfirst_node(List, lc);
+						RangeVar   *rv = makeRangeVarFromNameList(names);
+						Oid			relid = RangeVarGetRelid(rv, NoLock, true);
+
+						if (OidIsValid(relid))
+						{
+							char   *tname = get_rel_name(relid);
+							char	reason[320];
+
+							if (tname != NULL)
+								snprintf(reason, sizeof(reason),
+										 "DROP TABLE on %s", tname);
+							else
+								snprintf(reason, sizeof(reason),
+										 "DROP TABLE on OID %u", relid);
+
+							pgr_unsubscribe_all_for_table(relid, reason);
+						}
+					}
+				}
+			}
+			break;
+
+		case T_AlterTableStmt:
+			{
+				/*
+				 * ALTER TABLE DROP COLUMN is handled here (pre-DDL) because
+				 * column metadata disappears after the DDL executes.
+				 *
+				 * Note: In PostgreSQL, RENAME COLUMN goes through RenameStmt
+				 * (renameType == OBJECT_COLUMN), NOT through AlterTableStmt.
+				 * So we only need to check AT_DropColumn here.
+				 */
+				AlterTableStmt *stmt = (AlterTableStmt *) parsetree;
+				ListCell	   *lc;
+				bool			is_drop_column = false;
+
+				foreach(lc, stmt->cmds)
+				{
+					AlterTableCmd *cmd = lfirst_node(AlterTableCmd, lc);
+
+					if (cmd->subtype == AT_DropColumn)
+					{
+						is_drop_column = true;
+						break;
+					}
+				}
+
+				if (is_drop_column)
+				{
+					Oid		relid = RangeVarGetRelid(stmt->relation,
+													  NoLock, true);
+
+					if (OidIsValid(relid))
+					{
+						char	   *relname = get_rel_name(relid);
+						char		table_name[256];
+
+						if (relname != NULL)
+							strlcpy(table_name, relname, sizeof(table_name));
+						else
+							snprintf(table_name, sizeof(table_name),
+									 "OID %u", relid);
+
+						pgr_notify_schema_changed_and_unsubscribe(relid,
+																   table_name);
+					}
+				}
+			}
+			break;
+
+		case T_RenameStmt:
+			{
+				RenameStmt *stmt = (RenameStmt *) parsetree;
+
+				/*
+				 * RENAME COLUMN: treat as schema change — emit notification
+				 * and unsubscribe BEFORE the rename so column names in the
+				 * subscription's query text still match the old schema.
+				 */
+				if (stmt->relation != NULL &&
+					stmt->renameType == OBJECT_COLUMN)
+				{
+					Oid		relid = RangeVarGetRelid(stmt->relation,
+													  NoLock, true);
+
+					if (OidIsValid(relid))
+					{
+						char	   *relname = get_rel_name(relid);
+						char		table_name[256];
+
+						if (relname != NULL)
+							strlcpy(table_name, relname, sizeof(table_name));
+						else
+							snprintf(table_name, sizeof(table_name),
+									 "OID %u", relid);
+
+						pgr_notify_schema_changed_and_unsubscribe(relid,
+																   table_name);
+					}
+				}
+			}
+			break;
+
+		default:
+			break;
+	}
+
+run_ddl:
+	/* Execute the DDL */
 	if (prev_ProcessUtility)
 		prev_ProcessUtility(pstmt, queryString, readOnlyTree,
 							context, params, queryEnv, dest, qc);
@@ -611,10 +804,22 @@ pgr_ProcessUtility(PlannedStmt *pstmt,
 		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 								context, params, queryEnv, dest, qc);
 
-	/* Now check if the DDL affected any tracked tables */
+	/* Guard: skip post-DDL processing if not initialised */
 	if (pgr_state == NULL || pgr_dep_hash == NULL)
 		return;
 
+	/*
+	 * POST-DDL phase: handle operations where we act after the DDL executes.
+	 *
+	 * TRUNCATE — invalidate all tracked queries on the truncated tables.
+	 *   Iterates all relations in stmt->relations to handle multi-table TRUNCATE.
+	 *
+	 * RENAME TABLE — invalidate queries (the table still exists, just renamed;
+	 *   the query text is now stale but the OID is unchanged).
+	 *
+	 * General ALTER TABLE (non column-drop/rename) — invalidate as before.
+	 *   Column-drop/rename was already handled in the pre-DDL phase above.
+	 */
 	switch (nodeTag(parsetree))
 	{
 		case T_TruncateStmt:
@@ -633,34 +838,36 @@ pgr_ProcessUtility(PlannedStmt *pstmt,
 			}
 			break;
 
-		case T_DropStmt:
-			{
-				DropStmt   *stmt = (DropStmt *) parsetree;
-
-				if (stmt->removeType == OBJECT_TABLE)
-				{
-					ListCell   *lc;
-
-					foreach(lc, stmt->objects)
-					{
-						List	   *names = lfirst_node(List, lc);
-						RangeVar   *rv = makeRangeVarFromNameList(names);
-						Oid			relid = RangeVarGetRelid(rv, NoLock, true);
-
-						if (OidIsValid(relid))
-							pgr_invalidate_table(relid);
-					}
-				}
-			}
-			break;
-
 		case T_AlterTableStmt:
 			{
+				/*
+				 * Only invalidate for ALTER operations that are NOT DROP COLUMN
+				 * (those were already handled pre-DDL above with schema_changed).
+				 * RENAME COLUMN goes through RenameStmt, not here.
+				 */
 				AlterTableStmt *stmt = (AlterTableStmt *) parsetree;
-				Oid		relid = RangeVarGetRelid(stmt->relation, NoLock, true);
+				ListCell	   *lc;
+				bool			has_drop_column = false;
 
-				if (OidIsValid(relid))
-					pgr_invalidate_table(relid);
+				foreach(lc, stmt->cmds)
+				{
+					AlterTableCmd *cmd = lfirst_node(AlterTableCmd, lc);
+
+					if (cmd->subtype == AT_DropColumn)
+					{
+						has_drop_column = true;
+						break;
+					}
+				}
+
+				if (!has_drop_column)
+				{
+					Oid		relid = RangeVarGetRelid(stmt->relation,
+													  NoLock, true);
+
+					if (OidIsValid(relid))
+						pgr_invalidate_table(relid);
+				}
 			}
 			break;
 
@@ -668,9 +875,14 @@ pgr_ProcessUtility(PlannedStmt *pstmt,
 			{
 				RenameStmt *stmt = (RenameStmt *) parsetree;
 
+				/*
+				 * RENAME TABLE: the OID is unchanged, but the query text stored
+				 * in shmem now references the old table name. Invalidate so
+				 * clients know to re-subscribe with the new name.
+				 * (Column rename was handled pre-DDL.)
+				 */
 				if (stmt->relation != NULL &&
-					(stmt->renameType == OBJECT_TABLE ||
-					 stmt->renameType == OBJECT_COLUMN))
+					stmt->renameType == OBJECT_TABLE)
 				{
 					Oid		relid = RangeVarGetRelid(stmt->relation,
 													  NoLock, true);

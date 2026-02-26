@@ -193,6 +193,7 @@ pgr_dep_add(const char *query_id, const char *query_text,
 		entry->subscribed_at = GetCurrentTimestamp();
 		entry->last_invalidated = 0;
 		entry->invalidation_count = 0;
+		entry->notify_seq = 0;
 		pgr_state->subscribe_count++;
 	}
 
@@ -315,6 +316,44 @@ pgr_dep_find_by_table(Oid table_oid, char query_ids[][PGR_QUERY_ID_LEN],
 
 	LWLockRelease(pgr_state->lock);
 	return count;
+}
+
+/*
+ * Atomically increment the per-query sequence number and update stats.
+ * Called from recompute.c before emitting a NOTIFY.
+ *
+ * Returns the new sequence value, or -1 if the entry was not found.
+ * The sequence starts at 1 after the first notification.
+ */
+int64
+pgr_dep_increment_seq(const char *query_id)
+{
+	PgrDepEntry *entry;
+	bool		found;
+	char		key[PGR_QUERY_ID_LEN];
+	int64		seq;
+
+	memset(key, 0, PGR_QUERY_ID_LEN);
+	strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+
+	LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
+
+	entry = (PgrDepEntry *) hash_search(pgr_dep_hash, key,
+										HASH_FIND, &found);
+
+	if (!found || entry == NULL)
+	{
+		LWLockRelease(pgr_state->lock);
+		return -1;
+	}
+
+	entry->notify_seq++;
+	seq = entry->notify_seq;
+	entry->last_invalidated = GetCurrentTimestamp();
+	entry->invalidation_count++;
+
+	LWLockRelease(pgr_state->lock);
+	return seq;
 }
 
 /*

@@ -9,11 +9,22 @@
 #include "invalidation.h"
 #include "recompute.h"
 
-/* Max NOTIFY payload is 7999 bytes. We use 7800 as safe limit. */
-#define PGR_NOTIFY_MAX_PAYLOAD	7800
-#define PGR_NOTIFY_CHANNEL "pgr"
+/*
+ * PostgreSQL NOTIFY payload limit is NOTIFY_PAYLOAD_MAX_LENGTH (8000 chars).
+ * We subtract the channel name length plus a small overhead margin (100 bytes)
+ * to account for internal framing. The actual threshold is computed at runtime
+ * using the configured pgr_notify_channel GUC.
+ *
+ * For the default channel "pgr" (3 chars): 8000 - 3 - 100 = 7897, rounded to 7900.
+ * The macro below computes it dynamically from the channel name length.
+ */
+#define PGR_NOTIFY_OVERHEAD		100
+#define PGR_NOTIFY_PAYLOAD_LIMIT	8000
+#define PGR_NOTIFY_MAX_PAYLOAD_FOR_CHANNEL(ch) \
+	((PGR_NOTIFY_PAYLOAD_LIMIT) - (int) strlen(ch) - PGR_NOTIFY_OVERHEAD)
 
-static char *pgr_build_delta_json(const char *query_id, const char *query_text);
+static char *pgr_build_delta_json(const char *query_id, const char *query_text,
+								  int64 seq);
 static char *pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 									TupleDesc tupdesc);
 /* pgr_json_escape_string declared extern in recompute.h */
@@ -53,58 +64,77 @@ pgr_recompute_for_table(Oid table_oid)
 	{
 		PgrDepEntry *entry;
 		char		*delta_json;
+		int64		seq;
+		int			max_payload;
 
-		entry = pgr_dep_find(query_ids[i]);
-		if (entry == NULL)
+		/*
+		 * Atomically increment seq and update stats under the exclusive lock.
+		 * seq is a notification attempt counter — it increments whenever a
+		 * trigger fires for this query. Clients detect missed notifications
+		 * by observing gaps in the sequence.
+		 * Returns -1 if the entry was removed (concurrent unsubscribe).
+		 */
+		seq = pgr_dep_increment_seq(query_ids[i]);
+		if (seq < 0)
 			continue;
 
-		/* Notify mode: lightweight invalidation, no query execution */
+		/* Look up entry to get mode and query fields for notification */
+		entry = pgr_dep_find(query_ids[i]);
+		if (entry == NULL)
+			continue;	/* removed between seq increment and find (benign) */
+
+		/* Compute payload limit for the configured channel */
+		max_payload = PGR_NOTIFY_MAX_PAYLOAD_FOR_CHANNEL(pgr_notify_channel);
+
+		/*
+		 * Notify mode: lightweight invalidation, no query execution.
+		 * Note: entry pointer is valid for shared reads here — PG hash
+		 * entries are stable in memory while the LWLock prevents structural
+		 * changes. The trigger fires while the DML transaction is still
+		 * open, so concurrent unsubscribe (which takes the exclusive lock)
+		 * cannot race here.
+		 */
 		if (entry->mode == 'n')
 		{
 			StringInfoData inv;
 
 			initStringInfo(&inv);
-			appendStringInfoString(&inv, "{\"type\":\"invalidated\",\"query_id\":");
+			appendStringInfoString(&inv,
+								   "{\"type\":\"invalidated\",\"query_id\":");
 			pgr_json_escape_string(&inv, entry->query_id);
-			appendStringInfoChar(&inv, '}');
-			Async_Notify(PGR_NOTIFY_CHANNEL, inv.data);
+			appendStringInfo(&inv, ",\"seq\":" INT64_FORMAT "}", seq);
+			Async_Notify(pgr_notify_channel, inv.data);
 			pfree(inv.data);
-
-			LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
-			entry->last_invalidated = GetCurrentTimestamp();
-			entry->invalidation_count++;
-			LWLockRelease(pgr_state->lock);
 			continue;
 		}
 
 		/* Delta mode: full EXCEPT-based diff computation */
 		delta_json = pgr_build_delta_json(entry->query_id,
-										  entry->query_text);
+										  entry->query_text,
+										  seq);
 
 		if (delta_json != NULL)
 		{
-			if (strlen(delta_json) <= PGR_NOTIFY_MAX_PAYLOAD)
+			if ((int) strlen(delta_json) <= max_payload)
 			{
-				Async_Notify(PGR_NOTIFY_CHANNEL, delta_json);
+				Async_Notify(pgr_notify_channel, delta_json);
 			}
 			else
 			{
 				StringInfoData overflow;
 
 				initStringInfo(&overflow);
-				appendStringInfoString(&overflow, "{\"type\":\"overflow\",\"query_id\":");
+				appendStringInfoString(&overflow,
+									   "{\"type\":\"overflow\",\"query_id\":");
 				pgr_json_escape_string(&overflow, entry->query_id);
-				appendStringInfoString(&overflow, ",\"fetch\":true}");
-				Async_Notify(PGR_NOTIFY_CHANNEL, overflow.data);
+				appendStringInfo(&overflow,
+								 ",\"seq\":" INT64_FORMAT ",\"fetch\":true}",
+								 seq);
+				Async_Notify(pgr_notify_channel, overflow.data);
 				pfree(overflow.data);
 			}
 
 			pfree(delta_json);
-
-			/* Update per-entry stats */
-			LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
-			entry->last_invalidated = GetCurrentTimestamp();
-			LWLockRelease(pgr_state->lock);
 		}
 	}
 }
@@ -117,13 +147,16 @@ pgr_recompute_for_table(Oid table_oid)
  * the cached result is used for EXCEPT comparisons and snapshot refresh.
  * This avoids re-executing the (potentially expensive) user query 3 times.
  *
+ * The seq parameter is embedded in the payload so clients can detect gaps.
+ *
  * Returns a palloc'd JSON string like:
- * {"query_id":"q1","inserted":[...],"deleted":[...]}
+ * {"query_id":"q1","seq":N,"inserted":[...],"deleted":[...]}
  *
  * Returns NULL if no changes detected.
  */
 static char *
-pgr_build_delta_json(const char *query_id, const char *query_text)
+pgr_build_delta_json(const char *query_id, const char *query_text,
+					 int64 seq)
 {
 	StringInfoData	snap_name;
 	StringInfoData	sql;
@@ -232,11 +265,13 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 	SPI_execute("DROP TABLE IF EXISTS _pgr_recompute", false, 0);
 	SPI_execute("RESET client_min_messages", false, 0);
 
-	/* Build result JSON */
+	/* Build result JSON — include seq for gap detection */
 	initStringInfo(&result);
 	appendStringInfoString(&result, "{\"query_id\":");
 	pgr_json_escape_string(&result, query_id);
-	appendStringInfo(&result, ",\"inserted\":%s,\"deleted\":%s}",
+	appendStringInfo(&result,
+					 ",\"seq\":" INT64_FORMAT ",\"inserted\":%s,\"deleted\":%s}",
+					 seq,
 					 inserted_json ? inserted_json : "[]",
 					 deleted_json ? deleted_json : "[]");
 
