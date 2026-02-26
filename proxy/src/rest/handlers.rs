@@ -6,7 +6,7 @@ use sqlx::Row;
 
 use crate::error::AppError;
 use crate::middleware::rls::{rls_transaction, RequestClaims};
-use crate::rest::embed::{self, EmbedJoin, ResolvedEmbed};
+use crate::rest::embed::{self, ResolvedEmbed};
 use crate::rest::filter::RestQuery;
 use crate::rest::query_builder;
 use crate::state::AppState;
@@ -173,117 +173,40 @@ async fn execute_select_json(
 }
 
 /// Execute a SELECT with resource embedding (lateral subqueries for FK joins).
+/// Supports nested/transitive embeds via recursive lateral subquery generation.
 async fn execute_select_with_embeds(
     tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
     built: &query_builder::BuiltQuery,
-    parent: &crate::rest::catalog::TableMeta,
+    _parent: &crate::rest::catalog::TableMeta,
     embeds: &[ResolvedEmbed],
     user_columns: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, AppError> {
     // Build a query that includes lateral subqueries for each embed.
     // Strategy: wrap the base query in a CTE, then select from it with
     // lateral subqueries that produce JSON arrays/objects for each embed.
+    // Nested embeds are handled recursively inside build_lateral_sql.
 
     let parent_alias = "base";
     let mut lateral_selects: Vec<String> = Vec::new();
     let mut lateral_joins: Vec<String> = Vec::new();
 
-    for (i, emb) in embeds.iter().enumerate() {
-        let alias = format!("_e{}", i);
-        let target_from = format!(
-            "{}.{}",
-            query_builder::quote_ident(&emb.target_table.schema),
-            query_builder::quote_ident(&emb.target_table.name)
-        );
+    // Global counter ensures unique aliases across all nesting levels.
+    let mut global_counter: usize = 0;
 
-        let col_select = if emb.columns.is_empty() {
-            "*".to_string()
-        } else {
-            emb.columns
-                .iter()
-                .map(|c| query_builder::quote_ident(c))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        match &emb.join {
-            EmbedJoin::OneToMany {
-                child_columns,
-                parent_columns,
-            } => {
-                // Child has FK → parent. Returns JSON array.
-                let join_cond: Vec<String> = child_columns
-                    .iter()
-                    .zip(parent_columns.iter())
-                    .map(|(child_col, parent_col)| {
-                        format!(
-                            "sub.{} = {}.{}",
-                            query_builder::quote_ident(child_col),
-                            parent_alias,
-                            query_builder::quote_ident(parent_col)
-                        )
-                    })
-                    .collect();
-
-                lateral_joins.push(format!(
-                    "LEFT JOIN LATERAL (\
-                        SELECT COALESCE(json_agg(row_to_json(sub)), '[]'::json) AS data \
-                        FROM (SELECT {} FROM {} sub WHERE {}) sub\
-                    ) {} ON true",
-                    col_select,
-                    target_from,
-                    join_cond.join(" AND "),
-                    query_builder::quote_ident(&alias),
-                ));
-                lateral_selects.push(format!(
-                    "{}.data AS {}",
-                    query_builder::quote_ident(&alias),
-                    query_builder::quote_ident(&emb.relation_name)
-                ));
-            }
-            EmbedJoin::ManyToOne {
-                parent_columns,
-                target_columns,
-            } => {
-                // Parent has FK → child. Returns single JSON object.
-                let join_cond: Vec<String> = target_columns
-                    .iter()
-                    .zip(parent_columns.iter())
-                    .map(|(target_col, parent_col)| {
-                        format!(
-                            "sub.{} = {}.{}",
-                            query_builder::quote_ident(target_col),
-                            parent_alias,
-                            query_builder::quote_ident(parent_col)
-                        )
-                    })
-                    .collect();
-
-                lateral_joins.push(format!(
-                    "LEFT JOIN LATERAL (\
-                        SELECT row_to_json(sub) AS data \
-                        FROM (SELECT {} FROM {} sub WHERE {} LIMIT 1) sub\
-                    ) {} ON true",
-                    col_select,
-                    target_from,
-                    join_cond.join(" AND "),
-                    query_builder::quote_ident(&alias),
-                ));
-                lateral_selects.push(format!(
-                    "{}.data AS {}",
-                    query_builder::quote_ident(&alias),
-                    query_builder::quote_ident(&emb.relation_name)
-                ));
-            }
-        }
+    for emb in embeds {
+        let (select_expr, join_clause) =
+            embed::build_lateral_sql(emb, parent_alias, &mut global_counter);
+        lateral_selects.push(select_expr);
+        lateral_joins.push(join_clause);
     }
 
     // Build final query:
     // WITH base AS (SELECT * FROM table WHERE ...)
     // SELECT row_to_json(combined) AS data FROM (
-    //   SELECT base.col1, base.col2, _e0.data AS relation0
+    //   SELECT base.col1, base.col2, _e0.data AS comments, _e1.data AS author
     //   FROM base
     //   LEFT JOIN LATERAL (...) _e0 ON true
+    //   LEFT JOIN LATERAL (...) _e1 ON true
     // ) combined
     let embed_cols = lateral_selects.join(", ");
     let joins = lateral_joins.join(" ");
@@ -298,7 +221,7 @@ async fn execute_select_with_embeds(
                 .filter(|c| !c.contains('(') && c != "*")
                 .collect();
             if cols.is_empty() {
-                // User had * or only embeds → select all parent columns
+                // User had * or only embeds -> select all parent columns
                 format!("{}.*", parent_alias)
             } else {
                 cols.iter()

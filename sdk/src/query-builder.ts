@@ -67,8 +67,17 @@ export class PgStackQueryBuilder {
     values: Record<string, unknown> | Record<string, unknown>[],
     options?: { onConflict?: string; ignoreDuplicates?: boolean },
   ): Promise<PgStackResponse> {
-    // pgStack doesn't have built-in upsert yet — use INSERT with conflict hint header
-    return this.mutate('POST', values);
+    const resolution = options?.ignoreDuplicates
+      ? 'ignore-duplicates'
+      : 'merge-duplicates';
+    const extraHeaders: Record<string, string> = {
+      Prefer: `resolution=${resolution}`,
+    };
+    const extraParams: string[] = [];
+    if (options?.onConflict) {
+      extraParams.push(`on_conflict=${enc(options.onConflict)}`);
+    }
+    return this.mutate('POST', values, extraHeaders, extraParams);
   }
 
   /** DELETE rows matching filters. */
@@ -249,10 +258,19 @@ export class PgStackQueryBuilder {
     }
   }
 
-  private async mutate(method: string, body?: unknown): Promise<PgStackResponse> {
-    const qs = this.buildQueryString();
+  private async mutate(
+    method: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+    extraParams?: string[],
+  ): Promise<PgStackResponse> {
+    let qs = this.buildQueryString();
+    if (extraParams && extraParams.length > 0) {
+      const extra = extraParams.join('&');
+      qs = qs ? `${qs}&${extra}` : extra;
+    }
     const url = `${this.baseUrl}/rest/v1/${enc(this.table)}${qs ? '?' + qs : ''}`;
-    const headers = this.headersFn();
+    const headers = { ...this.headersFn(), ...extraHeaders };
 
     const opts: RequestInit = { method, headers };
     if (body !== undefined) {

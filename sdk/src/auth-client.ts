@@ -32,6 +32,13 @@ export type AuthStateChangeCallback = (
 
 export interface AuthOptions {
   autoRefreshToken?: boolean;
+  /** Automatically detect OAuth session in URL hash fragment (default: true). */
+  detectSessionInUrl?: boolean;
+}
+
+export interface OAuthSessionResult {
+  session: AuthSession | null;
+  error: AuthError | null;
 }
 
 export class PgStackAuth {
@@ -41,11 +48,84 @@ export class PgStackAuth {
   private listeners: AuthStateChangeCallback[] = [];
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private autoRefresh: boolean;
+  private detectSessionInUrl: boolean;
+  private _initialized: Promise<void>;
 
   constructor(url: string, anonKey: string, options?: AuthOptions) {
     this.url = url;
     this.anonKey = anonKey;
     this.autoRefresh = options?.autoRefreshToken ?? true;
+    this.detectSessionInUrl = options?.detectSessionInUrl ?? true;
+    this._initialized = this._initialize();
+  }
+
+  private async _initialize(): Promise<void> {
+    if (this.detectSessionInUrl && typeof window !== 'undefined') {
+      await this.handleOAuthRedirect();
+    }
+  }
+
+  /**
+   * Parse an OAuth redirect hash fragment and establish the session.
+   *
+   * After an OAuth provider redirects back to your app, the URL contains
+   * a hash fragment like:
+   *   http://app.com/#access_token=xxx&refresh_token=yyy&expires_in=3600&token_type=bearer
+   *
+   * This method parses those parameters, fetches the user profile,
+   * stores the session, fires the SIGNED_IN event, and clears the hash.
+   *
+   * @returns The session if tokens were found, or null with an error.
+   */
+  async handleOAuthRedirect(): Promise<OAuthSessionResult> {
+    if (typeof window === 'undefined') {
+      return { session: null, error: null };
+    }
+
+    const hash = window.location.hash;
+    if (!hash || hash.length <= 1) {
+      return { session: null, error: null };
+    }
+
+    const params = new URLSearchParams(hash.substring(1));
+    const accessToken = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
+    const expiresIn = params.get('expires_in');
+    const tokenType = params.get('token_type');
+
+    if (!accessToken) {
+      return { session: null, error: null };
+    }
+
+    try {
+      // Fetch user profile using the access token
+      const res = await this.fetch('/auth/v1/user', 'GET', undefined, accessToken);
+      if (res.error) {
+        return { session: null, error: res.error };
+      }
+
+      const user = res.data as AuthUser;
+      const session: AuthSession = {
+        access_token: accessToken,
+        refresh_token: refreshToken ?? '',
+        expires_in: expiresIn ? parseInt(expiresIn, 10) : 3600,
+        token_type: tokenType ?? 'bearer',
+        user,
+      };
+
+      this.setSession(session);
+
+      // Clear the hash from the URL without triggering a navigation
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+
+      return { session, error: null };
+    } catch (e) {
+      const error: AuthError = {
+        message: e instanceof Error ? e.message : String(e),
+        status: 0,
+      };
+      return { session: null, error };
+    }
   }
 
   /** Sign up with email and password. */
