@@ -4,7 +4,7 @@
     accessToken, currentUser, currentScreen,
     lists, currentList, items, addToast
   } from '../stores.js';
-  import { apiRpc } from '../api.js';
+  import { apiRpc, API_BASE } from '../api.js';
 
   let listName = '';
   let shareCode = '';
@@ -77,7 +77,7 @@
   function handleLogout() {
     const token = $accessToken;
     if (token) {
-      fetch('http://127.0.0.1:8080/auth/v1/logout', {
+      fetch(API_BASE + '/auth/v1/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

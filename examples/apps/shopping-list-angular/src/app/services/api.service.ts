@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { AuthService } from './auth.service';
 
-const API_BASE = 'http://127.0.0.1:8080';
+const API_BASE = window.location.origin;
 const ANON_KEY = 'anon-key-12345';
 
 @Injectable({ providedIn: 'root' })

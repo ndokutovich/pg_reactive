@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
 
-const API_BASE = 'http://127.0.0.1:8080';
+const API_BASE = window.location.origin;
 const ANON_KEY = 'anon-key-12345';
 
 export interface User {

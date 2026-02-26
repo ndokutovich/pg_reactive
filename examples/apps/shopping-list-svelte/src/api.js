@@ -1,7 +1,7 @@
 import { get } from 'svelte/store';
 import { accessToken } from './stores.js';
 
-export const API_BASE = 'http://127.0.0.1:8080';
+export const API_BASE = window.location.origin;
 export const ANON_KEY = 'anon-key-12345';
 
 export function parseJwt(token) {

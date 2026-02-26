@@ -620,7 +620,7 @@
   // Handles all HTTP communication with the pgStack backend.
   // Encapsulates REST, RPC, and raw SQL endpoints.
 
-  var API_BASE = 'http://127.0.0.1:8080';
+  var API_BASE = location.origin;
   var ANON_KEY = 'anon-key-12345';
 
   function ApiService(injector) {
