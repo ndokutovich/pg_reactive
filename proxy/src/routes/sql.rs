@@ -5,6 +5,16 @@ use axum::Json;
 
 use crate::state::AppState;
 
+use subtle::ConstantTimeEq;
+
+/// Constant-time string comparison to prevent timing attacks on key checks.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
 /// POST /api/sql — execute raw SQL.
 /// Requires service_role key (Authorization: Bearer <SERVICE_ROLE_KEY>).
 pub async fn sql_execute(
@@ -73,18 +83,18 @@ fn is_service_role(state: &AppState, headers: &HeaderMap) -> bool {
         None => return false, // No service_role_key configured — deny all
     };
 
-    // Check Authorization: Bearer <key>
+    // Check Authorization: Bearer <key> (constant-time comparison)
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some(token) = auth.strip_prefix("Bearer ") {
-            if token == srv_key {
+            if constant_time_eq(token, srv_key) {
                 return true;
             }
         }
     }
 
-    // Check apikey header
+    // Check apikey header (constant-time comparison)
     if let Some(key) = headers.get("apikey").and_then(|v| v.to_str().ok()) {
-        if key == srv_key {
+        if constant_time_eq(key, srv_key) {
             return true;
         }
     }

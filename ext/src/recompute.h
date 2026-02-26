@@ -2,6 +2,7 @@
 #define PGR_RECOMPUTE_H
 
 #include "postgres.h"
+#include "lib/stringinfo.h"
 
 /* Initialize the recompute hooks */
 extern void pgr_recompute_init_hooks(void);
@@ -14,5 +15,8 @@ extern void pgr_snapshot_create(const char *query_id, const char *query_text);
 
 /* Drop a snapshot table for a query_id */
 extern void pgr_snapshot_drop(const char *query_id);
+
+/* Append a JSON-escaped string value (with surrounding quotes) to buf */
+extern void pgr_json_escape_string(StringInfo buf, const char *value);
 
 #endif /* PGR_RECOMPUTE_H */

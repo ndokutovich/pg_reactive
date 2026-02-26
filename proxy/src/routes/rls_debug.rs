@@ -10,10 +10,18 @@ use crate::state::AppState;
 
 /// GET /rest/v1/rls-debug — return the current PG role and JWT claims as seen by PG.
 /// Useful for debugging RLS policies.
+/// Restricted to service_role only.
 pub async fn rls_debug(
     State(state): State<AppState>,
     claims: RequestClaims,
 ) -> Result<impl IntoResponse, AppError> {
+    // Only service_role may access this debug endpoint
+    if claims.role != "service_role" {
+        return Err(AppError::Forbidden(
+            "rls-debug requires service_role".into(),
+        ));
+    }
+
     let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
 
     let row = sqlx::query(

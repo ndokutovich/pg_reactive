@@ -50,6 +50,11 @@ CREATE FUNCTION pgr.stats(
 AS 'MODULE_PATHNAME', 'pgr_stats'
 LANGUAGE C STRICT;
 
+-- Restrict subscribe/unsubscribe to database owner by default.
+-- Grant to specific roles as needed (e.g., the proxy connection role).
+REVOKE EXECUTE ON FUNCTION pgr.subscribe(text, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.unsubscribe(text) FROM PUBLIC;
+
 -- Function documentation
 COMMENT ON FUNCTION pgr.subscribe(text, text, text) IS
     'Register a live query. Mode: delta (default) = full diff with snapshots, notify = lightweight invalidation. '

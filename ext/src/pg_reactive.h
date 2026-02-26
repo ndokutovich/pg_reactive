@@ -70,6 +70,31 @@ typedef struct PgrEvictedInfo
 extern PgrSharedState *pgr_state;
 extern HTAB *pgr_dep_hash;
 
+/*
+ * Validate a query_id for safe use in SQL identifiers.
+ * Allows only alphanumeric characters, underscores, and hyphens.
+ * Rejects NULL, empty, or overly long strings (max 64 chars).
+ */
+static inline bool
+pgr_is_valid_query_id(const char *query_id)
+{
+	const char *p;
+
+	if (query_id == NULL || query_id[0] == '\0')
+		return false;
+	if (strlen(query_id) > 64)
+		return false;
+	for (p = query_id; *p; p++)
+	{
+		if (!(*p >= 'a' && *p <= 'z') &&
+			!(*p >= 'A' && *p <= 'Z') &&
+			!(*p >= '0' && *p <= '9') &&
+			*p != '_' && *p != '-')
+			return false;
+	}
+	return true;
+}
+
 /* dependency.c */
 extern void pgr_shmem_request(void);
 extern void pgr_shmem_startup(void);

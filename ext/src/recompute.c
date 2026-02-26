@@ -16,7 +16,7 @@
 static char *pgr_build_delta_json(const char *query_id, const char *query_text);
 static char *pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 									TupleDesc tupdesc);
-static void pgr_json_escape_string(StringInfo buf, const char *value);
+/* pgr_json_escape_string declared extern in recompute.h */
 
 /*
  * Return true if the given type OID represents a JSON-numeric type
@@ -64,9 +64,9 @@ pgr_recompute_for_table(Oid table_oid)
 			StringInfoData inv;
 
 			initStringInfo(&inv);
-			appendStringInfo(&inv,
-							 "{\"type\":\"invalidated\",\"query_id\":\"%s\"}",
-							 entry->query_id);
+			appendStringInfoString(&inv, "{\"type\":\"invalidated\",\"query_id\":");
+			pgr_json_escape_string(&inv, entry->query_id);
+			appendStringInfoChar(&inv, '}');
 			Async_Notify(PGR_NOTIFY_CHANNEL, inv.data);
 			pfree(inv.data);
 
@@ -92,9 +92,9 @@ pgr_recompute_for_table(Oid table_oid)
 				StringInfoData overflow;
 
 				initStringInfo(&overflow);
-				appendStringInfo(&overflow,
-								 "{\"type\":\"overflow\",\"query_id\":\"%s\",\"fetch\":true}",
-								 entry->query_id);
+				appendStringInfoString(&overflow, "{\"type\":\"overflow\",\"query_id\":");
+				pgr_json_escape_string(&overflow, entry->query_id);
+				appendStringInfoString(&overflow, ",\"fetch\":true}");
 				Async_Notify(PGR_NOTIFY_CHANNEL, overflow.data);
 				pfree(overflow.data);
 			}
@@ -234,9 +234,9 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 
 	/* Build result JSON */
 	initStringInfo(&result);
-	appendStringInfo(&result,
-					 "{\"query_id\":\"%s\",\"inserted\":%s,\"deleted\":%s}",
-					 query_id,
+	appendStringInfoString(&result, "{\"query_id\":");
+	pgr_json_escape_string(&result, query_id);
+	appendStringInfo(&result, ",\"inserted\":%s,\"deleted\":%s}",
 					 inserted_json ? inserted_json : "[]",
 					 deleted_json ? deleted_json : "[]");
 
@@ -253,7 +253,7 @@ pgr_build_delta_json(const char *query_id, const char *query_text)
 /*
  * Append a JSON-escaped string value (with surrounding quotes) to buf.
  */
-static void
+void
 pgr_json_escape_string(StringInfo buf, const char *value)
 {
 	const char *p;

@@ -78,12 +78,17 @@ pub async fn signup(
     })?;
 
     // Validate input
-    if body.email.is_empty() || !body.email.contains('@') {
+    if !is_valid_email(&body.email) {
         return Err(AppError::BadRequest("invalid email".into()));
     }
-    if body.password.len() < 6 {
+    if body.password.len() < 8 {
         return Err(AppError::BadRequest(
-            "password must be at least 6 characters".into(),
+            "password must be at least 8 characters".into(),
+        ));
+    }
+    if body.password.len() > 256 {
+        return Err(AppError::BadRequest(
+            "password must be at most 256 characters".into(),
         ));
     }
 
@@ -365,7 +370,7 @@ pub async fn update_user(
 
     // Update email if provided
     if let Some(email) = &body.email {
-        if email.is_empty() || !email.contains('@') {
+        if !is_valid_email(email) {
             return Err(AppError::BadRequest("invalid email".into()));
         }
         sqlx::query(
@@ -379,9 +384,14 @@ pub async fn update_user(
 
     // Update password if provided
     if let Some(pwd) = &body.password {
-        if pwd.len() < 6 {
+        if pwd.len() < 8 {
             return Err(AppError::BadRequest(
-                "password must be at least 6 characters".into(),
+                "password must be at least 8 characters".into(),
+            ));
+        }
+        if pwd.len() > 256 {
+            return Err(AppError::BadRequest(
+                "password must be at most 256 characters".into(),
             ));
         }
         let pwd_owned = pwd.clone();
@@ -441,6 +451,20 @@ pub async fn logout(
 }
 
 // ---------- Helpers ----------
+
+/// Validate an email address: non-empty local part, non-empty domain with at
+/// least one dot, total length <= 254.
+fn is_valid_email(email: &str) -> bool {
+    if email.len() > 254 {
+        return false;
+    }
+    match email.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty() && !domain.is_empty() && domain.contains('.')
+        }
+        None => false,
+    }
+}
 
 /// Extract and validate JWT claims from request headers.
 fn extract_claims_from_headers(

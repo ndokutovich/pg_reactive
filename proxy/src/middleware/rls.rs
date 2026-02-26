@@ -1,11 +1,23 @@
 use axum::http::HeaderMap;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row};
+use subtle::ConstantTimeEq;
 use tracing::debug;
 
 use crate::auth::jwt;
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// Maximum size for claims_json passed to set_config (8 KB).
+const MAX_CLAIMS_JSON_LEN: usize = 8192;
+
+/// Constant-time string comparison to prevent timing attacks on key checks.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
 
 /// Represents the authenticated identity for a request.
 /// Extracted from JWT, anon key, or service role key.
@@ -43,10 +55,17 @@ impl RequestClaims {
     }
 
     /// Create claims from a validated JWT.
+    /// SECURITY: JWTs are never allowed to claim service_role.
+    /// Only direct API key comparison grants service_role.
     fn from_jwt(claims: &jwt::Claims) -> Self {
+        let role = if claims.role == "service_role" {
+            "authenticated".to_string()
+        } else {
+            claims.role.clone()
+        };
         let claims_json = serde_json::to_string(claims).unwrap_or_default();
         Self {
-            role: claims.role.clone(),
+            role,
             sub: Some(claims.sub.clone()),
             email: claims.email.clone(),
             claims_json,
@@ -75,20 +94,20 @@ pub fn resolve_claims(headers: &HeaderMap, state: &AppState) -> Result<RequestCl
 
     let bearer_token = auth_header.and_then(|h| h.strip_prefix("Bearer "));
 
-    // 1. Check if bearer token is a service_role_key
+    // 1. Check if bearer token is a service_role_key (constant-time comparison)
     if let Some(token) = bearer_token {
         if let Some(ref srk) = state.config.service_role_key {
-            if token == srk {
+            if constant_time_eq(token, srk) {
                 debug!("request authenticated as service_role (bearer)");
                 return Ok(RequestClaims::service_role());
             }
         }
     }
 
-    // 2. Check if apikey header is service_role_key
+    // 2. Check if apikey header is service_role_key (constant-time comparison)
     if let Some(key) = apikey_header {
         if let Some(ref srk) = state.config.service_role_key {
-            if key == srk {
+            if constant_time_eq(key, srk) {
                 debug!("request authenticated as service_role (apikey)");
                 return Ok(RequestClaims::service_role());
             }
@@ -110,20 +129,20 @@ pub fn resolve_claims(headers: &HeaderMap, state: &AppState) -> Result<RequestCl
         }
     }
 
-    // 4. Check if bearer token is anon_key
+    // 4. Check if bearer token is anon_key (constant-time comparison)
     if let Some(token) = bearer_token {
         if let Some(ref ak) = state.config.anon_key {
-            if token == ak {
+            if constant_time_eq(token, ak) {
                 debug!("request authenticated as anon (bearer)");
                 return Ok(RequestClaims::anon());
             }
         }
     }
 
-    // 5. Check if apikey header is anon_key
+    // 5. Check if apikey header is anon_key (constant-time comparison)
     if let Some(key) = apikey_header {
         if let Some(ref ak) = state.config.anon_key {
-            if key == ak {
+            if constant_time_eq(key, ak) {
                 debug!("request authenticated as anon (apikey)");
                 return Ok(RequestClaims::anon());
             }
@@ -182,9 +201,15 @@ pub async fn rls_transaction(
         .execute(&mut *tx)
         .await?;
 
-    // SET LOCAL request.jwt.claims — used by RLS policies
+    // SET LOCAL request.jwt.claims — used by RLS policies.
+    // Truncate to MAX_CLAIMS_JSON_LEN to prevent oversized GUC values.
+    let truncated_claims = if claims.claims_json.len() > MAX_CLAIMS_JSON_LEN {
+        &claims.claims_json[..MAX_CLAIMS_JSON_LEN]
+    } else {
+        &claims.claims_json
+    };
     sqlx::query("SELECT set_config('request.jwt.claims', $1, true)")
-        .bind(&claims.claims_json)
+        .bind(truncated_claims)
         .execute(&mut *tx)
         .await?;
 

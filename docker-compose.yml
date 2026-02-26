@@ -9,11 +9,11 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     command: >
       postgres
         -c shared_preload_libraries=pg_reactive
-        -c log_min_messages=debug1
+        -c log_min_messages=warning
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d pg_reactive_test"]
       interval: 2s
@@ -29,9 +29,11 @@ services:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
       RUST_LOG: pgstack_proxy=info,tower_http=info
-      JWT_SECRET: ${JWT_SECRET:-test-secret-key-for-development-only}
-      ANON_KEY: ${ANON_KEY:-anon-key-12345}
-      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-srv-key-99999}
+      # WARNING: These are DEVELOPMENT-ONLY defaults. NEVER use in production.
+      # For production, set these via environment variables or a .env file with strong random secrets.
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-do-not-use-in-production}
+      ANON_KEY: ${ANON_KEY:-dev-only-anon-key-do-not-use-in-production}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"  # Dev only — allows /api/sql without service_role auth
     ports:
       - "8080:8080"

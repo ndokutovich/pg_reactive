@@ -58,7 +58,7 @@ pub async fn call_rpc(
             .map(|p| p.pg_type.as_str())
             .unwrap_or("text");
         // Use named parameter syntax with cast: param_name := $N::type
-        placeholders.push(format!("{} := ${}::{}", quote_ident(key), i + 1, pg_type));
+        placeholders.push(format!("{} := ${}::{}", quote_ident(key), i + 1, safe_pg_type(pg_type)));
     }
 
     // Use to_json() to always get JSON output regardless of return type.
@@ -170,6 +170,20 @@ fn json_to_param(val: &serde_json::Value) -> String {
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
         _ => val.to_string(),
+    }
+}
+
+/// Validate a pg_type string before interpolation into SQL.
+/// Only allows alphanumeric, underscore, space, brackets, parentheses, dots, commas.
+/// Returns "text" as safe fallback for any invalid type.
+fn safe_pg_type(pg_type: &str) -> &str {
+    if pg_type
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " _[].(),".contains(c))
+    {
+        pg_type
+    } else {
+        "text"
     }
 }
 

@@ -1,6 +1,7 @@
+use std::fmt;
 use std::net::SocketAddr;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     pub database_url: String,
     pub listen_addr: SocketAddr,
@@ -18,6 +19,8 @@ pub struct Config {
     pub auth_rate_window_secs: u64,
     /// Allow /api/sql without service_role auth (dev/tutorial only).
     pub enable_sql_endpoint: bool,
+    /// Comma-separated allowed origins for CORS, or None for permissive (dev mode).
+    pub allowed_origins: Option<String>,
 }
 
 impl Config {
@@ -69,6 +72,10 @@ impl Config {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
+        let allowed_origins = std::env::var("ALLOWED_ORIGINS")
+            .ok()
+            .filter(|s| !s.is_empty());
+
         Self {
             database_url,
             listen_addr,
@@ -84,6 +91,29 @@ impl Config {
             auth_rate_limit,
             auth_rate_window_secs,
             enable_sql_endpoint,
+            allowed_origins,
         }
+    }
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("database_url", &"[REDACTED]")
+            .field("listen_addr", &self.listen_addr)
+            .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "[REDACTED]"))
+            .field("anon_key", &self.anon_key.as_ref().map(|_| "[REDACTED]"))
+            .field("service_role_key", &self.service_role_key.as_ref().map(|_| "[REDACTED]"))
+            .field("max_connections", &self.max_connections)
+            .field("google_client_id", &self.google_client_id)
+            .field("google_client_secret", &self.google_client_secret.as_ref().map(|_| "[REDACTED]"))
+            .field("github_client_id", &self.github_client_id)
+            .field("github_client_secret", &self.github_client_secret.as_ref().map(|_| "[REDACTED]"))
+            .field("site_url", &self.site_url)
+            .field("auth_rate_limit", &self.auth_rate_limit)
+            .field("auth_rate_window_secs", &self.auth_rate_window_secs)
+            .field("enable_sql_endpoint", &self.enable_sql_endpoint)
+            .field("allowed_origins", &self.allowed_origins)
+            .finish()
     }
 }

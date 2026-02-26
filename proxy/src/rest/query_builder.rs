@@ -110,7 +110,7 @@ pub fn build_insert(
         for (i, col) in col_names.iter().enumerate() {
             let val = obj.get(col).unwrap_or(&serde_json::Value::Null);
             params.push(json_to_pg_param(val));
-            placeholders.push(format!("${}::{}", params.len(), col_types[i]));
+            placeholders.push(format!("${}::{}", params.len(), safe_pg_type(col_types[i])));
         }
         value_groups.push(format!("({})", placeholders.join(", ")));
     }
@@ -158,7 +158,7 @@ pub fn build_update(
             .map(|c| c.pg_type.as_str())
             .unwrap_or("text");
         params.push(json_to_pg_param(val));
-        set_clauses.push(format!("{} = ${}::{}", quote_ident(col), params.len(), pg_type));
+        set_clauses.push(format!("{} = ${}::{}", quote_ident(col), params.len(), safe_pg_type(pg_type)));
     }
 
     let from_clause = format!("{}.{}", quote_ident(&table.schema), quote_ident(&table.name));
@@ -198,6 +198,20 @@ pub fn build_delete(table: &TableMeta, query: &RestQuery) -> Result<BuiltQuery, 
     );
 
     Ok(BuiltQuery { sql, params })
+}
+
+/// Validate a pg_type string before interpolation into SQL.
+/// Only allows alphanumeric, underscore, space, brackets, parentheses, dots, commas.
+/// Returns "text" as safe fallback for any invalid type.
+fn safe_pg_type(pg_type: &str) -> &str {
+    if pg_type
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " _[].(),".contains(c))
+    {
+        pg_type
+    } else {
+        "text"
+    }
 }
 
 // ---- Internal helpers ----
@@ -334,7 +348,7 @@ fn build_where(
                 let mut placeholders = Vec::new();
                 for v in values {
                     params.push(v.to_string());
-                    placeholders.push(format!("${}::{}", params.len(), pg_type));
+                    placeholders.push(format!("${}::{}", params.len(), safe_pg_type(pg_type)));
                 }
 
                 let in_list = placeholders.join(", ");
@@ -357,7 +371,7 @@ fn build_where(
             }
             _ => {
                 params.push(f.value.clone());
-                let cast = format!("${}::{}", params.len(), pg_type);
+                let cast = format!("${}::{}", params.len(), safe_pg_type(pg_type));
                 let op = f.operator.sql_op();
                 if f.negate {
                     format!("NOT ({} {} {})", quote_ident(&f.column), op, cast)

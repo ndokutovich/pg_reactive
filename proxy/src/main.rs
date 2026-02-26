@@ -39,6 +39,10 @@ async fn main() {
         warn!("ENABLE_SQL_ENDPOINT=true — /api/sql accepts unauthenticated requests (disable in production!)");
     }
 
+    if config.allowed_origins.is_none() {
+        warn!("ALLOWED_ORIGINS not set — CORS is permissive (set to restrict in production)");
+    }
+
     let pg_pool = PgPool::connect(&config.database_url)
         .await
         .expect("failed to connect to PostgreSQL");
@@ -82,6 +86,9 @@ async fn main() {
     info!("shutdown complete");
 }
 
+/// Maximum request body size: 1 MB.
+const MAX_BODY_SIZE: usize = 1024 * 1024;
+
 fn build_router(state: AppState) -> Router {
     // Auth routes with rate limiting (signup + token are brute-force targets)
     let auth_rate_limited = Router::new()
@@ -123,8 +130,16 @@ fn build_router(state: AppState) -> Router {
         // Legacy/demo routes (backwards compatibility with pg_reactive tutorial)
         .route("/api/demo", post(routes::demo::demo_action))
         .route("/api/sql", post(routes::sql::sql_execute))
+        // Request body size limit (1 MB)
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(MAX_BODY_SIZE))
+        // Security headers
+        .layer(axum::middleware::from_fn(
+            middleware::security_headers::security_headers,
+        ))
         // CORS
-        .layer(middleware::cors::cors_layer())
+        .layer(middleware::cors::cors_layer(
+            state.config.allowed_origins.as_deref(),
+        ))
         .with_state(state)
 }
 
@@ -172,11 +187,25 @@ async fn ws_handler(
         }
     }
 
+    // Acquire a WebSocket connection permit (FIX W1: connection limiting)
+    let permit = state
+        .ws_semaphore
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            error::AppError::TooManyRequests("too many WebSocket connections".into())
+        })?;
+
     let channels = state.channels.clone();
     let pg_pool = state.pg_pool.clone();
 
     Ok(ws.on_upgrade(move |socket| {
-        realtime::ws::handle_websocket(socket, query_id, channels, pg_pool)
+        // The permit is moved into the async block and held for the connection lifetime.
+        // It is released automatically when the future completes and permit is dropped.
+        async move {
+            realtime::ws::handle_websocket(socket, query_id, channels, pg_pool).await;
+            drop(permit);
+        }
     }))
 }
 

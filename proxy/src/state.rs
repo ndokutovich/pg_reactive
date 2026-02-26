@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use sqlx::PgPool;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, RwLock, Semaphore};
 
 use crate::config::Config;
 use crate::middleware::rate_limit::RateLimiter;
@@ -21,6 +21,8 @@ pub struct AppState {
     pub pg_pool: PgPool,
     pub catalog: Catalog,
     pub auth_rate_limiter: RateLimiter,
+    /// Semaphore to limit concurrent WebSocket connections.
+    pub ws_semaphore: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -29,6 +31,7 @@ impl AppState {
             config.auth_rate_limit,
             config.auth_rate_window_secs,
         );
+        let ws_semaphore = Arc::new(Semaphore::new(config.max_connections));
         Self {
             channels: Arc::new(RwLock::new(HashMap::new())),
             config,
@@ -36,6 +39,7 @@ impl AppState {
             pg_pool,
             catalog: Catalog::new(),
             auth_rate_limiter: rate_limiter,
+            ws_semaphore,
         }
     }
 }

@@ -71,14 +71,22 @@ impl RestQuery {
                 "select" => result.select = Some(value.into_owned()),
                 "order" => result.order = parse_order(&value)?,
                 "limit" => {
-                    result.limit = Some(value.parse::<i64>().map_err(|_| {
+                    let v = value.parse::<i64>().map_err(|_| {
                         AppError::BadRequest("invalid limit value".into())
-                    })?);
+                    })?;
+                    if v < 0 {
+                        return Err(AppError::BadRequest("limit must not be negative".into()));
+                    }
+                    result.limit = Some(v);
                 }
                 "offset" => {
-                    result.offset = Some(value.parse::<i64>().map_err(|_| {
+                    let v = value.parse::<i64>().map_err(|_| {
                         AppError::BadRequest("invalid offset value".into())
-                    })?);
+                    })?;
+                    if v < 0 {
+                        return Err(AppError::BadRequest("offset must not be negative".into()));
+                    }
+                    result.offset = Some(v);
                 }
                 _ => {
                     // Column filter: column=operator.value

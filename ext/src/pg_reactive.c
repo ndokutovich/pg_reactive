@@ -5,6 +5,7 @@
 #include "catalog/pg_class.h"
 #include "fmgr.h"
 #include "funcapi.h"
+#include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "parser/analyze.h"
 #include "parser/parser.h"
@@ -428,6 +429,14 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 				 errmsg("query_id too long (max %d characters)",
 						PGR_QUERY_ID_LEN - 1)));
 
+	/* Validate query_id contains only safe characters for SQL identifiers */
+	if (!pgr_is_valid_query_id(query_id))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid query_id \"%s\": must contain only "
+						"alphanumeric characters, underscores, and hyphens",
+						query_id)));
+
 	/* Validate query text length */
 	if (strlen(query_str) >= PGR_QUERY_TEXT_LEN)
 		ereport(ERROR,
@@ -499,9 +508,11 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 
 	/* Build JSON result */
 	initStringInfo(&buf);
+	appendStringInfoString(&buf, "{\"query_id\": ");
+	pgr_json_escape_string(&buf, query_id);
 	appendStringInfo(&buf,
-					 "{\"query_id\": \"%s\", \"tables\": %d, \"mode\": \"%s\", \"status\": \"subscribed\"}",
-					 query_id, num_tables, mode_str);
+					 ", \"tables\": %d, \"mode\": \"%s\", \"status\": \"subscribed\"}",
+					 num_tables, mode_str);
 
 	PG_RETURN_DATUM(DirectFunctionCall1(jsonb_in,
 										CStringGetDatum(buf.data)));
