@@ -1,0 +1,19 @@
+{
+  "name": "What to Buy \u2014 Shared Shopping List",
+  "short_name": "What to Buy",
+  "description": "Shared shopping list for couples with real-time sync",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fffbeb",
+  "theme_color": "#d97706",
+  "categories": ["shopping", "productivity"],
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

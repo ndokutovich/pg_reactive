@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>What to Buy (Vue)</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#d97706">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  /* -- Variables -- */
+  :root {
+    --amber-50: #fffbeb;
+    --amber-100: #fef3c7;
+    --amber-200: #fde68a;
+    --amber-300: #fcd34d;
+    --amber-400: #fbbf24;
+    --amber-500: #f59e0b;
+    --amber-600: #d97706;
+    --amber-700: #b45309;
+    --amber-800: #92400e;
+    --green-500: #10b981;
+    --green-600: #059669;
+    --green-50: #ecfdf5;
+    --red-500: #ef4444;
+    --red-50: #fef2f2;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-xs: 6px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --transition: 0.2s ease;
+  }
+
+  /* -- Reset -- */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font);
+    background: var(--amber-50);
+    color: var(--gray-800);
+    line-height: 1.6;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .screen { animation: fadeIn 0.25s ease; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* -- Buttons -- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 20px; border: none; border-radius: var(--radius-sm);
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all var(--transition); font-family: var(--font);
+  }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-primary { background: var(--amber-600); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--amber-700); }
+  .btn-secondary { background: var(--gray-100); color: var(--gray-700); }
+  .btn-secondary:hover:not(:disabled) { background: var(--gray-200); }
+  .btn-ghost { background: transparent; color: var(--gray-500); padding: 8px 12px; font-size: 13px; }
+  .btn-ghost:hover { background: var(--gray-100); color: var(--gray-700); }
+  .btn-danger { background: transparent; color: var(--gray-400); padding: 4px 8px; }
+  .btn-danger:hover { color: var(--red-500); }
+  .btn-icon { padding: 8px; border-radius: 50%; min-width: 36px; min-height: 36px; }
+  .btn-full { width: 100%; }
+
+  /* -- Inputs -- */
+  .input {
+    width: 100%; padding: 10px 14px;
+    border: 1.5px solid var(--gray-200); border-radius: var(--radius-sm);
+    font-size: 14px; color: var(--gray-800); background: #fff;
+    transition: border-color var(--transition), box-shadow var(--transition);
+    outline: none; font-family: var(--font);
+  }
+  .input:focus { border-color: var(--amber-500); box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
+  .input::placeholder { color: var(--gray-400); }
+
+  /* -- Cards -- */
+  .card {
+    background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .card-body { padding: 20px; }
+
+  /* -- Alerts -- */
+  .alert {
+    padding: 10px 14px; border-radius: var(--radius-xs);
+    font-size: 13px; font-weight: 500; margin-bottom: 16px;
+  }
+  .alert-error { background: var(--red-50); color: var(--red-500); border: 1px solid #fecaca; }
+  .alert-success { background: var(--green-50); color: var(--green-600); border: 1px solid #bbf7d0; }
+
+  /* -- Spinner -- */
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid var(--gray-200); border-top-color: var(--amber-600);
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ======= SETUP SCREEN ======= */
+  .setup-hero {
+    max-width: 480px; margin: 80px auto; padding: 40px 24px; text-align: center;
+  }
+  .setup-icon { font-size: 56px; margin-bottom: 16px; }
+  .setup-hero h1 { font-size: 26px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px; }
+  .setup-hero p { color: var(--gray-500); font-size: 15px; margin-bottom: 28px; max-width: 360px; margin-left: auto; margin-right: auto; }
+  .setup-log {
+    background: var(--gray-900); color: #a5f3ab;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+    padding: 16px; border-radius: var(--radius-sm);
+    max-height: 200px; overflow-y: auto; text-align: left;
+    margin-top: 20px; line-height: 1.8;
+  }
+  .setup-log .error { color: #fca5a5; }
+  .setup-log .ok { color: #a5f3ab; }
+  .setup-skip { margin-top: 12px; }
+
+  /* ======= AUTH SCREEN ======= */
+  .auth-wrap { max-width: 400px; margin: 80px auto; padding: 0 16px; }
+  .auth-header { text-align: center; margin-bottom: 24px; }
+  .auth-header h2 { font-size: 22px; color: var(--gray-900); margin-bottom: 4px; }
+  .auth-header .subtitle { color: var(--gray-500); font-size: 14px; }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px; }
+  .auth-toggle { text-align: center; margin-top: 16px; font-size: 14px; color: var(--gray-500); }
+  .auth-toggle a { color: var(--amber-600); cursor: pointer; font-weight: 600; text-decoration: none; }
+  .auth-toggle a:hover { text-decoration: underline; }
+
+  /* ======= LISTS SCREEN ======= */
+  .app-bar {
+    background: #fff; border-bottom: 1px solid var(--gray-200);
+    padding: 0 16px; height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow);
+  }
+  .app-bar h1 { font-size: 18px; font-weight: 700; color: var(--amber-700); }
+  .app-bar-right { display: flex; align-items: center; gap: 12px; }
+  .app-bar .user-email { font-size: 12px; color: var(--gray-400); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .main-pad { max-width: 560px; margin: 0 auto; padding: 16px; }
+
+  .section-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--gray-400); margin-bottom: 10px; margin-top: 20px;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  .action-row {
+    display: flex; gap: 8px; margin-bottom: 16px;
+  }
+  .action-row .input { flex: 1; }
+
+  /* List cards */
+  .list-card {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 16px; background: #fff; border-radius: var(--radius);
+    box-shadow: var(--shadow); margin-bottom: 10px; cursor: pointer;
+    transition: box-shadow var(--transition), transform var(--transition);
+    border-left: 4px solid var(--amber-400);
+  }
+  .list-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+  .list-card:active { transform: scale(0.98); }
+
+  .list-card-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--amber-100); color: var(--amber-700);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+  }
+  .list-card-info { flex: 1; min-width: 0; }
+  .list-card-name { font-size: 15px; font-weight: 600; color: var(--gray-800); }
+  .list-card-meta { font-size: 12px; color: var(--gray-400); display: flex; gap: 10px; margin-top: 2px; }
+  .list-card-progress {
+    width: 48px; text-align: right; font-size: 13px; font-weight: 700; color: var(--amber-600);
+  }
+
+  .empty-lists { text-align: center; padding: 40px 20px; color: var(--gray-400); }
+  .empty-lists p { font-size: 14px; margin-top: 8px; }
+
+  /* ======= DETAIL SCREEN ======= */
+  .detail-bar {
+    background: #fff; border-bottom: 1px solid var(--gray-200);
+    padding: 0 8px; height: 56px;
+    display: flex; align-items: center; gap: 8px;
+    position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow);
+  }
+  .detail-bar h1 { font-size: 17px; font-weight: 700; color: var(--gray-800); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail-bar .btn-icon svg { width: 20px; height: 20px; }
+
+  .progress-strip {
+    background: var(--amber-100); padding: 12px 16px; display: flex;
+    align-items: center; gap: 12px;
+  }
+  .progress-bar-wrap {
+    flex: 1; background: var(--amber-200); border-radius: 10px; height: 8px; overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%; background: var(--green-500); border-radius: 10px;
+    transition: width 0.4s ease;
+  }
+  .progress-text { font-size: 13px; font-weight: 600; color: var(--amber-700); white-space: nowrap; }
+
+  .add-item-row {
+    display: flex; gap: 8px; padding: 12px 16px; background: #fff;
+    border-bottom: 1px solid var(--gray-100); position: sticky; top: 56px; z-index: 90;
+  }
+  .add-item-row .input { flex: 1; }
+  .qty-input { width: 56px !important; flex: none !important; text-align: center; }
+
+  /* Item list */
+  .item-list { list-style: none; }
+
+  .item-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; border-bottom: 1px solid var(--gray-50);
+    transition: background var(--transition);
+  }
+  .item-row:active { background: var(--gray-50); }
+
+  .item-checkbox {
+    appearance: none; width: 24px; height: 24px;
+    border: 2px solid var(--gray-300); border-radius: 50%;
+    cursor: pointer; transition: all var(--transition); flex-shrink: 0;
+    position: relative; background: #fff;
+  }
+  .item-checkbox:checked {
+    background: var(--green-500); border-color: var(--green-500);
+  }
+  .item-checkbox:checked::after {
+    content: ''; position: absolute; top: 4px; left: 7px;
+    width: 6px; height: 10px; border: solid #fff; border-width: 0 2.5px 2.5px 0;
+    transform: rotate(45deg);
+  }
+
+  .item-info { flex: 1; min-width: 0; }
+  .item-name { font-size: 15px; color: var(--gray-800); transition: all var(--transition); }
+  .item-row.checked .item-name { text-decoration: line-through; color: var(--gray-400); }
+
+  .item-qty {
+    font-size: 12px; color: var(--amber-600); background: var(--amber-100);
+    padding: 2px 8px; border-radius: 10px; font-weight: 600; flex-shrink: 0;
+  }
+  .item-row.checked .item-qty { color: var(--gray-400); background: var(--gray-100); }
+
+  .item-delete { opacity: 0; transition: opacity var(--transition); }
+  .item-row:hover .item-delete { opacity: 1; }
+
+  .item-separator {
+    padding: 8px 16px; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--gray-400); background: var(--gray-50);
+  }
+
+  .empty-items { text-align: center; padding: 48px 20px; color: var(--gray-400); }
+  .empty-items p { font-size: 14px; margin-top: 8px; }
+
+  /* ======= SHARE MODAL ======= */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 200; padding: 24px;
+  }
+  .modal-box {
+    background: #fff; border-radius: var(--radius); padding: 28px;
+    max-width: 360px; width: 100%; box-shadow: var(--shadow-lg);
+    text-align: center; animation: fadeIn 0.2s ease;
+  }
+  .modal-box h3 { font-size: 18px; color: var(--gray-900); margin-bottom: 8px; }
+  .modal-box p { font-size: 14px; color: var(--gray-500); margin-bottom: 20px; }
+  .share-code-display {
+    font-size: 28px; font-weight: 800; letter-spacing: 0.15em;
+    color: var(--amber-700); background: var(--amber-100);
+    padding: 12px 20px; border-radius: var(--radius-sm);
+    margin-bottom: 16px; font-family: 'SF Mono', 'Fira Code', monospace;
+    user-select: all;
+  }
+  .copy-feedback {
+    font-size: 13px; color: var(--green-600); font-weight: 600;
+    margin-bottom: 12px; min-height: 20px;
+  }
+
+  /* ======= TOAST ======= */
+  .toast-area {
+    position: fixed; top: 64px; right: 16px; z-index: 300;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .toast {
+    padding: 10px 16px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500; box-shadow: var(--shadow-lg);
+    animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+    max-width: 300px;
+  }
+  .toast-info { background: var(--amber-600); color: #fff; }
+  .toast-success { background: var(--green-500); color: #fff; }
+  .toast-error { background: var(--red-500); color: #fff; }
+  @keyframes toastIn { from { opacity:0; transform:translateX(30px); } to { opacity:1; transform:translateX(0); } }
+  @keyframes toastOut { to { opacity:0; transform:translateX(30px); } }
+
+  /* ======= FOOTER ======= */
+  .app-footer {
+    text-align: center; padding: 24px 16px; font-size: 12px; color: var(--gray-400);
+  }
+
+  /* ======= RESPONSIVE ======= */
+  @media (max-width: 480px) {
+    .setup-hero { margin: 40px 16px; padding: 28px 20px; }
+    .auth-wrap { margin: 40px auto; }
+    .app-bar .user-email { display: none; }
+    .item-delete { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <!-- Toast area -->
+  <div class="toast-area">
+    <div v-for="t in toasts" :key="t.id" :class="'toast toast-' + t.type">{{ t.msg }}</div>
+  </div>
+
+  <!-- ======= SETUP SCREEN ======= -->
+  <div v-if="screen === 'setup'" class="screen">
+    <div class="setup-hero card">
+      <div class="card-body">
+        <div class="setup-icon">&#x1F6D2;</div>
+        <h1>What to Buy (Vue)</h1>
+        <p>A shared shopping list for couples. Set up the database to get started.</p>
+        <button class="btn btn-primary btn-full" :disabled="setupRunning" @click="runSetup">
+          {{ setupBtnText }}
+        </button>
+        <button class="btn btn-ghost btn-full setup-skip" @click="screen = 'auth'">Skip (already set up)</button>
+        <div v-if="setupLog.length > 0" class="setup-log" ref="setupLogEl">
+          <div v-for="(entry, i) in setupLog" :key="i" :class="entry.cls">{{ entry.text }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= AUTH SCREEN ======= -->
+  <div v-if="screen === 'auth'" class="screen">
+    <div class="auth-wrap">
+      <div class="card">
+        <div class="card-body">
+          <div class="auth-header">
+            <h2>{{ isSignUp ? 'Sign Up' : 'Log In' }}</h2>
+            <p class="subtitle">{{ isSignUp ? 'Create your account to start shopping together' : 'Welcome back!' }}</p>
+          </div>
+          <div v-if="authError" class="alert alert-error">{{ authError }}</div>
+          <form @submit.prevent="handleAuth">
+            <div class="form-group">
+              <label for="auth-email">Email</label>
+              <input type="email" id="auth-email" class="input" placeholder="you@example.com" required autocomplete="email" v-model="authEmail">
+            </div>
+            <div class="form-group">
+              <label for="auth-password">Password</label>
+              <input type="password" id="auth-password" class="input" placeholder="At least 6 characters" required minlength="6" autocomplete="current-password" v-model="authPassword">
+            </div>
+            <button type="submit" class="btn btn-primary btn-full" :disabled="authLoading">
+              {{ authLoading ? 'Please wait...' : (isSignUp ? 'Sign Up' : 'Log In') }}
+            </button>
+          </form>
+          <div class="auth-toggle">
+            <span>{{ isSignUp ? 'Already have an account? ' : 'Need an account? ' }}</span>
+            <a @click="toggleAuthMode">{{ isSignUp ? 'Log In' : 'Sign Up' }}</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= LISTS SCREEN ======= -->
+  <div v-if="screen === 'lists'" class="screen">
+    <div class="app-bar">
+      <h1>&#x1F6D2; What to Buy</h1>
+      <div class="app-bar-right">
+        <span class="user-email">{{ currentUser ? currentUser.email : '' }}</span>
+        <button class="btn btn-ghost" @click="handleLogout">Log out</button>
+      </div>
+    </div>
+    <div class="main-pad">
+      <div class="section-label">Create New List</div>
+      <form class="action-row" @submit.prevent="handleCreateList">
+        <input type="text" class="input" placeholder="e.g. Weekly groceries" required maxlength="100" v-model="newListName">
+        <button type="submit" class="btn btn-primary" :disabled="creatingList">Create</button>
+      </form>
+
+      <div class="section-label">Join a List</div>
+      <form class="action-row" @submit.prevent="handleJoinList">
+        <input type="text" class="input" placeholder="Enter share code" required maxlength="10" v-model="joinCode"
+               style="text-transform:uppercase; letter-spacing:0.1em; font-weight:600;">
+        <button type="submit" class="btn btn-secondary" :disabled="joiningList">Join</button>
+      </form>
+
+      <div class="section-label">My Lists</div>
+      <div v-if="listsLoading" style="text-align:center; padding:20px;">
+        <div class="spinner"></div>
+      </div>
+      <div v-else-if="lists.length === 0" class="empty-lists">
+        <div style="font-size:40px; opacity:0.4;">&#x1F4CB;</div>
+        <p>No lists yet. Create one or join with a share code!</p>
+      </div>
+      <div v-else>
+        <div v-for="list in lists" :key="list.id" class="list-card" @click="openList(list)">
+          <div class="list-card-icon">&#x1F6D2;</div>
+          <div class="list-card-info">
+            <div class="list-card-name">{{ list.name }}</div>
+            <div class="list-card-meta">
+              <span>&#x1F465; {{ list.member_count }}</span>
+              <span>Code: {{ (list.share_code || '').toUpperCase() }}</span>
+            </div>
+          </div>
+          <div class="list-card-progress">{{ list.checked_count }}/{{ list.item_count }}</div>
+        </div>
+      </div>
+
+      <div class="app-footer">
+        Built with pgStack &mdash; PostgreSQL + Rust + Row Level Security
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= DETAIL SCREEN ======= -->
+  <div v-if="screen === 'detail'" class="screen">
+    <div class="detail-bar">
+      <button class="btn btn-icon btn-ghost" title="Back" @click="goBackToLists">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h1>{{ currentList ? currentList.name : 'List' }}</h1>
+      <button class="btn btn-icon btn-ghost" title="Share" @click="openShareModal">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      </button>
+      <button class="btn btn-icon btn-danger" title="Delete list" @click="handleDeleteList">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
+    </div>
+
+    <div class="progress-strip">
+      <div class="progress-bar-wrap"><div class="progress-bar" :style="{ width: progressPct + '%' }"></div></div>
+      <div class="progress-text">{{ checkedCount }} / {{ items.length }}</div>
+    </div>
+
+    <form class="add-item-row" @submit.prevent="handleAddItem">
+      <input type="text" class="input" placeholder="Add item..." required maxlength="200" v-model="newItemName" ref="itemNameInput">
+      <input type="text" class="input qty-input" placeholder="Qty" maxlength="10" v-model="newItemQty">
+      <button type="submit" class="btn btn-primary btn-icon" title="Add">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+    </form>
+
+    <div>
+      <ul v-if="items.length > 0" class="item-list">
+        <template v-if="uncheckedItems.length > 0">
+          <li class="item-separator">To buy ({{ uncheckedItems.length }})</li>
+          <li v-for="item in uncheckedItems" :key="item.id" class="item-row">
+            <input type="checkbox" class="item-checkbox" :checked="item.checked" @change="toggleItem(item.id, true)">
+            <div class="item-info">
+              <div class="item-name">{{ item.name }}</div>
+            </div>
+            <span class="item-qty">x{{ item.quantity || '1' }}</span>
+            <button class="btn btn-danger item-delete" title="Remove" @click.stop="deleteItem(item.id)">&#x2715;</button>
+          </li>
+        </template>
+        <template v-if="checkedItems.length > 0">
+          <li class="item-separator">In cart ({{ checkedItems.length }})</li>
+          <li v-for="item in checkedItems" :key="item.id" class="item-row checked">
+            <input type="checkbox" class="item-checkbox" :checked="item.checked" @change="toggleItem(item.id, false)">
+            <div class="item-info">
+              <div class="item-name">{{ item.name }}</div>
+            </div>
+            <span class="item-qty">x{{ item.quantity || '1' }}</span>
+            <button class="btn btn-danger item-delete" title="Remove" @click.stop="deleteItem(item.id)">&#x2715;</button>
+          </li>
+        </template>
+      </ul>
+      <div v-else class="empty-items">
+        <div style="font-size:40px; opacity:0.4;">&#x1F6D2;</div>
+        <p>List is empty. Add items above!</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= SHARE MODAL ======= -->
+  <div v-if="shareModalVisible" class="modal-overlay" @click.self="closeShareModal">
+    <div class="modal-box">
+      <h3>Share This List</h3>
+      <p>Give this code to your partner so they can join the list.</p>
+      <div class="share-code-display">{{ shareCodeDisplay }}</div>
+      <div class="copy-feedback">{{ copyFeedback }}</div>
+      <button class="btn btn-primary btn-full" @click="copyShareCode">Copy Code</button>
+      <button v-if="hasNativeShare" class="btn btn-ghost btn-full" style="margin-top:8px;" @click="nativeShare">Share via...</button>
+      <button class="btn btn-ghost btn-full" style="margin-top:8px;" @click="closeShareModal">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+(function() {
+  'use strict';
+
+  var API_BASE = 'http://127.0.0.1:8080';
+  var ANON_KEY = 'anon-key-12345';
+  var POLL_INTERVAL = 2000;
+
+  var MIGRATION_SQL = [
+    "CREATE TABLE IF NOT EXISTS shopping_lists (\n  id serial PRIMARY KEY,\n  name text NOT NULL,\n  owner_id uuid NOT NULL,\n  share_code text UNIQUE DEFAULT substr(md5(random()::text), 1, 6),\n  created_at timestamptz DEFAULT now()\n)",
+    "CREATE TABLE IF NOT EXISTS list_members (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  user_id uuid NOT NULL,\n  role text DEFAULT 'member',\n  joined_at timestamptz DEFAULT now(),\n  UNIQUE(list_id, user_id)\n)",
+    "CREATE TABLE IF NOT EXISTS shopping_items (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  name text NOT NULL,\n  quantity text DEFAULT '1',\n  checked boolean DEFAULT false,\n  added_by uuid,\n  created_at timestamptz DEFAULT now()\n)",
+    "GRANT ALL ON shopping_lists TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE shopping_lists_id_seq TO authenticated",
+    "GRANT ALL ON list_members TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE list_members_id_seq TO authenticated",
+    "GRANT ALL ON shopping_items TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE shopping_items_id_seq TO authenticated",
+    "ALTER TABLE shopping_lists ENABLE ROW LEVEL SECURITY",
+    "ALTER TABLE list_members ENABLE ROW LEVEL SECURITY",
+    "ALTER TABLE shopping_items ENABLE ROW LEVEL SECURITY",
+    "DROP POLICY IF EXISTS lists_select ON shopping_lists",
+    "CREATE POLICY lists_select ON shopping_lists FOR SELECT TO authenticated\n  USING (id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))",
+    "DROP POLICY IF EXISTS lists_insert ON shopping_lists",
+    "CREATE POLICY lists_insert ON shopping_lists FOR INSERT TO authenticated\n  WITH CHECK (owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS lists_delete ON shopping_lists",
+    "CREATE POLICY lists_delete ON shopping_lists FOR DELETE TO authenticated\n  USING (owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS members_own ON list_members",
+    "CREATE POLICY members_own ON list_members FOR SELECT TO authenticated\n  USING (user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS items_access ON shopping_items",
+    "CREATE POLICY items_access ON shopping_items FOR ALL TO authenticated\n  USING (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))\n  WITH CHECK (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))",
+    "CREATE OR REPLACE FUNCTION public.create_shopping_list(list_name text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; new_list record; BEGIN INSERT INTO shopping_lists (name, owner_id) VALUES (list_name, uid) RETURNING * INTO new_list; INSERT INTO list_members (list_id, user_id, role) VALUES (new_list.id, uid, 'owner'); RETURN row_to_json(new_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.create_shopping_list(text) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated"
+  ];
+
+  // ---- Utilities ----
+  function parseJwt(token) {
+    try {
+      var b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(atob(b64 + '=='.slice(0, (4 - b64.length % 4) % 4)));
+    } catch (e) { return null; }
+  }
+
+  // ---- API Helpers ----
+  function authHeaders(accessToken) {
+    var h = { 'Content-Type': 'application/json', 'apikey': ANON_KEY };
+    if (accessToken) h['Authorization'] = 'Bearer ' + accessToken;
+    return h;
+  }
+
+  function apiSql(sql) {
+    return fetch(API_BASE + '/api/sql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql: sql })
+    }).then(function(r) { return r.json(); });
+  }
+
+  function apiRest(method, path, body, accessToken) {
+    var opts = { method: method, headers: authHeaders(accessToken) };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    return fetch(API_BASE + '/rest/v1/' + path, opts).then(function(res) {
+      if (res.status === 204) return null;
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
+        return data;
+      });
+    });
+  }
+
+  function apiRpc(fn, params, accessToken) {
+    return fetch(API_BASE + '/rest/v1/rpc/' + fn, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+      body: JSON.stringify(params || {})
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
+        return data;
+      });
+    });
+  }
+
+  // ---- Notification helpers ----
+  function requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }
+
+  function showNotification(title, body, toastFn) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(title, { body: body, icon: 'icon.svg', tag: 'wtb-' + Date.now() });
+      } catch (e) { /* ignore */ }
+    }
+    if (toastFn) toastFn(title + ': ' + body, 'info');
+  }
+
+  // ---- PWA ----
+  function registerServiceWorker() {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(function(err) {
+        console.log('SW registration failed:', err);
+      });
+    }
+  }
+
+  // ---- Vue App ----
+  var ref = Vue.ref;
+  var reactive = Vue.reactive;
+  var computed = Vue.computed;
+  var watch = Vue.watch;
+  var onMounted = Vue.onMounted;
+  var onUnmounted = Vue.onUnmounted;
+  var nextTick = Vue.nextTick;
+
+  var app = Vue.createApp({
+    setup: function() {
+      // ---- Screen routing ----
+      var screen = ref('setup');
+
+      // ---- Toast system ----
+      var toasts = ref([]);
+      var toastId = 0;
+
+      function toast(msg, type) {
+        var id = ++toastId;
+        toasts.value.push({ id: id, msg: msg, type: type || 'info' });
+        setTimeout(function() {
+          toasts.value = toasts.value.filter(function(t) { return t.id !== id; });
+        }, 3200);
+      }
+
+      // ---- Setup screen ----
+      var setupLog = ref([]);
+      var setupRunning = ref(false);
+      var setupBtnText = ref('Setup Database');
+      var setupLogEl = ref(null);
+
+      function appendLog(text, cls) {
+        setupLog.value.push({ text: text, cls: cls || '' });
+        nextTick(function() {
+          if (setupLogEl.value) {
+            setupLogEl.value.scrollTop = setupLogEl.value.scrollHeight;
+          }
+        });
+      }
+
+      function runSetup() {
+        setupRunning.value = true;
+        setupBtnText.value = 'Setting up...';
+        setupLog.value = [];
+
+        var allOk = true;
+        var idx = 0;
+
+        function runNext() {
+          if (idx >= MIGRATION_SQL.length) {
+            if (allOk) {
+              appendLog('\nSetup complete! Proceeding to sign in...', 'ok');
+              appendLog('NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
+              setupBtnText.value = 'Done!';
+              setTimeout(function() { screen.value = 'auth'; }, 1200);
+            } else {
+              appendLog('\nSetup finished with errors. You may retry.', 'error');
+              setupRunning.value = false;
+              setupBtnText.value = 'Retry Setup';
+            }
+            return;
+          }
+
+          var stmt = MIGRATION_SQL[idx];
+          var short = stmt.replace(/\n/g, ' ');
+          if (short.length > 60) short = short.substring(0, 60) + '...';
+          appendLog('> ' + short);
+
+          apiSql(stmt).then(function(result) {
+            if (result.error) {
+              if (result.error.indexOf('already exists') !== -1 || result.error.indexOf('duplicate') !== -1) {
+                appendLog('  (skipped)', 'ok');
+              } else {
+                appendLog('  ERROR: ' + result.error, 'error');
+                allOk = false;
+              }
+            } else {
+              appendLog('  OK', 'ok');
+            }
+            idx++;
+            runNext();
+          }).catch(function(err) {
+            appendLog('  NETWORK ERROR: ' + err.message, 'error');
+            allOk = false;
+            idx++;
+            runNext();
+          });
+        }
+        runNext();
+      }
+
+      // ---- Auth screen ----
+      var isSignUp = ref(true);
+      var authEmail = ref('');
+      var authPassword = ref('');
+      var authError = ref('');
+      var authLoading = ref(false);
+      var accessToken = ref(null);
+      var currentUser = ref(null);
+
+      function toggleAuthMode() {
+        isSignUp.value = !isSignUp.value;
+        authError.value = '';
+      }
+
+      function handleAuth() {
+        authError.value = '';
+        authLoading.value = true;
+
+        var url, body;
+        if (isSignUp.value) {
+          url = API_BASE + '/auth/v1/signup';
+          body = { email: authEmail.value.trim(), password: authPassword.value };
+        } else {
+          url = API_BASE + '/auth/v1/token';
+          body = { grant_type: 'password', email: authEmail.value.trim(), password: authPassword.value };
+        }
+
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+        .then(function(res) {
+          return res.json().then(function(data) {
+            if (!res.ok) throw new Error(data.error || data.message || 'Auth failed');
+            return data;
+          });
+        })
+        .then(function(data) {
+          accessToken.value = data.access_token;
+          currentUser.value = data.user;
+          enterLists();
+        })
+        .catch(function(err) {
+          authError.value = err.message;
+        })
+        .finally(function() {
+          authLoading.value = false;
+        });
+      }
+
+      // ---- Lists screen ----
+      var lists = ref([]);
+      var listsLoading = ref(false);
+      var newListName = ref('');
+      var joinCode = ref('');
+      var creatingList = ref(false);
+      var joiningList = ref(false);
+
+      function enterLists() {
+        screen.value = 'lists';
+        requestNotificationPermission();
+        loadLists();
+      }
+
+      function loadLists() {
+        listsLoading.value = true;
+        apiRpc('my_shopping_lists', {}, accessToken.value).then(function(data) {
+          lists.value = Array.isArray(data) ? data : [];
+        }).catch(function(err) {
+          toast('Failed to load lists: ' + err.message, 'error');
+        }).finally(function() {
+          listsLoading.value = false;
+        });
+      }
+
+      function handleCreateList() {
+        var listName = newListName.value.trim();
+        if (!listName) return;
+        creatingList.value = true;
+
+        apiRpc('create_shopping_list', { list_name: listName }, accessToken.value).then(function() {
+          newListName.value = '';
+          toast('List created!', 'success');
+          loadLists();
+        }).catch(function(err) {
+          toast('Failed: ' + err.message, 'error');
+        }).finally(function() {
+          creatingList.value = false;
+        });
+      }
+
+      function handleJoinList() {
+        var code = joinCode.value.trim();
+        if (!code) return;
+        joiningList.value = true;
+
+        apiRpc('join_shopping_list', { code: code }, accessToken.value).then(function(data) {
+          joinCode.value = '';
+          toast('Joined list: ' + (data.name || 'Success'), 'success');
+          loadLists();
+        }).catch(function(err) {
+          toast(err.message, 'error');
+        }).finally(function() {
+          joiningList.value = false;
+        });
+      }
+
+      // ---- Detail screen ----
+      var currentList = ref(null);
+      var items = ref([]);
+      var newItemName = ref('');
+      var newItemQty = ref('1');
+      var itemNameInput = ref(null);
+      var pollTimer = ref(null);
+      var suppressNotifications = ref(false);
+      var knownItemIds = reactive(new Set());
+
+      var uncheckedItems = computed(function() {
+        return items.value.filter(function(i) { return !i.checked; });
+      });
+
+      var checkedItems = computed(function() {
+        return items.value.filter(function(i) { return i.checked; });
+      });
+
+      var checkedCount = computed(function() {
+        return checkedItems.value.length;
+      });
+
+      var progressPct = computed(function() {
+        var total = items.value.length;
+        if (total === 0) return 0;
+        return Math.round(checkedCount.value / total * 100);
+      });
+
+      function openList(list) {
+        currentList.value = list;
+        screen.value = 'detail';
+        knownItemIds.clear();
+        loadItems();
+        startPolling();
+      }
+
+      function goBackToLists() {
+        stopPolling();
+        currentList.value = null;
+        items.value = [];
+        screen.value = 'lists';
+        loadLists();
+      }
+
+      function loadItems() {
+        if (!currentList.value) return;
+
+        return apiRest('GET', 'shopping_items?list_id=eq.' + currentList.value.id + '&order=checked.asc,created_at.desc', undefined, accessToken.value)
+          .then(function(data) {
+            var newItems = Array.isArray(data) ? data : [];
+            detectChanges(newItems);
+            items.value = newItems;
+          })
+          .catch(function(err) {
+            console.error('Load items failed:', err);
+          });
+      }
+
+      function detectChanges(newItems) {
+        if (suppressNotifications.value || knownItemIds.size === 0) {
+          newItems.forEach(function(it) { knownItemIds.add(it.id); });
+          return;
+        }
+
+        var claims = parseJwt(accessToken.value);
+        var myUserId = claims ? claims.sub : null;
+
+        newItems.forEach(function(it) {
+          if (!knownItemIds.has(it.id)) {
+            knownItemIds.add(it.id);
+            if (it.added_by !== myUserId) {
+              showNotification('Item added', it.name + (it.quantity !== '1' ? ' x' + it.quantity : ''), toast);
+            }
+            return;
+          }
+          var old = items.value.find(function(o) { return o.id === it.id; });
+          if (old && old.checked !== it.checked && it.added_by !== myUserId) {
+            if (it.checked) {
+              showNotification('Item checked off', it.name, toast);
+            }
+          }
+        });
+      }
+
+      function handleAddItem() {
+        if (!currentList.value) return;
+
+        var name = newItemName.value.trim();
+        var qty = newItemQty.value.trim() || '1';
+        if (!name) return;
+
+        var claims = parseJwt(accessToken.value);
+        var body = {
+          list_id: currentList.value.id,
+          name: name,
+          quantity: qty,
+          checked: false,
+          added_by: claims ? claims.sub : null
+        };
+
+        suppressNotifications.value = true;
+        setTimeout(function() { suppressNotifications.value = false; }, 3000);
+
+        apiRest('POST', 'shopping_items', body, accessToken.value).then(function(created) {
+          items.value.unshift(created);
+          knownItemIds.add(created.id);
+          newItemName.value = '';
+          newItemQty.value = '1';
+          nextTick(function() {
+            if (itemNameInput.value) itemNameInput.value.focus();
+          });
+        }).catch(function(err) {
+          toast('Failed to add: ' + err.message, 'error');
+        });
+      }
+
+      function toggleItem(id, checked) {
+        var item = items.value.find(function(i) { return i.id === id; });
+        if (!item) return;
+
+        var prev = item.checked;
+        item.checked = checked;
+
+        suppressNotifications.value = true;
+        setTimeout(function() { suppressNotifications.value = false; }, 3000);
+
+        apiRest('PATCH', 'shopping_items?id=eq.' + id, { checked: checked }, accessToken.value).catch(function(err) {
+          item.checked = prev;
+          toast('Update failed: ' + err.message, 'error');
+        });
+      }
+
+      function deleteItem(id) {
+        var idx = -1;
+        for (var i = 0; i < items.value.length; i++) {
+          if (items.value[i].id === id) { idx = i; break; }
+        }
+        if (idx === -1) return;
+
+        var removed = items.value.splice(idx, 1)[0];
+        knownItemIds.delete(id);
+
+        apiRest('DELETE', 'shopping_items?id=eq.' + id, undefined, accessToken.value).catch(function(err) {
+          items.value.splice(idx, 0, removed);
+          knownItemIds.add(id);
+          toast('Delete failed: ' + err.message, 'error');
+        });
+      }
+
+      function handleDeleteList() {
+        if (!currentList.value) return;
+        if (!confirm('Delete "' + currentList.value.name + '" and all its items?')) return;
+
+        apiRest('DELETE', 'shopping_lists?id=eq.' + currentList.value.id, undefined, accessToken.value).then(function() {
+          toast('List deleted', 'success');
+          goBackToLists();
+        }).catch(function(err) {
+          toast('Delete failed: ' + err.message, 'error');
+        });
+      }
+
+      // ---- Polling ----
+      function startPolling() {
+        stopPolling();
+        pollTimer.value = setInterval(function() { loadItems(); }, POLL_INTERVAL);
+      }
+
+      function stopPolling() {
+        if (pollTimer.value) {
+          clearInterval(pollTimer.value);
+          pollTimer.value = null;
+        }
+      }
+
+      // ---- Share modal ----
+      var shareModalVisible = ref(false);
+      var copyFeedback = ref('');
+      var hasNativeShare = ref(typeof navigator !== 'undefined' && !!navigator.share);
+
+      var shareCodeDisplay = computed(function() {
+        if (currentList.value && currentList.value.share_code) {
+          return currentList.value.share_code.toUpperCase();
+        }
+        return '------';
+      });
+
+      function openShareModal() {
+        if (!currentList.value) return;
+        copyFeedback.value = '';
+        shareModalVisible.value = true;
+      }
+
+      function closeShareModal() {
+        shareModalVisible.value = false;
+      }
+
+      function copyShareCode() {
+        var code = shareCodeDisplay.value;
+        navigator.clipboard.writeText(code).then(function() {
+          copyFeedback.value = 'Copied!';
+        }).catch(function() {
+          copyFeedback.value = 'Copy failed -- select and copy manually';
+        });
+      }
+
+      function nativeShare() {
+        if (!currentList.value || !navigator.share) return;
+        navigator.share({
+          title: 'Join my shopping list: ' + currentList.value.name,
+          text: 'Use code ' + shareCodeDisplay.value + ' to join my shopping list on What to Buy!'
+        }).catch(function() { /* user cancelled */ });
+      }
+
+      // ---- Logout ----
+      function handleLogout() {
+        fetch(API_BASE + '/auth/v1/logout', {
+          method: 'POST', headers: authHeaders(accessToken.value)
+        }).catch(function() {});
+
+        stopPolling();
+        accessToken.value = null;
+        currentUser.value = null;
+        lists.value = [];
+        currentList.value = null;
+        items.value = [];
+        knownItemIds.clear();
+        screen.value = 'auth';
+      }
+
+      // ---- Lifecycle ----
+      onMounted(function() {
+        registerServiceWorker();
+      });
+
+      onUnmounted(function() {
+        stopPolling();
+      });
+
+      return {
+        // Screen
+        screen: screen,
+
+        // Toasts
+        toasts: toasts,
+        toast: toast,
+
+        // Setup
+        setupLog: setupLog,
+        setupRunning: setupRunning,
+        setupBtnText: setupBtnText,
+        setupLogEl: setupLogEl,
+        runSetup: runSetup,
+
+        // Auth
+        isSignUp: isSignUp,
+        authEmail: authEmail,
+        authPassword: authPassword,
+        authError: authError,
+        authLoading: authLoading,
+        currentUser: currentUser,
+        toggleAuthMode: toggleAuthMode,
+        handleAuth: handleAuth,
+
+        // Lists
+        lists: lists,
+        listsLoading: listsLoading,
+        newListName: newListName,
+        joinCode: joinCode,
+        creatingList: creatingList,
+        joiningList: joiningList,
+        handleCreateList: handleCreateList,
+        handleJoinList: handleJoinList,
+        handleLogout: handleLogout,
+
+        // Detail
+        currentList: currentList,
+        items: items,
+        newItemName: newItemName,
+        newItemQty: newItemQty,
+        itemNameInput: itemNameInput,
+        uncheckedItems: uncheckedItems,
+        checkedItems: checkedItems,
+        checkedCount: checkedCount,
+        progressPct: progressPct,
+        openList: openList,
+        goBackToLists: goBackToLists,
+        handleAddItem: handleAddItem,
+        toggleItem: toggleItem,
+        deleteItem: deleteItem,
+        handleDeleteList: handleDeleteList,
+
+        // Share modal
+        shareModalVisible: shareModalVisible,
+        shareCodeDisplay: shareCodeDisplay,
+        copyFeedback: copyFeedback,
+        hasNativeShare: hasNativeShare,
+        openShareModal: openShareModal,
+        closeShareModal: closeShareModal,
+        copyShareCode: copyShareCode,
+        nativeShare: nativeShare
+      };
+    }
+  });
+
+  app.mount('#app');
+})();
+</script>
+
+</body>
+</html>
