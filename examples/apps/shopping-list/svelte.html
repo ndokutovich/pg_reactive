@@ -711,6 +711,7 @@
     "CREATE TABLE IF NOT EXISTS shopping_lists (\n  id serial PRIMARY KEY,\n  name text NOT NULL,\n  owner_id uuid NOT NULL,\n  share_code text UNIQUE DEFAULT substr(md5(random()::text), 1, 6),\n  created_at timestamptz DEFAULT now()\n)",
     "CREATE TABLE IF NOT EXISTS list_members (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  user_id uuid NOT NULL,\n  role text DEFAULT 'member',\n  joined_at timestamptz DEFAULT now(),\n  UNIQUE(list_id, user_id)\n)",
     "CREATE TABLE IF NOT EXISTS shopping_items (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  name text NOT NULL,\n  quantity text DEFAULT '1',\n  checked boolean DEFAULT false,\n  added_by uuid,\n  created_at timestamptz DEFAULT now()\n)",
+    `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF; END $$`,
     "GRANT ALL ON shopping_lists TO authenticated",
     "GRANT USAGE, SELECT ON SEQUENCE shopping_lists_id_seq TO authenticated",
     "GRANT ALL ON list_members TO authenticated",
