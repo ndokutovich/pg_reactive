@@ -23,6 +23,7 @@ export const MIGRATION_SQL = [
   added_by uuid,
   created_at timestamptz DEFAULT now()
 )`,
+  `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF; END $$`,
   'GRANT ALL ON shopping_lists TO authenticated',
   'GRANT USAGE, SELECT ON SEQUENCE shopping_lists_id_seq TO authenticated',
   'GRANT ALL ON list_members TO authenticated',
