@@ -9,6 +9,8 @@
 <meta name="theme-color" content="#d97706">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="config.js"></script>
 <style>
   /* -- Variables -- */
   :root {
@@ -349,7 +351,7 @@
         <button class="btn btn-primary btn-full" :disabled="setupRunning" @click="runSetup">
           {{ setupBtnText }}
         </button>
-        <button class="btn btn-ghost btn-full setup-skip" @click="screen = 'auth'">Skip (already set up)</button>
+        <button class="btn btn-ghost btn-full setup-skip" @click="skipSetup">Skip (already set up)</button>
         <div v-if="setupLog.length > 0" class="setup-log" ref="setupLogEl">
           <div v-for="(entry, i) in setupLog" :key="i" :class="entry.cls">{{ entry.text }}</div>
         </div>
@@ -519,10 +521,11 @@
 (function() {
   'use strict';
 
-  var _m = location.pathname.match(/^(.*?)\/apps\//);
-  var API_BASE = location.origin + (_m ? _m[1] : '');
-  var ANON_KEY = 'anon-key-12345';
+  var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
+  var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
+  var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
   var POLL_INTERVAL = 2000;
+  var SESSION_KEY = 'wtb-session';
 
   var MIGRATION_SQL = [
     "CREATE TABLE IF NOT EXISTS shopping_lists (\n  id serial PRIMARY KEY,\n  name text NOT NULL,\n  owner_id uuid NOT NULL,\n  share_code text UNIQUE DEFAULT substr(md5(random()::text), 1, 6),\n  created_at timestamptz DEFAULT now()\n)",
@@ -553,7 +556,11 @@
     "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
     "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
     "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated"
+    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.subscribe_list_items(p_list_id integer) RETURNS jsonb AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; qid text := 'items-' || p_list_id::text; BEGIN IF NOT EXISTS (SELECT 1 FROM list_members WHERE list_id = p_list_id AND user_id = uid) THEN RAISE EXCEPTION 'not a member of this list'; END IF; RETURN pgr.subscribe(qid, 'SELECT id, list_id, name, quantity, checked, added_by, created_at FROM shopping_items WHERE list_id = ' || p_list_id || ' ORDER BY checked, created_at DESC'); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.subscribe_list_items(integer) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.unsubscribe_list_items(p_list_id integer) RETURNS boolean AS $$ SELECT pgr.unsubscribe('items-' || p_list_id::text) $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.unsubscribe_list_items(integer) TO authenticated"
   ];
 
   // ---- Utilities ----
@@ -579,11 +586,25 @@
     }).then(function(r) { return r.json(); });
   }
 
-  function apiRest(method, path, body, accessToken) {
+  // Callback for Vue to sync its refs after token refresh
+  var _onTokenRefresh = null;
+
+  function apiRest(method, path, body, accessToken, _retry) {
     var opts = { method: method, headers: authHeaders(accessToken) };
     if (body !== undefined) opts.body = JSON.stringify(body);
     return fetch(API_BASE + '/rest/v1/' + path, opts).then(function(res) {
       if (res.status === 204) return null;
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function(data) {
+          if (_onTokenRefresh) _onTokenRefresh(data);
+          return apiRest(method, path, body, data.access_token, true);
+        }).catch(function() {
+          clearSession();
+          if (_onTokenRefresh) _onTokenRefresh(null);
+          location.hash = '#/auth';
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(function(data) {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -591,17 +612,65 @@
     });
   }
 
-  function apiRpc(fn, params, accessToken) {
+  function apiRpc(fn, params, accessToken, _retry) {
     return fetch(API_BASE + '/rest/v1/rpc/' + fn, {
       method: 'POST',
       headers: authHeaders(accessToken),
       body: JSON.stringify(params || {})
     }).then(function(res) {
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function(data) {
+          if (_onTokenRefresh) _onTokenRefresh(data);
+          return apiRpc(fn, params, data.access_token, true);
+        }).catch(function() {
+          clearSession();
+          if (_onTokenRefresh) _onTokenRefresh(null);
+          location.hash = '#/auth';
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(function(data) {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
       });
     });
+  }
+
+  // ---- Session persistence ----
+  function saveSession(data) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+
+  function loadSession() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+  }
+
+  function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+  }
+
+  function tryRefresh() {
+    var session = loadSession();
+    if (!session || !session.refresh_token) return Promise.reject('no refresh token');
+    return fetch(API_BASE + '/auth/v1/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: session.refresh_token })
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || 'refresh failed');
+        saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user || session.user });
+        return data;
+      });
+    });
+  }
+
+  function isTokenExpiringSoon() {
+    var session = loadSession();
+    if (!session) return true;
+    var claims = parseJwt(session.access_token);
+    if (!claims || !claims.exp) return false;
+    return (claims.exp - Math.floor(Date.now() / 1000)) < 300;
   }
 
   // ---- Notification helpers ----
@@ -646,8 +715,8 @@
 
   var app = Vue.createApp({
     setup: function() {
-      // ---- Screen routing ----
-      var screen = ref('setup');
+      // ---- Screen routing (router sets this in onMounted) ----
+      var screen = ref('');
 
       // ---- Toast system ----
       var toasts = ref([]);
@@ -690,7 +759,7 @@
               appendLog('\nSetup complete! Proceeding to sign in...', 'ok');
               appendLog('NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
               setupBtnText.value = 'Done!';
-              setTimeout(function() { screen.value = 'auth'; }, 1200);
+              setTimeout(function() { location.hash = '#/auth'; }, 1200);
             } else {
               appendLog('\nSetup finished with errors. You may retry.', 'error');
               setupRunning.value = false;
@@ -727,6 +796,13 @@
         runNext();
       }
 
+      // ---- WebSocket ref ----
+      var currentWs = ref(null);
+
+      function skipSetup() {
+        location.hash = '#/auth';
+      }
+
       // ---- Auth screen ----
       var isSignUp = ref(true);
       var authEmail = ref('');
@@ -735,6 +811,17 @@
       var authLoading = ref(false);
       var accessToken = ref(null);
       var currentUser = ref(null);
+
+      // Sync Vue refs when token is refreshed by outer 401 interceptor
+      _onTokenRefresh = function(data) {
+        if (data) {
+          accessToken.value = data.access_token;
+          if (data.user) currentUser.value = data.user;
+        } else {
+          accessToken.value = null;
+          currentUser.value = null;
+        }
+      };
 
       function toggleAuthMode() {
         isSignUp.value = !isSignUp.value;
@@ -768,6 +855,7 @@
         .then(function(data) {
           accessToken.value = data.access_token;
           currentUser.value = data.user;
+          saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
           enterLists();
         })
         .catch(function(err) {
@@ -787,9 +875,7 @@
       var joiningList = ref(false);
 
       function enterLists() {
-        screen.value = 'lists';
-        requestNotificationPermission();
-        loadLists();
+        location.hash = '#/lists';
       }
 
       function loadLists() {
@@ -865,18 +951,72 @@
 
       function openList(list) {
         currentList.value = list;
+        location.hash = '#/list/' + list.id;
+      }
+
+      function openListDirect(list) {
+        currentList.value = list;
         screen.value = 'detail';
         knownItemIds.clear();
+        items.value = [];
         loadItems();
-        startPolling();
+        connectLiveQuery(list.id);
+      }
+
+      function connectLiveQuery(listId) {
+        apiRpc('subscribe_list_items', { p_list_id: listId }, accessToken.value).then(function() {
+          var wsUrl = WS_BASE + '/ws/items-' + listId + '?token=' + encodeURIComponent(accessToken.value);
+          var ws = new WebSocket(wsUrl);
+          currentWs.value = ws;
+
+          ws.onmessage = function(e) {
+            var msg;
+            try { msg = JSON.parse(e.data); } catch (ex) { return; }
+
+            if (msg.type === 'subscribed') return;
+            if (msg.type === 'overflow') { loadItems(); return; }
+
+            var changed = false;
+            if (msg.inserted && msg.inserted.length) {
+              msg.inserted.forEach(function(row) {
+                var idx = items.value.findIndex(function(i) { return i.id === row.id; });
+                if (idx >= 0) {
+                  var old = items.value[idx];
+                  if (old.checked !== row.checked) detectItemChange(row);
+                  items.value[idx] = row;
+                } else {
+                  detectNewItem(row);
+                  items.value.push(row);
+                }
+              });
+              changed = true;
+            }
+            if (msg.deleted && msg.deleted.length) {
+              var ids = new Set(msg.deleted.map(function(r) { return r.id; }));
+              items.value = items.value.filter(function(i) { return !ids.has(i.id); });
+              changed = true;
+            }
+            // Vue reactivity handles re-render automatically
+          };
+
+          ws.onerror = function() {
+            console.warn('WebSocket error, falling back to polling');
+            startPolling();
+          };
+
+          ws.onclose = function() { currentWs.value = null; };
+        }).catch(function(err) {
+          console.warn('Live query unavailable, falling back to polling:', err.message || err);
+          startPolling();
+        });
       }
 
       function goBackToLists() {
+        if (currentWs.value) { currentWs.value.close(); currentWs.value = null; }
         stopPolling();
         currentList.value = null;
         items.value = [];
-        screen.value = 'lists';
-        loadLists();
+        location.hash = '#/lists';
       }
 
       function loadItems() {
@@ -898,25 +1038,32 @@
           newItems.forEach(function(it) { knownItemIds.add(it.id); });
           return;
         }
+        newItems.forEach(function(it) {
+          if (!knownItemIds.has(it.id)) { detectNewItem(it); return; }
+          var old = items.value.find(function(o) { return o.id === it.id; });
+          if (old && old.checked !== it.checked) detectItemChange(it);
+        });
+      }
 
+      function detectNewItem(row) {
+        if (suppressNotifications.value || knownItemIds.has(row.id)) return;
+        knownItemIds.add(row.id);
+        if (knownItemIds.size <= 1) return; // first load -- don't notify
         var claims = parseJwt(accessToken.value);
         var myUserId = claims ? claims.sub : null;
+        if (row.added_by !== myUserId) {
+          showNotification('Item added', row.name + (row.quantity !== '1' ? ' x' + row.quantity : ''), toast);
+        }
+      }
 
-        newItems.forEach(function(it) {
-          if (!knownItemIds.has(it.id)) {
-            knownItemIds.add(it.id);
-            if (it.added_by !== myUserId) {
-              showNotification('Item added', it.name + (it.quantity !== '1' ? ' x' + it.quantity : ''), toast);
-            }
-            return;
-          }
-          var old = items.value.find(function(o) { return o.id === it.id; });
-          if (old && old.checked !== it.checked && it.added_by !== myUserId) {
-            if (it.checked) {
-              showNotification('Item checked off', it.name, toast);
-            }
-          }
-        });
+      function detectItemChange(row) {
+        if (suppressNotifications.value) return;
+        knownItemIds.add(row.id);
+        var claims = parseJwt(accessToken.value);
+        var myUserId = claims ? claims.sub : null;
+        if (row.added_by !== myUserId && row.checked) {
+          showNotification('Item checked off', row.name, toast);
+        }
       }
 
       function handleAddItem() {
@@ -1054,22 +1201,101 @@
           method: 'POST', headers: authHeaders(accessToken.value)
         }).catch(function() {});
 
+        if (currentWs.value) { currentWs.value.close(); currentWs.value = null; }
         stopPolling();
+        clearSession();
         accessToken.value = null;
         currentUser.value = null;
         lists.value = [];
         currentList.value = null;
         items.value = [];
         knownItemIds.clear();
-        screen.value = 'auth';
+        location.hash = '#/auth';
+      }
+
+      // ---- Hash router ----
+      function routerDispatch() {
+        var hash = location.hash.replace(/^#\/?/, '') || '';
+        var parts = hash.split('/');
+        var s = parts[0];
+
+        if (s === 'list' && parts[1]) {
+          var listId = parseInt(parts[1], 10);
+          if (!accessToken.value) { location.hash = '#/auth'; return; }
+          var list = lists.value.find(function(l) { return l.id === listId; });
+          if (list) { openListDirect(list); return; }
+          // List not in memory -- load first
+          apiRpc('my_shopping_lists', {}, accessToken.value).then(function(data) {
+            lists.value = Array.isArray(data) ? data : [];
+            list = lists.value.find(function(l) { return l.id === listId; });
+            if (list) openListDirect(list); else location.hash = '#/lists';
+          }).catch(function() { location.hash = '#/lists'; });
+          return;
+        }
+        if (s === 'lists') {
+          if (!accessToken.value) { location.hash = '#/auth'; return; }
+          screen.value = 'lists';
+          requestNotificationPermission();
+          loadLists();
+          return;
+        }
+        if (s === 'auth') { screen.value = 'auth'; return; }
+        if (s === 'setup') { screen.value = 'setup'; return; }
+        // Default: check session
+        if (accessToken.value) { location.hash = '#/lists'; }
+        else { location.hash = '#/setup'; }
       }
 
       // ---- Lifecycle ----
       onMounted(function() {
         registerServiceWorker();
+
+        // Restore session
+        var session = loadSession();
+        if (session && session.access_token) {
+          accessToken.value = session.access_token;
+          currentUser.value = session.user;
+          if (isTokenExpiringSoon()) {
+            tryRefresh().then(function(data) {
+              accessToken.value = data.access_token;
+              currentUser.value = data.user || session.user;
+              routerDispatch();
+            }).catch(function() {
+              clearSession();
+              accessToken.value = null;
+              currentUser.value = null;
+              location.hash = '#/auth';
+            });
+          } else {
+            routerDispatch();
+          }
+        } else {
+          routerDispatch();
+        }
+
+        window.addEventListener('hashchange', routerDispatch);
+
+        // Re-check token on tab focus
+        document.addEventListener('visibilitychange', function() {
+          if (!document.hidden && accessToken.value) {
+            if (isTokenExpiringSoon()) {
+              tryRefresh().then(function(data) {
+                accessToken.value = data.access_token;
+              }).catch(function() {
+                clearSession();
+                accessToken.value = null;
+                currentUser.value = null;
+                location.hash = '#/auth';
+              });
+            }
+            // Re-sync items if on detail screen
+            if (currentList.value) loadItems();
+          }
+        });
       });
 
       onUnmounted(function() {
+        if (currentWs.value) { currentWs.value.close(); currentWs.value = null; }
         stopPolling();
       });
 
@@ -1087,6 +1313,7 @@
         setupBtnText: setupBtnText,
         setupLogEl: setupLogEl,
         runSetup: runSetup,
+        skipSetup: skipSetup,
 
         // Auth
         isSignUp: isSignUp,

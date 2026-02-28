@@ -9,6 +9,8 @@
 <meta name="theme-color" content="#d97706">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="config.js"></script>
 <style>
   /* ── Variables ── */
   :root {
@@ -341,7 +343,7 @@
 <div class="toast-area" id="toasts"></div>
 
 <!-- ═══════ SETUP SCREEN ═══════ -->
-<div id="screen-setup" class="screen active">
+<div id="screen-setup" class="screen">
   <div class="setup-hero card">
     <div class="card-body">
       <div class="setup-icon">&#x1F6D2;</div>
@@ -472,11 +474,11 @@
   // ═══════════════════════════════════════════════════════════════
   // CONFIG
   // ═══════════════════════════════════════════════════════════════
-  // Detect base path from URL: /pg-reactive/apps/shopping-list/ → /pg-reactive
-  var _m = location.pathname.match(/^(.*?)\/apps\//);
-  var API_BASE = location.origin + (_m ? _m[1] : '');
-  var ANON_KEY = 'anon-key-12345';
+  var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
+  var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
+  var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
   var POLL_INTERVAL = 2000;
+  var SESSION_KEY = 'wtb-session';
 
   // ═══════════════════════════════════════════════════════════════
   // STATE
@@ -488,6 +490,7 @@
   var currentList = null;
   var items = [];
   var pollTimer = null;
+  var currentWs = null;
   var suppressNotifications = false;
   var knownItemIds = new Set();
 
@@ -515,6 +518,91 @@
     for (var i = 0; i < screens.length; i++) screens[i].classList.remove('active');
     $('screen-' + name).classList.add('active');
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SESSION PERSISTENCE
+  // ═══════════════════════════════════════════════════════════════
+  function saveSession(data) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+    accessToken = data.access_token;
+    currentUser = data.user;
+  }
+
+  function loadSession() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+  }
+
+  function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+    accessToken = null;
+    currentUser = null;
+  }
+
+  function tryRefresh() {
+    var session = loadSession();
+    if (!session || !session.refresh_token) return Promise.reject('no refresh token');
+    return fetch(API_BASE + '/auth/v1/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: session.refresh_token })
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || 'refresh failed');
+        saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user || session.user });
+        return data;
+      });
+    });
+  }
+
+  function isTokenExpiringSoon() {
+    var session = loadSession();
+    if (!session) return true;
+    var claims = parseJwt(session.access_token);
+    if (!claims || !claims.exp) return false;
+    return (claims.exp - Math.floor(Date.now() / 1000)) < 300;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // HASH ROUTER
+  // ═══════════════════════════════════════════════════════════════
+  var router = {
+    navigate: function(path) {
+      location.hash = '#/' + path;
+    },
+    dispatch: function() {
+      var hash = location.hash.replace(/^#\/?/, '') || '';
+      var parts = hash.split('/');
+      var screen = parts[0];
+
+      if (screen === 'list' && parts[1]) {
+        var listId = parseInt(parts[1], 10);
+        if (!accessToken) { router.navigate('auth'); return; }
+        var list = lists.find(function(l) { return l.id === listId; });
+        if (list) { openListDirect(list); return; }
+        // List not in memory — load first
+        apiRpc('my_shopping_lists').then(function(data) {
+          lists = Array.isArray(data) ? data : [];
+          list = lists.find(function(l) { return l.id === listId; });
+          if (list) openListDirect(list); else router.navigate('lists');
+        }).catch(function() { router.navigate('lists'); });
+        return;
+      }
+      if (screen === 'lists') {
+        if (!accessToken) { router.navigate('auth'); return; }
+        showScreen('lists');
+        $('lists-email').textContent = currentUser ? currentUser.email : '';
+        loadLists();
+        return;
+      }
+      if (screen === 'auth') { showScreen('auth'); return; }
+      if (screen === 'setup') { showScreen('setup'); return; }
+      // Default: check session
+      if (accessToken) { router.navigate('lists'); }
+      else { router.navigate('setup'); }
+    }
+  };
+
+  window.addEventListener('hashchange', function() { router.dispatch(); });
 
   function showAlert(id, msg, type) {
     var el = $(id);
@@ -557,11 +645,19 @@
     }).then(function(r) { return r.json(); });
   }
 
-  function apiRest(method, path, body) {
+  function apiRest(method, path, body, _retry) {
     var opts = { method: method, headers: authHeaders() };
     if (body !== undefined) opts.body = JSON.stringify(body);
     return fetch(API_BASE + '/rest/v1/' + path, opts).then(function(res) {
       if (res.status === 204) return null;
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function() {
+          return apiRest(method, path, body, true);
+        }).catch(function() {
+          clearSession(); router.navigate('auth');
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(function(data) {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -569,12 +665,20 @@
     });
   }
 
-  function apiRpc(fn, params) {
+  function apiRpc(fn, params, _retry) {
     return fetch(API_BASE + '/rest/v1/rpc/' + fn, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(params || {})
     }).then(function(res) {
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function() {
+          return apiRpc(fn, params, true);
+        }).catch(function() {
+          clearSession(); router.navigate('auth');
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(function(data) {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -614,7 +718,11 @@
     "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
     "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
     "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated"
+    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.subscribe_list_items(p_list_id integer) RETURNS jsonb AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; qid text := 'items-' || p_list_id::text; BEGIN IF NOT EXISTS (SELECT 1 FROM list_members WHERE list_id = p_list_id AND user_id = uid) THEN RAISE EXCEPTION 'not a member of this list'; END IF; RETURN pgr.subscribe(qid, 'SELECT id, list_id, name, quantity, checked, added_by, created_at FROM shopping_items WHERE list_id = ' || p_list_id || ' ORDER BY checked, created_at DESC'); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.subscribe_list_items(integer) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.unsubscribe_list_items(p_list_id integer) RETURNS boolean AS $$ SELECT pgr.unsubscribe('items-' || p_list_id::text) $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.unsubscribe_list_items(integer) TO authenticated"
   ];
 
   function runSetup() {
@@ -634,7 +742,7 @@
           appendLog(log, '\nSetup complete! Proceeding to sign in...', 'ok');
           appendLog(log, 'NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
           btn.textContent = 'Done!';
-          setTimeout(function() { showScreen('auth'); }, 1200);
+          setTimeout(function() { router.navigate('auth'); }, 1200);
         } else {
           appendLog(log, '\nSetup finished with errors. You may retry.', 'error');
           btn.disabled = false;
@@ -718,8 +826,7 @@
       });
     })
     .then(function(data) {
-      accessToken = data.access_token;
-      currentUser = data.user;
+      saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
       enterLists();
     })
     .catch(function(err) {
@@ -735,10 +842,8 @@
   // LISTS SCREEN
   // ═══════════════════════════════════════════════════════════════
   function enterLists() {
-    showScreen('lists');
-    $('lists-email').textContent = currentUser.email;
     requestNotificationPermission();
-    loadLists();
+    router.navigate('lists');
   }
 
   function loadLists() {
@@ -864,20 +969,76 @@
   // ═══════════════════════════════════════════════════════════════
   function openList(list) {
     currentList = list;
+    router.navigate('list/' + list.id);
+  }
+
+  function openListDirect(list) {
+    currentList = list;
     $('detail-title').textContent = list.name;
     $('share-code-display').textContent = (list.share_code || '').toUpperCase();
     showScreen('detail');
     knownItemIds.clear();
+    items = [];
     loadItems();
-    startPolling();
+    connectLiveQuery(list.id);
+  }
+
+  function connectLiveQuery(listId) {
+    // Try to subscribe via SECURITY DEFINER RPC
+    apiRpc('subscribe_list_items', { p_list_id: listId }).then(function() {
+      var wsUrl = WS_BASE + '/ws/items-' + listId + '?token=' + encodeURIComponent(accessToken);
+      currentWs = new WebSocket(wsUrl);
+
+      currentWs.onmessage = function(e) {
+        var msg;
+        try { msg = JSON.parse(e.data); } catch (ex) { return; }
+
+        if (msg.type === 'subscribed') return;
+        if (msg.type === 'overflow') { loadItems(); return; }
+
+        // Apply delta
+        var changed = false;
+        if (msg.inserted && msg.inserted.length) {
+          msg.inserted.forEach(function(row) {
+            var idx = items.findIndex(function(i) { return i.id === row.id; });
+            if (idx >= 0) {
+              var old = items[idx];
+              if (old.checked !== row.checked) detectItemChange(row);
+              items[idx] = row;
+            } else {
+              detectNewItem(row);
+              items.push(row);
+            }
+          });
+          changed = true;
+        }
+        if (msg.deleted && msg.deleted.length) {
+          var deletedIds = new Set(msg.deleted.map(function(r) { return r.id; }));
+          items = items.filter(function(i) { return !deletedIds.has(i.id); });
+          changed = true;
+        }
+        if (changed) renderItems();
+      };
+
+      currentWs.onerror = function() {
+        console.warn('WebSocket error, falling back to polling');
+        startPolling();
+      };
+
+      currentWs.onclose = function() { currentWs = null; };
+    }).catch(function(err) {
+      // Live queries unavailable — fall back to polling
+      console.warn('Live query unavailable, falling back to polling:', err.message || err);
+      startPolling();
+    });
   }
 
   function goBackToLists() {
+    if (currentWs) { currentWs.close(); currentWs = null; }
     stopPolling();
     currentList = null;
     items = [];
-    showScreen('lists');
-    loadLists();
+    router.navigate('lists');
   }
 
   function loadItems() {
@@ -900,25 +1061,32 @@
       newItems.forEach(function(it) { knownItemIds.add(it.id); });
       return;
     }
+    newItems.forEach(function(it) {
+      if (!knownItemIds.has(it.id)) { detectNewItem(it); return; }
+      var old = items.find(function(o) { return o.id === it.id; });
+      if (old && old.checked !== it.checked) detectItemChange(it);
+    });
+  }
 
+  function detectNewItem(row) {
+    if (suppressNotifications || knownItemIds.has(row.id)) return;
+    knownItemIds.add(row.id);
+    if (knownItemIds.size <= 1) return; // first load — don't notify
     var claims = parseJwt(accessToken);
     var myUserId = claims ? claims.sub : null;
+    if (row.added_by !== myUserId) {
+      showNotification('Item added', row.name + (row.quantity !== '1' ? ' x' + row.quantity : ''));
+    }
+  }
 
-    newItems.forEach(function(it) {
-      if (!knownItemIds.has(it.id)) {
-        knownItemIds.add(it.id);
-        if (it.added_by !== myUserId) {
-          showNotification('Item added', it.name + (it.quantity !== '1' ? ' x' + it.quantity : ''));
-        }
-        return;
-      }
-      var old = items.find(function(o) { return o.id === it.id; });
-      if (old && old.checked !== it.checked && it.added_by !== myUserId) {
-        if (it.checked) {
-          showNotification('Item checked off', it.name);
-        }
-      }
-    });
+  function detectItemChange(row) {
+    if (suppressNotifications) return;
+    knownItemIds.add(row.id);
+    var claims = parseJwt(accessToken);
+    var myUserId = claims ? claims.sub : null;
+    if (row.added_by !== myUserId && row.checked) {
+      showNotification('Item checked off', row.name);
+    }
   }
 
   function renderItems() {
@@ -1162,14 +1330,14 @@
       method: 'POST', headers: authHeaders()
     }).catch(function() {});
 
+    if (currentWs) { currentWs.close(); currentWs = null; }
     stopPolling();
-    accessToken = null;
-    currentUser = null;
+    clearSession();
     lists = [];
     currentList = null;
     items = [];
     knownItemIds.clear();
-    showScreen('auth');
+    router.navigate('auth');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1191,7 +1359,7 @@
 
     // Setup
     $('btn-setup').addEventListener('click', runSetup);
-    $('btn-skip-setup').addEventListener('click', function() { showScreen('auth'); });
+    $('btn-skip-setup').addEventListener('click', function() { router.navigate('auth'); });
 
     // Auth
     $('auth-form').addEventListener('submit', handleAuth);
@@ -1214,6 +1382,38 @@
     $('btn-close-modal').addEventListener('click', closeShareModal);
     $('modal-share').addEventListener('click', function(e) {
       if (e.target === $('modal-share')) closeShareModal();
+    });
+
+    // Restore session
+    var session = loadSession();
+    if (session && session.access_token) {
+      accessToken = session.access_token;
+      currentUser = session.user;
+      if (isTokenExpiringSoon()) {
+        tryRefresh().then(function() {
+          router.dispatch();
+        }).catch(function() {
+          clearSession();
+          router.navigate('auth');
+        });
+      } else {
+        router.dispatch();
+      }
+    } else {
+      router.dispatch();
+    }
+
+    // Re-check token on tab focus
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && accessToken) {
+        if (isTokenExpiringSoon()) {
+          tryRefresh().catch(function() {
+            clearSession(); router.navigate('auth');
+          });
+        }
+        // Re-sync items if on detail screen
+        if (currentList) loadItems();
+      }
     });
   });
 

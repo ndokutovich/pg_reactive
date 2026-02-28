@@ -1,12 +1,19 @@
 // What to Buy — Service Worker
 // Provides offline caching for the PWA shell
 
-var CACHE_NAME = 'wtb-v3';
+var CACHE_NAME = 'wtb-v4';
 var SHELL_FILES = [
   './',
   './index.html',
+  './vue.html',
+  './react.html',
+  './svelte.html',
+  './angular.html',
+  './config.js',
   './manifest.json',
-  './icon.svg'
+  './icon.svg',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 // Install: cache the app shell

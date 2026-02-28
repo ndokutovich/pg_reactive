@@ -9,6 +9,8 @@
 <meta name="theme-color" content="#d97706">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="config.js"></script>
 <style>
   /* ── Variables ── */
   :root {
@@ -348,10 +350,11 @@
   // ═══════════════════════════════════════════════════════════════
   // CONFIG
   // ═══════════════════════════════════════════════════════════════
-  const _m = location.pathname.match(/^(.*?)\/apps\//);
-  const API_BASE = location.origin + (_m ? _m[1] : '');
-  const ANON_KEY = 'anon-key-12345';
+  var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
+  var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
+  var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
   const POLL_INTERVAL = 2000;
+  var SESSION_KEY = 'wtb-session';
 
   // ═══════════════════════════════════════════════════════════════
   // MIGRATION SQL
@@ -385,7 +388,11 @@
     "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
     "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
     "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated"
+    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.subscribe_list_items(p_list_id integer) RETURNS jsonb AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; qid text := 'items-' || p_list_id::text; BEGIN IF NOT EXISTS (SELECT 1 FROM list_members WHERE list_id = p_list_id AND user_id = uid) THEN RAISE EXCEPTION 'not a member of this list'; END IF; RETURN pgr.subscribe(qid, 'SELECT id, list_id, name, quantity, checked, added_by, created_at FROM shopping_items WHERE list_id = ' || p_list_id || ' ORDER BY checked, created_at DESC'); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.subscribe_list_items(integer) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.unsubscribe_list_items(p_list_id integer) RETURNS boolean AS $$ SELECT pgr.unsubscribe('items-' || p_list_id::text) $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.unsubscribe_list_items(integer) TO authenticated"
   ];
 
   // ═══════════════════════════════════════════════════════════════
@@ -396,6 +403,41 @@
       const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
       return JSON.parse(atob(b64 + '=='.slice(0, (4 - b64.length % 4) % 4)));
     } catch (e) { return null; }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SESSION PERSISTENCE
+  // ═══════════════════════════════════════════════════════════════
+  function saveSession(data) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+  function loadSession() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+  }
+  function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+  }
+  function tryRefresh() {
+    var session = loadSession();
+    if (!session || !session.refresh_token) return Promise.reject('no refresh token');
+    return fetch(API_BASE + '/auth/v1/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: session.refresh_token })
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || 'refresh failed');
+        saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user || session.user });
+        return data;
+      });
+    });
+  }
+  function isTokenExpiringSoon() {
+    var session = loadSession();
+    if (!session) return true;
+    var claims = parseJwt(session.access_token);
+    if (!claims || !claims.exp) return false;
+    return (claims.exp - Math.floor(Date.now() / 1000)) < 300;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -415,11 +457,20 @@
     }).then(r => r.json());
   }
 
-  function apiRest(method, path, body, token) {
+  function apiRest(method, path, body, token, _retry) {
     const opts = { method, headers: authHeaders(token) };
     if (body !== undefined) opts.body = JSON.stringify(body);
     return fetch(API_BASE + '/rest/v1/' + path, opts).then(res => {
       if (res.status === 204) return null;
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(data => {
+          return apiRest(method, path, body, data.access_token, true);
+        }).catch(() => {
+          clearSession();
+          location.hash = '#/auth';
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(data => {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -427,12 +478,21 @@
     });
   }
 
-  function apiRpc(fn, params, token) {
+  function apiRpc(fn, params, token, _retry) {
     return fetch(API_BASE + '/rest/v1/rpc/' + fn, {
       method: 'POST',
       headers: authHeaders(token),
       body: JSON.stringify(params || {})
     }).then(res => {
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(data => {
+          return apiRpc(fn, params, data.access_token, true);
+        }).catch(() => {
+          clearSession();
+          location.hash = '#/auth';
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(data => {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -667,6 +727,7 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || data.message || 'Auth failed');
+        saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
         onAuth(data.access_token, data.user);
       } catch (err) {
         setError(err.message);
@@ -988,11 +1049,33 @@
     const knownItemIdsRef = useRef(new Set());
     const suppressRef = useRef(false);
     const itemsRef = useRef([]);
+    const wsRef = useRef(null);
 
     // Keep itemsRef in sync with state
     useEffect(() => {
       itemsRef.current = items;
     }, [items]);
+
+    const detectNewItem = useCallback((row) => {
+      if (suppressRef.current || knownItemIdsRef.current.has(row.id)) return;
+      knownItemIdsRef.current.add(row.id);
+      if (knownItemIdsRef.current.size <= 1) return; // first load
+      const claims = parseJwt(accessToken);
+      const myUserId = claims ? claims.sub : null;
+      if (row.added_by !== myUserId) {
+        showNotification('Item added', row.name + (row.quantity !== '1' ? ' x' + row.quantity : ''), addToast);
+      }
+    }, [accessToken, addToast]);
+
+    const detectItemChange = useCallback((row) => {
+      if (suppressRef.current) return;
+      knownItemIdsRef.current.add(row.id);
+      const claims = parseJwt(accessToken);
+      const myUserId = claims ? claims.sub : null;
+      if (row.added_by !== myUserId && row.checked) {
+        showNotification('Item checked off', row.name, addToast);
+      }
+    }, [accessToken, addToast]);
 
     const detectChanges = useCallback((newItems) => {
       if (suppressRef.current || knownItemIdsRef.current.size === 0) {
@@ -1000,26 +1083,19 @@
         return;
       }
 
-      const claims = parseJwt(accessToken);
-      const myUserId = claims ? claims.sub : null;
       const oldItems = itemsRef.current;
 
       newItems.forEach(it => {
         if (!knownItemIdsRef.current.has(it.id)) {
-          knownItemIdsRef.current.add(it.id);
-          if (it.added_by !== myUserId) {
-            showNotification('Item added', it.name + (it.quantity !== '1' ? ' x' + it.quantity : ''), addToast);
-          }
+          detectNewItem(it);
           return;
         }
         const old = oldItems.find(o => o.id === it.id);
-        if (old && old.checked !== it.checked && it.added_by !== myUserId) {
-          if (it.checked) {
-            showNotification('Item checked off', it.name, addToast);
-          }
+        if (old && old.checked !== it.checked) {
+          detectItemChange(it);
         }
       });
-    }, [accessToken, addToast]);
+    }, [detectNewItem, detectItemChange]);
 
     const loadItems = useCallback(() => {
       if (!list) return;
@@ -1034,14 +1110,77 @@
         });
     }, [list, accessToken, detectChanges]);
 
-    // Initial load
+    // Initial load + live query WebSocket
     useEffect(() => {
       knownItemIdsRef.current.clear();
       loadItems();
-    }, [loadItems]);
 
-    // Polling
+      // Try to connect live query
+      let ws = null;
+      let fallbackTimer = null;
+
+      apiRpc('subscribe_list_items', { p_list_id: list.id }, accessToken).then(() => {
+        const wsUrl = WS_BASE + '/ws/items-' + list.id + '?token=' + encodeURIComponent(accessToken);
+        ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onmessage = function(e) {
+          let msg;
+          try { msg = JSON.parse(e.data); } catch (ex) { return; }
+
+          if (msg.type === 'subscribed') return;
+          if (msg.type === 'overflow') { loadItems(); return; }
+
+          // Apply delta
+          setItems(prev => {
+            let next = [...prev];
+            let changed = false;
+
+            if (msg.inserted && msg.inserted.length) {
+              msg.inserted.forEach(row => {
+                const idx = next.findIndex(i => i.id === row.id);
+                if (idx >= 0) {
+                  const old = next[idx];
+                  if (old.checked !== row.checked) detectItemChange(row);
+                  next[idx] = row;
+                } else {
+                  detectNewItem(row);
+                  next.push(row);
+                }
+              });
+              changed = true;
+            }
+            if (msg.deleted && msg.deleted.length) {
+              const deletedIds = new Set(msg.deleted.map(r => r.id));
+              next = next.filter(i => !deletedIds.has(i.id));
+              changed = true;
+            }
+            return changed ? next : prev;
+          });
+        };
+
+        ws.onerror = function() {
+          console.warn('WebSocket error, falling back to polling');
+          fallbackTimer = setInterval(() => { loadItems(); }, POLL_INTERVAL);
+        };
+
+        ws.onclose = function() {
+          wsRef.current = null;
+        };
+      }).catch(err => {
+        console.warn('Live query unavailable, falling back to polling:', err.message || err);
+        fallbackTimer = setInterval(() => { loadItems(); }, POLL_INTERVAL);
+      });
+
+      return () => {
+        if (ws) { ws.close(); wsRef.current = null; }
+        if (fallbackTimer) clearInterval(fallbackTimer);
+      };
+    }, [list.id]);
+
+    // Polling fallback only when no WS
     useEffect(() => {
+      if (wsRef.current) return;
       const timer = setInterval(() => { loadItems(); }, POLL_INTERVAL);
       return () => clearInterval(timer);
     }, [loadItems]);
@@ -1154,7 +1293,10 @@
     return (
       <div className="screen">
         <div className="detail-bar">
-          <button className="btn btn-icon btn-ghost" onClick={onBack} title="Back">
+          <button className="btn btn-icon btn-ghost" onClick={() => {
+            if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+            onBack();
+          }} title="Back">
             <BackIcon />
           </button>
           <h1>{list.name}</h1>
@@ -1246,36 +1388,139 @@
   // APP (ROOT COMPONENT)
   // ═══════════════════════════════════════════════════════════════
   function App() {
-    const [screen, setScreen] = useState('setup');
+    const [screen, setScreen] = useState('');
     const [accessToken, setAccessToken] = useState(null);
     const [user, setUser] = useState(null);
     const [currentList, setCurrentList] = useState(null);
+    const [listsCache, setListsCache] = useState([]);
     const { toasts, addToast } = useToasts();
+    const wsRef = React.useRef(null);
 
-    // Register service worker on mount
+    // Hash router dispatch
+    const dispatch = useCallback(() => {
+      const hash = location.hash.replace(/^#\/?/, '') || '';
+      const parts = hash.split('/');
+      const route = parts[0];
+
+      if (route === 'list' && parts[1]) {
+        const listId = parseInt(parts[1], 10);
+        const session = loadSession();
+        const token = session ? session.access_token : accessToken;
+        if (!token) { location.hash = '#/auth'; return; }
+
+        // Check listsCache first
+        const cached = listsCache.find(l => l.id === listId);
+        if (cached) {
+          setCurrentList(cached);
+          setScreen('detail');
+          return;
+        }
+
+        // Load lists then find
+        apiRpc('my_shopping_lists', {}, token).then(data => {
+          const allLists = Array.isArray(data) ? data : [];
+          setListsCache(allLists);
+          const found = allLists.find(l => l.id === listId);
+          if (found) {
+            setCurrentList(found);
+            setScreen('detail');
+          } else {
+            location.hash = '#/lists';
+          }
+        }).catch(() => { location.hash = '#/lists'; });
+        return;
+      }
+      if (route === 'lists') {
+        const session = loadSession();
+        const token = session ? session.access_token : accessToken;
+        if (!token) { location.hash = '#/auth'; return; }
+        setCurrentList(null);
+        setScreen('lists');
+        return;
+      }
+      if (route === 'auth') { setScreen('auth'); return; }
+      if (route === 'setup') { setScreen('setup'); return; }
+
+      // Default: check session
+      const session = loadSession();
+      if (session && session.access_token) {
+        location.hash = '#/lists';
+      } else {
+        location.hash = '#/setup';
+      }
+    }, [accessToken, listsCache]);
+
+    // Register service worker + restore session + listen to hash changes
     useEffect(() => {
       registerServiceWorker();
+
+      // Restore session from localStorage
+      const session = loadSession();
+      if (session && session.access_token) {
+        setAccessToken(session.access_token);
+        setUser(session.user);
+
+        if (isTokenExpiringSoon()) {
+          tryRefresh().then(data => {
+            setAccessToken(data.access_token);
+            setUser(data.user || session.user);
+            dispatch();
+          }).catch(() => {
+            clearSession();
+            location.hash = '#/auth';
+          });
+        } else {
+          dispatch();
+        }
+      } else {
+        dispatch();
+      }
+
+      const onHashChange = () => dispatch();
+      window.addEventListener('hashchange', onHashChange);
+      return () => window.removeEventListener('hashchange', onHashChange);
     }, []);
 
+    // Visibility handler for token refresh + item re-sync
+    useEffect(() => {
+      const handleVisibility = () => {
+        if (!document.hidden && accessToken) {
+          if (isTokenExpiringSoon()) {
+            tryRefresh().then(data => {
+              setAccessToken(data.access_token);
+            }).catch(() => {
+              clearSession();
+              location.hash = '#/auth';
+            });
+          }
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibility);
+      return () => document.removeEventListener('visibilitychange', handleVisibility);
+    }, [accessToken]);
+
     const handleSetupComplete = useCallback(() => {
-      setScreen('auth');
+      location.hash = '#/auth';
     }, []);
 
     const handleAuth = useCallback((token, userData) => {
       setAccessToken(token);
       setUser(userData);
-      setScreen('lists');
       requestNotificationPermission();
+      location.hash = '#/lists';
     }, []);
 
     const handleOpenList = useCallback((list) => {
-      setCurrentList(list);
-      setScreen('detail');
+      setListsCache(prev => {
+        const exists = prev.find(l => l.id === list.id);
+        return exists ? prev : [...prev, list];
+      });
+      location.hash = '#/list/' + list.id;
     }, []);
 
     const handleBackToLists = useCallback(() => {
-      setCurrentList(null);
-      setScreen('lists');
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      location.hash = '#/lists';
     }, []);
 
     const handleLogout = useCallback(() => {
@@ -1284,10 +1529,13 @@
           method: 'POST', headers: authHeaders(accessToken)
         }).catch(() => {});
       }
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      clearSession();
       setAccessToken(null);
       setUser(null);
       setCurrentList(null);
-      setScreen('auth');
+      setListsCache([]);
+      location.hash = '#/auth';
     }, [accessToken]);
 
     return (

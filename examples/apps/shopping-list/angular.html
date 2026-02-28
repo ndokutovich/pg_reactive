@@ -9,6 +9,8 @@
 <meta name="theme-color" content="#d97706">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="config.js"></script>
 <style>
   /* ── Variables ── */
   :root {
@@ -341,7 +343,7 @@
 <div class="toast-area" id="toasts"></div>
 
 <!-- ═══════ SETUP SCREEN ═══════ -->
-<div id="screen-setup" class="screen active">
+<div id="screen-setup" class="screen">
   <div class="setup-hero card">
     <div class="card-body">
       <div class="setup-icon">&#x1F6D2;</div>
@@ -614,16 +616,69 @@
   };
 
   // ═══════════════════════════════════════════════════════════════
+  // CONFIG
+  // ═══════════════════════════════════════════════════════════════
+  var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
+  var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
+  var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
+  var SESSION_KEY = 'wtb-session';
+
+  // ═══════════════════════════════════════════════════════════════
+  // UTILITIES
+  // ═══════════════════════════════════════════════════════════════
+  function parseJwt(token) {
+    try {
+      var b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(atob(b64 + '=='.slice(0, (4 - b64.length % 4) % 4)));
+    } catch (e) { return null; }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SESSION PERSISTENCE
+  // ═══════════════════════════════════════════════════════════════
+  function saveSessionData(data) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+
+  function loadSessionData() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+  }
+
+  function clearSessionData() {
+    localStorage.removeItem(SESSION_KEY);
+  }
+
+  function tryRefresh() {
+    var session = loadSessionData();
+    if (!session || !session.refresh_token) return Promise.reject('no refresh token');
+    return fetch(API_BASE + '/auth/v1/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: session.refresh_token })
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || 'refresh failed');
+        saveSessionData({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user || session.user });
+        return data;
+      });
+    });
+  }
+
+  function isTokenExpiringSoon() {
+    var session = loadSessionData();
+    if (!session) return true;
+    var claims = parseJwt(session.access_token);
+    if (!claims || !claims.exp) return false;
+    return (claims.exp - Math.floor(Date.now() / 1000)) < 300;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // SERVICES
   // ═══════════════════════════════════════════════════════════════
 
   // ── ApiService ──
   // Handles all HTTP communication with the pgStack backend.
   // Encapsulates REST, RPC, and raw SQL endpoints.
-
-  var _m = location.pathname.match(/^(.*?)\/apps\//);
-  var API_BASE = location.origin + (_m ? _m[1] : '');
-  var ANON_KEY = 'anon-key-12345';
 
   function ApiService(injector) {
     this._injector = injector;
@@ -645,11 +700,25 @@
     }).then(function(r) { return r.json(); });
   };
 
-  ApiService.prototype.rest = function(method, path, body) {
+  ApiService.prototype.rest = function(method, path, body, _retry) {
+    var self = this;
     var opts = { method: method, headers: this.getAuthHeaders() };
     if (body !== undefined) opts.body = JSON.stringify(body);
     return fetch(API_BASE + '/rest/v1/' + path, opts).then(function(res) {
       if (res.status === 204) return null;
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function(data) {
+          var authService = self._injector.get('AuthService');
+          authService._setSession(data);
+          return self.rest(method, path, body, true);
+        }).catch(function() {
+          var authService = self._injector.get('AuthService');
+          authService.logout();
+          var router = self._injector.get('RouterService');
+          router.navigate('auth');
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(function(data) {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -657,13 +726,27 @@
     });
   };
 
-  ApiService.prototype.rpc = function(fn, params) {
+  ApiService.prototype.rpc = function(fn, params, _retry) {
+    var self = this;
     var headers = this.getAuthHeaders();
     return fetch(API_BASE + '/rest/v1/rpc/' + fn, {
       method: 'POST',
       headers: headers,
       body: JSON.stringify(params || {})
     }).then(function(res) {
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function(data) {
+          var authService = self._injector.get('AuthService');
+          authService._setSession(data);
+          return self.rpc(fn, params, true);
+        }).catch(function() {
+          var authService = self._injector.get('AuthService');
+          authService.logout();
+          var router = self._injector.get('RouterService');
+          router.navigate('auth');
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(function(data) {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -700,22 +783,16 @@
     this.user$ = new BehaviorSubject(null);
     this.isAuthenticated$ = new BehaviorSubject(false);
     this._accessToken = null;
+    this.currentWs = null;
   }
 
   AuthService.prototype.getAccessToken = function() {
     return this._accessToken;
   };
 
-  AuthService.prototype.parseJwt = function(token) {
-    try {
-      var b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-      return JSON.parse(atob(b64 + '=='.slice(0, (4 - b64.length % 4) % 4)));
-    } catch (e) { return null; }
-  };
-
   AuthService.prototype.getUserId = function() {
     if (!this._accessToken) return null;
-    var claims = this.parseJwt(this._accessToken);
+    var claims = parseJwt(this._accessToken);
     return claims ? claims.sub : null;
   };
 
@@ -725,6 +802,7 @@
     return api.authPost('/auth/v1/signup', { email: email, password: password })
       .then(function(data) {
         self._setSession(data);
+        saveSessionData({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
         return data;
       });
   };
@@ -735,6 +813,7 @@
     return api.authPost('/auth/v1/token', { grant_type: 'password', email: email, password: password })
       .then(function(data) {
         self._setSession(data);
+        saveSessionData({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
         return data;
       });
   };
@@ -742,9 +821,11 @@
   AuthService.prototype.logout = function() {
     var api = this._injector.get('ApiService');
     api.authPostWithHeaders('/auth/v1/logout', this._injector.get('ApiService').getAuthHeaders());
+    if (this.currentWs) { this.currentWs.close(); this.currentWs = null; }
     this._accessToken = null;
     this.user$.next(null);
     this.isAuthenticated$.next(false);
+    clearSessionData();
   };
 
   AuthService.prototype._setSession = function(data) {
@@ -836,13 +917,79 @@
   };
 
   ListService.prototype.openList = function(list) {
+    location.hash = '#/list/' + list.id;
+  };
+
+  ListService.prototype.openListDirect = function(list) {
     this.currentList$.next(list);
     this._knownItemIds.clear();
+    this.items$.next([]);
     this.loadItems();
-    this.startPolling();
+    this.connectLiveQuery(list.id);
+  };
+
+  ListService.prototype.connectLiveQuery = function(listId) {
+    var self = this;
+    var authService = this._injector.get('AuthService');
+    var api = this._injector.get('ApiService');
+
+    api.rpc('subscribe_list_items', { p_list_id: listId }).then(function() {
+      var wsUrl = WS_BASE + '/ws/items-' + listId + '?token=' + encodeURIComponent(authService.getAccessToken());
+      var ws = new WebSocket(wsUrl);
+      authService.currentWs = ws;
+
+      ws.onmessage = function(e) {
+        var msg;
+        try { msg = JSON.parse(e.data); } catch (ex) { return; }
+
+        if (msg.type === 'subscribed') return;
+        if (msg.type === 'overflow') { self.loadItems(); return; }
+
+        var currentItems = self.items$.getValue();
+        var changed = false;
+
+        if (msg.inserted && msg.inserted.length) {
+          msg.inserted.forEach(function(row) {
+            var idx = -1;
+            for (var i = 0; i < currentItems.length; i++) {
+              if (currentItems[i].id === row.id) { idx = i; break; }
+            }
+            if (idx >= 0) {
+              var old = currentItems[idx];
+              if (old.checked !== row.checked) self._detectItemChange(row);
+              currentItems[idx] = row;
+            } else {
+              self._detectNewItem(row);
+              currentItems.push(row);
+            }
+          });
+          changed = true;
+        }
+        if (msg.deleted && msg.deleted.length) {
+          var deletedIds = new Set(msg.deleted.map(function(r) { return r.id; }));
+          currentItems = currentItems.filter(function(i) { return !deletedIds.has(i.id); });
+          changed = true;
+        }
+        if (changed) {
+          self.items$.next(currentItems);
+        }
+      };
+
+      ws.onerror = function() {
+        console.warn('WebSocket error, falling back to polling');
+        self.startPolling();
+      };
+
+      ws.onclose = function() { authService.currentWs = null; };
+    }).catch(function(err) {
+      console.warn('Live query unavailable, falling back to polling:', err.message || err);
+      self.startPolling();
+    });
   };
 
   ListService.prototype.closeList = function() {
+    var authService = this._injector.get('AuthService');
+    if (authService.currentWs) { authService.currentWs.close(); authService.currentWs = null; }
     this.stopPolling();
     this.currentList$.next(null);
     this.items$.next([]);
@@ -946,26 +1093,41 @@
       return;
     }
 
-    var authService = this._injector.get('AuthService');
-    var myUserId = authService.getUserId();
-    var notify = this._injector.get('NotificationService');
     var oldItems = this.items$.getValue();
 
     for (var j = 0; j < newItems.length; j++) {
       var it = newItems[j];
       if (!this._knownItemIds.has(it.id)) {
-        this._knownItemIds.add(it.id);
-        if (it.added_by !== myUserId) {
-          notify.showNotification('Item added', it.name + (it.quantity !== '1' ? ' x' + it.quantity : ''));
-        }
+        this._detectNewItem(it);
         continue;
       }
       var old = oldItems.find(function(o) { return o.id === it.id; });
-      if (old && old.checked !== it.checked && it.added_by !== myUserId) {
-        if (it.checked) {
-          notify.showNotification('Item checked off', it.name);
-        }
+      if (old && old.checked !== it.checked) {
+        this._detectItemChange(it);
       }
+    }
+  };
+
+  ListService.prototype._detectNewItem = function(row) {
+    if (this._suppressNotifications || this._knownItemIds.has(row.id)) return;
+    this._knownItemIds.add(row.id);
+    if (this._knownItemIds.size <= 1) return; // first load
+    var authService = this._injector.get('AuthService');
+    var myUserId = authService.getUserId();
+    if (row.added_by !== myUserId) {
+      var notify = this._injector.get('NotificationService');
+      notify.showNotification('Item added', row.name + (row.quantity !== '1' ? ' x' + row.quantity : ''));
+    }
+  };
+
+  ListService.prototype._detectItemChange = function(row) {
+    if (this._suppressNotifications) return;
+    this._knownItemIds.add(row.id);
+    var authService = this._injector.get('AuthService');
+    var myUserId = authService.getUserId();
+    if (row.added_by !== myUserId && row.checked) {
+      var notify = this._injector.get('NotificationService');
+      notify.showNotification('Item checked off', row.name);
     }
   };
 
@@ -980,19 +1142,69 @@
   };
 
   // ── RouterService ──
-  // Simple screen router, simulating Angular Router.
-  // Manages active screen state and navigation.
+  // Hash-based router, simulating Angular Router.
+  // Manages active screen state and navigation via location.hash.
 
   function RouterService(injector) {
     this._injector = injector;
-    this.activeScreen$ = new BehaviorSubject('setup');
+    this.activeScreen$ = new BehaviorSubject('');
   }
 
-  RouterService.prototype.navigate = function(screen) {
+  RouterService.prototype.navigate = function(path) {
+    location.hash = '#/' + path;
+  };
+
+  RouterService.prototype.showScreen = function(screen) {
     var screens = document.querySelectorAll('.screen');
     for (var i = 0; i < screens.length; i++) screens[i].classList.remove('active');
-    document.getElementById('screen-' + screen).classList.add('active');
+    var el = document.getElementById('screen-' + screen);
+    if (el) el.classList.add('active');
     this.activeScreen$.next(screen);
+  };
+
+  RouterService.prototype.dispatch = function() {
+    var hash = location.hash.replace(/^#\/?/, '') || '';
+    var parts = hash.split('/');
+    var screen = parts[0];
+    var authService = this._injector.get('AuthService');
+    var listService = this._injector.get('ListService');
+    var self = this;
+
+    if (screen === 'list' && parts[1]) {
+      var listId = parseInt(parts[1], 10);
+      if (!authService.getAccessToken()) { self.navigate('auth'); return; }
+      var lists = listService.lists$.getValue();
+      var list = lists.find(function(l) { return l.id === listId; });
+      if (list) {
+        self.showScreen('detail');
+        listService.openListDirect(list);
+        return;
+      }
+      // List not in memory - load first
+      var api = this._injector.get('ApiService');
+      api.rpc('my_shopping_lists').then(function(data) {
+        var loaded = Array.isArray(data) ? data : [];
+        listService.lists$.next(loaded);
+        list = loaded.find(function(l) { return l.id === listId; });
+        if (list) {
+          self.showScreen('detail');
+          listService.openListDirect(list);
+        } else {
+          self.navigate('lists');
+        }
+      }).catch(function() { self.navigate('lists'); });
+      return;
+    }
+    if (screen === 'lists') {
+      if (!authService.getAccessToken()) { self.navigate('auth'); return; }
+      self.showScreen('lists');
+      return;
+    }
+    if (screen === 'auth') { self.showScreen('auth'); return; }
+    if (screen === 'setup') { self.showScreen('setup'); return; }
+    // Default: check session
+    if (authService.getAccessToken()) { self.navigate('lists'); }
+    else { self.navigate('setup'); }
   };
 
   // ═══════════════════════════════════════════════════════════════
@@ -1032,7 +1244,11 @@
     "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
     "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
     "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated"
+    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.subscribe_list_items(p_list_id integer) RETURNS jsonb AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; qid text := 'items-' || p_list_id::text; BEGIN IF NOT EXISTS (SELECT 1 FROM list_members WHERE list_id = p_list_id AND user_id = uid) THEN RAISE EXCEPTION 'not a member of this list'; END IF; RETURN pgr.subscribe(qid, 'SELECT id, list_id, name, quantity, checked, added_by, created_at FROM shopping_items WHERE list_id = ' || p_list_id || ' ORDER BY checked, created_at DESC'); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.subscribe_list_items(integer) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.unsubscribe_list_items(p_list_id integer) RETURNS boolean AS $$ SELECT pgr.unsubscribe('items-' || p_list_id::text) $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.unsubscribe_list_items(integer) TO authenticated"
   ];
 
   function SetupComponent(injector) {
@@ -1050,7 +1266,7 @@
       self.runSetup();
     });
     document.getElementById('btn-skip-setup').addEventListener('click', function() {
-      self._router.navigate('auth');
+      location.hash = '#/auth';
     });
   };
 
@@ -1072,7 +1288,7 @@
           self._appendLog(log, '\nSetup complete! Proceeding to sign in...', 'ok');
           self._appendLog(log, 'NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
           btn.textContent = 'Done!';
-          setTimeout(function() { self._router.navigate('auth'); }, 1200);
+          setTimeout(function() { location.hash = '#/auth'; }, 1200);
         } else {
           self._appendLog(log, '\nSetup finished with errors. You may retry.', 'error');
           btn.disabled = false;
@@ -1181,7 +1397,7 @@
       : this._authService.login(email, password);
 
     promise.then(function() {
-      self._router.navigate('lists');
+      location.hash = '#/lists';
     }).catch(function(err) {
       self._showAlert(err.message, 'error');
     }).finally(function() {
@@ -1327,7 +1543,7 @@
     this._listService.lists$.next([]);
     this._listService.currentList$.next(null);
     this._listService.items$.next([]);
-    this._router.navigate('auth');
+    location.hash = '#/auth';
   };
 
   ListsComponent.prototype._clearChildren = function(el) {
@@ -1398,7 +1614,6 @@
 
   ListsComponent.prototype._openList = function(list) {
     this._listService.openList(list);
-    this._router.navigate('detail');
   };
 
   // ── DetailComponent ──
@@ -1474,7 +1689,7 @@
 
   DetailComponent.prototype._goBack = function() {
     this._listService.closeList();
-    this._router.navigate('lists');
+    location.hash = '#/lists';
   };
 
   DetailComponent.prototype._handleAddItem = function(e) {
@@ -1645,6 +1860,8 @@
   }
 
   AppModule.prototype.bootstrap = function() {
+    var self = this;
+
     // Register infrastructure
     this.injector.register('ChangeDetector', this.changeDetector);
 
@@ -1683,6 +1900,46 @@
     this.components.auth.activate();
     this.components.lists.activate();
     this.components.detail.activate();
+
+    // Wire up hash-based router
+    window.addEventListener('hashchange', function() { routerService.dispatch(); });
+
+    // Restore session from localStorage
+    var session = loadSessionData();
+    if (session && session.access_token) {
+      authService._setSession(session);
+      if (isTokenExpiringSoon()) {
+        tryRefresh().then(function(data) {
+          authService._setSession(data);
+          routerService.dispatch();
+        }).catch(function() {
+          authService.logout();
+          routerService.navigate('auth');
+        });
+      } else {
+        routerService.dispatch();
+      }
+    } else {
+      routerService.dispatch();
+    }
+
+    // Re-check token on tab focus (visibilitychange)
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && authService.getAccessToken()) {
+        if (isTokenExpiringSoon()) {
+          tryRefresh().then(function(data) {
+            authService._setSession(data);
+          }).catch(function() {
+            authService.logout();
+            routerService.navigate('auth');
+          });
+        }
+        // Re-sync items if on detail screen
+        if (listService.currentList$.getValue()) {
+          listService.loadItems();
+        }
+      }
+    });
 
     // Register PWA service worker
     this._registerServiceWorker();

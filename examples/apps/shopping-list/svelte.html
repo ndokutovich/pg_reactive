@@ -9,6 +9,8 @@
 <meta name="theme-color" content="#d97706">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="config.js"></script>
 <style>
   /* ── Variables ── */
   :root {
@@ -381,10 +383,11 @@
   // ═══════════════════════════════════════════════════════════════
   // CONFIG
   // ═══════════════════════════════════════════════════════════════
-  var _m = location.pathname.match(/^(.*?)\/apps\//);
-  var API_BASE = location.origin + (_m ? _m[1] : '');
-  var ANON_KEY = 'anon-key-12345';
+  var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
+  var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
+  var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
   var POLL_INTERVAL = 2000;
+  var SESSION_KEY = 'wtb-session';
   var SVG_NS = 'http://www.w3.org/2000/svg';
 
   // ═══════════════════════════════════════════════════════════════
@@ -496,6 +499,7 @@
   var knownItemIds = new Set();
   var suppressNotifications = false;
   var pollTimer = null;
+  var currentWs = null;
 
   // ── Derived stores (auto-update when dependencies change) ──
   var progressInfo = derived(items, function(allItems) {
@@ -648,6 +652,45 @@
     } catch (e) { return null; }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // SESSION PERSISTENCE
+  // ═══════════════════════════════════════════════════════════════
+  function saveSession(data) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+
+  function loadSession() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+  }
+
+  function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+  }
+
+  function tryRefresh() {
+    var session = loadSession();
+    if (!session || !session.refresh_token) return Promise.reject('no refresh token');
+    return fetch(API_BASE + '/auth/v1/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: session.refresh_token })
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || 'refresh failed');
+        saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user || session.user });
+        return data;
+      });
+    });
+  }
+
+  function isTokenExpiringSoon() {
+    var session = loadSession();
+    if (!session) return true;
+    var claims = parseJwt(session.access_token);
+    if (!claims || !claims.exp) return false;
+    return (claims.exp - Math.floor(Date.now() / 1000)) < 300;
+  }
+
   function toast(msg, type) {
     var toastEl = el('div', {
       className: 'toast toast-' + (type || 'info'),
@@ -681,11 +724,27 @@
     }).then(function(r) { return r.json(); });
   }
 
-  function apiRest(method, path, body) {
+  function apiRest(method, path, body, _retry) {
     var opts = { method: method, headers: authHeaders() };
     if (body !== undefined) opts.body = JSON.stringify(body);
     return fetch(API_BASE + '/rest/v1/' + path, opts).then(function(res) {
       if (res.status === 204) return null;
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function() {
+          var session = loadSession();
+          if (session) {
+            accessToken.set(session.access_token);
+            currentUser.set(session.user);
+          }
+          return apiRest(method, path, body, true);
+        }).catch(function() {
+          clearSession();
+          accessToken.set(null);
+          currentUser.set(null);
+          location.hash = '#/auth';
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(function(data) {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -693,12 +752,28 @@
     });
   }
 
-  function apiRpc(fn, params) {
+  function apiRpc(fn, params, _retry) {
     return fetch(API_BASE + '/rest/v1/rpc/' + fn, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(params || {})
     }).then(function(res) {
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function() {
+          var session = loadSession();
+          if (session) {
+            accessToken.set(session.access_token);
+            currentUser.set(session.user);
+          }
+          return apiRpc(fn, params, true);
+        }).catch(function() {
+          clearSession();
+          accessToken.set(null);
+          currentUser.set(null);
+          location.hash = '#/auth';
+          throw new Error('Session expired');
+        });
+      }
       return res.json().then(function(data) {
         if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
         return data;
@@ -738,7 +813,11 @@
     "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
     "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
     "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated"
+    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.subscribe_list_items(p_list_id integer) RETURNS jsonb AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; qid text := 'items-' || p_list_id::text; BEGIN IF NOT EXISTS (SELECT 1 FROM list_members WHERE list_id = p_list_id AND user_id = uid) THEN RAISE EXCEPTION 'not a member of this list'; END IF; RETURN pgr.subscribe(qid, 'SELECT id, list_id, name, quantity, checked, added_by, created_at FROM shopping_items WHERE list_id = ' || p_list_id || ' ORDER BY checked, created_at DESC'); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.subscribe_list_items(integer) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.unsubscribe_list_items(p_list_id integer) RETURNS boolean AS $$ SELECT pgr.unsubscribe('items-' || p_list_id::text) $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.unsubscribe_list_items(integer) TO authenticated"
   ];
 
   // ═══════════════════════════════════════════════════════════════
@@ -782,27 +861,33 @@
       newItems.forEach(function(it) { knownItemIds.add(it.id); });
       return;
     }
-
-    var token = accessToken.get();
-    var claims = parseJwt(token);
-    var myUserId = claims ? claims.sub : null;
     var currentItems = items.get();
-
     newItems.forEach(function(it) {
-      if (!knownItemIds.has(it.id)) {
-        knownItemIds.add(it.id);
-        if (it.added_by !== myUserId) {
-          showNotification('Item added', it.name + (it.quantity !== '1' ? ' x' + it.quantity : ''));
-        }
-        return;
-      }
+      if (!knownItemIds.has(it.id)) { detectNewItem(it); return; }
       var old = currentItems.find(function(o) { return o.id === it.id; });
-      if (old && old.checked !== it.checked && it.added_by !== myUserId) {
-        if (it.checked) {
-          showNotification('Item checked off', it.name);
-        }
-      }
+      if (old && old.checked !== it.checked) detectItemChange(it);
     });
+  }
+
+  function detectNewItem(row) {
+    if (suppressNotifications || knownItemIds.has(row.id)) return;
+    knownItemIds.add(row.id);
+    if (knownItemIds.size <= 1) return; // first load -- don't notify
+    var claims = parseJwt(accessToken.get());
+    var myUserId = claims ? claims.sub : null;
+    if (row.added_by !== myUserId) {
+      showNotification('Item added', row.name + (row.quantity !== '1' ? ' x' + row.quantity : ''));
+    }
+  }
+
+  function detectItemChange(row) {
+    if (suppressNotifications) return;
+    knownItemIds.add(row.id);
+    var claims = parseJwt(accessToken.get());
+    var myUserId = claims ? claims.sub : null;
+    if (row.added_by !== myUserId && row.checked) {
+      showNotification('Item checked off', row.name);
+    }
   }
 
   function loadItems() {
@@ -840,6 +925,116 @@
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // NAVIGATION & LIVE QUERY
+  // ═══════════════════════════════════════════════════════════════
+  function openList(list) {
+    location.hash = '#/list/' + list.id;
+  }
+
+  function openListDirect(list) {
+    currentList.set(list);
+    currentScreen.set('detail');
+    knownItemIds.clear();
+    items.set([]);
+    loadItems();
+    connectLiveQuery(list.id);
+  }
+
+  function connectLiveQuery(listId) {
+    apiRpc('subscribe_list_items', { p_list_id: listId }).then(function() {
+      var wsUrl = WS_BASE + '/ws/items-' + listId + '?token=' + encodeURIComponent(accessToken.get());
+      currentWs = new WebSocket(wsUrl);
+
+      currentWs.onmessage = function(e) {
+        var msg;
+        try { msg = JSON.parse(e.data); } catch (ex) { return; }
+
+        if (msg.type === 'subscribed') return;
+        if (msg.type === 'overflow') { loadItems(); return; }
+
+        // Apply delta
+        var changed = false;
+        if (msg.inserted && msg.inserted.length) {
+          msg.inserted.forEach(function(row) {
+            var currentItems = items.get();
+            var idx = currentItems.findIndex(function(i) { return i.id === row.id; });
+            if (idx >= 0) {
+              var old = currentItems[idx];
+              if (old.checked !== row.checked) detectItemChange(row);
+              items.update(function(arr) {
+                var newArr = arr.slice();
+                newArr[idx] = row;
+                return newArr;
+              });
+            } else {
+              detectNewItem(row);
+              items.update(function(arr) { return arr.concat([row]); });
+            }
+          });
+          changed = true;
+        }
+        if (msg.deleted && msg.deleted.length) {
+          var deletedIds = new Set(msg.deleted.map(function(r) { return r.id; }));
+          items.update(function(arr) {
+            return arr.filter(function(i) { return !deletedIds.has(i.id); });
+          });
+          changed = true;
+        }
+      };
+
+      currentWs.onerror = function() {
+        console.warn('WebSocket error, falling back to polling');
+        startPolling();
+      };
+
+      currentWs.onclose = function() { currentWs = null; };
+    }).catch(function(err) {
+      console.warn('Live query unavailable, falling back to polling:', err.message || err);
+      startPolling();
+    });
+  }
+
+  function goBackToLists() {
+    if (currentWs) { currentWs.close(); currentWs = null; }
+    stopPolling();
+    currentList.set(null);
+    items.set([]);
+    location.hash = '#/lists';
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // HASH ROUTER
+  // ═══════════════════════════════════════════════════════════════
+  function routerDispatch() {
+    var hash = location.hash.replace(/^#\/?/, '') || '';
+    var parts = hash.split('/');
+    var s = parts[0];
+    if (s === 'list' && parts[1]) {
+      var listId = parseInt(parts[1], 10);
+      if (!accessToken.get()) { location.hash = '#/auth'; return; }
+      var list = lists.get().find(function(l) { return l.id === listId; });
+      if (list) { openListDirect(list); return; }
+      apiRpc('my_shopping_lists').then(function(data) {
+        lists.set(Array.isArray(data) ? data : []);
+        list = lists.get().find(function(l) { return l.id === listId; });
+        if (list) openListDirect(list); else location.hash = '#/lists';
+      }).catch(function() { location.hash = '#/lists'; });
+      return;
+    }
+    if (s === 'lists') {
+      if (!accessToken.get()) { location.hash = '#/auth'; return; }
+      currentScreen.set('lists');
+      loadLists();
+      return;
+    }
+    if (s === 'auth') { currentScreen.set('auth'); return; }
+    if (s === 'setup') { currentScreen.set('setup'); return; }
+    if (accessToken.get()) { location.hash = '#/lists'; }
+    else { location.hash = '#/setup'; }
+  }
+  window.addEventListener('hashchange', routerDispatch);
+
+  // ═══════════════════════════════════════════════════════════════
   // COMPONENT: SetupScreen
   // Returns { element, destroy }
   // ═══════════════════════════════════════════════════════════════
@@ -854,7 +1049,7 @@
     var skipBtn = el('button', {
       className: 'btn btn-ghost btn-full setup-skip',
       textContent: 'Skip (already set up)',
-      onClick: function() { currentScreen.set('auth'); }
+      onClick: function() { location.hash = '#/auth'; }
     });
 
     setupBtn.addEventListener('click', function() {
@@ -872,7 +1067,7 @@
             appendLog(logEl, '\nSetup complete! Proceeding to sign in...', 'ok');
             appendLog(logEl, 'NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
             setupBtn.textContent = 'Done!';
-            setTimeout(function() { currentScreen.set('auth'); }, 1200);
+            setTimeout(function() { location.hash = '#/auth'; }, 1200);
           } else {
             appendLog(logEl, '\nSetup finished with errors. You may retry.', 'error');
             setupBtn.disabled = false;
@@ -1017,11 +1212,11 @@
         });
       })
       .then(function(data) {
+        saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
         accessToken.set(data.access_token);
         currentUser.set(data.user);
         requestNotificationPermission();
-        currentScreen.set('lists');
-        loadLists();
+        location.hash = '#/lists';
       })
       .catch(function(err) {
         alertEl.textContent = err.message;
@@ -1075,11 +1270,7 @@
     );
 
     card.addEventListener('click', function() {
-      currentList.set(list);
-      currentScreen.set('detail');
-      knownItemIds.clear();
-      loadItems();
-      startPolling();
+      openList(list);
     });
 
     return {
@@ -1208,14 +1399,16 @@
           method: 'POST', headers: authHeaders()
         }).catch(function() {});
 
+        if (currentWs) { currentWs.close(); currentWs = null; }
         stopPolling();
+        clearSession();
         accessToken.set(null);
         currentUser.set(null);
         lists.set([]);
         currentList.set(null);
         items.set([]);
         knownItemIds.clear();
-        currentScreen.set('auth');
+        location.hash = '#/auth';
       }
     });
 
@@ -1334,11 +1527,7 @@
     var backBtn = el('button', { className: 'btn btn-icon btn-ghost', title: 'Back' });
     backBtn.appendChild(svgBackArrow());
     backBtn.addEventListener('click', function() {
-      stopPolling();
-      currentList.set(null);
-      items.set([]);
-      currentScreen.set('lists');
-      loadLists();
+      goBackToLists();
     });
 
     // Share button (SVG via safe DOM)
@@ -1358,11 +1547,7 @@
 
       apiRest('DELETE', 'shopping_lists?id=eq.' + list.id).then(function() {
         toast('List deleted', 'success');
-        stopPolling();
-        currentList.set(null);
-        items.set([]);
-        currentScreen.set('lists');
-        loadLists();
+        goBackToLists();
       }).catch(function(err) {
         toast('Delete failed: ' + err.message, 'error');
       });
@@ -1629,6 +1814,49 @@
   document.addEventListener('DOMContentLoaded', function() {
     registerServiceWorker();
     App();
+
+    // Restore session from localStorage
+    var session = loadSession();
+    if (session && session.access_token) {
+      accessToken.set(session.access_token);
+      currentUser.set(session.user);
+      if (isTokenExpiringSoon()) {
+        tryRefresh().then(function(data) {
+          accessToken.set(data.access_token);
+          currentUser.set(data.user || session.user);
+          routerDispatch();
+        }).catch(function() {
+          clearSession();
+          accessToken.set(null);
+          currentUser.set(null);
+          location.hash = '#/auth';
+        });
+      } else {
+        routerDispatch();
+      }
+    } else {
+      routerDispatch();
+    }
+
+    // Re-check token on tab focus
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && accessToken.get()) {
+        if (isTokenExpiringSoon()) {
+          tryRefresh().then(function(data) {
+            accessToken.set(data.access_token);
+            var session = loadSession();
+            currentUser.set(data.user || (session && session.user));
+          }).catch(function() {
+            clearSession();
+            accessToken.set(null);
+            currentUser.set(null);
+            location.hash = '#/auth';
+          });
+        }
+        // Re-sync items if on detail screen
+        if (currentList.get()) loadItems();
+      }
+    });
   });
 
 })();
