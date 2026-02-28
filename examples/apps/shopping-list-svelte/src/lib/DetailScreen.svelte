@@ -61,10 +61,9 @@
             if (msg.type === 'subscribed') return;
             if (msg.type === 'overflow') { loadItems(); return; }
 
-            if (msg.deleted && msg.deleted.length > 0) {
-              const delIds = new Set(msg.deleted.map(d => d.id));
-              $items = $items.filter(it => !delIds.has(it.id));
-            }
+            const insertedIds = new Set((msg.inserted || []).map(r => r.id));
+
+            // Process inserted first (upsert)
             if (msg.inserted && msg.inserted.length > 0) {
               msg.inserted.forEach(row => {
                 const idx = $items.findIndex(it => it.id === row.id);
@@ -76,6 +75,14 @@
                   knownItemIds.add(row.id);
                 }
               });
+            }
+            // Process deleted (skip ids also in inserted — those are updates)
+            if (msg.deleted && msg.deleted.length > 0) {
+              const delIds = msg.deleted.filter(d => !insertedIds.has(d.id)).map(d => d.id);
+              if (delIds.length > 0) {
+                const delSet = new Set(delIds);
+                $items = $items.filter(it => !delSet.has(it.id));
+              }
             }
           } catch (e) {
             console.warn('WS parse error:', e);

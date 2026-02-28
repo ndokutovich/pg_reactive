@@ -132,10 +132,9 @@ export default function DetailScreen({
 
             setItems(prev => {
               let updated = [...prev];
-              if (msg.deleted && msg.deleted.length > 0) {
-                const delIds = new Set(msg.deleted.map(d => d.id));
-                updated = updated.filter(it => !delIds.has(it.id));
-              }
+              const insertedIds = new Set((msg.inserted || []).map(r => r.id));
+
+              // Process inserted first (upsert)
               if (msg.inserted && msg.inserted.length > 0) {
                 msg.inserted.forEach(row => {
                   const idx = updated.findIndex(it => it.id === row.id);
@@ -146,6 +145,13 @@ export default function DetailScreen({
                     knownItemIdsRef.current.add(row.id);
                   }
                 });
+              }
+              // Process deleted (skip ids also in inserted — those are updates)
+              if (msg.deleted && msg.deleted.length > 0) {
+                const delIds = new Set(msg.deleted.filter(d => !insertedIds.has(d.id)).map(d => d.id));
+                if (delIds.size > 0) {
+                  updated = updated.filter(it => !delIds.has(it.id));
+                }
               }
               return updated;
             });

@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, Output, OnInit, OnDestroy, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, EventEmitter, Input, Output, OnInit, OnDestroy, signal, ChangeDetectionStrategy, NgZone } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiService, WS_BASE } from '../services/api.service';
 import { AuthService } from '../services/auth.service';
@@ -142,7 +142,8 @@ export class DetailScreenComponent implements OnInit, OnDestroy {
   constructor(
     private api: ApiService,
     private auth: AuthService,
-    private toast: ToastService
+    private toast: ToastService,
+    private ngZone: NgZone
   ) {}
 
   ngOnInit(): void {
@@ -178,34 +179,41 @@ export class DetailScreenComponent implements OnInit, OnDestroy {
         this.ws = ws;
 
         ws.onmessage = (evt: MessageEvent) => {
-          try {
-            const msg = JSON.parse(evt.data);
-            if (msg.type === 'subscribed') return;
-            if (msg.type === 'overflow') { this.loadItems(); return; }
+          this.ngZone.run(() => {
+            try {
+              const msg = JSON.parse(evt.data);
+              if (msg.type === 'subscribed') return;
+              if (msg.type === 'overflow') { this.loadItems(); return; }
 
-            let current = [...this.items()];
+              let current = [...this.items()];
+              const insertedIds = new Set((msg.inserted || []).map((r: any) => r.id));
 
-            if (msg.deleted && msg.deleted.length > 0) {
-              const delIds = new Set(msg.deleted.map((d: any) => d.id));
-              current = current.filter(it => !delIds.has(it.id));
-            }
-            if (msg.inserted && msg.inserted.length > 0) {
-              msg.inserted.forEach((row: ShoppingItem) => {
-                const idx = current.findIndex(it => it.id === row.id);
-                if (idx >= 0) {
-                  current[idx] = row;
-                } else {
-                  current.unshift(row);
-                  this.knownItemIds.add(row.id);
+              // Process inserted first (upsert)
+              if (msg.inserted && msg.inserted.length > 0) {
+                msg.inserted.forEach((row: ShoppingItem) => {
+                  const idx = current.findIndex(it => it.id === row.id);
+                  if (idx >= 0) {
+                    current[idx] = row;
+                  } else {
+                    current.unshift(row);
+                    this.knownItemIds.add(row.id);
+                  }
+                });
+              }
+              // Process deleted (skip ids also in inserted — those are updates)
+              if (msg.deleted && msg.deleted.length > 0) {
+                const delIds = new Set(msg.deleted.filter((d: any) => !insertedIds.has(d.id)).map((d: any) => d.id));
+                if (delIds.size > 0) {
+                  current = current.filter(it => !delIds.has(it.id));
                 }
-              });
-            }
+              }
 
-            this.items.set(current);
-            this.updateDerived(current);
-          } catch (e) {
-            console.warn('WS parse error:', e);
-          }
+              this.items.set(current);
+              this.updateDerived(current);
+            } catch (e) {
+              console.warn('WS parse error:', e);
+            }
+          });
         };
 
         ws.onerror = () => {

@@ -998,6 +998,9 @@
 
         // Apply delta
         var changed = false;
+        var insertedIds = new Set((msg.inserted || []).map(function(r) { return r.id; }));
+
+        // Process inserted first (upsert)
         if (msg.inserted && msg.inserted.length) {
           msg.inserted.forEach(function(row) {
             var idx = items.findIndex(function(i) { return i.id === row.id; });
@@ -1012,10 +1015,14 @@
           });
           changed = true;
         }
+        // Process deleted (skip ids also in inserted — those are updates)
         if (msg.deleted && msg.deleted.length) {
-          var deletedIds = new Set(msg.deleted.map(function(r) { return r.id; }));
-          items = items.filter(function(i) { return !deletedIds.has(i.id); });
-          changed = true;
+          var delIds = msg.deleted.filter(function(d) { return !insertedIds.has(d.id); }).map(function(d) { return d.id; });
+          if (delIds.length > 0) {
+            var deletedIds = new Set(delIds);
+            items = items.filter(function(i) { return !deletedIds.has(i.id); });
+            changed = true;
+          }
         }
         if (changed) renderItems();
       };

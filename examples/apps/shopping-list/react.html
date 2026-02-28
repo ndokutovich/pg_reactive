@@ -1135,7 +1135,9 @@
           setItems(prev => {
             let next = [...prev];
             let changed = false;
+            const insertedIds = new Set((msg.inserted || []).map(r => r.id));
 
+            // Process inserted first (upsert)
             if (msg.inserted && msg.inserted.length) {
               msg.inserted.forEach(row => {
                 const idx = next.findIndex(i => i.id === row.id);
@@ -1150,10 +1152,14 @@
               });
               changed = true;
             }
+            // Process deleted (skip ids also in inserted — those are updates)
             if (msg.deleted && msg.deleted.length) {
-              const deletedIds = new Set(msg.deleted.map(r => r.id));
-              next = next.filter(i => !deletedIds.has(i.id));
-              changed = true;
+              const delIds = msg.deleted.filter(d => !insertedIds.has(d.id)).map(d => d.id);
+              if (delIds.length > 0) {
+                const deletedIdSet = new Set(delIds);
+                next = next.filter(i => !deletedIdSet.has(i.id));
+                changed = true;
+              }
             }
             return changed ? next : prev;
           });
