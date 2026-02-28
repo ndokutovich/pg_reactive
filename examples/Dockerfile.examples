@@ -11,5 +11,8 @@ COPY ext/ /tmp/ext/
 RUN make -C /tmp/ext clean && make -C /tmp/ext && make -C /tmp/ext install \
     && rm -rf /tmp/ext
 
+# Bootstrap pgstack schema, auth tables, and roles on first start
+COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
+
 # Copy example setup scripts (used by the setup service)
 COPY examples/ /examples/
