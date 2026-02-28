@@ -85,3 +85,12 @@ services:
     depends_on:
       setup:
         condition: service_completed_successfully
+    networks:
+      default:
+      gateway:
+        aliases:
+          - pgr-web
+
+networks:
+  gateway:
+    external: true

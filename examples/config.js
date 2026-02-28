@@ -23,9 +23,13 @@
   if (typeof window.PGR_BASE === 'string') {
     // Explicit override — strip trailing slash
     base = window.PGR_BASE.replace(/\/+$/, '');
+  } else if (document.currentScript && document.currentScript.src) {
+    // Detect base from config.js script URL — works at any sub-path.
+    // config.js is always at {base}/config.js, so strip the filename.
+    var url = new URL(document.currentScript.src);
+    base = url.pathname.replace(/\/config\.js$/, '');
   } else {
-    // Auto-detect: examples live at {base}/NN-name/app.html
-    // Extract everything before the /NN- segment
+    // Fallback: numbered example paths like {base}/01-name/app.html
     var m = location.pathname.match(/^(.*?)\/\d{2}-/);
     base = m ? m[1] : '';
   }
