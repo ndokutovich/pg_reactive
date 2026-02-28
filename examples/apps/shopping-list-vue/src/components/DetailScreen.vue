@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, inject, onMounted, onUnmounted } from 'vue'
-import { apiRest, parseJwt, POLL_INTERVAL } from '../api.js'
+import { apiRest, apiRpc, parseJwt, POLL_INTERVAL, WS_BASE } from '../api.js'
 
 const props = defineProps({
   list: {
@@ -19,6 +19,7 @@ const newItemQty = ref('1')
 const knownItemIds = ref(new Set())
 let suppressNotifications = false
 let pollTimer = null
+let currentWs = null
 
 const uncheckedItems = computed(() => items.value.filter(i => !i.checked))
 const checkedItems = computed(() => items.value.filter(i => i.checked))
@@ -110,7 +111,7 @@ async function handleAddItem() {
 
   try {
     const created = await apiRest('POST', 'shopping_items', body, auth.accessToken.value)
-    items.value.unshift(created)
+    if (!items.value.some(i => i.id === created.id)) items.value.unshift(created)
     knownItemIds.value.add(created.id)
     newItemName.value = ''
     newItemQty.value = '1'
@@ -165,14 +166,73 @@ function handleDeleteList() {
     })
 }
 
+function connectLiveQuery() {
+  if (!props.list || !auth.accessToken.value) return
+
+  apiRpc('subscribe_list_items', { p_list_id: props.list.id }, auth.accessToken.value)
+    .then(() => {
+      const qid = 'items-' + props.list.id
+      const ws = new WebSocket(WS_BASE + '/ws/' + qid + '?token=' + auth.accessToken.value)
+      currentWs = ws
+
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data)
+          if (msg.type === 'subscribed') return
+          if (msg.type === 'overflow') { loadItems(); return }
+
+          if (msg.deleted && msg.deleted.length > 0) {
+            const delIds = new Set(msg.deleted.map(d => d.id))
+            items.value = items.value.filter(it => !delIds.has(it.id))
+          }
+          if (msg.inserted && msg.inserted.length > 0) {
+            msg.inserted.forEach(row => {
+              const idx = items.value.findIndex(it => it.id === row.id)
+              if (idx >= 0) {
+                items.value[idx] = row
+              } else {
+                items.value.unshift(row)
+                knownItemIds.value.add(row.id)
+              }
+            })
+          }
+        } catch (e) {
+          console.warn('WS parse error:', e)
+        }
+      }
+
+      ws.onerror = () => {
+        console.warn('WS error, falling back to polling')
+        ws.close()
+        currentWs = null
+        startPolling()
+      }
+
+      ws.onopen = () => {
+        stopPolling()
+      }
+
+      ws.onclose = () => {
+        if (currentWs === ws) currentWs = null
+      }
+    })
+    .catch(err => {
+      console.warn('Subscribe RPC failed, using polling:', err)
+    })
+}
+
 onMounted(() => {
   knownItemIds.value.clear()
-  loadItems()
-  startPolling()
+  loadItems().then(() => connectLiveQuery())
+  startPolling() // Will be stopped when WS connects
 })
 
 onUnmounted(() => {
   stopPolling()
+  if (currentWs) {
+    currentWs.close()
+    currentWs = null
+  }
 })
 </script>
 

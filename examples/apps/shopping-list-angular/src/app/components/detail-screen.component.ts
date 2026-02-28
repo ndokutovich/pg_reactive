@@ -1,6 +1,6 @@
 import { Component, EventEmitter, Input, Output, OnInit, OnDestroy, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ApiService } from '../services/api.service';
+import { ApiService, WS_BASE } from '../services/api.service';
 import { AuthService } from '../services/auth.service';
 import { ToastService } from '../services/toast.service';
 import { ShoppingList } from './lists-screen.component';
@@ -131,6 +131,7 @@ export class DetailScreenComponent implements OnInit, OnDestroy {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private knownItemIds = new Set<number>();
   private suppressNotifications = false;
+  private ws: WebSocket | null = null;
 
   uncheckedItems = signal<ShoppingItem[]>([]);
   checkedItems = signal<ShoppingItem[]>([]);
@@ -146,17 +147,85 @@ export class DetailScreenComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.knownItemIds.clear();
-    this.loadItems();
-    this.startPolling();
+    this.loadItems().then(() => this.connectLiveQuery());
+    this.startPolling(); // Will be stopped when WS connects
   }
 
   ngOnDestroy(): void {
     this.stopPolling();
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
   }
 
   goBack(): void {
     this.stopPolling();
+    if (this.ws) { this.ws.close(); this.ws = null; }
     this.back.emit();
+  }
+
+  private connectLiveQuery(): void {
+    if (!this.list) return;
+    const token = this.auth.getToken();
+    if (!token) return;
+
+    this.api.apiRpc('subscribe_list_items', { p_list_id: this.list.id })
+      .then(() => {
+        const qid = 'items-' + this.list!.id;
+        const currentToken = this.auth.getToken();
+        const ws = new WebSocket(WS_BASE + '/ws/' + qid + '?token=' + currentToken);
+        this.ws = ws;
+
+        ws.onmessage = (evt: MessageEvent) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.type === 'subscribed') return;
+            if (msg.type === 'overflow') { this.loadItems(); return; }
+
+            let current = [...this.items()];
+
+            if (msg.deleted && msg.deleted.length > 0) {
+              const delIds = new Set(msg.deleted.map((d: any) => d.id));
+              current = current.filter(it => !delIds.has(it.id));
+            }
+            if (msg.inserted && msg.inserted.length > 0) {
+              msg.inserted.forEach((row: ShoppingItem) => {
+                const idx = current.findIndex(it => it.id === row.id);
+                if (idx >= 0) {
+                  current[idx] = row;
+                } else {
+                  current.unshift(row);
+                  this.knownItemIds.add(row.id);
+                }
+              });
+            }
+
+            this.items.set(current);
+            this.updateDerived(current);
+          } catch (e) {
+            console.warn('WS parse error:', e);
+          }
+        };
+
+        ws.onerror = () => {
+          console.warn('WS error, falling back to polling');
+          ws.close();
+          this.ws = null;
+          this.startPolling();
+        };
+
+        ws.onopen = () => {
+          this.stopPolling();
+        };
+
+        ws.onclose = () => {
+          if (this.ws === ws) this.ws = null;
+        };
+      })
+      .catch((err: unknown) => {
+        console.warn('Subscribe RPC failed, using polling:', err);
+      });
   }
 
   private startPolling(): void {
@@ -257,7 +326,8 @@ export class DetailScreenComponent implements OnInit, OnDestroy {
     try {
       const created = await this.api.apiRest<ShoppingItem>('POST', 'shopping_items', body);
       const current = this.items();
-      const updated = [created, ...current];
+      const exists = current.some(i => i.id === created.id);
+      const updated = exists ? current : [created, ...current];
       this.items.set(updated);
       this.knownItemIds.add(created.id);
       this.updateDerived(updated);

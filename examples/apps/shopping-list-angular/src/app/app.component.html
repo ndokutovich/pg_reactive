@@ -3,8 +3,8 @@
 @switch (screen()) {
   @case ('setup') {
     <app-setup-screen
-      (skip)="screen.set('auth')"
-      (done)="screen.set('auth')">
+      (skip)="navigate('auth')"
+      (done)="navigate('auth')">
     </app-setup-screen>
   }
   @case ('auth') {

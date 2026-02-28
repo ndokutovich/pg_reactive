@@ -1,6 +1,6 @@
 <script>
   import { accessToken, currentUser, currentScreen, addToast } from '../stores.js';
-  import { API_BASE } from '../api.js';
+  import { API_BASE, saveSession } from '../api.js';
 
   let isSignUp = true;
   let email = '';
@@ -43,7 +43,8 @@
 
       $accessToken = data.access_token;
       $currentUser = data.user;
-      $currentScreen = 'lists';
+      saveSession(data);
+      location.hash = '#/lists';
     } catch (err) {
       error = err.message;
     } finally {

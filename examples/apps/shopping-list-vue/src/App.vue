@@ -1,5 +1,6 @@
 <script setup>
-import { ref, provide, onMounted } from 'vue'
+import { ref, provide, onMounted, onUnmounted } from 'vue'
+import { apiRest } from './api.js'
 import { useAuth } from './composables/useAuth.js'
 import { useToast } from './composables/useToast.js'
 import SetupScreen from './components/SetupScreen.vue'
@@ -13,7 +14,6 @@ import './App.css'
 const auth = useAuth()
 const { toasts, toast } = useToast()
 
-// Screen state: 'setup' | 'auth' | 'lists' | 'detail'
 const screen = ref('setup')
 const currentList = ref(null)
 const showShareModal = ref(false)
@@ -23,22 +23,49 @@ provide('toast', toast)
 provide('screen', screen)
 provide('currentList', currentList)
 
-function goToAuth() {
-  screen.value = 'auth'
+function navigate(path) {
+  location.hash = '#/' + path
 }
 
-function goToLists() {
-  screen.value = 'lists'
+function dispatch() {
+  const hash = location.hash || '#/setup'
+  const parts = hash.slice(2).split('/')
+  const route = parts[0] || 'setup'
+
+  if (route === 'setup') screen.value = 'setup'
+  else if (route === 'auth') screen.value = 'auth'
+  else if (route === 'lists') screen.value = 'lists'
+  else if (route === 'list' && parts[1]) {
+    const listId = parseInt(parts[1])
+    if (currentList.value && currentList.value.id === listId) {
+      screen.value = 'detail'
+    } else if (auth.accessToken.value) {
+      apiRest('GET', 'shopping_lists?id=eq.' + listId + '&select=*', undefined, auth.accessToken.value)
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+            currentList.value = data[0]
+            screen.value = 'detail'
+          } else {
+            navigate('lists')
+          }
+        }).catch(() => navigate('lists'))
+    } else {
+      navigate('auth')
+    }
+  } else {
+    screen.value = 'setup'
+  }
 }
 
+function goToAuth() { navigate('auth') }
+function goToLists() { navigate('lists') }
 function openList(list) {
   currentList.value = list
-  screen.value = 'detail'
+  navigate('list/' + list.id)
 }
-
 function goBackToLists() {
   currentList.value = null
-  screen.value = 'lists'
+  navigate('lists')
 }
 
 function openShare() {
@@ -52,7 +79,13 @@ function closeShare() {
 function handleLogout() {
   auth.logout()
   currentList.value = null
-  screen.value = 'auth'
+  navigate('auth')
+}
+
+function handleVisibility() {
+  if (document.visibilityState === 'visible') {
+    auth.refreshIfNeeded()
+  }
 }
 
 onMounted(() => {
@@ -61,6 +94,24 @@ onMounted(() => {
       console.log('SW registration failed:', err)
     })
   }
+
+  // Restore session
+  const restored = auth.restoreSession()
+  if (restored && (!location.hash || location.hash === '#/' || location.hash === '#/setup' || location.hash === '#/auth')) {
+    navigate('lists')
+  }
+
+  // Start hash routing
+  window.addEventListener('hashchange', dispatch)
+  dispatch()
+
+  // Visibility change for token refresh
+  document.addEventListener('visibilitychange', handleVisibility)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('hashchange', dispatch)
+  document.removeEventListener('visibilitychange', handleVisibility)
 })
 </script>
 

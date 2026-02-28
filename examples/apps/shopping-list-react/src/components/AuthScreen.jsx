@@ -35,7 +35,7 @@ export default function AuthScreen({ onLogin }) {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || data.message || 'Auth failed');
-        onLogin(data.access_token, data.user);
+        onLogin(data.access_token, data.user, data.refresh_token);
       } catch (err) {
         setError(err.message);
       } finally {

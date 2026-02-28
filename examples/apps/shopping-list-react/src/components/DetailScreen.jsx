@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { apiRest, parseJwt, POLL_INTERVAL } from '../api';
+import { apiRest, apiRpc, parseJwt, POLL_INTERVAL, WS_BASE } from '../api';
 import { useToast } from './Toast';
 
 function requestNotificationPermission() {
@@ -37,6 +37,8 @@ export default function DetailScreen({
   const knownItemIdsRef = useRef(new Set());
   const suppressRef = useRef(false);
   const suppressTimerRef = useRef(null);
+  const pollTimerRef = useRef(null);
+  const wsRef = useRef(null);
 
   // Keep itemsRef in sync
   useEffect(() => {
@@ -99,20 +101,101 @@ export default function DetailScreen({
     }
   }, [list, accessToken, detectChanges]);
 
-  // Initial load + request notification permission
+  // Polling helpers
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    pollTimerRef.current = setInterval(loadItems, POLL_INTERVAL);
+  }, [loadItems, stopPolling]);
+
+  // WebSocket live query connection
+  const connectLiveQuery = useCallback(() => {
+    if (!list || !accessToken) return;
+
+    apiRpc('subscribe_list_items', { p_list_id: list.id }, accessToken)
+      .then(() => {
+        const qid = 'items-' + list.id;
+        const ws = new WebSocket(WS_BASE + '/ws/' + qid + '?token=' + accessToken);
+        wsRef.current = ws;
+
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.type === 'subscribed') return;
+            if (msg.type === 'overflow') { loadItems(); return; }
+
+            setItems(prev => {
+              let updated = [...prev];
+              if (msg.deleted && msg.deleted.length > 0) {
+                const delIds = new Set(msg.deleted.map(d => d.id));
+                updated = updated.filter(it => !delIds.has(it.id));
+              }
+              if (msg.inserted && msg.inserted.length > 0) {
+                msg.inserted.forEach(row => {
+                  const idx = updated.findIndex(it => it.id === row.id);
+                  if (idx >= 0) {
+                    updated[idx] = row;
+                  } else {
+                    updated.unshift(row);
+                    knownItemIdsRef.current.add(row.id);
+                  }
+                });
+              }
+              return updated;
+            });
+          } catch (e) {
+            console.warn('WS parse error:', e);
+          }
+        };
+
+        ws.onerror = () => {
+          console.warn('WS error, falling back to polling');
+          ws.close();
+          wsRef.current = null;
+          startPolling();
+        };
+
+        ws.onopen = () => {
+          // Stop polling when WS is connected
+          stopPolling();
+        };
+
+        ws.onclose = () => {
+          if (wsRef.current === ws) {
+            wsRef.current = null;
+          }
+        };
+      })
+      .catch(err => {
+        console.warn('Subscribe RPC failed, using polling:', err);
+        startPolling();
+      });
+  }, [list, accessToken, loadItems, startPolling, stopPolling]);
+
+  // Initial load + request notification permission + connect live query
   useEffect(() => {
     if (!list) return;
     knownItemIdsRef.current.clear();
     requestNotificationPermission();
-    loadItems();
-  }, [list]); // eslint-disable-line react-hooks/exhaustive-deps
+    loadItems().then(() => connectLiveQuery());
 
-  // Polling
-  useEffect(() => {
-    if (!list) return;
-    const timer = setInterval(loadItems, POLL_INTERVAL);
-    return () => clearInterval(timer);
-  }, [list, loadItems]);
+    // Start polling as fallback until WS connects
+    startPolling();
+
+    return () => {
+      stopPolling();
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [list]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Suppress notifications temporarily after user actions
   const suppressNotifications = useCallback(() => {
@@ -144,7 +227,7 @@ export default function DetailScreen({
       try {
         const created = await apiRest('POST', 'shopping_items', body, accessToken);
         knownItemIdsRef.current.add(created.id);
-        setItems((prev) => [created, ...prev]);
+        setItems((prev) => prev.some(i => i.id === created.id) ? prev : [created, ...prev]);
         setItemName('');
         setItemQty('1');
         if (nameInputRef.current) nameInputRef.current.focus();
@@ -182,7 +265,6 @@ export default function DetailScreen({
       // Optimistic removal
       const idx = items.findIndex((it) => it.id === id);
       if (idx === -1) return;
-      const removed = items[idx];
       const prevItems = [...items];
 
       setItems((prev) => prev.filter((it) => it.id !== id));

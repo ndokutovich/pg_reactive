@@ -5,11 +5,12 @@
     lists, uncheckedItems, checkedItems, progressPct,
     progressText, addToast
   } from '../stores.js';
-  import { apiRest, parseJwt } from '../api.js';
+  import { apiRest, apiRpc, parseJwt, WS_BASE } from '../api.js';
 
   let itemName = '';
   let itemQty = '1';
   let pollTimer = null;
+  let currentWs = null;
   let suppressNotifications = false;
   let knownItemIds = new Set();
   let showShareModal = false;
@@ -21,12 +22,16 @@
 
   onMount(() => {
     knownItemIds.clear();
-    loadItems();
-    startPolling();
+    loadItems().then(() => connectLiveQuery());
+    startPolling(); // Will be stopped when WS connects
   });
 
   onDestroy(() => {
     stopPolling();
+    if (currentWs) {
+      currentWs.close();
+      currentWs = null;
+    }
   });
 
   function startPolling() {
@@ -39,6 +44,62 @@
       clearInterval(pollTimer);
       pollTimer = null;
     }
+  }
+
+  function connectLiveQuery() {
+    if (!$currentList || !$accessToken) return;
+
+    apiRpc('subscribe_list_items', { p_list_id: $currentList.id })
+      .then(() => {
+        const qid = 'items-' + $currentList.id;
+        const ws = new WebSocket(WS_BASE + '/ws/' + qid + '?token=' + encodeURIComponent($accessToken));
+        currentWs = ws;
+
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.type === 'subscribed') return;
+            if (msg.type === 'overflow') { loadItems(); return; }
+
+            if (msg.deleted && msg.deleted.length > 0) {
+              const delIds = new Set(msg.deleted.map(d => d.id));
+              $items = $items.filter(it => !delIds.has(it.id));
+            }
+            if (msg.inserted && msg.inserted.length > 0) {
+              msg.inserted.forEach(row => {
+                const idx = $items.findIndex(it => it.id === row.id);
+                if (idx >= 0) {
+                  $items[idx] = row;
+                  $items = $items;
+                } else {
+                  $items = [row, ...$items];
+                  knownItemIds.add(row.id);
+                }
+              });
+            }
+          } catch (e) {
+            console.warn('WS parse error:', e);
+          }
+        };
+
+        ws.onopen = () => {
+          stopPolling();
+        };
+
+        ws.onerror = () => {
+          console.warn('WS error, falling back to polling');
+          ws.close();
+          currentWs = null;
+          startPolling();
+        };
+
+        ws.onclose = () => {
+          if (currentWs === ws) currentWs = null;
+        };
+      })
+      .catch(err => {
+        console.warn('Subscribe RPC failed, using polling:', err);
+      });
   }
 
   async function loadItems() {
@@ -109,7 +170,7 @@
 
     try {
       const created = await apiRest('POST', 'shopping_items', body);
-      $items = [created, ...$items];
+      if (!$items.some(i => i.id === created.id)) $items = [created, ...$items];
       knownItemIds.add(created.id);
       itemName = '';
       itemQty = '1';
@@ -170,9 +231,10 @@
 
   function goBack() {
     stopPolling();
+    if (currentWs) { currentWs.close(); currentWs = null; }
     $currentList = null;
     $items = [];
-    $currentScreen = 'lists';
+    location.hash = '#/lists';
   }
 
   function openShare() {

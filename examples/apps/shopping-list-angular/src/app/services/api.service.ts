@@ -1,7 +1,11 @@
 import { Injectable } from '@angular/core';
 import { AuthService } from './auth.service';
 
-const API_BASE = window.location.origin;
+const m = location.pathname.match(/^(.*?)\/apps\//);
+const base = m ? m[1] : '';
+const API_BASE = location.origin + base;
+export const WS_BASE = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + base;
+
 const ANON_KEY = 'anon-key-12345';
 
 @Injectable({ providedIn: 'root' })
@@ -30,6 +34,18 @@ export class ApiService {
   }
 
   async apiRest<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+    try {
+      return await this.doRest<T>(method, path, body);
+    } catch (err: unknown) {
+      if (err instanceof Error && (err as any).status === 401) {
+        const refreshed = await this.auth.tryRefresh();
+        if (refreshed) return this.doRest<T>(method, path, body);
+      }
+      throw err;
+    }
+  }
+
+  private async doRest<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
     const opts: RequestInit = {
       method,
       headers: this.authHeaders()
@@ -43,12 +59,26 @@ export class ApiService {
     }
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || data.message || JSON.stringify(data));
+      const err = new Error(data.error || data.message || JSON.stringify(data));
+      (err as any).status = res.status;
+      throw err;
     }
     return data as T;
   }
 
   async apiRpc<T = unknown>(fn: string, params?: Record<string, unknown>): Promise<T> {
+    try {
+      return await this.doRpc<T>(fn, params);
+    } catch (err: unknown) {
+      if (err instanceof Error && (err as any).status === 401) {
+        const refreshed = await this.auth.tryRefresh();
+        if (refreshed) return this.doRpc<T>(fn, params);
+      }
+      throw err;
+    }
+  }
+
+  private async doRpc<T = unknown>(fn: string, params?: Record<string, unknown>): Promise<T> {
     const res = await fetch(API_BASE + '/rest/v1/rpc/' + fn, {
       method: 'POST',
       headers: this.authHeaders(),
@@ -56,7 +86,9 @@ export class ApiService {
     });
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || data.message || JSON.stringify(data));
+      const err = new Error(data.error || data.message || JSON.stringify(data));
+      (err as any).status = res.status;
+      throw err;
     }
     return data as T;
   }

@@ -52,7 +52,7 @@
       appendLog('Setup complete! Proceeding to sign in...', 'ok');
       appendLog('NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
       done = true;
-      setTimeout(() => { $currentScreen = 'auth'; }, 1200);
+      setTimeout(() => { location.hash = '#/auth'; }, 1200);
     } else {
       appendLog('');
       appendLog('Setup finished with errors. You may retry.', 'error');
@@ -61,7 +61,7 @@
   }
 
   function skipSetup() {
-    $currentScreen = 'auth';
+    location.hash = '#/auth';
   }
 </script>
 

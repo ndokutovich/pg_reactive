@@ -4,7 +4,7 @@
     accessToken, currentUser, currentScreen,
     lists, currentList, items, addToast
   } from '../stores.js';
-  import { apiRpc, API_BASE } from '../api.js';
+  import { apiRpc, API_BASE, clearSession } from '../api.js';
 
   let listName = '';
   let shareCode = '';
@@ -71,7 +71,7 @@
 
   function openList(list) {
     $currentList = list;
-    $currentScreen = 'detail';
+    location.hash = '#/list/' + list.id;
   }
 
   function handleLogout() {
@@ -86,12 +86,13 @@
       }).catch(() => {});
     }
 
+    clearSession();
     $accessToken = null;
     $currentUser = null;
     $lists = [];
     $currentList = null;
     $items = [];
-    $currentScreen = 'auth';
+    location.hash = '#/auth';
   }
 </script>
 

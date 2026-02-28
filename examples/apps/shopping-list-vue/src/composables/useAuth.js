@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { API_BASE, parseJwt } from '../api.js'
+import { API_BASE, parseJwt, saveSession, loadSession, clearSession, tryRefresh } from '../api.js'
 
 const accessToken = ref(null)
 const currentUser = ref(null)
@@ -25,6 +25,7 @@ export function useAuth() {
     if (!res.ok) throw new Error(data.error || data.message || 'Login failed')
     accessToken.value = data.access_token
     currentUser.value = data.user
+    saveSession(data)
     return data
   }
 
@@ -38,6 +39,7 @@ export function useAuth() {
     if (!res.ok) throw new Error(data.error || data.message || 'Signup failed')
     accessToken.value = data.access_token
     currentUser.value = data.user
+    saveSession(data)
     return data
   }
 
@@ -54,6 +56,43 @@ export function useAuth() {
     }
     accessToken.value = null
     currentUser.value = null
+    clearSession()
+  }
+
+  function restoreSession() {
+    const session = loadSession()
+    if (!session || !session.access_token) return false
+
+    const claims = parseJwt(session.access_token)
+    if (!claims) { clearSession(); return false }
+
+    if (claims.exp && claims.exp * 1000 < Date.now()) {
+      // Token expired, try refresh
+      tryRefresh().then(data => {
+        if (data) {
+          accessToken.value = data.access_token
+          currentUser.value = data.user
+        }
+      })
+      return false // Not immediately available
+    }
+
+    accessToken.value = session.access_token
+    currentUser.value = session.user
+    return true
+  }
+
+  function refreshIfNeeded() {
+    if (!accessToken.value) return
+    const claims = parseJwt(accessToken.value)
+    if (claims && claims.exp && claims.exp * 1000 < Date.now()) {
+      tryRefresh().then(data => {
+        if (data) {
+          accessToken.value = data.access_token
+          currentUser.value = data.user
+        }
+      })
+    }
   }
 
   return {
@@ -64,6 +103,8 @@ export function useAuth() {
     userId,
     login,
     signup,
-    logout
+    logout,
+    restoreSession,
+    refreshIfNeeded
   }
 }
