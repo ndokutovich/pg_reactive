@@ -1602,7 +1602,7 @@
 
       apiRest('POST', 'shopping_items', body).then(function(created) {
         knownItemIds.add(created.id);
-        items.update(function(arr) { return [created].concat(arr); });
+        items.update(function(arr) { return arr.some(function(i) { return i.id === created.id; }) ? arr : [created].concat(arr); });
         itemNameInput.value = '';
         itemQtyInput.value = '1';
         itemNameInput.focus();

@@ -1086,7 +1086,8 @@
         setTimeout(function() { suppressNotifications.value = false; }, 3000);
 
         apiRest('POST', 'shopping_items', body, accessToken.value).then(function(created) {
-          items.value.unshift(created);
+          var exists = items.value.some(function(i) { return i.id === created.id; });
+          if (!exists) items.value.unshift(created);
           knownItemIds.add(created.id);
           newItemName.value = '';
           newItemQty.value = '1';

@@ -1190,7 +1190,8 @@
     setTimeout(function() { suppressNotifications = false; }, 3000);
 
     apiRest('POST', 'shopping_items', body).then(function(created) {
-      items.unshift(created);
+      var exists = items.some(function(i) { return i.id === created.id; });
+      if (!exists) items.unshift(created);
       knownItemIds.add(created.id);
       renderItems();
       nameInput.value = '';

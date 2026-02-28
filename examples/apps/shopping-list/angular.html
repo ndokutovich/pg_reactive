@@ -1033,7 +1033,8 @@
 
     return api.rest('POST', 'shopping_items', body).then(function(created) {
       var currentItems = self.items$.getValue();
-      currentItems.unshift(created);
+      var exists = currentItems.some(function(i) { return i.id === created.id; });
+      if (!exists) currentItems.unshift(created);
       self._knownItemIds.add(created.id);
       self.items$.next(currentItems);
       return created;

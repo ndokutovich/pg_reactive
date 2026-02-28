@@ -1211,7 +1211,7 @@
 
       apiRest('POST', 'shopping_items', body, accessToken).then(created => {
         knownItemIdsRef.current.add(created.id);
-        setItems(prev => [created, ...prev]);
+        setItems(prev => prev.some(i => i.id === created.id) ? prev : [created, ...prev]);
         setItemName('');
         setItemQty('1');
         if (itemNameRef.current) itemNameRef.current.focus();
