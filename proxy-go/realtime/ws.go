@@ -56,10 +56,16 @@ func WSHandler(
 		// a JWT secret is configured.
 		if cfg.JWTSecret != "" {
 			authHeader := r.Header.Get("Authorization")
-			// Check anon key first; if it matches, allow without further JWT validation.
+			apikeyParam := r.URL.Query().Get("apikey")
+
+			// Check anon key — via Authorization header or ?apikey= query param.
+			// WebSocket connections from browsers cannot set custom headers, so
+			// ?apikey= is the primary mechanism for browser-based auth.
 			var isAnon bool
-			if cfg.AnonKey != "" && authHeader == "Bearer "+cfg.AnonKey {
-				isAnon = true
+			if cfg.AnonKey != "" {
+				if authHeader == "Bearer "+cfg.AnonKey || apikeyParam == cfg.AnonKey {
+					isAnon = true
+				}
 			}
 
 			if !isAnon {

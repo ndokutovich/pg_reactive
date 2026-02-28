@@ -8,9 +8,11 @@
  *   PGR.base    — URL base path, e.g. "" or "/pg-reactive"
  *   PGR.wsBase  — WebSocket base, e.g. "wss://host/pg-reactive/ws"
  *   PGR.apiBase — HTTP API base,  e.g. "https://host/pg-reactive/api"
+ *   PGR.anonKey — Anon API key for unauthenticated access (null if auth disabled)
  *
- * Override by setting window.PGR_BASE before loading this script:
+ * Override by setting globals before loading this script:
  *   <script>window.PGR_BASE = '/my-prefix';</script>
+ *   <script>window.PGR_ANON_KEY = 'your-anon-key';</script>
  *   <script src="../config.js"></script>
  */
 (function () {
@@ -29,10 +31,31 @@
   }
 
   var wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  var anonKey = typeof window.PGR_ANON_KEY === 'string' ? window.PGR_ANON_KEY : 'anon-key-12345';
 
   window.PGR = {
     base:    base,
     wsBase:  wsProto + location.host + base + '/ws',
     apiBase: location.origin + base + '/api',
+    anonKey: anonKey,
   };
+
+  // Auto-inject ?apikey= into WebSocket connections targeting /ws/.
+  // Browsers cannot set custom headers on WebSocket handshakes, so the
+  // anon key must be passed as a query parameter. This monkey-patch means
+  // zero changes are required in individual example HTML files.
+  if (anonKey) {
+    var _WS = WebSocket;
+    window.WebSocket = function (url, protocols) {
+      if (url.indexOf('/ws/') !== -1 && url.indexOf('apikey=') === -1) {
+        url += (url.indexOf('?') === -1 ? '?' : '&') + 'apikey=' + encodeURIComponent(anonKey);
+      }
+      return protocols !== undefined ? new _WS(url, protocols) : new _WS(url);
+    };
+    window.WebSocket.prototype = _WS.prototype;
+    window.WebSocket.CONNECTING = _WS.CONNECTING;
+    window.WebSocket.OPEN = _WS.OPEN;
+    window.WebSocket.CLOSING = _WS.CLOSING;
+    window.WebSocket.CLOSED = _WS.CLOSED;
+  }
 })();
