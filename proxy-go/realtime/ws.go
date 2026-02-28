@@ -69,7 +69,9 @@ func WSHandler(
 			}
 
 			if !isAnon {
-				// Try to extract and validate a JWT from Bearer or ?token= param.
+				// Try to extract a JWT from Bearer header or ?token= query param.
+				// Browsers cannot set custom headers on WebSocket upgrades, so
+				// ?token= is the primary mechanism for authenticated WS connections.
 				var token string
 				if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
 					token = authHeader[7:]
@@ -82,6 +84,8 @@ func WSHandler(
 					return
 				}
 
+				// Inject token into Authorization header so ResolveClaims can find it
+				r.Header.Set("Authorization", "Bearer "+token)
 				claims, err := middleware.ResolveClaims(r, cfg)
 				if err != nil || claims.Role == "" {
 					writeWSError(w, http.StatusUnauthorized, "authentication required")
