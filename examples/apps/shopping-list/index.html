@@ -472,7 +472,9 @@
   // ═══════════════════════════════════════════════════════════════
   // CONFIG
   // ═══════════════════════════════════════════════════════════════
-  var API_BASE = location.origin;
+  // Detect base path from URL: /pg-reactive/apps/shopping-list/ → /pg-reactive
+  var _m = location.pathname.match(/^(.*?)\/apps\//);
+  var API_BASE = location.origin + (_m ? _m[1] : '');
   var ANON_KEY = 'anon-key-12345';
   var POLL_INTERVAL = 2000;
 

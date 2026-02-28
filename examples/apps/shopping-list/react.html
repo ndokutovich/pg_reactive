@@ -348,7 +348,8 @@
   // ═══════════════════════════════════════════════════════════════
   // CONFIG
   // ═══════════════════════════════════════════════════════════════
-  const API_BASE = location.origin;
+  const _m = location.pathname.match(/^(.*?)\/apps\//);
+  const API_BASE = location.origin + (_m ? _m[1] : '');
   const ANON_KEY = 'anon-key-12345';
   const POLL_INTERVAL = 2000;
 

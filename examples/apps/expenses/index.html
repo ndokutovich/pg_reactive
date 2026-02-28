@@ -729,7 +729,8 @@
   // ============================================================
   //  CONFIG
   // ============================================================
-  var API_BASE = location.origin;
+  var _m = location.pathname.match(/^(.*?)\/apps\//);
+  var API_BASE = location.origin + (_m ? _m[1] : '');
   var API_KEY = 'anon-key-12345';
 
   var CATEGORY_COLORS = {
