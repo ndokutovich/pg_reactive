@@ -1,7 +1,7 @@
 // What to Buy — Service Worker
 // Provides offline caching for the PWA shell
 
-var CACHE_NAME = 'wtb-v1';
+var CACHE_NAME = 'wtb-v2';
 var SHELL_FILES = [
   './',
   './index.html',
@@ -36,10 +36,8 @@ self.addEventListener('activate', function(event) {
 self.addEventListener('fetch', function(event) {
   var url = new URL(event.request.url);
 
-  // API calls: always go to network
-  if (url.pathname.startsWith('/rest/') ||
-      url.pathname.startsWith('/auth/') ||
-      url.pathname.startsWith('/api/')) {
+  // API calls: always go to network (match regardless of base path prefix)
+  if (/\/(rest|auth|api|ws)\//.test(url.pathname)) {
     return;
   }
 
