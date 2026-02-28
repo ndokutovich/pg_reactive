@@ -451,9 +451,15 @@
 
   function showNotification(title, body, addToast) {
     if ('Notification' in window && Notification.permission === 'granted') {
-      try {
-        new Notification(title, { body, icon: 'icon.svg', tag: 'wtb-' + Date.now() });
-      } catch (e) { /* ignore */ }
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+        navigator.serviceWorker.ready.then(function(reg) {
+          reg.showNotification(title, { body, icon: 'icon.svg', tag: 'wtb-' + Date.now() });
+        }).catch(function() {});
+      } else {
+        try {
+          new Notification(title, { body, icon: 'icon.svg', tag: 'wtb-' + Date.now() });
+        } catch (e) { /* ignore */ }
+      }
     }
     if (addToast) addToast(title + ': ' + body, 'info');
   }

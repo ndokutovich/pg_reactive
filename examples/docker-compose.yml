@@ -19,8 +19,8 @@ services:
       interval: 2s
       timeout: 5s
       retries: 15
-    tmpfs:
-      - /var/lib/postgresql/data
+    volumes:
+      - pgdata:/var/lib/postgresql/data
 
   # Go proxy (compiles in ~30s — use this instead of 'proxy' for faster builds)
   proxy:
@@ -90,6 +90,9 @@ services:
       gateway:
         aliases:
           - pgr-web
+
+volumes:
+  pgdata:
 
 networks:
   gateway:
