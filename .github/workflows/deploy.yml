@@ -9,6 +9,8 @@ on:
       - 'ext/**'
       - 'docker/**'
       - 'docker-compose.yml'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
 
 jobs:
   deploy:
