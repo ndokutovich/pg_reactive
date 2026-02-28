@@ -17,6 +17,9 @@ type SQLConfig struct {
 	ServiceRoleKey    string
 	// RLSConfig is embedded for claim resolution.
 	RLS middleware.RLSConfig
+	// CatalogRefreshFn is called after DDL statements to keep the REST
+	// catalog in sync. May be nil (catalog refresh is skipped).
+	CatalogRefreshFn func() error
 }
 
 // SQL returns an http.HandlerFunc for POST /api/sql.
@@ -112,6 +115,18 @@ func SQL(pool *pgxpool.Pool, cfg SQLConfig) http.HandlerFunc {
 				writeJSONError(w, http.StatusInternalServerError, "SQL execution failed")
 				return
 			}
+
+			// Auto-refresh REST catalog after DDL so new tables/columns
+			// are immediately visible via /rest/v1/.
+			isDDL := strings.HasPrefix(upper, "CREATE") ||
+				strings.HasPrefix(upper, "ALTER") ||
+				strings.HasPrefix(upper, "DROP")
+			if isDDL && cfg.CatalogRefreshFn != nil {
+				if err := cfg.CatalogRefreshFn(); err != nil {
+					log.Warn().Err(err).Msg("auto catalog refresh after DDL failed")
+				}
+			}
+
 			writeJSONOK(w, map[string]any{"ok": true, "rows_affected": ct.RowsAffected()})
 		}
 	}

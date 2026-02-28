@@ -239,6 +239,9 @@ func buildRouter(state *AppState) http.Handler {
 			EnableSQLEndpoint: state.Config.EnableSQLEndpoint,
 			ServiceRoleKey:    state.Config.ServiceRoleKey,
 			RLS:               rlsCfg,
+			CatalogRefreshFn: func() error {
+				return catalog.Refresh(context.Background(), state.Pool)
+			},
 		}))
 
 		r.Post("/api/demo", routes.Demo(
