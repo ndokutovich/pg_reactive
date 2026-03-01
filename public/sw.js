@@ -1,4 +1,4 @@
-const CACHE = 'wtb-v2';
+const CACHE = 'wtb-v3';
 const SHELL = ['./index.html', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', e => {
