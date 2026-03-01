@@ -11,11 +11,12 @@ RUN npm run build
 
 # ── Stage 2: Build Docusaurus docs ────────────────────────────────────────────
 FROM node:20-bookworm-slim AS docs-builder
+ARG DOCS_BASE_URL=/docs/
 WORKDIR /docs-build
 COPY docs/site/package.json docs/site/package-lock.json ./
 RUN npm ci --prefer-offline
 COPY docs/site/ .
-ENV DOCS_URL=http://localhost:8080 DOCS_BASE_URL=/docs/
+ENV DOCS_URL=http://localhost:8080 DOCS_BASE_URL=${DOCS_BASE_URL}
 RUN npm run build
 
 # ── Stage 3: Build Go proxy ────────────────────────────────────────────────────
