@@ -219,7 +219,7 @@ func buildRPCCall(fnName string, meta *FunctionMeta, args map[string]any) (strin
 			callSQL,
 		)
 	} else {
-		sql = fmt.Sprintf(`SELECT %s AS data`, callSQL)
+		sql = fmt.Sprintf(`SELECT to_json(%s) AS data`, callSQL)
 	}
 
 	return sql, params, nil
