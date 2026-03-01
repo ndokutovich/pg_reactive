@@ -15,6 +15,7 @@ COPY --chown=postgres:postgres examples/ /examples/
 
 # Init SQL runs on every fresh start (tmpfs wipes state)
 COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
+COPY public/migration.sql /docker-entrypoint-initdb.d/02-wtb.sql
 
 COPY docker/entrypoint-dev.sh /usr/local/bin/entrypoint-dev.sh
 RUN chmod +x /usr/local/bin/entrypoint-dev.sh
