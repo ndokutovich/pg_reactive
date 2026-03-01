@@ -217,3 +217,20 @@ GRANT EXECUTE ON FUNCTION public.add_numbers(integer, integer) TO anon, authenti
 GRANT EXECUTE ON FUNCTION public.get_greeting(text) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.list_active_authors() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_post_stats() TO anon, authenticated, service_role;
+
+-- Edge Functions registry
+CREATE TABLE IF NOT EXISTS pgstack.edge_functions (
+    name TEXT PRIMARY KEY,
+    runtime TEXT NOT NULL DEFAULT 'deno'
+        CHECK (runtime IN ('deno', 'embedded', 'plv8')),
+    verify_jwt BOOLEAN NOT NULL DEFAULT true,
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'inactive')),
+    code TEXT,
+    import_map JSONB,
+    env_vars JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+GRANT SELECT ON pgstack.edge_functions TO service_role;

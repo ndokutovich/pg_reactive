@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"pgstack-proxy-go/auth"
+	"pgstack-proxy-go/functions"
 	appMiddleware "pgstack-proxy-go/middleware"
 	"pgstack-proxy-go/realtime"
 	"pgstack-proxy-go/rest"
@@ -229,6 +230,9 @@ func buildRouter(state *AppState) http.Handler {
 		r.Get("/rest/v1", routes.OpenAPISpec(catalog))
 		r.Get("/rest/v1/", routes.OpenAPISpec(catalog))
 
+		// Batch transactions (must be before {table} wildcard)
+		r.Post("/rest/v1/batch", rest.Batch(restDeps, state.Config.MaxBatchOperations))
+
 		// RLS debug
 		r.Get("/rest/v1/rls-debug", routes.RLSDebug(state.Pool, rlsCfg))
 
@@ -283,6 +287,39 @@ func buildRouter(state *AppState) http.Handler {
 			r.Get("/object/{bucket}/*", routes.DownloadObject(storageDeps))
 			r.Delete("/object/{bucket}/*", routes.DeleteObject(storageDeps))
 		})
+	})
+
+	// ── Edge Functions routes (/functions/v1/) ───────────────────────────
+	fnCatalog := functions.NewFunctionsCatalog()
+	if err := fnCatalog.Refresh(context.Background(), state.Pool); err != nil {
+		log.Warn().Err(err).Msg("initial edge functions catalog load failed — functions may return 404 until refreshed")
+	} else {
+		log.Info().Msg("edge functions catalog loaded")
+	}
+	fnDeps := &functions.FunctionsDeps{
+		Pool: state.Pool,
+		ResolveClaims: func(r *http.Request) (*rest.RequestClaims, error) {
+			claims, err := appMiddleware.ResolveClaims(r, rlsCfg)
+			if err != nil {
+				return nil, err
+			}
+			return &rest.RequestClaims{
+				Role:       claims.Role,
+				Sub:        claims.Sub,
+				Email:      claims.Email,
+				ClaimsJSON: claims.ClaimsJSON,
+			}, nil
+		},
+		EdgeRuntimeURL: state.Config.EdgeRuntimeURL,
+		Catalog:        fnCatalog,
+		DatabaseURL:    state.Config.DatabaseURL,
+	}
+	r.Group(func(r chi.Router) {
+		r.Use(appMiddleware.SecurityHeaders)
+		r.Get("/functions/v1/", functions.List(fnDeps))
+		r.Post("/functions/v1/_refresh", functions.Refresh(fnDeps))
+		r.Get("/functions/v1/{name}", functions.InvokeGet(fnDeps))
+		r.Post("/functions/v1/{name}", functions.Invoke(fnDeps))
 	})
 
 	// ── User SPA / static files (lowest priority, catch-all) ─────────

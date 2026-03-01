@@ -41,14 +41,18 @@ type Config struct {
 	BroadcastCapacity int
 
 	// HTTP
-	MaxBodySize int64
-	MaxFileSize int64 // storage upload limit (default 50 MB)
+	MaxBodySize        int64
+	MaxFileSize        int64 // storage upload limit (default 50 MB)
+	MaxBatchOperations int   // max operations per batch request (default 20)
 
 	// PG listener reconnect
 	PGReconnectMaxBackoff time.Duration
 
 	// Feature flags
-	EnableSQLEndpoint bool
+	EnableSQLEndpoint  bool
+	EmbeddedFunctions  bool   // enable goja embedded JS functions
+	EdgeRuntimeURL     string // URL of Supabase edge-runtime (empty = disabled)
+	FunctionsDir       string // directory for Deno function sources
 
 	// CORS
 	AllowedOrigins []string
@@ -104,11 +108,15 @@ func FromEnv() Config {
 
 	cfg.MaxBodySize = int64(envIntOrDefault("MAX_BODY_SIZE", 1024*1024))
 	cfg.MaxFileSize = int64(envIntOrDefault("MAX_FILE_SIZE", 52428800)) // 50 MB default for storage uploads
+	cfg.MaxBatchOperations = envIntOrDefault("MAX_BATCH_OPERATIONS", 20)
 
 	pgBackoff := envIntOrDefault("PG_RECONNECT_MAX_BACKOFF", 30)
 	cfg.PGReconnectMaxBackoff = time.Duration(pgBackoff) * time.Second
 
 	cfg.EnableSQLEndpoint = envBoolOrDefault("ENABLE_SQL_ENDPOINT", false)
+	cfg.EmbeddedFunctions = envBoolOrDefault("EMBEDDED_FUNCTIONS", false)
+	cfg.EdgeRuntimeURL = os.Getenv("EDGE_RUNTIME_URL")
+	cfg.FunctionsDir = envOrDefault("FUNCTIONS_DIR", "/functions")
 
 	rawOrigins := os.Getenv("ALLOWED_ORIGINS")
 	if rawOrigins != "" {

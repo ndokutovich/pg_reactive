@@ -108,6 +108,53 @@ export class PgStackClient {
     }
   }
 
+  /** Execute multiple REST operations in a single database transaction. */
+  async batch(
+    operations: BatchOperation[],
+    options?: { atomic?: boolean },
+  ): Promise<{ data: BatchResponse | null; error: PgStackError | null }> {
+    try {
+      const res = await fetch(`${this.url}/rest/v1/batch`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          atomic: options?.atomic ?? true,
+          operations,
+        }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 207) {
+        return {
+          data: null,
+          error: {
+            message: body.error || res.statusText,
+            status: res.status,
+          },
+        };
+      }
+      return { data: body as BatchResponse, error: null };
+    } catch (e) {
+      return {
+        data: null,
+        error: {
+          message: e instanceof Error ? e.message : String(e),
+          status: 0,
+        },
+      };
+    }
+  }
+
+  /** Access the edge functions client. */
+  get functions(): EdgeFunctionsClient {
+    if (!this._functionsClient) {
+      this._functionsClient = new EdgeFunctionsClient(this.url, () => this.getHeaders());
+    }
+    return this._functionsClient;
+  }
+
+  private _functionsClient?: EdgeFunctionsClient;
+
   /** Get the current auth headers. */
   private getHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
@@ -118,9 +165,83 @@ export class PgStackClient {
   }
 }
 
+/** A single operation in a batch request. */
+export interface BatchOperation {
+  id?: string;
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  path: string;
+  query?: string;
+  body?: unknown;
+}
+
+/** Result of a single operation within a batch. */
+export interface BatchResult {
+  id: string;
+  status: number;
+  data?: unknown;
+  error?: string;
+}
+
+/** Response from POST /rest/v1/batch. */
+export interface BatchResponse {
+  results: BatchResult[];
+  error?: string;
+  failed_operation?: string;
+}
+
 export interface PgStackError {
   message: string;
   status: number;
+}
+
+/** Client for invoking edge functions via /functions/v1/{name}. */
+export class EdgeFunctionsClient {
+  constructor(
+    private url: string,
+    private headersFn: () => Record<string, string>,
+  ) {}
+
+  /** Invoke an edge function by name. */
+  async invoke<T = unknown>(
+    name: string,
+    options?: {
+      body?: unknown;
+      method?: 'POST' | 'GET';
+      headers?: Record<string, string>;
+    },
+  ): Promise<{ data: T | null; error: PgStackError | null }> {
+    const method = options?.method ?? 'POST';
+    const headers = { ...this.headersFn(), ...options?.headers };
+
+    const fetchOpts: RequestInit = { method, headers };
+    if (method === 'POST' && options?.body !== undefined) {
+      fetchOpts.body = JSON.stringify(options.body);
+    }
+
+    try {
+      const res = await fetch(`${this.url}/functions/v1/${encodeURIComponent(name)}`, fetchOpts);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return {
+          data: null,
+          error: {
+            message: (body as Record<string, string>).error || res.statusText,
+            status: res.status,
+          },
+        };
+      }
+      const data = (await res.json()) as T;
+      return { data, error: null };
+    } catch (e) {
+      return {
+        data: null,
+        error: {
+          message: e instanceof Error ? e.message : String(e),
+          status: 0,
+        },
+      };
+    }
+  }
 }
 
 /**

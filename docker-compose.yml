@@ -42,6 +42,18 @@ services:
       db:
         condition: service_healthy
 
+  # Optional: Supabase edge-runtime for Deno-based edge functions.
+  # Uncomment to enable. Set EDGE_RUNTIME_URL=http://edge-runtime:9000 on proxy-go.
+  # edge-runtime:
+  #   image: supabase/edge-runtime:v1.62.2
+  #   environment:
+  #     PGSTACK_DB_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
+  #   volumes:
+  #     - ./supabase/functions:/functions:ro
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+
   proxy:
     build:
       context: .

@@ -8,6 +8,7 @@ import { registerDbCommand } from "./commands/db.js";
 import { registerGenerateCommand } from "./commands/generate.js";
 import { registerDbosCommand } from "./commands/dbos.js";
 import { registerDeployCommand } from "./commands/deploy.js";
+import { registerFunctionsCommand } from "./commands/functions.js";
 
 const program = new Command();
 
@@ -25,5 +26,6 @@ registerDbCommand(program);
 registerGenerateCommand(program);
 registerDbosCommand(program);
 registerDeployCommand(program);
+registerFunctionsCommand(program);
 
 program.parse();
