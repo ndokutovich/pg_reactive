@@ -6,6 +6,8 @@ import { registerDevCommand } from "./commands/dev.js";
 import { registerMigrationCommand } from "./commands/migration.js";
 import { registerDbCommand } from "./commands/db.js";
 import { registerGenerateCommand } from "./commands/generate.js";
+import { registerDbosCommand } from "./commands/dbos.js";
+import { registerDeployCommand } from "./commands/deploy.js";
 
 const program = new Command();
 
@@ -21,5 +23,7 @@ registerDevCommand(program);
 registerMigrationCommand(program);
 registerDbCommand(program);
 registerGenerateCommand(program);
+registerDbosCommand(program);
+registerDeployCommand(program);
 
 program.parse();

@@ -42,6 +42,7 @@ type Config struct {
 
 	// HTTP
 	MaxBodySize int64
+	MaxFileSize int64 // storage upload limit (default 50 MB)
 
 	// PG listener reconnect
 	PGReconnectMaxBackoff time.Duration
@@ -102,6 +103,7 @@ func FromEnv() Config {
 	cfg.BroadcastCapacity = envIntOrDefault("BROADCAST_CAPACITY", 1024)
 
 	cfg.MaxBodySize = int64(envIntOrDefault("MAX_BODY_SIZE", 1024*1024))
+	cfg.MaxFileSize = int64(envIntOrDefault("MAX_FILE_SIZE", 52428800)) // 50 MB default for storage uploads
 
 	pgBackoff := envIntOrDefault("PG_RECONNECT_MAX_BACKOFF", 30)
 	cfg.PGReconnectMaxBackoff = time.Duration(pgBackoff) * time.Second

@@ -18,6 +18,7 @@
 /* GUC variables */
 extern int pgr_max_subscriptions;
 extern char *pgr_notify_channel;
+extern bool pgr_batch_invalidation;
 
 /*
  * Column bitmask: bit N corresponds to attnum (N+1).
@@ -54,6 +55,7 @@ typedef struct PgrSharedState
 	int64		unsubscribe_count;	/* total unsubscribe calls */
 	int64		invalidation_count;	/* total invalidations */
 	int64		eviction_count;		/* total LRU evictions */
+	int64		recompute_count;	/* total recomputes executed */
 } PgrSharedState;
 
 /*

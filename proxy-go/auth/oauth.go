@@ -110,6 +110,18 @@ func Callback(d *Deps) http.HandlerFunc {
 		code := r.URL.Query().Get("code")
 		state := r.URL.Query().Get("state")
 
+		// Handle provider-side user denial (e.g. ?error=access_denied).
+		if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
+			desc := r.URL.Query().Get("error_description")
+			if desc == "" {
+				desc = oauthErr
+			}
+			redirectURL := fmt.Sprintf("%s#error=%s&error_description=%s",
+				d.SiteURL, url.QueryEscape(oauthErr), url.QueryEscape(desc))
+			http.Redirect(w, r, redirectURL, http.StatusFound)
+			return
+		}
+
 		if code == "" || state == "" {
 			writeError(w, http.StatusBadRequest, "code and state are required")
 			return
@@ -149,7 +161,9 @@ func Callback(d *Deps) http.HandlerFunc {
 		}
 		if err != nil {
 			log.Error().Err(err).Str("provider", provider).Msg("oauth exchange")
-			writeError(w, http.StatusBadGateway, "oauth provider error")
+			redirectURL := fmt.Sprintf("%s#error=server_error&error_description=%s",
+				d.SiteURL, url.QueryEscape("oauth provider error: "+err.Error()))
+			http.Redirect(w, r, redirectURL, http.StatusFound)
 			return
 		}
 

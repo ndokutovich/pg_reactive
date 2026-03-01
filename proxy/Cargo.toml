@@ -36,6 +36,9 @@ reqwest = { version = "0.12", features = ["json"] }
 # URL parsing
 urlencoding = "2"
 
+# UUID parsing/validation
+uuid = "1"
+
 # Email
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls", "smtp-transport", "builder"], default-features = false }
 

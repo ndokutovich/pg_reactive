@@ -141,6 +141,9 @@ func ResolveEmbed(catalog *Catalog, parentTable *TableMeta, req EmbedRequest, de
 	// 1. ManyToOne: parentTable has a FK pointing at targetTable.
 	for _, fk := range parentTable.ForeignKeys {
 		if fk.ReferencedTable == targetKey {
+			if err := validateEmbedColumns(target, req.Columns); err != nil {
+				return nil, err
+			}
 			re := &ResolvedEmbed{
 				RelationName: req.Relation,
 				TargetTable:  target,
@@ -159,6 +162,9 @@ func ResolveEmbed(catalog *Catalog, parentTable *TableMeta, req EmbedRequest, de
 	// 2. OneToMany: targetTable has a FK pointing at parentTable.
 	for _, fk := range target.ForeignKeys {
 		if fk.ReferencedTable == parentKey {
+			if err := validateEmbedColumns(target, req.Columns); err != nil {
+				return nil, err
+			}
 			re := &ResolvedEmbed{
 				RelationName: req.Relation,
 				TargetTable:  target,
@@ -175,6 +181,24 @@ func ResolveEmbed(catalog *Catalog, parentTable *TableMeta, req EmbedRequest, de
 	}
 
 	return nil, fmt.Errorf("embed: no FK relationship found between %q and %q", parentTable.Name, req.Relation)
+}
+
+// validateEmbedColumns checks that all user-requested columns exist in the
+// target table.  Columns named "*" are always allowed.
+func validateEmbedColumns(target *TableMeta, columns []string) error {
+	if len(columns) == 0 {
+		return nil
+	}
+	colSet := target.columnSet()
+	for _, c := range columns {
+		if c == "*" {
+			continue
+		}
+		if _, ok := colSet[c]; !ok {
+			return fmt.Errorf("column %q not found in table %q", c, target.Name)
+		}
+	}
+	return nil
 }
 
 func resolveChildren(catalog *Catalog, parent *ResolvedEmbed, children []EmbedRequest, depth int) error {

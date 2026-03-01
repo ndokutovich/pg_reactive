@@ -24,6 +24,7 @@ PG_MODULE_MAGIC;
 /* GUC variables */
 int pgr_max_subscriptions = 1024;
 char *pgr_notify_channel = "pgr";
+bool pgr_batch_invalidation = true;
 
 void _PG_init(void);
 
@@ -535,12 +536,21 @@ pgr_unsubscribe(PG_FUNCTION_ARGS)
 	int			num_tables = 0;
 	char		entry_mode = 'd';
 	bool		found;
-	PgrDepEntry *entry;
 
-	/* Read mode and copy table OIDs under lock before removing */
-	entry = pgr_dep_find(query_id);
-	if (entry != NULL)
-		entry_mode = entry->mode;
+	/* Read mode under lock before removing (entry pointer is invalid after release) */
+	{
+		char		find_key[PGR_QUERY_ID_LEN];
+		PgrDepEntry *e;
+		bool		found_e;
+
+		memset(find_key, 0, PGR_QUERY_ID_LEN);
+		strlcpy(find_key, query_id, PGR_QUERY_ID_LEN);
+		LWLockAcquire(pgr_state->lock, LW_SHARED);
+		e = (PgrDepEntry *) hash_search(pgr_dep_hash, find_key, HASH_FIND, &found_e);
+		if (found_e && e != NULL)
+			entry_mode = e->mode;
+		LWLockRelease(pgr_state->lock);
+	}
 
 	num_tables = pgr_dep_copy_tables(query_id, table_oids,
 									 PGR_MAX_DEPS_PER_QUERY);
@@ -623,14 +633,23 @@ pgr_unsubscribe_all_for_table(Oid table_oid, const char *reason)
 		int			num_tables;
 		char		entry_mode = 'd';
 		bool		found;
-		PgrDepEntry *entry;
 		int			j;
 		char		dummy[1][PGR_QUERY_ID_LEN];
 
-		/* Read mode before removing */
-		entry = pgr_dep_find(query_ids[i]);
-		if (entry != NULL)
-			entry_mode = entry->mode;
+		/* Read mode under lock before removing (pointer invalid after release) */
+		{
+			char		find_key[PGR_QUERY_ID_LEN];
+			PgrDepEntry *e;
+			bool		found_e;
+
+			memset(find_key, 0, PGR_QUERY_ID_LEN);
+			strlcpy(find_key, query_ids[i], PGR_QUERY_ID_LEN);
+			LWLockAcquire(pgr_state->lock, LW_SHARED);
+			e = (PgrDepEntry *) hash_search(pgr_dep_hash, find_key, HASH_FIND, &found_e);
+			if (found_e && e != NULL)
+				entry_mode = e->mode;
+			LWLockRelease(pgr_state->lock);
+		}
 
 		num_tables = pgr_dep_copy_tables(query_ids[i], tbl_oids,
 										 PGR_MAX_DEPS_PER_QUERY);
@@ -761,7 +780,7 @@ pgr_stats(PG_FUNCTION_ARGS)
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "value",
 						   TEXTOID, -1, 0);
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
-		funcctx->max_calls = 6;
+		funcctx->max_calls = 7;
 		funcctx->call_cntr = 0;
 
 		MemoryContextSwitchTo(oldcontext);
@@ -811,6 +830,11 @@ pgr_stats(PG_FUNCTION_ARGS)
 				values[0] = CStringGetTextDatum("total_evictions");
 				snprintf(valbuf, sizeof(valbuf), "%ld",
 						 pgr_state->eviction_count);
+				break;
+			case 6:
+				values[0] = CStringGetTextDatum("total_recomputes");
+				snprintf(valbuf, sizeof(valbuf), "%ld",
+						 pgr_state->recompute_count);
 				break;
 			default:
 				LWLockRelease(pgr_state->lock);
@@ -869,6 +893,21 @@ _PG_init(void)
 							   0,
 							   NULL, NULL, NULL);
 
+	/* GUC: pg_reactive.batch_invalidation
+	 * PGC_SUSET: only superusers can change. Using PGC_USERSET would allow
+	 * mid-transaction toggling which silently drops notifications when the
+	 * trigger marks dirty (batch path) but pre-commit sees batch=off. */
+	DefineCustomBoolVariable("pg_reactive.batch_invalidation",
+							 "Batch recomputes within a transaction",
+							 "When enabled, DML triggers defer recompute to "
+							 "transaction pre-commit, batching multiple DML "
+							 "statements into a single recompute per query.",
+							 &pgr_batch_invalidation,
+							 true,		/* default on */
+							 PGC_SUSET,
+							 0,
+							 NULL, NULL, NULL);
+
 	/* GUC: pg_reactive.notify_channel */
 	DefineCustomStringVariable("pg_reactive.notify_channel",
 							   "NOTIFY channel name for pg_reactive notifications",
@@ -893,8 +932,9 @@ _PG_init(void)
 	if (pgr_async_recompute)
 		pgr_bgworker_register();
 
-	elog(LOG, "pg_reactive %s: loaded (max_subscriptions=%d, async_recompute=%s, notify_channel=%s)",
+	elog(LOG, "pg_reactive %s: loaded (max_subscriptions=%d, async_recompute=%s, batch_invalidation=%s, notify_channel=%s)",
 		 PG_REACTIVE_VERSION, pgr_max_subscriptions,
 		 pgr_async_recompute ? "on" : "off",
+		 pgr_batch_invalidation ? "on" : "off",
 		 pgr_notify_channel);
 }

@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,10 +77,24 @@ func listenOnce(ctx context.Context, dbURL string, channels *sync.Map, connected
 
 		if v, ok := channels.Load(msg.QueryID); ok {
 			ch := v.(chan string)
-			// Non-blocking send: drop if no receivers are ready.
+			// Non-blocking send: if the channel is full, drain one item
+			// and push an overflow notification so the client knows to
+			// refetch the full snapshot.
 			select {
 			case ch <- payload:
 			default:
+				// Channel full — drain the oldest message to make room.
+				// Since listenOnce is the sole writer to this channel,
+				// the slot freed by the drain is guaranteed to be available.
+				select {
+				case <-ch:
+				default:
+				}
+				overflow := fmt.Sprintf(
+					`{"type":"overflow","query_id":%q,"fetch":true}`,
+					msg.QueryID,
+				)
+				ch <- overflow
 			}
 		}
 	}

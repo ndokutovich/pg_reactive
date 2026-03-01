@@ -152,26 +152,29 @@ func Insert(d *RestDeps) http.HandlerFunc {
 				writeJSONError(w, http.StatusBadRequest, "invalid JSON array body")
 				return
 			}
+			if len(rows) == 0 {
+				if minimal {
+					w.WriteHeader(http.StatusCreated)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte("[]"))
+				return
+			}
 
-			var results []json.RawMessage
-			for _, row := range rows {
-				bq, err := BuildInsert(tm, row)
-				if err != nil {
-					writeJSONError(w, http.StatusBadRequest, err.Error())
-					return
-				}
-				var raw json.RawMessage
-				dbRow := tx.QueryRow(r.Context(), bq.SQL, bq.Params...)
-				if err := dbRow.Scan(&raw); err != nil {
-					status, msg := pgHTTPStatus(err)
-					writeJSONError(w, status, msg)
-					return
-				}
-				// raw is a json array from COALESCE(json_agg(...), '[]'); unwrap it.
-				var arr []json.RawMessage
-				if json.Unmarshal(raw, &arr) == nil && len(arr) > 0 {
-					results = append(results, arr...)
-				}
+			bq, err := BuildBulkInsert(tm, rows)
+			if err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+
+			var raw json.RawMessage
+			dbRow := tx.QueryRow(r.Context(), bq.SQL, bq.Params...)
+			if err := dbRow.Scan(&raw); err != nil {
+				status, msg := pgHTTPStatus(err)
+				writeJSONError(w, status, msg)
+				return
 			}
 
 			if err := tx.Commit(r.Context()); err != nil {
@@ -184,10 +187,9 @@ func Insert(d *RestDeps) http.HandlerFunc {
 				w.WriteHeader(http.StatusCreated)
 				return
 			}
-			out, _ := json.Marshal(results)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write(out)
+			_, _ = w.Write(raw)
 			return
 		}
 

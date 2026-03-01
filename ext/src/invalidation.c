@@ -276,6 +276,14 @@ pgr_trigger_func(PG_FUNCTION_ARGS)
 		 * and the background worker will handle recompute. */
 		pgr_mark_dirty_table(table_oid);
 	}
+	else if (pgr_batch_invalidation)
+	{
+		/* Batch mode: defer recompute to pre-commit.
+		 * The dirty list already tracks which query_ids need recompute.
+		 * The xact callback will process them all at once, avoiding
+		 * redundant recomputes when multiple DML statements in the same
+		 * transaction touch the same table. */
+	}
 	else
 	{
 		/* Sync mode: recompute inline within the trigger.
@@ -899,14 +907,51 @@ run_ddl:
 }
 
 /*
- * Transaction callback: clear dirty list on commit or abort.
- * (In Phase 4, pre-commit will trigger recompute before clearing.)
+ * Transaction callback: batch recompute at pre-commit, clear on commit/abort.
+ *
+ * When batch_invalidation is enabled (default), recompute is deferred from
+ * individual triggers to this callback. At XACT_EVENT_PRE_COMMIT we process
+ * the dirty list once — one recompute per unique query_id regardless of how
+ * many DML statements touched the same tables.
+ *
+ * SPI is available during PRE_COMMIT because the transaction is still open.
  */
 static void
 pgr_xact_callback(XactEvent event, void *arg)
 {
 	switch (event)
 	{
+		case XACT_EVENT_PRE_COMMIT:
+			/*
+			 * Batch mode: recompute all dirty queries before commit.
+			 * Skip if async mode (background worker handles recompute)
+			 * or if batch is disabled (already done inline in triggers).
+			 */
+			if (pgr_batch_invalidation && !pgr_async_recompute &&
+				dirty_list != NULL && dirty_list->count > 0)
+			{
+				int		i;
+
+				SPI_connect();
+				PushActiveSnapshot(GetTransactionSnapshot());
+
+				PG_TRY();
+				{
+					for (i = 0; i < dirty_list->count; i++)
+						pgr_recompute_query(dirty_list->query_ids[i]);
+				}
+				PG_CATCH();
+				{
+					PopActiveSnapshot();
+					SPI_finish();
+					PG_RE_THROW();
+				}
+				PG_END_TRY();
+
+				PopActiveSnapshot();
+				SPI_finish();
+			}
+			break;
 		case XACT_EVENT_COMMIT:
 			/* In async mode, push dirty table OIDs to shared queue
 			 * so the background worker can recompute after commit. */

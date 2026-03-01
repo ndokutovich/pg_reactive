@@ -94,14 +94,27 @@ pub async fn sql_execute(
             }
         }
     } else {
-        match sqlx::query(sql).execute(&state.pg_pool).await {
-            Ok(result) => (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "ok": true,
-                    "rows_affected": result.rows_affected(),
-                })),
-            ),
+        let result = match sqlx::query(sql).execute(&state.pg_pool).await {
+            Ok(result) => {
+                // Auto-refresh catalog after DDL statements
+                let trimmed_upper = sql.trim().to_uppercase();
+                if trimmed_upper.starts_with("CREATE")
+                    || trimmed_upper.starts_with("ALTER")
+                    || trimmed_upper.starts_with("DROP")
+                {
+                    if let Err(e) = state.catalog.refresh(&state.pg_pool).await {
+                        tracing::warn!("catalog refresh after DDL failed: {}", e);
+                    }
+                }
+
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "ok": true,
+                        "rows_affected": result.rows_affected(),
+                    })),
+                )
+            }
             Err(e) => {
                 tracing::error!("SQL execution failed: {}", e);
                 (
@@ -109,6 +122,7 @@ pub async fn sql_execute(
                     Json(serde_json::json!({"error": "SQL execution failed"})),
                 )
             }
-        }
+        };
+        result
     }
 }

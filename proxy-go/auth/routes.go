@@ -85,8 +85,12 @@ func Signup(d *Deps) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid email address")
 			return
 		}
-		if len(body.Password) < 6 {
-			writeError(w, http.StatusBadRequest, "password must be at least 6 characters")
+		if len(body.Password) < 8 {
+			writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+			return
+		}
+		if len(body.Password) > 256 {
+			writeError(w, http.StatusBadRequest, "password must be at most 256 characters")
 			return
 		}
 
@@ -452,8 +456,12 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 		}
 
 		if body.Password != nil {
-			if len(*body.Password) < 6 {
-				writeError(w, http.StatusBadRequest, "password must be at least 6 characters")
+			if len(*body.Password) < 8 {
+				writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+				return
+			}
+			if len(*body.Password) > 256 {
+				writeError(w, http.StatusBadRequest, "password must be at most 256 characters")
 				return
 			}
 			hashed, err := HashPassword(*body.Password)
@@ -590,8 +598,12 @@ func RecoverConfirm(d *Deps) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "token is required")
 			return
 		}
-		if len(body.Password) < 6 {
-			writeError(w, http.StatusBadRequest, "password must be at least 6 characters")
+		if len(body.Password) < 8 {
+			writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+			return
+		}
+		if len(body.Password) > 256 {
+			writeError(w, http.StatusBadRequest, "password must be at most 256 characters")
 			return
 		}
 
@@ -991,8 +1003,12 @@ func AdminCreateUser(d *Deps) http.HandlerFunc {
 
 		var hashedPwd *string
 		if body.Password != "" {
-			if len(body.Password) < 6 {
-				writeError(w, http.StatusBadRequest, "password must be at least 6 characters")
+			if len(body.Password) < 8 {
+				writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+				return
+			}
+			if len(body.Password) > 256 {
+				writeError(w, http.StatusBadRequest, "password must be at most 256 characters")
 				return
 			}
 			h, err := HashPassword(body.Password)

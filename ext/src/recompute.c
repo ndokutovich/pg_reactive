@@ -41,6 +41,119 @@ pgr_is_json_numeric_type(Oid typid)
 }
 
 /*
+ * Recompute a single query by query_id.
+ * Handles both delta and notify modes.
+ *
+ * Must be called from within an SPI-connected context.
+ */
+void
+pgr_recompute_query(const char *query_id)
+{
+	char		local_qid[PGR_QUERY_ID_LEN];
+	char		local_qtext[PGR_QUERY_TEXT_LEN];
+	char		local_mode;
+	char		*delta_json;
+	int64		seq;
+	int			max_payload;
+
+	if (pgr_state == NULL || pgr_dep_hash == NULL)
+		return;
+
+	/*
+	 * Atomically increment seq and update stats under the exclusive lock.
+	 * seq is a notification attempt counter — it increments whenever a
+	 * trigger fires for this query. Clients detect missed notifications
+	 * by observing gaps in the sequence.
+	 * Returns -1 if the entry was removed (concurrent unsubscribe).
+	 */
+	seq = pgr_dep_increment_seq(query_id);
+	if (seq < 0)
+		return;
+
+	/* Increment shared recompute counter */
+	LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
+	pgr_state->recompute_count++;
+	LWLockRelease(pgr_state->lock);
+
+	/*
+	 * Copy entry fields into local buffers while holding the lock.
+	 * The entry pointer from pgr_dep_find points into shared memory and
+	 * can be invalidated by a concurrent pgr_dep_remove (HASH_REMOVE)
+	 * after the lock is released. Copying under the lock prevents
+	 * use-after-free on the shared hash entry.
+	 */
+	{
+		PgrDepEntry *entry;
+		bool		found;
+		char		key[PGR_QUERY_ID_LEN];
+
+		memset(key, 0, PGR_QUERY_ID_LEN);
+		strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+
+		LWLockAcquire(pgr_state->lock, LW_SHARED);
+		entry = (PgrDepEntry *) hash_search(pgr_dep_hash, key,
+											HASH_FIND, &found);
+		if (!found || entry == NULL)
+		{
+			LWLockRelease(pgr_state->lock);
+			return;		/* removed between seq increment and find (benign) */
+		}
+
+		strlcpy(local_qid, entry->query_id, PGR_QUERY_ID_LEN);
+		strlcpy(local_qtext, entry->query_text, PGR_QUERY_TEXT_LEN);
+		local_mode = entry->mode;
+		LWLockRelease(pgr_state->lock);
+	}
+
+	/* Compute payload limit for the configured channel */
+	max_payload = PGR_NOTIFY_MAX_PAYLOAD_FOR_CHANNEL(pgr_notify_channel);
+
+	/*
+	 * Notify mode: lightweight invalidation, no query execution.
+	 */
+	if (local_mode == 'n')
+	{
+		StringInfoData inv;
+
+		initStringInfo(&inv);
+		appendStringInfoString(&inv,
+							   "{\"type\":\"invalidated\",\"query_id\":");
+		pgr_json_escape_string(&inv, local_qid);
+		appendStringInfo(&inv, ",\"seq\":" INT64_FORMAT "}", seq);
+		Async_Notify(pgr_notify_channel, inv.data);
+		pfree(inv.data);
+		return;
+	}
+
+	/* Delta mode: full EXCEPT-based diff computation */
+	delta_json = pgr_build_delta_json(local_qid, local_qtext, seq);
+
+	if (delta_json != NULL)
+	{
+		if ((int) strlen(delta_json) <= max_payload)
+		{
+			Async_Notify(pgr_notify_channel, delta_json);
+		}
+		else
+		{
+			StringInfoData overflow;
+
+			initStringInfo(&overflow);
+			appendStringInfoString(&overflow,
+								   "{\"type\":\"overflow\",\"query_id\":");
+			pgr_json_escape_string(&overflow, local_qid);
+			appendStringInfo(&overflow,
+							 ",\"seq\":" INT64_FORMAT ",\"fetch\":true}",
+							 seq);
+			Async_Notify(pgr_notify_channel, overflow.data);
+			pfree(overflow.data);
+		}
+
+		pfree(delta_json);
+	}
+}
+
+/*
  * Recompute all queries that depend on a given table.
  * Called from the trigger function (AFTER STATEMENT), where SPI is available.
  *
@@ -61,82 +174,7 @@ pgr_recompute_for_table(Oid table_oid)
 		return;
 
 	for (i = 0; i < count; i++)
-	{
-		PgrDepEntry *entry;
-		char		*delta_json;
-		int64		seq;
-		int			max_payload;
-
-		/*
-		 * Atomically increment seq and update stats under the exclusive lock.
-		 * seq is a notification attempt counter — it increments whenever a
-		 * trigger fires for this query. Clients detect missed notifications
-		 * by observing gaps in the sequence.
-		 * Returns -1 if the entry was removed (concurrent unsubscribe).
-		 */
-		seq = pgr_dep_increment_seq(query_ids[i]);
-		if (seq < 0)
-			continue;
-
-		/* Look up entry to get mode and query fields for notification */
-		entry = pgr_dep_find(query_ids[i]);
-		if (entry == NULL)
-			continue;	/* removed between seq increment and find (benign) */
-
-		/* Compute payload limit for the configured channel */
-		max_payload = PGR_NOTIFY_MAX_PAYLOAD_FOR_CHANNEL(pgr_notify_channel);
-
-		/*
-		 * Notify mode: lightweight invalidation, no query execution.
-		 * Note: entry pointer is valid for shared reads here — PG hash
-		 * entries are stable in memory while the LWLock prevents structural
-		 * changes. The trigger fires while the DML transaction is still
-		 * open, so concurrent unsubscribe (which takes the exclusive lock)
-		 * cannot race here.
-		 */
-		if (entry->mode == 'n')
-		{
-			StringInfoData inv;
-
-			initStringInfo(&inv);
-			appendStringInfoString(&inv,
-								   "{\"type\":\"invalidated\",\"query_id\":");
-			pgr_json_escape_string(&inv, entry->query_id);
-			appendStringInfo(&inv, ",\"seq\":" INT64_FORMAT "}", seq);
-			Async_Notify(pgr_notify_channel, inv.data);
-			pfree(inv.data);
-			continue;
-		}
-
-		/* Delta mode: full EXCEPT-based diff computation */
-		delta_json = pgr_build_delta_json(entry->query_id,
-										  entry->query_text,
-										  seq);
-
-		if (delta_json != NULL)
-		{
-			if ((int) strlen(delta_json) <= max_payload)
-			{
-				Async_Notify(pgr_notify_channel, delta_json);
-			}
-			else
-			{
-				StringInfoData overflow;
-
-				initStringInfo(&overflow);
-				appendStringInfoString(&overflow,
-									   "{\"type\":\"overflow\",\"query_id\":");
-				pgr_json_escape_string(&overflow, entry->query_id);
-				appendStringInfo(&overflow,
-								 ",\"seq\":" INT64_FORMAT ",\"fetch\":true}",
-								 seq);
-				Async_Notify(pgr_notify_channel, overflow.data);
-				pfree(overflow.data);
-			}
-
-			pfree(delta_json);
-		}
-	}
+		pgr_recompute_query(query_ids[i]);
 }
 
 /*

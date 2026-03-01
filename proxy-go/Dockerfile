@@ -21,13 +21,18 @@ RUN go mod download
 COPY proxy-go/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o pgstack-proxy-go .
 
-# ── Stage 3: Minimal runtime image ─────────────────────────────────────────────
-FROM gcr.io/distroless/static-debian12
+# ── Stage 3: Runtime image ────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --no-log-init --shell /bin/false appuser
 
-COPY --from=builder /app/pgstack-proxy-go /pgstack-proxy-go
+COPY --from=builder /app/pgstack-proxy-go /usr/local/bin/pgstack-proxy
 COPY --from=studio-builder /studio-build/dist /studio
 
 ENV STUDIO_DIR=/studio
 EXPOSE 8080
 
-ENTRYPOINT ["/pgstack-proxy-go"]
+USER appuser
+CMD ["pgstack-proxy"]

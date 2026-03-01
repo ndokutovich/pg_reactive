@@ -250,13 +250,22 @@ func (c *Catalog) GetTable(name string) *TableMeta {
 	return nil
 }
 
-// ListTables returns all tables in the given schema.
+// ListTables returns all tables in the given schema.  If schema is empty, all
+// tables across every schema are returned.
 func (c *Catalog) ListTables(schema string) []*TableMeta {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	prefix := schema + "."
 	var out []*TableMeta
+	if schema == "" {
+		// Return everything.
+		for _, tm := range c.tables {
+			out = append(out, tm)
+		}
+		return out
+	}
+
+	prefix := schema + "."
 	for k, tm := range c.tables {
 		if strings.HasPrefix(k, prefix) {
 			out = append(out, tm)

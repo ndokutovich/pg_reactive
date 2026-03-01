@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 
 use axum::routing::{delete, get, post};
 use axum::Router;
-use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
@@ -43,10 +43,12 @@ async fn main() {
         warn!("ALLOWED_ORIGINS not set — CORS is permissive (set to restrict in production)");
     }
 
-    let pg_pool = PgPool::connect(&config.database_url)
+    let pg_pool = PgPoolOptions::new()
+        .max_connections(50)
+        .connect(&config.database_url)
         .await
         .expect("failed to connect to PostgreSQL");
-    info!("PG connection pool ready");
+    info!("PG connection pool ready (max_connections=50)");
 
     let state = AppState::new(config.clone(), pg_pool);
 
@@ -190,14 +192,37 @@ async fn ws_handler(
             .and_then(|v| v.to_str().ok());
         let query_str = req.0.query();
 
-        // Check anon key first (it's not a JWT, so don't try to validate it as one)
+        // Check anon key first via Bearer header (it's not a JWT, so don't try to validate it as one)
         let is_anon_key = state.config.anon_key.as_ref().map_or(false, |ak| {
             auth_header
                 .and_then(|h| h.strip_prefix("Bearer "))
                 .map_or(false, |t| auth::keys::constant_time_eq(t, ak))
         });
 
-        if !is_anon_key {
+        // Also check ?apikey= query param (browsers can't set custom headers on WebSocket)
+        let is_apikey_auth = if !is_anon_key {
+            if let Some(q) = query_str {
+                let apikey_value = q.split('&')
+                    .find_map(|pair| pair.strip_prefix("apikey="));
+                if let Some(key) = apikey_value {
+                    // Check against anon_key
+                    let is_anon = state.config.anon_key.as_ref()
+                        .map_or(false, |ak| auth::keys::constant_time_eq(key, ak));
+                    // Check against service_role_key
+                    let is_service = state.config.service_role_key.as_ref()
+                        .map_or(false, |srk| auth::keys::constant_time_eq(key, srk));
+                    is_anon || is_service
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !is_anon_key && !is_apikey_auth {
             let token = auth::jwt::extract_token_from_header(auth_header, None, query_str);
             match token {
                 Some(t) => {

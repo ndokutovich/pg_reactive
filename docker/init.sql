@@ -21,6 +21,7 @@ GRANT service_role TO postgres;
 
 -- Auth schema
 CREATE SCHEMA IF NOT EXISTS pgstack;
+GRANT USAGE ON SCHEMA pgstack TO authenticated, anon, service_role;
 
 CREATE TABLE IF NOT EXISTS pgstack.users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -35,6 +36,13 @@ CREATE TABLE IF NOT EXISTS pgstack.users (
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+ALTER TABLE pgstack.users ENABLE ROW LEVEL SECURITY;
+
+-- Users can only see their own record
+CREATE POLICY users_self_select ON pgstack.users
+  FOR SELECT TO authenticated
+  USING (id = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
 
 CREATE TABLE IF NOT EXISTS pgstack.refresh_tokens (
   id bigserial PRIMARY KEY,
@@ -59,13 +67,76 @@ CREATE TABLE IF NOT EXISTS pgstack.email_tokens (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
     token       text NOT NULL UNIQUE,
-    token_type  text NOT NULL CHECK (token_type IN ('verify', 'reset', 'magic_link')),
+    token_type  text NOT NULL CHECK (token_type IN ('email_verification', 'recovery', 'magiclink')),
     used_at     timestamptz,
     expires_at  timestamptz NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_email_tokens_token ON pgstack.email_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON pgstack.email_tokens(user_id);
+
+-- Storage tables
+CREATE TABLE IF NOT EXISTS pgstack.storage_buckets (
+  id text PRIMARY KEY,
+  public boolean DEFAULT false,
+  file_size_limit bigint DEFAULT 52428800,
+  allowed_mime_types text[],
+  created_at timestamptz DEFAULT now()
+);
+
+ALTER TABLE pgstack.storage_buckets ENABLE ROW LEVEL SECURITY;
+CREATE POLICY storage_buckets_select ON pgstack.storage_buckets
+  FOR SELECT TO anon, authenticated USING (true);
+
+CREATE TABLE IF NOT EXISTS pgstack.storage_objects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bucket_id text NOT NULL REFERENCES pgstack.storage_buckets(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  size bigint NOT NULL,
+  mime_type text,
+  data bytea NOT NULL,
+  metadata jsonb DEFAULT '{}',
+  owner uuid REFERENCES pgstack.users(id) ON DELETE SET NULL,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE(bucket_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_storage_objects_bucket ON pgstack.storage_objects(bucket_id);
+CREATE INDEX IF NOT EXISTS idx_storage_objects_owner ON pgstack.storage_objects(owner);
+
+ALTER TABLE pgstack.storage_objects ENABLE ROW LEVEL SECURITY;
+
+-- Public bucket objects: anyone can read
+CREATE POLICY storage_objects_public_select ON pgstack.storage_objects
+  FOR SELECT TO anon, authenticated
+  USING (EXISTS (SELECT 1 FROM pgstack.storage_buckets b WHERE b.id = bucket_id AND b.public = true));
+
+-- Private bucket objects: only owner can read
+CREATE POLICY storage_objects_owner_select ON pgstack.storage_objects
+  FOR SELECT TO authenticated
+  USING (owner = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
+
+-- Authenticated users can insert (owner must match their ID)
+CREATE POLICY storage_objects_insert ON pgstack.storage_objects
+  FOR INSERT TO authenticated
+  WITH CHECK (owner = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
+
+-- Only owner can update their objects
+CREATE POLICY storage_objects_update ON pgstack.storage_objects
+  FOR UPDATE TO authenticated
+  USING (owner = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
+
+-- Only owner can delete their objects
+CREATE POLICY storage_objects_delete ON pgstack.storage_objects
+  FOR DELETE TO authenticated
+  USING (owner = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
+
+-- Table grants for pgstack schema objects
+GRANT SELECT ON pgstack.storage_buckets TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON pgstack.storage_objects TO authenticated;
+GRANT SELECT ON pgstack.storage_objects TO anon;
+GRANT SELECT ON pgstack.users TO authenticated;
 
 -- Default grants for public schema
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;

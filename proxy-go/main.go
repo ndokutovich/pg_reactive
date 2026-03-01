@@ -225,6 +225,10 @@ func buildRouter(state *AppState) http.Handler {
 		r.Get("/rest/v1/rpc/{function}", rest.RPCGet(restDeps))
 		r.Post("/rest/v1/rpc/{function}", rest.RPCPost(restDeps))
 
+		// OpenAPI spec (must be before {table} wildcard)
+		r.Get("/rest/v1", routes.OpenAPISpec(catalog))
+		r.Get("/rest/v1/", routes.OpenAPISpec(catalog))
+
 		// RLS debug
 		r.Get("/rest/v1/rls-debug", routes.RLSDebug(state.Pool, rlsCfg))
 
@@ -257,6 +261,28 @@ func buildRouter(state *AppState) http.Handler {
 				return catalog.Refresh(context.Background(), pool)
 			},
 		))
+	})
+
+	// ── Storage routes (own group — no BodyLimit, handler uses MaxBytesReader) ──
+	r.Group(func(r chi.Router) {
+		r.Use(appMiddleware.SecurityHeaders)
+
+		storageDeps := &routes.StorageDeps{
+			Pool: state.Pool,
+			ResolveClaims: func(r *http.Request) (appMiddleware.RequestClaims, error) {
+				return appMiddleware.ResolveClaims(r, rlsCfg)
+			},
+			MaxFileSize: state.Config.MaxFileSize,
+		}
+		r.Route("/storage/v1", func(r chi.Router) {
+			r.Post("/bucket", routes.CreateBucket(storageDeps))
+			r.Get("/bucket", routes.ListBuckets(storageDeps))
+			r.Delete("/bucket/{bucketId}", routes.DeleteBucket(storageDeps))
+			r.Post("/object/{bucket}/*", routes.UploadObject(storageDeps))
+			r.Get("/object/list/{bucket}", routes.ListObjects(storageDeps))
+			r.Get("/object/{bucket}/*", routes.DownloadObject(storageDeps))
+			r.Delete("/object/{bucket}/*", routes.DeleteObject(storageDeps))
+		})
 	})
 
 	// ── User SPA / static files (lowest priority, catch-all) ─────────

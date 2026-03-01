@@ -101,7 +101,7 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          JOIN pg_attribute a ON a.attrelid = c.oid
-         WHERE c.relkind IN ('r', 'v', 'p')
+         WHERE c.relkind IN ('r', 'v', 'm', 'p')
            AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pgr', 'pgstack')
            AND a.attnum > 0
            AND NOT a.attisdropped

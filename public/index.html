@@ -2,860 +2,260 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>What to Buy</title>
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#d97706">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pgStack — The Complete PostgreSQL Backend</title>
+  <meta name="description" content="Auth, REST API, Live Queries, Storage, and Dashboard. Two processes. One command. Open source PostgreSQL backend platform.">
   <link rel="icon" type="image/svg+xml" href="icon.svg">
-  <link rel="apple-touch-icon" href="icon.svg">
-  <style>
-/* ── Reset & Variables ──────────────────────────────────────────── */
-:root {
-  --amber-50:#fffbeb; --amber-100:#fef3c7; --amber-200:#fde68a; --amber-300:#fcd34d;
-  --amber-400:#fbbf24; --amber-500:#f59e0b; --amber-600:#d97706; --amber-700:#b45309;
-  --green-50:#ecfdf5; --green-500:#10b981; --green-600:#059669;
-  --red-50:#fef2f2; --red-500:#ef4444; --red-600:#dc2626;
-  --gray-50:#f9fafb; --gray-100:#f3f4f6; --gray-200:#e5e7eb; --gray-300:#d1d5db;
-  --gray-400:#9ca3af; --gray-500:#6b7280; --gray-600:#4b5563; --gray-700:#374151;
-  --gray-800:#1f2937; --gray-900:#111827;
-  --radius:12px; --radius-sm:8px; --radius-xs:6px;
-  --shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
-  --shadow-md:0 4px 6px -1px rgba(0,0,0,.08),0 2px 4px -1px rgba(0,0,0,.04);
-  --shadow-lg:0 10px 25px -5px rgba(0,0,0,.1),0 4px 10px -2px rgba(0,0,0,.04);
-  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-  --ease:.2s ease;
-}
-*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
-body { font-family:var(--font); background:var(--amber-50); color:var(--gray-800); line-height:1.6; min-height:100vh; min-height:100dvh; -webkit-tap-highlight-color:transparent; }
-a { color:var(--amber-700); }
-
-/* ── Utilities ──────────────────────────────────────────────────── */
-.hidden { display:none !important; }
-.spinner { width:18px; height:18px; border:2px solid var(--gray-300); border-top-color:var(--amber-600); border-radius:50%; animation:spin .6s linear infinite; display:inline-block; vertical-align:middle; }
-@keyframes spin { to { transform:rotate(360deg); } }
-@keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-@keyframes slideIn { from { opacity:0; transform:translateX(60px); } to { opacity:1; transform:translateX(0); } }
-@keyframes slideOut { from { opacity:1; transform:translateX(0); } to { opacity:0; transform:translateX(60px); } }
-
-/* ── Typography ─────────────────────────────────────────────────── */
-h1 { font-size:1.5rem; font-weight:700; letter-spacing:-.02em; }
-h2 { font-size:1.125rem; font-weight:600; color:var(--gray-700); }
-.text-sm { font-size:.875rem; }
-.text-xs { font-size:.75rem; }
-.text-muted { color:var(--gray-500); }
-.text-center { text-align:center; }
-
-/* ── Buttons ────────────────────────────────────────────────────── */
-.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:10px 20px; border:none; border-radius:var(--radius-sm); font:inherit; font-size:.9rem; font-weight:600; cursor:pointer; transition:all var(--ease); white-space:nowrap; }
-.btn:active { transform:scale(.97); }
-.btn:disabled { opacity:.5; cursor:not-allowed; transform:none; }
-.btn-primary { background:var(--amber-600); color:#fff; box-shadow:var(--shadow); }
-.btn-primary:hover:not(:disabled) { background:var(--amber-700); box-shadow:var(--shadow-md); }
-.btn-secondary { background:var(--gray-100); color:var(--gray-700); }
-.btn-secondary:hover:not(:disabled) { background:var(--gray-200); }
-.btn-danger { background:transparent; color:var(--red-500); padding:8px; }
-.btn-danger:hover { background:var(--red-50); }
-.btn-ghost { background:transparent; color:var(--gray-600); padding:8px; }
-.btn-ghost:hover { background:var(--gray-100); }
-.btn-icon { width:40px; height:40px; padding:0; border-radius:50%; flex-shrink:0; }
-.btn-full { width:100%; }
-
-/* ── Inputs ─────────────────────────────────────────────────────── */
-.input { width:100%; padding:10px 14px; border:1.5px solid var(--gray-200); border-radius:var(--radius-sm); font:inherit; font-size:.9rem; background:#fff; transition:all var(--ease); outline:none; }
-.input:focus { border-color:var(--amber-400); box-shadow:0 0 0 3px rgba(251,191,36,.15); }
-.input::placeholder { color:var(--gray-400); }
-.input-row { display:flex; gap:8px; }
-
-/* ── Cards ──────────────────────────────────────────────────────── */
-.card { background:#fff; border-radius:var(--radius); box-shadow:var(--shadow); padding:24px; }
-
-/* ── Screens ────────────────────────────────────────────────────── */
-.screen { display:none; animation:fadeIn .3s ease; }
-.screen.active { display:block; }
-.screen-center { align-items:center; justify-content:center; min-height:100vh; min-height:100dvh; padding:24px; }
-.screen-center.active { display:flex; }
-
-/* ── App Bar ────────────────────────────────────────────────────── */
-.appbar { position:sticky; top:0; z-index:50; background:#fff; border-bottom:1px solid var(--gray-200); padding:0 16px; height:56px; display:flex; align-items:center; gap:12px; }
-.appbar h1 { flex:1; font-size:1.125rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.appbar .user-email { font-size:.8rem; color:var(--gray-500); max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-/* ── Content Container ──────────────────────────────────────────── */
-.container { max-width:560px; margin:0 auto; padding:16px; }
-
-/* ── Auth Screen ────────────────────────────────────────────────── */
-.auth-card { max-width:380px; width:100%; }
-.auth-card h1 { text-align:center; margin-bottom:4px; }
-.auth-card .subtitle { text-align:center; color:var(--gray-500); margin-bottom:24px; font-size:.9rem; }
-.auth-form { display:flex; flex-direction:column; gap:12px; }
-.auth-toggle { text-align:center; margin-top:16px; font-size:.875rem; color:var(--gray-500); }
-.auth-toggle a { cursor:pointer; font-weight:600; }
-.alert { padding:10px 14px; border-radius:var(--radius-sm); font-size:.875rem; margin-bottom:12px; }
-.alert-error { background:var(--red-50); color:var(--red-600); border:1px solid rgba(239,68,68,.15); }
-
-/* ── Lists Screen ───────────────────────────────────────────────── */
-.section { margin-bottom:24px; }
-.section-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--gray-400); margin-bottom:10px; }
-.list-grid { display:flex; flex-direction:column; gap:10px; }
-.list-card { background:#fff; border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px; cursor:pointer; transition:all var(--ease); display:flex; align-items:center; gap:14px; border:1.5px solid transparent; }
-.list-card:hover { box-shadow:var(--shadow-md); border-color:var(--amber-200); }
-.list-card .list-icon { width:44px; height:44px; border-radius:var(--radius-sm); background:var(--amber-100); display:flex; align-items:center; justify-content:center; font-size:1.3rem; flex-shrink:0; }
-.list-card .list-info { flex:1; min-width:0; }
-.list-card .list-name { font-weight:600; font-size:.95rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.list-card .list-meta { font-size:.8rem; color:var(--gray-500); display:flex; gap:12px; margin-top:2px; }
-.list-card .list-progress { font-size:.8rem; color:var(--amber-600); font-weight:600; white-space:nowrap; }
-.empty-state { text-align:center; padding:40px 20px; color:var(--gray-400); }
-.empty-state .empty-icon { font-size:2.5rem; margin-bottom:8px; display:block; }
-
-/* ── Detail Screen ──────────────────────────────────────────────── */
-.progress-strip { background:var(--gray-100); padding:10px 16px; display:flex; align-items:center; gap:12px; }
-.progress-bar-track { flex:1; height:6px; background:var(--gray-200); border-radius:3px; overflow:hidden; }
-.progress-bar-fill { height:100%; background:var(--green-500); border-radius:3px; transition:width .4s ease; }
-.progress-text { font-size:.8rem; font-weight:600; color:var(--gray-600); white-space:nowrap; }
-.add-form { display:flex; gap:8px; padding:16px; background:#fff; border-bottom:1px solid var(--gray-100); }
-.add-form .input { flex:1; }
-.add-form .qty-input { width:56px; text-align:center; flex:none; }
-.item-section { padding:8px 16px 4px; }
-.item-section-title { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--gray-400); padding:8px 0 4px; }
-.item-row { display:flex; align-items:center; gap:10px; padding:10px 4px; border-bottom:1px solid var(--gray-50); transition:background var(--ease); }
-.item-row:last-child { border-bottom:none; }
-.item-checkbox { width:22px; height:22px; border-radius:6px; border:2px solid var(--gray-300); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--ease); flex-shrink:0; background:#fff; -webkit-appearance:none; appearance:none; }
-.item-checkbox:checked { background:var(--green-500); border-color:var(--green-500); }
-.item-checkbox:checked::after { content:''; display:block; width:6px; height:10px; border:solid #fff; border-width:0 2px 2px 0; transform:rotate(45deg) translateY(-1px); }
-.item-name { flex:1; font-size:.95rem; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.item-name.checked { text-decoration:line-through; color:var(--gray-400); }
-.item-qty { font-size:.75rem; font-weight:600; background:var(--gray-100); color:var(--gray-600); padding:2px 8px; border-radius:10px; white-space:nowrap; }
-.item-delete { opacity:0; transition:opacity var(--ease); }
-.item-row:hover .item-delete { opacity:1; }
-
-/* ── Share Modal ────────────────────────────────────────────────── */
-.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:100; display:flex; align-items:center; justify-content:center; padding:24px; animation:fadeIn .2s ease; }
-.modal { background:#fff; border-radius:var(--radius); box-shadow:var(--shadow-lg); padding:28px; max-width:360px; width:100%; text-align:center; animation:fadeIn .25s ease; }
-.modal h2 { margin-bottom:4px; }
-.modal .modal-desc { color:var(--gray-500); font-size:.9rem; margin-bottom:20px; }
-.share-code { font-family:monospace; font-size:1.8rem; font-weight:700; letter-spacing:.2em; background:var(--amber-100); color:var(--amber-700); padding:14px 24px; border-radius:var(--radius-sm); margin-bottom:20px; display:block; user-select:all; }
-.modal-actions { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
-
-/* ── Toasts ─────────────────────────────────────────────────────── */
-.toast-area { position:fixed; top:12px; right:12px; z-index:200; display:flex; flex-direction:column; gap:8px; max-width:340px; }
-.toast { padding:12px 16px; border-radius:var(--radius-sm); font-size:.875rem; font-weight:500; box-shadow:var(--shadow-md); animation:slideIn .3s ease; display:flex; align-items:center; gap:8px; }
-.toast.removing { animation:slideOut .25s ease forwards; }
-.toast-info { background:var(--amber-100); color:var(--amber-700); border:1px solid var(--amber-200); }
-.toast-success { background:var(--green-50); color:var(--green-600); border:1px solid rgba(16,185,129,.2); }
-.toast-error { background:var(--red-50); color:var(--red-600); border:1px solid rgba(239,68,68,.15); }
-
-/* ── Responsive ─────────────────────────────────────────────────── */
-@media (max-width:480px) {
-  .appbar .user-email { display:none; }
-  .item-delete { opacity:1; }
-  .container { padding:12px; }
-}
-  </style>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- Toast Area -->
-<div class="toast-area" id="toastArea"></div>
-
-<!-- Auth Screen -->
-<div id="authScreen" class="screen screen-center">
-  <div class="card auth-card">
-    <h1 id="authTitle">Create account</h1>
-    <p class="subtitle" id="authSubtitle">Sign up to start making lists</p>
-    <div class="alert alert-error hidden" id="authError"></div>
-    <form class="auth-form" id="authForm">
-      <input class="input" type="email" id="authEmail" placeholder="Email" required autocomplete="email">
-      <input class="input" type="password" id="authPassword" placeholder="Password" required autocomplete="new-password" minlength="6">
-      <button class="btn btn-primary btn-full" type="submit" id="authSubmit">Sign Up</button>
-    </form>
-    <p class="auth-toggle">
-      <span id="authToggleText">Already have an account?</span>
-      <a id="authToggleLink">Sign in</a>
-    </p>
+<!-- Navigation -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="#" class="nav-brand"><span class="dot"></span> pgStack</a>
+    <ul class="nav-links">
+      <li><a href="#features" class="hide-mobile">Features</a></li>
+      <li><a href="#quickstart" class="hide-mobile">Quick Start</a></li>
+      <li><a href="#examples" class="hide-mobile">Examples</a></li>
+      <li><a href="/studio/" class="nav-cta">Open Studio</a></li>
+    </ul>
   </div>
-</div>
+</nav>
 
-<!-- Lists Screen -->
-<div id="listsScreen" class="screen">
-  <div class="appbar">
-    <h1>What to Buy</h1>
-    <span class="user-email" id="userEmail"></span>
-    <button class="btn btn-ghost btn-icon" id="btnLogout" title="Log out">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-    </button>
-  </div>
+<!-- Hero -->
+<section class="hero">
   <div class="container">
-    <div class="section">
-      <div class="input-row">
-        <input class="input" id="newListName" placeholder="New list name..." maxlength="60">
-        <button class="btn btn-primary" id="btnCreateList">Create</button>
+    <h1 class="hero-title">pg<span class="accent">Stack</span></h1>
+    <p class="hero-subtitle">The Complete PostgreSQL Backend</p>
+    <p class="hero-desc">
+      Auth, REST API, Live Queries, Storage, and Dashboard.<br>
+      Two processes. One command.
+    </p>
+    <div class="hero-code">
+      <code><span class="dim">$</span> npx pgstack init myapp <span class="dim">&amp;&amp;</span> cd myapp <span class="dim">&amp;&amp;</span> pgstack dev</code>
+    </div>
+    <div class="hero-actions">
+      <a href="/studio/" class="btn btn-primary">Open Studio</a>
+      <a href="https://github.com/ndokutovich/pg_reactive" class="btn btn-secondary">Documentation</a>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section class="features" id="features">
+  <div class="container">
+    <span class="section-label">Everything included</span>
+    <h2 class="section-title">Six pillars. Zero glue code.</h2>
+    <p class="section-desc">Everything you need to build a production backend, powered entirely by PostgreSQL.</p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <h3 class="feature-name">Authentication</h3>
+        <p class="feature-desc">Email/password, OAuth (Google, GitHub), magic links. JWT tokens with PostgreSQL RLS for row-level security.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        </div>
+        <h3 class="feature-name">REST API</h3>
+        <p class="feature-desc">PostgREST-compatible CRUD with filters, embedding, RPC, and auto-generated OpenAPI. Zero boilerplate.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <h3 class="feature-name">Live Queries</h3>
+        <p class="feature-desc">SQL-level reactivity via pg_reactive. Column-level change tracking, delta computation, WebSocket delivery.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </div>
+        <h3 class="feature-name">Storage</h3>
+        <p class="feature-desc">File upload and download with bucket ACLs. Public and private access control. No S3 dependency required.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <h3 class="feature-name">Studio Dashboard</h3>
+        <p class="feature-desc">Table editor, SQL editor, auth manager, and realtime monitor. All in a browser-based admin panel.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        </div>
+        <h3 class="feature-name">CLI</h3>
+        <p class="feature-desc">Project scaffolding, dev server, migrations, type generation, and deployment. One tool for the full lifecycle.</p>
       </div>
     </div>
-    <div class="section">
-      <div class="input-row">
-        <input class="input" id="joinCode" placeholder="Enter share code..." maxlength="6" style="text-transform:uppercase;font-family:monospace;letter-spacing:.1em">
-        <button class="btn btn-secondary" id="btnJoinList">Join</button>
+  </div>
+</section>
+
+<!-- Architecture -->
+<section class="architecture" id="architecture">
+  <div class="container text-center">
+    <span class="section-label">Architecture</span>
+    <h2 class="section-title">Radically simple infrastructure</h2>
+    <p class="section-desc" style="margin: 0 auto;">No orchestrator. No message broker. No cache layer. Just PostgreSQL doing what it does best.</p>
+
+    <div class="arch-block">
+      <div class="arch-diagram"><span class="highlight">Your App</span>  <span class="subtle">---&gt;</span>  <span class="highlight">pgstack-proxy</span>  <span class="subtle">---&gt;</span>  <span class="highlight">PostgreSQL</span>
+               <span class="subtle">REST, Auth,</span>          <span class="subtle">+ pg_reactive</span>
+               <span class="subtle">WebSocket</span>             <span class="subtle">extension</span></div>
+      <div class="arch-compare">
+        <div class="arch-compare-item">
+          <div class="arch-compare-label">Typical BaaS</div>
+          <div class="arch-compare-value">15+ containers</div>
+        </div>
+        <div class="arch-compare-item">
+          <div class="arch-compare-label">pgStack</div>
+          <div class="arch-compare-value"><span class="accent">2</span> processes</div>
+        </div>
       </div>
     </div>
-    <div class="section">
-      <div class="section-title">My Lists</div>
-      <div class="list-grid" id="listGrid"></div>
+  </div>
+</section>
+
+<!-- Quick Start -->
+<section class="quickstart" id="quickstart">
+  <div class="container">
+    <span class="section-label">Get started</span>
+    <h2 class="section-title">Up and running in 60 seconds</h2>
+    <p class="section-desc">From zero to a full backend with auth, REST, and live queries.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3 class="step-title">Scaffold your project</h3>
+        <p class="step-desc">Initialize a new pgStack project with all configuration files and a default migration.</p>
+        <div class="step-code">npx pgstack init myapp</div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3 class="step-title">Start the dev server</h3>
+        <p class="step-desc">Launches PostgreSQL with pg_reactive and the proxy server. Hot-reloads on migration changes.</p>
+        <div class="step-code">cd myapp &amp;&amp; pgstack dev</div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3 class="step-title">Build your app</h3>
+        <p class="step-desc">Use the TypeScript SDK, REST API, or raw SQL. Add auth, live queries, and storage as needed.</p>
+        <div class="step-code">import { createClient } from '@pgstack/sdk'</div>
+      </div>
     </div>
   </div>
-</div>
+</section>
 
-<!-- Detail Screen -->
-<div id="detailScreen" class="screen">
-  <div class="appbar">
-    <button class="btn btn-ghost btn-icon" id="btnBack" title="Back">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-    </button>
-    <h1 id="detailTitle">List</h1>
-    <button class="btn btn-ghost btn-icon" id="btnShare" title="Share">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-    </button>
-    <button class="btn btn-danger btn-icon" id="btnDeleteList" title="Delete list">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-    </button>
-  </div>
-  <div class="progress-strip">
-    <div class="progress-bar-track"><div class="progress-bar-fill" id="progressFill"></div></div>
-    <span class="progress-text" id="progressText">0 / 0</span>
-  </div>
-  <form class="add-form" id="addForm">
-    <input class="input" id="itemName" placeholder="Add an item..." maxlength="100" required>
-    <input class="input qty-input" id="itemQty" placeholder="1" maxlength="6">
-    <button class="btn btn-primary btn-icon" type="submit" title="Add">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    </button>
-  </form>
-  <div id="itemsContainer"></div>
-</div>
+<!-- Live Examples -->
+<section class="examples" id="examples">
+  <div class="container">
+    <span class="section-label">See it in action</span>
+    <h2 class="section-title">Live examples</h2>
+    <p class="section-desc">Interactive demos showing real-time SQL subscriptions, from simple filters to full-stack applications.</p>
 
-<!-- Share Modal -->
-<div class="modal-backdrop hidden" id="shareModal">
-  <div class="modal">
-    <h2>Share this list</h2>
-    <p class="modal-desc">Give this code to anyone you want to share with</p>
-    <span class="share-code" id="shareCode"></span>
-    <div class="modal-actions">
-      <button class="btn btn-primary" id="btnCopyCode">Copy Code</button>
-      <button class="btn btn-secondary hidden" id="btnNativeShare">Share&hellip;</button>
-      <button class="btn btn-ghost" id="btnCloseModal">Close</button>
+    <div class="example-grid">
+      <a href="/examples/01-live-products/" class="example-card">
+        <div class="example-num">Example 01</div>
+        <div class="example-name">Live Products Dashboard</div>
+        <p class="example-desc">Real-time product catalog with live price and stock updates.</p>
+        <span class="example-badge badge-basic">Basic</span>
+      </a>
+
+      <a href="/examples/02-order-feed/" class="example-card">
+        <div class="example-num">Example 02</div>
+        <div class="example-name">Order Feed</div>
+        <p class="example-desc">Streaming order feed with live status transitions.</p>
+        <span class="example-badge badge-basic">Basic</span>
+      </a>
+
+      <a href="/examples/03-revenue-dashboard/" class="example-card">
+        <div class="example-num">Example 03</div>
+        <div class="example-name">Revenue Dashboard</div>
+        <p class="example-desc">Aggregate revenue metrics updating in real time.</p>
+        <span class="example-badge badge-intermediate">Intermediate</span>
+      </a>
+
+      <a href="/examples/04-category-leaderboard/" class="example-card">
+        <div class="example-num">Example 04</div>
+        <div class="example-name">Category Leaderboard</div>
+        <p class="example-desc">Live-ranked leaderboard with animated position changes.</p>
+        <span class="example-badge badge-intermediate">Intermediate</span>
+      </a>
+
+      <a href="/examples/05-realtime-crm/" class="example-card">
+        <div class="example-num">Example 05</div>
+        <div class="example-name">Realtime CRM</div>
+        <p class="example-desc">Customer pipeline with multi-stage live tracking.</p>
+        <span class="example-badge badge-advanced">Advanced</span>
+      </a>
+
+      <a href="/examples/06-inventory-monitor/" class="example-card">
+        <div class="example-num">Example 06</div>
+        <div class="example-name">Inventory Monitor</div>
+        <p class="example-desc">Stock level monitoring with threshold alerts.</p>
+        <span class="example-badge badge-intermediate">Intermediate</span>
+      </a>
+
+      <a href="/examples/12-tutorial/" class="example-card">
+        <div class="example-num">Tutorial</div>
+        <div class="example-name">Interactive Tutorial</div>
+        <p class="example-desc">Step-by-step guide to building live queries from scratch.</p>
+        <span class="example-badge badge-basic">Basic</span>
+      </a>
+
+      <a href="/examples/apps/todo/" class="example-card">
+        <div class="example-num">Full-stack App</div>
+        <div class="example-name">Todo App</div>
+        <p class="example-desc">Complete todo application with auth, REST, and real-time sync.</p>
+        <span class="example-badge badge-fullstack">Full-stack</span>
+      </a>
+
+      <a href="/examples/apps/shopping-list/" class="example-card">
+        <div class="example-num">Full-stack App</div>
+        <div class="example-name">Shopping List</div>
+        <p class="example-desc">Collaborative shopping list PWA with sharing and live updates.</p>
+        <span class="example-badge badge-fullstack">Full-stack</span>
+      </a>
     </div>
   </div>
-</div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <ul class="footer-links">
+        <li><a href="https://github.com/ndokutovich/pg_reactive">GitHub</a></li>
+        <li><a href="https://www.npmjs.com/package/pgstack">npm</a></li>
+        <li><a href="https://github.com/ndokutovich/pg_reactive#readme">Documentation</a></li>
+        <li><a href="/studio/">Studio</a></li>
+      </ul>
+      <div class="footer-meta">
+        <div class="footer-tagline">Built with PostgreSQL</div>
+        <div class="footer-license">MIT License</div>
+      </div>
+    </div>
+  </div>
+</footer>
 
 <script>
-(function() {
-'use strict';
-
-/* ── Config ─────────────────────────────────────────────────────── */
-var API = '';  // same origin — served by pgStack proxy
-var WS_BASE = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-var ANON_KEY = 'dev-only-anon-key-do-not-use-in-production';
-var STORAGE_KEY = 'wtb-session';
-var POLL_MS = 2000;
-
-/* ── State ──────────────────────────────────────────────────────── */
-var accessToken = '';
-var refreshToken = '';
-var user = null;
-var currentListId = null;
-var currentList = null;
-var items = [];
-var ws = null;
-var pollTimer = null;
-var suppressUntil = 0;
-
-/* ── DOM refs ───────────────────────────────────────────────────── */
-var $ = function(id) { return document.getElementById(id); };
-
-/* ── Escape HTML — safe textContent-based escaping ──────────────── */
-var _escDiv = document.createElement('div');
-function esc(s) {
-  _escDiv.textContent = s || '';
-  return _escDiv.innerHTML;
-}
-
-/* ── HTTP helpers ───────────────────────────────────────────────── */
-function hdrs(extra) {
-  var h = { 'Content-Type': 'application/json', 'apikey': ANON_KEY };
-  if (accessToken) h['Authorization'] = 'Bearer ' + accessToken;
-  if (extra) for (var k in extra) h[k] = extra[k];
-  return h;
-}
-
-function apiRpc(fn, body) {
-  return fetch(API + '/rest/v1/rpc/' + fn, { method: 'POST', headers: hdrs(), body: JSON.stringify(body || {}) })
-    .then(handleAuth)
-    .then(function(r) { return r.json(); });
-}
-
-function apiRest(method, path, body) {
-  var opts = { method: method, headers: hdrs() };
-  if (body) opts.body = JSON.stringify(body);
-  return fetch(API + '/rest/v1/' + path, opts).then(handleAuth);
-}
-
-function handleAuth(r) {
-  if (r.status === 401 && refreshToken) {
-    return doRefresh().then(function() {
-      return fetch(r.url, { method: 'GET', headers: hdrs() });
-    });
-  }
-  return r;
-}
-
-function parseJwt(token) {
-  try { return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
-  catch(e) { return null; }
-}
-
-function getUserId() {
-  var claims = parseJwt(accessToken);
-  return claims ? claims.sub : null;
-}
-
-/* ── Session persistence ────────────────────────────────────────── */
-function saveSession() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ accessToken: accessToken, refreshToken: refreshToken, user: user })); } catch(e) {}
-}
-
-function loadSession() {
-  try {
-    var s = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (s && s.accessToken) {
-      accessToken = s.accessToken;
-      refreshToken = s.refreshToken || '';
-      user = s.user || null;
-      return true;
-    }
-  } catch(e) {}
-  return false;
-}
-
-function clearSession() {
-  accessToken = ''; refreshToken = ''; user = null;
-  try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
-}
-
-function doRefresh() {
-  if (!refreshToken) return Promise.reject(new Error('No refresh token'));
-  return fetch(API + '/auth/v1/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY },
-    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refreshToken })
-  }).then(function(r) {
-    if (!r.ok) { clearSession(); navigate('auth'); throw new Error('Session expired'); }
-    return r.json();
-  }).then(function(data) {
-    accessToken = data.access_token;
-    refreshToken = data.refresh_token;
-    user = data.user || user;
-    saveSession();
-  });
-}
-
-/* ── Toast notifications ────────────────────────────────────────── */
-function toast(msg, type) {
-  var el = document.createElement('div');
-  el.className = 'toast toast-' + (type || 'info');
-  el.textContent = msg;
-  $('toastArea').appendChild(el);
-  setTimeout(function() {
-    el.classList.add('removing');
-    setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 260);
-  }, 3200);
-}
-
-/* ── Router ─────────────────────────────────────────────────────── */
-function navigate(screen, params) {
-  location.hash = '#/' + screen + (params ? '/' + params : '');
-}
-
-function route() {
-  var hash = location.hash || '#/auth';
-  var parts = hash.replace('#/', '').split('/');
-  var screen = parts[0] || 'auth';
-  var param = parts[1] || null;
-
-  if ((screen === 'lists' || screen === 'list') && !accessToken) {
-    navigate('auth'); return;
-  }
-
-  document.querySelectorAll('.screen').forEach(function(s) { s.classList.remove('active'); });
-
-  switch (screen) {
-    case 'auth': showAuth(); break;
-    case 'lists': showLists(); break;
-    case 'list':
-      if (param) { currentListId = parseInt(param, 10); showDetail(); }
-      else navigate('lists');
-      break;
-    default: showAuth();
-  }
-}
-
-/* ── Auth Screen ────────────────────────────────────────────────── */
-var authMode = 'signup';
-
-function showAuth() {
-  $('authScreen').classList.add('active');
-  $('authError').classList.add('hidden');
-  updateAuthUI();
-}
-
-function updateAuthUI() {
-  $('authTitle').textContent = authMode === 'login' ? 'Welcome back' : 'Create account';
-  $('authSubtitle').textContent = authMode === 'login' ? 'Sign in to your account' : 'Sign up to start making lists';
-  $('authSubmit').textContent = authMode === 'login' ? 'Sign In' : 'Sign Up';
-  $('authToggleText').textContent = authMode === 'login' ? "Don't have an account? " : 'Already have an account? ';
-  $('authToggleLink').textContent = authMode === 'login' ? 'Sign up' : 'Sign in';
-  $('authPassword').autocomplete = authMode === 'login' ? 'current-password' : 'new-password';
-}
-
-$('authToggleLink').addEventListener('click', function() {
-  authMode = authMode === 'login' ? 'signup' : 'login';
-  $('authError').classList.add('hidden');
-  updateAuthUI();
+// Examples are served by a separate web server (port 3000).
+// Rewrite example links to use the correct port on the same host.
+document.querySelectorAll('.example-card').forEach(function(a) {
+  a.href = location.protocol + '//' + location.hostname + ':3000' + new URL(a.href).pathname.replace('/examples/', '/');
 });
-
-$('authForm').addEventListener('submit', function(e) {
-  e.preventDefault();
-  var email = $('authEmail').value.trim();
-  var password = $('authPassword').value;
-  var btn = $('authSubmit');
-  btn.disabled = true;
-  btn.textContent = '';
-  var sp = document.createElement('span'); sp.className = 'spinner'; btn.appendChild(sp);
-  $('authError').classList.add('hidden');
-
-  var url = authMode === 'signup' ? API + '/auth/v1/signup' : API + '/auth/v1/token';
-  var body = authMode === 'signup'
-    ? { email: email, password: password }
-    : { grant_type: 'password', email: email, password: password };
-
-  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY }, body: JSON.stringify(body) })
-    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
-    .then(function(res) {
-      btn.disabled = false;
-      updateAuthUI();
-      if (!res.ok) {
-        $('authError').textContent = res.data.error || res.data.msg || 'Authentication failed';
-        $('authError').classList.remove('hidden');
-        return;
-      }
-      accessToken = res.data.access_token;
-      refreshToken = res.data.refresh_token || '';
-      user = res.data.user || { email: email };
-      saveSession();
-      toast(authMode === 'signup' ? 'Account created!' : 'Welcome back!', 'success');
-      navigate('lists');
-    })
-    .catch(function(err) {
-      btn.disabled = false;
-      updateAuthUI();
-      $('authError').textContent = err.message;
-      $('authError').classList.remove('hidden');
-    });
-});
-
-/* ── Lists Screen ───────────────────────────────────────────────── */
-function showLists() {
-  $('listsScreen').classList.add('active');
-  $('userEmail').textContent = user ? user.email : '';
-  cleanupDetail();
-  loadLists();
-}
-
-function loadLists() {
-  var grid = $('listGrid');
-  grid.textContent = '';
-  var sp = document.createElement('div'); sp.className = 'text-center text-muted';
-  var spn = document.createElement('span'); spn.className = 'spinner'; sp.appendChild(spn);
-  grid.appendChild(sp);
-
-  apiRpc('my_shopping_lists').then(function(data) {
-    var arr = Array.isArray(data) ? data : [];
-    grid.textContent = '';
-
-    if (arr.length === 0) {
-      var empty = document.createElement('div'); empty.className = 'empty-state';
-      var ico = document.createElement('span'); ico.className = 'empty-icon'; ico.textContent = '\uD83D\uDED2';
-      empty.appendChild(ico);
-      empty.appendChild(document.createTextNode('No lists yet.'));
-      empty.appendChild(document.createElement('br'));
-      empty.appendChild(document.createTextNode('Create one above!'));
-      grid.appendChild(empty);
-      return;
-    }
-
-    arr.forEach(function(l) {
-      var card = document.createElement('div');
-      card.className = 'list-card';
-      card.setAttribute('data-id', l.id);
-
-      var iconDiv = document.createElement('div'); iconDiv.className = 'list-icon'; iconDiv.textContent = '\uD83D\uDED2';
-      var infoDiv = document.createElement('div'); infoDiv.className = 'list-info';
-      var nameDiv = document.createElement('div'); nameDiv.className = 'list-name'; nameDiv.textContent = l.name;
-      var metaDiv = document.createElement('div'); metaDiv.className = 'list-meta';
-      var memberSpan = document.createElement('span');
-      memberSpan.textContent = l.member_count + ' member' + (l.member_count != 1 ? 's' : '');
-      var codeSpan = document.createElement('span');
-      codeSpan.style.fontFamily = 'monospace'; codeSpan.style.letterSpacing = '.05em';
-      codeSpan.textContent = (l.share_code || '').toUpperCase();
-      metaDiv.appendChild(memberSpan); metaDiv.appendChild(codeSpan);
-      infoDiv.appendChild(nameDiv); infoDiv.appendChild(metaDiv);
-
-      var progressDiv = document.createElement('div'); progressDiv.className = 'list-progress';
-      progressDiv.textContent = l.checked_count + '/' + l.item_count;
-
-      card.appendChild(iconDiv); card.appendChild(infoDiv); card.appendChild(progressDiv);
-      card.addEventListener('click', function() { navigate('list', l.id); });
-      grid.appendChild(card);
-    });
-  }).catch(function() {
-    grid.textContent = '';
-    var err = document.createElement('div'); err.className = 'empty-state text-muted';
-    err.textContent = 'Failed to load lists';
-    grid.appendChild(err);
-  });
-}
-
-$('btnCreateList').addEventListener('click', function() {
-  var nameInput = $('newListName');
-  var name = nameInput.value.trim();
-  if (!name) return;
-  $('btnCreateList').disabled = true;
-  apiRpc('create_shopping_list', { list_name: name }).then(function() {
-    nameInput.value = '';
-    $('btnCreateList').disabled = false;
-    toast('List created!', 'success');
-    loadLists();
-  }).catch(function() {
-    $('btnCreateList').disabled = false;
-    toast('Failed to create list', 'error');
-  });
-});
-
-$('newListName').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') { e.preventDefault(); $('btnCreateList').click(); }
-});
-
-$('btnJoinList').addEventListener('click', function() {
-  var code = $('joinCode').value.trim();
-  if (!code) return;
-  $('btnJoinList').disabled = true;
-  apiRpc('join_shopping_list', { code: code }).then(function(data) {
-    $('joinCode').value = '';
-    $('btnJoinList').disabled = false;
-    if (data && data.error) { toast(data.error || 'Invalid code', 'error'); return; }
-    toast('Joined list!', 'success');
-    loadLists();
-  }).catch(function() {
-    $('btnJoinList').disabled = false;
-    toast('Invalid share code', 'error');
-  });
-});
-
-$('joinCode').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') { e.preventDefault(); $('btnJoinList').click(); }
-});
-
-$('btnLogout').addEventListener('click', function() {
-  fetch(API + '/auth/v1/logout', { method: 'POST', headers: hdrs() }).catch(function(){});
-  clearSession();
-  toast('Logged out', 'info');
-  navigate('auth');
-});
-
-/* ── Detail Screen ──────────────────────────────────────────────── */
-function showDetail() {
-  $('detailScreen').classList.add('active');
-  $('detailTitle').textContent = 'Loading...';
-  items = [];
-  renderItems();
-
-  apiRpc('my_shopping_lists').then(function(data) {
-    var arr = Array.isArray(data) ? data : [];
-    currentList = null;
-    for (var i = 0; i < arr.length; i++) {
-      if (arr[i].id === currentListId) { currentList = arr[i]; break; }
-    }
-    if (!currentList) { toast('List not found', 'error'); navigate('lists'); return; }
-    $('detailTitle').textContent = currentList.name;
-    loadItems();
-    startRealtime();
-  });
-}
-
-function loadItems() {
-  return apiRest('GET', 'shopping_items?list_id=eq.' + currentListId + '&order=checked.asc,created_at.desc')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      items = Array.isArray(data) ? data : [];
-      renderItems();
-    });
-}
-
-function renderItems() {
-  var unchecked = items.filter(function(i) { return !i.checked; });
-  var checked = items.filter(function(i) { return i.checked; });
-  var total = items.length;
-  var done = checked.length;
-
-  var pct = total > 0 ? (done / total * 100) : 0;
-  $('progressFill').style.width = pct + '%';
-  $('progressFill').style.background = pct === 100 ? 'var(--green-500)' : 'var(--amber-500)';
-  $('progressText').textContent = done + ' / ' + total;
-
-  var container = $('itemsContainer');
-  container.textContent = '';
-
-  if (total === 0) {
-    var empty = document.createElement('div'); empty.className = 'empty-state';
-    var ico = document.createElement('span'); ico.className = 'empty-icon'; ico.textContent = '\uD83C\uDF0E';
-    empty.appendChild(ico);
-    empty.appendChild(document.createTextNode('No items yet.'));
-    empty.appendChild(document.createElement('br'));
-    empty.appendChild(document.createTextNode('Add something above!'));
-    container.appendChild(empty);
-    return;
-  }
-
-  if (unchecked.length > 0) {
-    container.appendChild(buildItemSection('To buy (' + unchecked.length + ')', unchecked));
-  }
-  if (checked.length > 0) {
-    container.appendChild(buildItemSection('In cart (' + checked.length + ')', checked));
-  }
-}
-
-function buildItemSection(title, itemList) {
-  var section = document.createElement('div'); section.className = 'item-section';
-  var titleEl = document.createElement('div'); titleEl.className = 'item-section-title';
-  titleEl.textContent = title;
-  section.appendChild(titleEl);
-
-  itemList.forEach(function(item) {
-    var row = document.createElement('div'); row.className = 'item-row';
-
-    var cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.className = 'item-checkbox'; cb.checked = item.checked;
-
-    var nameSpan = document.createElement('span');
-    nameSpan.className = 'item-name' + (item.checked ? ' checked' : '');
-    nameSpan.textContent = item.name;
-
-    row.appendChild(cb); row.appendChild(nameSpan);
-
-    if (item.quantity && item.quantity !== '1') {
-      var qtySpan = document.createElement('span'); qtySpan.className = 'item-qty';
-      qtySpan.textContent = item.quantity;
-      row.appendChild(qtySpan);
-    }
-
-    var delBtn = document.createElement('button');
-    delBtn.className = 'btn btn-ghost btn-icon item-delete'; delBtn.title = 'Delete';
-    delBtn.insertAdjacentHTML('afterbegin',
-      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
-      '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>');
-    row.appendChild(delBtn);
-
-    // Bind events
-    var itemId = item.id;
-    cb.addEventListener('change', function() {
-      var newChecked = cb.checked;
-      suppressUntil = Date.now() + 3000;
-      for (var k = 0; k < items.length; k++) {
-        if (items[k].id === itemId) { items[k].checked = newChecked; break; }
-      }
-      renderItems();
-      apiRest('PATCH', 'shopping_items?id=eq.' + itemId, { checked: newChecked }).catch(function() {
-        for (var k = 0; k < items.length; k++) {
-          if (items[k].id === itemId) { items[k].checked = !newChecked; break; }
-        }
-        renderItems();
-        toast('Failed to update', 'error');
-      });
-    });
-
-    delBtn.addEventListener('click', function() {
-      suppressUntil = Date.now() + 3000;
-      items = items.filter(function(it) { return it.id !== itemId; });
-      renderItems();
-      apiRest('DELETE', 'shopping_items?id=eq.' + itemId).catch(function() {
-        loadItems(); toast('Failed to delete', 'error');
-      });
-    });
-
-    section.appendChild(row);
-  });
-  return section;
-}
-
-$('addForm').addEventListener('submit', function(e) {
-  e.preventDefault();
-  var name = $('itemName').value.trim();
-  if (!name) return;
-  var qty = $('itemQty').value.trim() || '1';
-  $('itemName').value = '';
-  $('itemQty').value = '';
-  $('itemName').focus();
-  suppressUntil = Date.now() + 3000;
-
-  apiRest('POST', 'shopping_items', { list_id: currentListId, name: name, quantity: qty, checked: false, added_by: getUserId() })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data && !data.error) {
-        var newItem = Array.isArray(data) ? data[0] : data;
-        if (newItem && newItem.id) {
-          items.unshift(newItem);
-          renderItems();
-        }
-      }
-    }).catch(function() { toast('Failed to add item', 'error'); });
-});
-
-/* ── Real-time updates ──────────────────────────────────────────── */
-function startRealtime() {
-  cleanupDetail();
-  pollTimer = setInterval(function() { loadItems(); }, POLL_MS);
-
-  try {
-    var wsUrl = WS_BASE + '/ws/items-' + currentListId + '?token=' + encodeURIComponent(accessToken);
-    ws = new WebSocket(wsUrl);
-    ws.onmessage = function(e) {
-      try {
-        var msg = JSON.parse(e.data);
-        if (msg.type === 'subscribed') return;
-        if (msg.type === 'overflow') { loadItems(); return; }
-        if (msg.inserted || msg.deleted) applyDelta(msg);
-      } catch(err) {}
-    };
-    ws.onopen = function() {
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      pollTimer = setInterval(function() { loadItems(); }, 10000);
-    };
-  } catch(err) {}
-}
-
-function applyDelta(msg) {
-  var insertedIds = {};
-  var changed = false;
-  var selfAction = Date.now() < suppressUntil;
-
-  if (msg.inserted && msg.inserted.length) {
-    for (var i = 0; i < msg.inserted.length; i++) {
-      var row = msg.inserted[i];
-      insertedIds[row.id] = true;
-      var found = false;
-      for (var j = 0; j < items.length; j++) {
-        if (items[j].id === row.id) { items[j] = row; found = true; break; }
-      }
-      if (!found) {
-        items.unshift(row);
-        if (!selfAction) toast(row.name + ' added', 'info');
-      }
-      changed = true;
-    }
-  }
-
-  if (msg.deleted && msg.deleted.length) {
-    var deleteIds = [];
-    for (var k = 0; k < msg.deleted.length; k++) {
-      if (!insertedIds[msg.deleted[k].id]) deleteIds.push(msg.deleted[k].id);
-    }
-    if (deleteIds.length > 0) {
-      var delSet = {};
-      for (var d = 0; d < deleteIds.length; d++) delSet[deleteIds[d]] = true;
-      items = items.filter(function(it) { return !delSet[it.id]; });
-      changed = true;
-    }
-  }
-
-  if (changed) renderItems();
-}
-
-function cleanupDetail() {
-  if (ws) { try { ws.close(); } catch(e) {} ws = null; }
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
-
-/* ── Detail bar actions ─────────────────────────────────────────── */
-$('btnBack').addEventListener('click', function() { cleanupDetail(); navigate('lists'); });
-
-$('btnDeleteList').addEventListener('click', function() {
-  if (!currentList) return;
-  if (!confirm('Delete "' + currentList.name + '"? This cannot be undone.')) return;
-  apiRest('DELETE', 'shopping_lists?id=eq.' + currentListId).then(function(r) {
-    if (r.ok) { cleanupDetail(); toast('List deleted', 'info'); navigate('lists'); }
-    else toast('Only the list owner can delete', 'error');
-  });
-});
-
-$('btnShare').addEventListener('click', function() {
-  if (!currentList) return;
-  $('shareCode').textContent = (currentList.share_code || '').toUpperCase();
-  $('shareModal').classList.remove('hidden');
-  if (navigator.share) $('btnNativeShare').classList.remove('hidden');
-});
-
-$('btnCopyCode').addEventListener('click', function() {
-  var code = (currentList && currentList.share_code || '').toUpperCase();
-  navigator.clipboard.writeText(code).then(function() {
-    $('btnCopyCode').textContent = 'Copied!';
-    setTimeout(function() { $('btnCopyCode').textContent = 'Copy Code'; }, 1500);
-  });
-});
-
-$('btnNativeShare').addEventListener('click', function() {
-  navigator.share({
-    title: 'Join my shopping list',
-    text: 'Use code ' + (currentList.share_code || '').toUpperCase() + ' to join "' + currentList.name + '" on What to Buy'
-  }).catch(function(){});
-});
-
-$('btnCloseModal').addEventListener('click', function() { $('shareModal').classList.add('hidden'); });
-$('shareModal').addEventListener('click', function(e) {
-  if (e.target === $('shareModal')) $('shareModal').classList.add('hidden');
-});
-
-/* ── Token refresh on tab visibility ────────────────────────────── */
-document.addEventListener('visibilitychange', function() {
-  if (document.visibilityState === 'visible' && accessToken) {
-    var claims = parseJwt(accessToken);
-    if (claims && claims.exp && claims.exp * 1000 - Date.now() < 300000) {
-      doRefresh().catch(function(){});
-    }
-    var hash = (location.hash || '').replace('#/', '').split('/');
-    if (hash[0] === 'lists') loadLists();
-    else if (hash[0] === 'list' && hash[1]) loadItems();
-  }
-});
-
-/* ── Service Worker ─────────────────────────────────────────────── */
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(function(){});
-}
-
-/* ── Init ───────────────────────────────────────────────────────── */
-window.addEventListener('hashchange', route);
-
-if (loadSession()) {
-  if (!location.hash || location.hash === '#/' || location.hash === '#/auth') {
-    navigate('lists');
-  } else {
-    route();
-  }
-} else {
-  route();
-}
-
-})();
 </script>
 </body>
 </html>

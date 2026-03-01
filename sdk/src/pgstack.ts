@@ -10,6 +10,7 @@
 import { PgStackAuth, type AuthSession } from './auth-client.js';
 import { PgStackQueryBuilder } from './query-builder.js';
 import { RealtimeChannel } from './index.js';
+import { StorageClient } from './storage.js';
 
 export interface PgStackClientOptions {
   /** Custom headers to include in all requests */
@@ -25,6 +26,7 @@ export class PgStackClient {
   readonly auth: PgStackAuth;
   private anonKey: string;
   private _accessToken: string | null = null;
+  private _storage: StorageClient | null = null;
 
   constructor(url: string, anonKey: string, options?: PgStackClientOptions) {
     // Normalize: strip trailing slash
@@ -38,6 +40,14 @@ export class PgStackClient {
     this.auth.onAuthStateChange((event, session) => {
       this._accessToken = session?.access_token ?? null;
     });
+  }
+
+  /** Storage client for file upload, download, and management. */
+  get storage(): StorageClient {
+    if (!this._storage) {
+      this._storage = new StorageClient(this.url, () => this.getHeaders());
+    }
+    return this._storage;
   }
 
   /** Start building a query on a table with an optional row type parameter. */

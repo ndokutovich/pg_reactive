@@ -1,6 +1,6 @@
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Redirect};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use crate::auth::jwt::{self, Claims};
@@ -68,13 +68,16 @@ struct UserResponse {
 pub async fn signup(
     State(state): State<AppState>,
     Json(body): Json<SignupRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     let secret = state.config.jwt_secret.as_ref().ok_or_else(|| {
         AppError::Internal("JWT_SECRET not configured".into())
     })?;
 
+    // Normalize email: trim whitespace and lowercase
+    let email = body.email.trim().to_lowercase();
+
     // Validate input
-    if !is_valid_email(&body.email) {
+    if !is_valid_email(&email) {
         return Err(AppError::BadRequest("invalid email".into()));
     }
     if body.password.len() < 8 {
@@ -92,7 +95,7 @@ pub async fn signup(
     let existing = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM pgstack.users WHERE email = $1",
     )
-    .bind(&body.email)
+    .bind(&email)
     .fetch_one(&state.pg_pool)
     .await?;
 
@@ -107,43 +110,89 @@ pub async fn signup(
         .map_err(|e| AppError::Internal(format!("hash task failed: {}", e)))?
         .map_err(AppError::Internal)?;
 
-    // Insert user
     let user_meta = body.data.unwrap_or(serde_json::json!({}));
-    let row = sqlx::query_as::<_, (String, String, String, String, String, serde_json::Value, serde_json::Value)>(
-        "INSERT INTO pgstack.users (email, encrypted_password, raw_user_meta, email_confirmed_at)
-         VALUES ($1, $2, $3, now())
-         RETURNING id::text, email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta",
-    )
-    .bind(&body.email)
-    .bind(&hash)
-    .bind(&user_meta)
-    .fetch_one(&state.pg_pool)
-    .await?;
 
-    let (user_id, email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = row;
+    if state.config.require_email_verification {
+        // Insert user WITHOUT confirming email
+        let row = sqlx::query_as::<_, (String, String, String, String, String, serde_json::Value, serde_json::Value)>(
+            "INSERT INTO pgstack.users (email, encrypted_password, raw_user_meta)
+             VALUES ($1, $2, $3)
+             RETURNING id::text, email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta",
+        )
+        .bind(&email)
+        .bind(&hash)
+        .bind(&user_meta)
+        .fetch_one(&state.pg_pool)
+        .await?;
 
-    // Generate tokens (new family)
-    let (access_token, refresh_token) =
-        generate_token_pair(&state, secret, &user_id, &email, &role, None).await?;
+        let (user_id, _user_email, _role, _created_at, _updated_at, _raw_user_meta, _raw_app_meta) = row;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(AuthResponse {
-            access_token,
-            token_type: "bearer".into(),
-            expires_in: state.config.access_token_expiry_secs,
-            refresh_token,
-            user: UserResponse {
-                id: user_id,
-                email,
-                role,
-                user_metadata: Some(raw_user_meta),
-                app_metadata: Some(raw_app_meta),
-                created_at,
-                updated_at,
-            },
-        }),
-    ))
+        // Generate verification token and store it
+        let verify_token = generate_token();
+        sqlx::query(
+            "INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+             VALUES ($1::uuid, $2, 'email_verification', now() + interval '24 hours')",
+        )
+        .bind(&user_id)
+        .bind(&verify_token)
+        .execute(&state.pg_pool)
+        .await?;
+
+        // Send verification email
+        let site_url = state
+            .config
+            .site_url
+            .as_deref()
+            .unwrap_or("http://127.0.0.1:3000");
+        let html = verify_email_html(site_url, &verify_token);
+        if let Err(e) = state.mailer.send(&email, "Verify your email", &html).await {
+            tracing::warn!("Failed to send verification email to {}: {}", email, e);
+        }
+
+        Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "message": "Check your email to confirm your account"
+            })),
+        ).into_response())
+    } else {
+        // Insert user with email confirmed immediately
+        let row = sqlx::query_as::<_, (String, String, String, String, String, serde_json::Value, serde_json::Value)>(
+            "INSERT INTO pgstack.users (email, encrypted_password, raw_user_meta, email_confirmed_at)
+             VALUES ($1, $2, $3, now())
+             RETURNING id::text, email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta",
+        )
+        .bind(&email)
+        .bind(&hash)
+        .bind(&user_meta)
+        .fetch_one(&state.pg_pool)
+        .await?;
+
+        let (user_id, user_email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = row;
+
+        // Generate tokens (new family)
+        let (access_token, refresh_token) =
+            generate_token_pair(&state, secret, &user_id, &user_email, &role, None).await?;
+
+        Ok((
+            StatusCode::CREATED,
+            Json(AuthResponse {
+                access_token,
+                token_type: "bearer".into(),
+                expires_in: state.config.access_token_expiry_secs,
+                refresh_token,
+                user: UserResponse {
+                    id: user_id,
+                    email: user_email,
+                    role,
+                    user_metadata: Some(raw_user_meta),
+                    app_metadata: Some(raw_app_meta),
+                    created_at,
+                    updated_at,
+                },
+            }),
+        ).into_response())
+    }
 }
 
 /// POST /auth/v1/token
@@ -274,10 +323,13 @@ async fn token_refresh(
         ));
     }
 
+    // Wrap revoke + new token insert in a single transaction
+    let mut tx = state.pg_pool.begin().await?;
+
     // Revoke the old refresh token (rotation)
     sqlx::query("UPDATE pgstack.refresh_tokens SET revoked = true WHERE id = $1")
         .bind(token_id)
-        .execute(&state.pg_pool)
+        .execute(&mut *tx)
         .await?;
 
     // Fetch user
@@ -286,14 +338,16 @@ async fn token_refresh(
          FROM pgstack.users WHERE id = $1::uuid",
     )
     .bind(&user_id)
-    .fetch_one(&state.pg_pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     let (email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = user;
 
-    // Generate new token pair (same family for reuse detection)
+    // Generate new token pair (same family for reuse detection) within transaction
     let (access_token, new_refresh_token) =
-        generate_token_pair(&state, secret, &user_id, &email, &role, family_id.as_deref()).await?;
+        generate_token_pair_tx(&mut tx, &state, secret, &user_id, &email, &role, family_id.as_deref()).await?;
+
+    tx.commit().await?;
 
     Ok((
         StatusCode::OK,
@@ -535,6 +589,48 @@ pub(crate) async fn generate_token_pair(
     Ok((access_token, refresh_token))
 }
 
+/// Like `generate_token_pair`, but executes the INSERT within an existing transaction.
+async fn generate_token_pair_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    secret: &str,
+    user_id: &str,
+    email: &str,
+    role: &str,
+    family_id: Option<&str>,
+) -> Result<(String, String), AppError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let claims = Claims {
+        sub: user_id.to_string(),
+        role: role.to_string(),
+        email: Some(email.to_string()),
+        iat: Some(now),
+        exp: Some(now + state.config.access_token_expiry_secs),
+    };
+
+    let access_token =
+        jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
+
+    let refresh_token = generate_refresh_token();
+
+    sqlx::query(
+        "INSERT INTO pgstack.refresh_tokens (token, user_id, family_id, expires_at)
+         VALUES ($1, $2::uuid, COALESCE($3::uuid, gen_random_uuid()), now() + $4 * interval '1 day')",
+    )
+    .bind(&refresh_token)
+    .bind(user_id)
+    .bind(family_id)
+    .bind(state.config.refresh_token_expiry_days)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok((access_token, refresh_token))
+}
+
 pub(crate) fn generate_refresh_token() -> String {
     use rand::Rng;
     let mut rng = rand::rng();
@@ -580,7 +676,6 @@ fn magic_link_email_html(site_url: &str, token: &str) -> String {
     )
 }
 
-#[allow(dead_code)]
 fn verify_email_html(site_url: &str, token: &str) -> String {
     format!(
         "<p>Hi,</p>\
@@ -620,7 +715,7 @@ pub async fn recover(
 
         sqlx::query(
             "INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
-             VALUES ($1::uuid, $2, 'reset', now() + interval '1 hour')",
+             VALUES ($1::uuid, $2, 'recovery', now() + interval '1 hour')",
         )
         .bind(&user_id)
         .bind(&token)
@@ -664,7 +759,7 @@ pub async fn recover_confirm(
     let row = sqlx::query_as::<_, (String, String)>(
         "SELECT id::text, user_id::text FROM pgstack.email_tokens
          WHERE token = $1
-           AND token_type = 'reset'
+           AND token_type = 'recovery'
            AND used_at IS NULL
            AND expires_at > now()",
     )
@@ -683,6 +778,9 @@ pub async fn recover_confirm(
         .map_err(|e| AppError::Internal(format!("hash task failed: {}", e)))?
         .map_err(AppError::Internal)?;
 
+    // Wrap password update + token mark-used in a single transaction
+    let mut tx = state.pg_pool.begin().await?;
+
     // Update password
     sqlx::query(
         "UPDATE pgstack.users SET encrypted_password = $1, updated_at = now()
@@ -690,7 +788,7 @@ pub async fn recover_confirm(
     )
     .bind(&hash)
     .bind(&user_id)
-    .execute(&state.pg_pool)
+    .execute(&mut *tx)
     .await?;
 
     // Mark token used
@@ -698,8 +796,10 @@ pub async fn recover_confirm(
         "UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid",
     )
     .bind(&token_id)
-    .execute(&state.pg_pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(Json(serde_json::json!({ "message": "Password updated" })))
 }
@@ -754,7 +854,7 @@ pub async fn magiclink(
 
     sqlx::query(
         "INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
-         VALUES ($1::uuid, $2, 'magic_link', now() + interval '15 minutes')",
+         VALUES ($1::uuid, $2, 'magiclink', now() + interval '15 minutes')",
     )
     .bind(&user_id)
     .bind(&token)
@@ -797,7 +897,7 @@ pub async fn magiclink_verify(
     let row = sqlx::query_as::<_, (String, String)>(
         "SELECT id::text, user_id::text FROM pgstack.email_tokens
          WHERE token = $1
-           AND token_type = 'magic_link'
+           AND token_type = 'magiclink'
            AND used_at IS NULL
            AND expires_at > now()",
     )
@@ -824,11 +924,19 @@ pub async fn magiclink_verify(
 
     let (email, role, _created_at, _updated_at, uid) = user;
 
-    // Mark token used
+    // Mark token used and confirm email (clicking the link proves email ownership)
     sqlx::query(
         "UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid",
     )
     .bind(&token_id)
+    .execute(&state.pg_pool)
+    .await?;
+
+    sqlx::query(
+        "UPDATE pgstack.users SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
+         WHERE id = $1::uuid",
+    )
+    .bind(&user_id)
     .execute(&state.pg_pool)
     .await?;
 
@@ -861,7 +969,7 @@ pub async fn verify_email(
     let row = sqlx::query_as::<_, (String, String)>(
         "SELECT id::text, user_id::text FROM pgstack.email_tokens
          WHERE token = $1
-           AND token_type = 'verify'
+           AND token_type = 'email_verification'
            AND used_at IS NULL
            AND expires_at > now()",
     )
@@ -965,6 +1073,11 @@ pub async fn admin_delete_user(
         return Err(AppError::Forbidden(
             "service_role key required".into(),
         ));
+    }
+
+    // Validate that the path parameter is a valid UUID
+    if uuid::Uuid::parse_str(&user_id).is_err() {
+        return Err(AppError::BadRequest("invalid user id".into()));
     }
 
     let result = sqlx::query(

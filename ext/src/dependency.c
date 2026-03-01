@@ -71,6 +71,7 @@ pgr_shmem_startup(void)
 		pgr_state->unsubscribe_count = 0;
 		pgr_state->invalidation_count = 0;
 		pgr_state->eviction_count = 0;
+		pgr_state->recompute_count = 0;
 	}
 
 	/* Initialize dependency hash table */

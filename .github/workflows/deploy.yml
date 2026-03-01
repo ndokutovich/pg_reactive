@@ -6,6 +6,7 @@ on:
     paths:
       - 'examples/**'
       - 'proxy-go/**'
+      - 'public/**'
       - 'ext/**'
       - 'docker/**'
       - 'docker-compose.yml'

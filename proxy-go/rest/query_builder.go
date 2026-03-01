@@ -127,6 +127,79 @@ func BuildInsert(table *TableMeta, body map[string]any) (*BuiltQuery, error) {
 	return &BuiltQuery{SQL: sql, Params: params}, nil
 }
 
+// BuildBulkInsert builds a single parameterised INSERT with multiple VALUES
+// clauses for an array of rows.  All rows must use the same set of columns
+// (determined as the union of all keys across all rows).  Missing keys in
+// individual rows are bound as NULL.  The result is wrapped in a CTE with
+// json_agg, returning a JSON array of all inserted rows.
+func BuildBulkInsert(table *TableMeta, rows []map[string]any) (*BuiltQuery, error) {
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("insert: empty row array")
+	}
+
+	// Collect the union of all column names across every row.
+	colUnion := make(map[string]struct{})
+	for _, row := range rows {
+		for k := range row {
+			colUnion[k] = struct{}{}
+		}
+	}
+	cols := make([]string, 0, len(colUnion))
+	for k := range colUnion {
+		cols = append(cols, k)
+	}
+	sortStrings(cols)
+
+	colSet := table.columnSet()
+	for _, c := range cols {
+		if _, ok := colSet[c]; !ok {
+			return nil, fmt.Errorf("insert: unknown column %q", c)
+		}
+	}
+
+	// Build column list.
+	var colSQL strings.Builder
+	for i, c := range cols {
+		if i > 0 {
+			colSQL.WriteString(", ")
+		}
+		colSQL.WriteString(QuoteIdent(c))
+	}
+
+	// Build VALUES clauses: ($1::type, $2::type), ($3::type, $4::type), ...
+	params := make([]any, 0, len(cols)*len(rows))
+	var valuesSQL strings.Builder
+	idx := 1
+
+	for ri, row := range rows {
+		if ri > 0 {
+			valuesSQL.WriteString(", ")
+		}
+		valuesSQL.WriteString("(")
+		for ci, c := range cols {
+			if ci > 0 {
+				valuesSQL.WriteString(", ")
+			}
+			typ := SafePGType(table.columnType(c))
+			valuesSQL.WriteString(fmt.Sprintf("$%d::%s", idx, typ))
+			if v, ok := row[c]; ok {
+				params = append(params, v)
+			} else {
+				params = append(params, nil)
+			}
+			idx++
+		}
+		valuesSQL.WriteString(")")
+	}
+
+	sql := fmt.Sprintf(
+		`WITH result AS (INSERT INTO %s (%s) VALUES %s RETURNING *)`+
+			` SELECT COALESCE(json_agg(row_to_json(result)), '[]'::json) AS data FROM result`,
+		qualifiedTable(table), colSQL.String(), valuesSQL.String(),
+	)
+	return &BuiltQuery{SQL: sql, Params: params}, nil
+}
+
 // BuildUpdate builds a parameterised UPDATE … SET … WHERE … RETURNING * with
 // json_agg wrapping.  At least one filter is required.
 func BuildUpdate(table *TableMeta, body map[string]any, q *RestQuery) (*BuiltQuery, error) {
