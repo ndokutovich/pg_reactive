@@ -19,13 +19,13 @@ function HomepageHeader() {
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
-            to="/docs/quickstart">
+            to="quickstart">
             Quick Start — 5 min
           </Link>
           <Link
             className="button button--outline button--secondary button--lg"
             style={{ marginLeft: '1rem' }}
-            to="/docs/intro">
+            to="intro">
             What is pgStack?
           </Link>
         </div>
@@ -180,7 +180,7 @@ CREATE POLICY "Users see own todos"
         <div className="row" style={{ marginTop: '2rem', justifyContent: 'center' }}>
           <Link
             className="button button--primary button--lg"
-            to="/docs/quickstart">
+            to="quickstart">
             Read the Quick Start Guide
           </Link>
         </div>

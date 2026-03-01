@@ -17,8 +17,9 @@ pgStack is designed as a self-hosted Supabase alternative. This page covers the 
 | **REST API** | PostgREST | pgstack-proxy (axum, PostgREST-compatible) |
 | **Real-time** | Phoenix Elixir server | pg_reactive C extension + Rust proxy |
 | **Row Level Security** | Yes | Yes |
-| **Storage** | S3-backed (Supabase Storage) | Coming soon |
-| **Edge Functions** | Deno runtime | Not included (use your own server) |
+| **Storage** | S3-backed (Supabase Storage) | Built-in (PostgreSQL-backed) |
+| **Edge Functions** | Deno runtime | Deno + PL/v8 + Embedded (3 backends) |
+| **Transaction Batching** | Not available | Built-in (`POST /rest/v1/batch`) |
 | **Studio / Dashboard** | Supabase Studio (React) | pgStack Studio (React) |
 | **SDK** | supabase-js | @pgstack/sdk (Supabase-compatible API) |
 | **Self-hosting** | Complex (15+ services, Kubernetes recommended) | `docker compose up -d` |
@@ -39,6 +40,10 @@ pgStack is designed as a self-hosted Supabase alternative. This page covers the 
 
 **Real-time efficiency.** pg_reactive delivers SQL-level deltas using `EXCEPT`-based diff. You get typed, structured change events — not raw WAL events that require client-side re-querying.
 
+**Transaction batching.** `POST /rest/v1/batch` executes multiple REST operations in a single PostgreSQL transaction with `{{opId.field}}` cross-referencing. Supabase has no equivalent — users have been requesting this since 2015.
+
+**Edge Functions flexibility.** Three runtime backends (Deno, PL/v8, embedded JS) — pick the right tool for the job. Supabase only offers Deno.
+
 **Durable job queues.** The DBOS integration gives you a PostgreSQL-backed job queue with automatic retries, cron scheduling, and observability — no Redis or RabbitMQ.
 
 **Auditability.** With two containers and a single database, your entire system state lives in PostgreSQL. No syncing between microservices.
@@ -47,9 +52,7 @@ pgStack is designed as a self-hosted Supabase alternative. This page covers the 
 
 **Managed hosting.** Supabase Cloud handles backups, upgrades, and scaling. pgStack is self-hosted only.
 
-**Storage.** Supabase has a production-grade object storage service. pgStack doesn't (yet).
-
-**Ecosystem.** Supabase has more OAuth providers, Deno edge functions, and a larger community.
+**Ecosystem.** Supabase has more OAuth providers and a larger community.
 
 **Realtime presence.** Supabase Realtime supports presence channels and broadcast. pgStack's real-time is focused on live SQL queries.
 
@@ -100,4 +103,4 @@ Auth methods match the Supabase JS client:
 
 6. **Test REST queries.** Most PostgREST-compatible queries work without changes.
 
-7. **Re-implement Supabase Storage** if you use it — pgStack doesn't have storage yet.
+7. **Migrate storage.** pgStack has built-in storage (PostgreSQL-backed). Upload files via the storage API.

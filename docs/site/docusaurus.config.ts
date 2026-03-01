@@ -11,8 +11,8 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://ndokutovich.github.io',
-  baseUrl: '/pg_reactive/',
+  url: process.env.DOCS_URL || 'https://ndokutovich.github.io',
+  baseUrl: process.env.DOCS_BASE_URL || '/pg_reactive/',
 
   organizationName: 'ndokutovich',
   projectName: 'pg_reactive',
@@ -35,6 +35,7 @@ const config: Config = {
       {
         docs: {
           sidebarPath: './sidebars.ts',
+          routeBasePath: '/',
           editUrl: 'https://github.com/ndokutovich/pg_reactive/edit/master/docs/site/',
         },
         blog: false,
@@ -78,15 +79,15 @@ const config: Config = {
           items: [
             {
               label: 'Getting Started',
-              to: '/docs/intro',
+              to: 'intro',
             },
             {
               label: 'Quick Start',
-              to: '/docs/quickstart',
+              to: 'quickstart',
             },
             {
               label: 'API Reference',
-              to: '/docs/reference/api',
+              to: 'reference/api',
             },
           ],
         },
@@ -95,15 +96,15 @@ const config: Config = {
           items: [
             {
               label: 'Authentication',
-              to: '/docs/auth/overview',
+              to: 'auth/overview',
             },
             {
               label: 'REST API',
-              to: '/docs/rest/overview',
+              to: 'rest/overview',
             },
             {
               label: 'Live Queries',
-              to: '/docs/realtime/overview',
+              to: 'realtime/overview',
             },
           ],
         },

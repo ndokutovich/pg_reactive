@@ -176,6 +176,10 @@ func buildRouter(state *AppState) http.Handler {
 		r.Handle("/studio/*", routes.StudioSPA(state.Config.StudioDir))
 	})
 
+	// ── Docs site (Docusaurus static) ─────────────────────────────────────
+	r.Get("/docs", routes.DocsRedirect)
+	r.Handle("/docs/*", routes.DocsSite(state.Config.DocsDir))
+
 	// ── API routes (strict CSP, body size limit) ──────────────────────────
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.SecurityHeaders)

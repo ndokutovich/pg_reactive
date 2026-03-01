@@ -9,7 +9,16 @@ RUN npm ci --prefer-offline
 COPY studio/ .
 RUN npm run build
 
-# ── Stage 2: Build Go proxy ────────────────────────────────────────────────────
+# ── Stage 2: Build Docusaurus docs ────────────────────────────────────────────
+FROM node:20-bookworm-slim AS docs-builder
+WORKDIR /docs-build
+COPY docs/site/package.json docs/site/package-lock.json ./
+RUN npm ci --prefer-offline
+COPY docs/site/ .
+ENV DOCS_URL=http://localhost:8080 DOCS_BASE_URL=/docs/
+RUN npm run build
+
+# ── Stage 3: Build Go proxy ────────────────────────────────────────────────────
 FROM golang:1.23-bookworm AS builder
 WORKDIR /app
 
@@ -30,8 +39,10 @@ RUN useradd --create-home --no-log-init --shell /bin/false appuser
 
 COPY --from=builder /app/pgstack-proxy-go /usr/local/bin/pgstack-proxy
 COPY --from=studio-builder /studio-build/dist /studio
+COPY --from=docs-builder /docs-build/build /docs
 
 ENV STUDIO_DIR=/studio
+ENV DOCS_DIR=/docs
 EXPOSE 8080
 
 USER appuser

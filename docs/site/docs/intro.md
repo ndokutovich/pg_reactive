@@ -15,7 +15,7 @@ Everything you expect from a modern backend: authentication, a REST API, real-ti
 | Component | Technology | What it does |
 |-----------|-----------|--------------|
 | Database | PostgreSQL 16 + pg_reactive | Live queries, auth schema, your data |
-| Proxy | Rust (axum) | Auth, REST API, WebSockets, OAuth, RLS |
+| Proxy | Go (chi) | Auth, REST API, WebSockets, Edge Functions, RLS |
 | Studio | React SPA | Admin dashboard at `/studio` |
 | SDK | TypeScript | Client library for auth, REST, live queries |
 | CLI | Node.js | Scaffold, migrate, generate types |
@@ -26,11 +26,14 @@ Everything you expect from a modern backend: authentication, a REST API, real-ti
 Your App (React, Next.js, etc.)
     │
     ▼
-pgStack Proxy (Rust / axum)  ← port 8080
-  ├── /auth/v1/*      Auth (signup, login, refresh, OAuth)
-  ├── /rest/v1/*      REST API (PostgREST-compatible CRUD)
-  ├── /ws/:query_id   WebSocket live query subscriptions
-  └── /studio/        Admin UI
+pgStack Proxy (Go / chi)  ← port 8080
+  ├── /auth/v1/*        Auth (signup, login, refresh, OAuth)
+  ├── /rest/v1/*        REST API (PostgREST-compatible CRUD)
+  ├── /rest/v1/batch    Transaction batching (multi-op transactions)
+  ├── /functions/v1/*   Edge Functions (Deno, PL/v8, embedded)
+  ├── /ws/:query_id     WebSocket live query subscriptions
+  ├── /storage/v1/*     File storage
+  └── /studio/          Admin UI
     │
     ▼
 PostgreSQL 16 + pg_reactive extension  ← port 5432 (internal)

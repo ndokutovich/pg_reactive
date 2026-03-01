@@ -163,5 +163,7 @@ Changes to `todos` will be pushed to all connected clients within milliseconds �
 - [Installation](./installation) — all installation options, environment variables
 - [Authentication](./auth/overview) — email/password, OAuth, magic links
 - [REST API](./rest/overview) — full query syntax, filters, embedding
+- [Transaction Batching](./rest/batch) — multi-operation database transactions
+- [Edge Functions](./functions/overview) — server-side code (Deno, PL/v8, embedded)
 - [Live Queries](./realtime/overview) — real-time subscriptions
 - [CLI Reference](./cli/overview) — migrations, type generation, dev tools

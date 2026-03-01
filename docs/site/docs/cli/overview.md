@@ -61,6 +61,15 @@ pgstack generate types                         # Print to stdout
 pgstack generate types --output src/db.ts      # Write to file
 ```
 
+### Edge Functions
+
+```bash
+pgstack functions new <name>                   # Scaffold a new function
+pgstack functions deploy <name>                # Register/update a function
+pgstack functions list                         # List all registered functions
+pgstack functions delete <name>                # Deactivate a function
+```
+
 ## Help
 
 Every command supports `--help`:

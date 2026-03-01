@@ -349,6 +349,92 @@ GET /rest/v1/rpc/get_dashboard_stats
 
 ---
 
+### POST /rest/v1/batch
+
+Execute multiple REST operations in a single database transaction.
+
+**Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
+
+**Request body:**
+
+```json
+{
+  "atomic": true,
+  "operations": [
+    { "id": "create", "method": "POST", "path": "/rest/v1/orders", "body": {"total": 99.99} },
+    { "id": "item", "method": "POST", "path": "/rest/v1/order_items",
+      "body": {"order_id": "{{create.id}}", "product_id": 7} }
+  ]
+}
+```
+
+**Response `200 OK`** (atomic, all succeed):
+
+```json
+{
+  "results": [
+    { "id": "create", "status": 201, "data": {"id": 42, "total": 99.99} },
+    { "id": "item", "status": 201, "data": {"id": 1, "order_id": 42, "product_id": 7} }
+  ]
+}
+```
+
+**Response `422`** (atomic, one fails): All rolled back. Includes `error` and `failed_operation`.
+
+**Response `207`** (partial mode, `"atomic": false`): Mix of successes and failures. Check each result's `status`.
+
+See [Transaction Batching](../rest/batch) for full documentation.
+
+---
+
+## Edge Functions Endpoints
+
+### POST /functions/v1/&#123;name&#125;
+
+Invoke an edge function.
+
+**Headers:** `Authorization: Bearer <token>`, `Content-Type: application/json`
+
+**Request body:** Function-specific JSON payload.
+
+```bash
+POST /functions/v1/send-email
+{"to": "user@example.com", "subject": "Hello"}
+```
+
+**Response `200 OK`:** Function return value (JSON).
+
+**GET variant** also supported for read-only functions.
+
+---
+
+### GET /functions/v1/
+
+List all registered edge functions.
+
+**Headers:** `Authorization: Bearer <SERVICE_ROLE_KEY>`
+
+**Response `200 OK`:**
+
+```json
+[
+  { "name": "send-email", "runtime": "deno", "status": "active", "verify_jwt": true },
+  { "name": "process-order", "runtime": "plv8", "status": "active", "verify_jwt": true }
+]
+```
+
+---
+
+### POST /functions/v1/_refresh
+
+Reload the functions catalog from the database.
+
+**Headers:** `Authorization: Bearer <SERVICE_ROLE_KEY>`
+
+**Response `200 OK`:** `{"ok": true}`
+
+---
+
 ## WebSocket API
 
 ### WS /ws/&#123;query_id&#125;
@@ -416,10 +502,15 @@ All error responses use this format:
 | Code | Meaning |
 |------|---------|
 | `200` | Success |
+| `201` | Created (successful insert) |
 | `204` | Success, no response body |
+| `207` | Multi-Status (partial batch — check individual results) |
 | `302` | Redirect (OAuth flows) |
 | `400` | Bad request (invalid parameters, constraint violation) |
 | `401` | Unauthorized (missing or invalid token) |
 | `403` | Forbidden (valid token but insufficient permissions, or RLS policy rejected) |
 | `404` | Not found |
+| `409` | Conflict (unique constraint violation) |
+| `422` | Unprocessable Entity (atomic batch failed — all rolled back) |
 | `500` | Internal server error |
+| `502` | Bad Gateway (edge runtime unavailable) |

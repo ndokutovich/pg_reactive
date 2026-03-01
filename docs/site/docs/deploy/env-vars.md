@@ -84,12 +84,27 @@ Required for email verification and password reset emails. If not set, these fea
 |----------|---------|-------------|
 | `ALLOWED_ORIGINS` | *(empty — permissive)* | Comma-separated list of allowed CORS origins. Empty allows all origins (development). For production, set explicitly: `https://app.example.com,https://admin.example.com` |
 
+## Edge Functions variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EDGE_RUNTIME_URL` | *(empty — disabled)* | URL of Supabase edge-runtime container. Example: `http://edge-runtime:9000`. Empty disables Deno backend. |
+| `EMBEDDED_FUNCTIONS` | `false` | Enable embedded JS runtime (goja) for lightweight functions. |
+| `FUNCTIONS_DIR` | `/functions` | Directory where Deno function sources are mounted. |
+
+## Batch transaction variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_BATCH_OPERATIONS` | `20` | Maximum operations per `POST /rest/v1/batch` request. |
+
 ## Connection limits
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAX_CONNECTIONS` | `10000` | Maximum concurrent WebSocket connections. Each connection holds a PostgreSQL `LISTEN` session. |
 | `MAX_BODY_SIZE` | `1048576` | Maximum request body size in bytes (default: 1 MB). |
+| `MAX_FILE_SIZE` | `52428800` | Maximum storage upload size in bytes (default: 50 MB). |
 
 ## PostgreSQL tuning (via docker-compose command flags)
 

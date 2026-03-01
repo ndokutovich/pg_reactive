@@ -28,6 +28,7 @@ const sidebars: SidebarsConfig = {
         'rest/embedding',
         'rest/rpc',
         'rest/pagination',
+        'rest/batch',
       ],
     },
     {
@@ -47,6 +48,15 @@ const sidebars: SidebarsConfig = {
         'studio/overview',
         'studio/table-editor',
         'studio/sql-editor',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Edge Functions',
+      items: [
+        'functions/overview',
+        'functions/deno',
+        'functions/plv8',
       ],
     },
     {

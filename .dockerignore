@@ -4,6 +4,10 @@ sdk/dist
 cli/node_modules
 cli/dist
 .git
-docs/
+docs/plans/
+docs/site/node_modules/
+docs/site/build/
+docs/site/.docusaurus/
 *.md
+!docs/site/**/*.md
 *.docx
