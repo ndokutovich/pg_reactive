@@ -37,12 +37,15 @@ CREATE TABLE IF NOT EXISTS shopping_items (
   created_at timestamptz DEFAULT now()
 );
 
--- Grants
-GRANT ALL ON shopping_lists TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE shopping_lists_id_seq TO authenticated;
-GRANT ALL ON list_members TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE list_members_id_seq TO authenticated;
-GRANT ALL ON shopping_items TO authenticated;
+-- Grants — minimum privileges only.
+-- shopping_lists: SELECT+DELETE only (INSERT via create_shopping_list RPC,
+--   UPDATE via update_shopping_list RPC). Direct INSERT/UPDATE blocked.
+-- list_members: SELECT only (INSERT via join_shopping_list RPC,
+--   DELETE via leave_shopping_list RPC). Direct mutation blocked.
+-- shopping_items: full CRUD scoped by RLS to items in user's lists.
+GRANT SELECT, DELETE ON shopping_lists TO authenticated;
+GRANT SELECT ON list_members TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON shopping_items TO authenticated;
 GRANT USAGE, SELECT ON SEQUENCE shopping_items_id_seq TO authenticated;
 
 -- RLS
@@ -50,27 +53,27 @@ ALTER TABLE shopping_lists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE list_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE shopping_items ENABLE ROW LEVEL SECURITY;
 
+-- shopping_lists: see/delete only lists you belong to, delete only if owner
 DROP POLICY IF EXISTS lists_select ON shopping_lists;
 CREATE POLICY lists_select ON shopping_lists FOR SELECT TO authenticated
   USING (id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims',true)::jsonb->>'sub')::uuid));
-
-DROP POLICY IF EXISTS lists_insert ON shopping_lists;
-CREATE POLICY lists_insert ON shopping_lists FOR INSERT TO authenticated
-  WITH CHECK (owner_id = (current_setting('request.jwt.claims',true)::jsonb->>'sub')::uuid);
 
 DROP POLICY IF EXISTS lists_delete ON shopping_lists;
 CREATE POLICY lists_delete ON shopping_lists FOR DELETE TO authenticated
   USING (owner_id = (current_setting('request.jwt.claims',true)::jsonb->>'sub')::uuid);
 
-DROP POLICY IF EXISTS members_own ON list_members;
-CREATE POLICY members_own ON list_members FOR ALL TO authenticated
+-- list_members: see your own memberships (avoids self-referential recursion).
+-- Use SECURITY DEFINER functions for cross-member queries (e.g. member counts).
+DROP POLICY IF EXISTS members_select ON list_members;
+CREATE POLICY members_select ON list_members FOR SELECT TO authenticated
   USING (user_id = (current_setting('request.jwt.claims',true)::jsonb->>'sub')::uuid);
 
+-- shopping_items: full CRUD for items in your lists
 DROP POLICY IF EXISTS items_access ON shopping_items;
 CREATE POLICY items_access ON shopping_items FOR ALL TO authenticated
   USING (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims',true)::jsonb->>'sub')::uuid));
 
--- Functions
+-- Functions (SECURITY DEFINER — bypass RLS, validate internally)
 DROP FUNCTION IF EXISTS create_shopping_list(text);
 CREATE OR REPLACE FUNCTION create_shopping_list(list_name text)
 RETURNS shopping_lists LANGUAGE plpgsql SECURITY DEFINER AS $fn$
@@ -79,8 +82,11 @@ DECLARE
   code text := upper(substr(md5(random()::text), 1, 6));
   result shopping_lists;
 BEGIN
+  IF length(trim(list_name)) = 0 THEN
+    RAISE EXCEPTION 'List name cannot be empty';
+  END IF;
   INSERT INTO shopping_lists(name, owner_id, share_code)
-  VALUES (list_name, uid, code) RETURNING * INTO result;
+  VALUES (trim(list_name), uid, code) RETURNING * INTO result;
   INSERT INTO list_members(list_id, user_id, role)
   VALUES (result.id, uid, 'owner');
   RETURN result;
