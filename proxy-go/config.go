@@ -62,6 +62,9 @@ type Config struct {
 
 	// Studio SPA
 	StudioDir string
+
+	// User static files (public/ directory)
+	PublicDir string
 }
 
 // FromEnv loads configuration from environment variables, applying defaults.
@@ -122,6 +125,7 @@ func FromEnv() Config {
 	cfg.SMTPPass = os.Getenv("SMTP_PASS")
 
 	cfg.StudioDir = envOrDefault("STUDIO_DIR", "/studio")
+	cfg.PublicDir = os.Getenv("PUBLIC_DIR")
 
 	return cfg
 }

@@ -55,6 +55,9 @@ export function registerDevCommand(program: Command): void {
           `  PostgreSQL:  ${chalk.cyan(`postgresql://postgres:postgres@127.0.0.1:${config.dbPort}/${dbName}`)}`
         );
         console.log(
+          `  Your app:    ${chalk.cyan(`http://127.0.0.1:${config.proxyPort}/`)}`
+        );
+        console.log(
           `  REST API:    ${chalk.cyan(`http://127.0.0.1:${config.proxyPort}/rest/v1/`)}`
         );
         console.log(

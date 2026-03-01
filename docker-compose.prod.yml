@@ -72,6 +72,9 @@ services:
       MAX_BODY_SIZE: ${MAX_BODY_SIZE:-1048576}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
       ENABLE_SQL_ENDPOINT: "false"
+      PUBLIC_DIR: ${PUBLIC_DIR:-/public}
+    volumes:
+      - ./public:/public:ro
     ports:
       - "${PROXY_PORT:-8080}:8080"
     depends_on:

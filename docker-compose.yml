@@ -33,8 +33,11 @@ services:
       ANON_KEY: ${ANON_KEY:-dev-only-anon-key-do-not-use-in-production}
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"
+      PUBLIC_DIR: /public
     ports:
       - "127.0.0.1:8080:8080"
+    volumes:
+      - ./public:/public:ro
     depends_on:
       db:
         condition: service_healthy

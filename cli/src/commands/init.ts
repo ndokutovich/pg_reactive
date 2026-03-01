@@ -28,6 +28,7 @@ export function registerInitCommand(program: Command): void {
       // Create directories
       await mkdir(resolve(projectDir, "migrations"), { recursive: true });
       await mkdir(resolve(projectDir, "types"), { recursive: true });
+      await mkdir(resolve(projectDir, "public"), { recursive: true });
 
       // Generate secrets
       const jwtSecret = generateJwtSecret();
@@ -86,12 +87,19 @@ export function registerInitCommand(program: Command): void {
         generateSeed()
       );
 
+      // Write public/index.html starter page
+      await writeFile(
+        join(projectDir, "public", "index.html"),
+        generateStarterPage(projectName)
+      );
+
       console.log(chalk.green("\nProject created successfully!\n"));
       console.log("Next steps:");
       console.log(chalk.cyan(`  cd ${name}`));
       console.log(chalk.cyan("  npx pgstack dev"));
       console.log(chalk.cyan("  npx pgstack migration run"));
       console.log();
+      console.log(`Your app:   ${chalk.yellow(`http://127.0.0.1:${DEFAULT_PROXY_PORT}/`)}`);
       console.log(`REST API:   ${chalk.yellow(`http://127.0.0.1:${DEFAULT_PROXY_PORT}/rest/v1/`)}`);
       console.log(`WebSocket:  ${chalk.yellow(`ws://127.0.0.1:${DEFAULT_PROXY_PORT}/ws/`)}`);
       console.log(`Health:     ${chalk.yellow(`http://127.0.0.1:${DEFAULT_PROXY_PORT}/health`)}`);
@@ -130,6 +138,9 @@ function generateDockerCompose(): string {
       ANON_KEY: \${ANON_KEY}
       SERVICE_ROLE_KEY: \${SERVICE_ROLE_KEY}
       LISTEN_ADDR: 0.0.0.0:${DEFAULT_PROXY_PORT}
+      PUBLIC_DIR: /public
+    volumes:
+      - ./public:/public:ro
     depends_on:
       db:
         condition: service_healthy
@@ -289,5 +300,48 @@ function generateSeed(): string {
 -- INSERT INTO products (name, price) VALUES
 --   ('Widget', 9.99),
 --   ('Gadget', 19.99);
+`;
+}
+
+function generateStarterPage(projectName: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${projectName}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f9fafb; color: #111827; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 2rem; max-width: 420px; width: 100%; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    p { color: #6b7280; margin-bottom: 1.5rem; }
+    .links { display: flex; flex-direction: column; gap: 0.5rem; }
+    .links a { color: #2563eb; text-decoration: none; font-size: 0.95rem; }
+    .links a:hover { text-decoration: underline; }
+    .status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; margin-right: 6px; vertical-align: middle; }
+    .status.ok { background: #10b981; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>${projectName}</h1>
+    <p>Your pgStack app is running. <span class="status" id="dot"></span><span id="health">checking...</span></p>
+    <div class="links">
+      <a href="/rest/v1/">REST API</a>
+      <a href="/health">Health check</a>
+      <a href="/studio/">Studio</a>
+    </div>
+  </div>
+  <script>
+    fetch('/health').then(r => r.json()).then(() => {
+      document.getElementById('dot').classList.add('ok');
+      document.getElementById('health').textContent = 'healthy';
+    }).catch(() => {
+      document.getElementById('health').textContent = 'unreachable';
+    });
+  </script>
+</body>
+</html>
 `;
 }

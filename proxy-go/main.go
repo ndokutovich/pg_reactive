@@ -259,6 +259,17 @@ func buildRouter(state *AppState) http.Handler {
 		))
 	})
 
+	// ── User SPA / static files (lowest priority, catch-all) ─────────
+	if state.Config.PublicDir != "" {
+		if info, err := os.Stat(state.Config.PublicDir); err == nil && info.IsDir() {
+			publicHandler := appMiddleware.PublicSecurityHeaders(
+				routes.PublicSPA(state.Config.PublicDir),
+			)
+			r.NotFound(publicHandler.ServeHTTP)
+			log.Info().Str("dir", state.Config.PublicDir).Msg("serving user static files")
+		}
+	}
+
 	return r
 }
 
