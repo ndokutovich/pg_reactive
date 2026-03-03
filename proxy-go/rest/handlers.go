@@ -298,6 +298,7 @@ func Update(d *RestDeps) http.HandlerFunc {
 		var result json.RawMessage
 		row := tx.QueryRow(r.Context(), bq.SQL, bq.Params...)
 		if err := row.Scan(&result); err != nil {
+			log.Error().Err(err).Str("sql", bq.SQL).Interface("params", bq.Params).Msg("update: query error")
 			status, msg := pgHTTPStatus(err)
 			writeJSONError(w, status, msg)
 			return

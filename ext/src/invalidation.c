@@ -2,6 +2,7 @@
 
 #include "access/relation.h"
 #include "access/xact.h"
+#include "miscadmin.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "catalog/namespace.h"
@@ -931,6 +932,23 @@ pgr_xact_callback(XactEvent event, void *arg)
 				dirty_list != NULL && dirty_list->count > 0)
 			{
 				int		i;
+				Oid		saved_user_id;
+				int		saved_sec_context;
+
+				/*
+				 * The proxy may have done SET LOCAL ROLE authenticated, which
+				 * would cause SPI queries to run as 'authenticated' — a role
+				 * that lacks privileges on internal pgr snapshot tables.
+				 *
+				 * Switch to the session user (postgres) so that recompute
+				 * operations (DELETE/INSERT on pgr._snap_* tables) succeed
+				 * regardless of what role the outer transaction uses.
+				 *
+				 * This mirrors what SECURITY DEFINER does for pgr_trigger_func
+				 * in sync mode; we replicate it here for the batch pre-commit path.
+				 */
+				GetUserIdAndSecContext(&saved_user_id, &saved_sec_context);
+				SetUserIdAndSecContext(GetSessionUserId(), saved_sec_context);
 
 				SPI_connect();
 				PushActiveSnapshot(GetTransactionSnapshot());
@@ -944,12 +962,14 @@ pgr_xact_callback(XactEvent event, void *arg)
 				{
 					PopActiveSnapshot();
 					SPI_finish();
+					SetUserIdAndSecContext(saved_user_id, saved_sec_context);
 					PG_RE_THROW();
 				}
 				PG_END_TRY();
 
 				PopActiveSnapshot();
 				SPI_finish();
+				SetUserIdAndSecContext(saved_user_id, saved_sec_context);
 			}
 			break;
 		case XACT_EVENT_COMMIT:
