@@ -97,7 +97,7 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
     for row in &col_rows {
         let schema: String = row.get("schema_name");
         let table: String = row.get("table_name");
-        let key = format!("{}.{}", schema, table);
+        let key = format!("{schema}.{table}");
 
         let entry = tables.entry(key).or_insert_with(|| TableMeta {
             schema: schema.clone(),
@@ -133,7 +133,7 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
     for row in &pk_rows {
         let schema: String = row.get("schema_name");
         let table: String = row.get("table_name");
-        let key = format!("{}.{}", schema, table);
+        let key = format!("{schema}.{table}");
         if let Some(t) = tables.get_mut(&key) {
             t.primary_keys.push(row.get("column_name"));
         }
@@ -167,14 +167,14 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
     for row in &fk_rows {
         let schema: String = row.get("schema_name");
         let table: String = row.get("table_name");
-        let key = format!("{}.{}", schema, table);
+        let key = format!("{schema}.{table}");
         let ref_schema: String = row.get("ref_schema");
         let ref_table: String = row.get("ref_table");
 
         if let Some(t) = tables.get_mut(&key) {
             t.foreign_keys.push(ForeignKey {
                 columns: row.get("columns"),
-                referenced_table: format!("{}.{}", ref_schema, ref_table),
+                referenced_table: format!("{ref_schema}.{ref_table}"),
                 referenced_columns: row.get("ref_columns"),
             });
         }

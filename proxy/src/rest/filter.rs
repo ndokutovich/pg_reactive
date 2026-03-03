@@ -110,8 +110,7 @@ fn parse_filter(column: &str, raw: &str) -> Result<Filter, AppError> {
     // Split on first dot: operator.value
     let (op_str, value) = rest.split_once('.').ok_or_else(|| {
         AppError::BadRequest(format!(
-            "invalid filter for '{}': expected operator.value, got '{}'",
-            column, raw
+            "invalid filter for '{column}': expected operator.value, got '{raw}'"
         ))
     })?;
 
@@ -131,8 +130,7 @@ fn parse_filter(column: &str, raw: &str) -> Result<Filter, AppError> {
         "fts" => FilterOp::Fts,
         _ => {
             return Err(AppError::BadRequest(format!(
-                "unknown filter operator: '{}'",
-                op_str
+                "unknown filter operator: '{op_str}'"
             )))
         }
     };
@@ -140,8 +138,7 @@ fn parse_filter(column: &str, raw: &str) -> Result<Filter, AppError> {
     // Validate column name (prevent SQL injection)
     if !is_valid_identifier(column) {
         return Err(AppError::BadRequest(format!(
-            "invalid column name: '{}'",
-            column
+            "invalid column name: '{column}'"
         )));
     }
 
@@ -165,8 +162,7 @@ fn parse_order(raw: &str) -> Result<Vec<OrderClause>, AppError> {
         let column = segments[0].to_string();
         if !is_valid_identifier(&column) {
             return Err(AppError::BadRequest(format!(
-                "invalid order column: '{}'",
-                column
+                "invalid order column: '{column}'"
             )));
         }
 
@@ -181,8 +177,7 @@ fn parse_order(raw: &str) -> Result<Vec<OrderClause>, AppError> {
                 "nullslast" => nulls_first = Some(false),
                 _ => {
                     return Err(AppError::BadRequest(format!(
-                        "invalid order modifier: '{}'",
-                        seg
+                        "invalid order modifier: '{seg}'"
                     )))
                 }
             }

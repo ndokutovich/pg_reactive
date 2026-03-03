@@ -23,7 +23,7 @@ pub async fn catalog_refresh(
         .catalog
         .refresh(&state.pg_pool)
         .await
-        .map_err(|e| AppError::Internal(format!("catalog refresh failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("catalog refresh failed: {e}")))?;
 
     Ok(Json(json!({ "ok": true })))
 }

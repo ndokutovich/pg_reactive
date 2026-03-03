@@ -10,5 +10,5 @@ pub async fn studio_redirect() -> Redirect {
 /// Falls back to index.html for all unknown paths (SPA client-side routing).
 pub fn studio_service() -> ServeDir<ServeFile> {
     let dir = std::env::var("STUDIO_DIR").unwrap_or_else(|_| "/studio".to_string());
-    ServeDir::new(&dir).fallback(ServeFile::new(format!("{}/index.html", dir)))
+    ServeDir::new(&dir).fallback(ServeFile::new(format!("{dir}/index.html")))
 }

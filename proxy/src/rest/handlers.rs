@@ -22,7 +22,7 @@ pub async fn select_rows(
         .catalog
         .get_table(&table_name)
         .await
-        .ok_or_else(|| AppError::NotFound(format!("table '{}' not found", table_name)))?;
+        .ok_or_else(|| AppError::NotFound(format!("table '{table_name}' not found")))?;
 
     let query = RestQuery::parse(uri.0.query())?;
 
@@ -68,7 +68,7 @@ pub async fn insert_rows(
         .catalog
         .get_table(&table_name)
         .await
-        .ok_or_else(|| AppError::NotFound(format!("table '{}' not found", table_name)))?;
+        .ok_or_else(|| AppError::NotFound(format!("table '{table_name}' not found")))?;
 
     let built = query_builder::build_insert(&table, &body)?;
 
@@ -112,7 +112,7 @@ pub async fn update_rows(
         .catalog
         .get_table(&table_name)
         .await
-        .ok_or_else(|| AppError::NotFound(format!("table '{}' not found", table_name)))?;
+        .ok_or_else(|| AppError::NotFound(format!("table '{table_name}' not found")))?;
 
     let query = RestQuery::parse(uri.0.query())?;
     let built = query_builder::build_update(&table, &body, &query)?;
@@ -137,7 +137,7 @@ pub async fn delete_rows(
         .catalog
         .get_table(&table_name)
         .await
-        .ok_or_else(|| AppError::NotFound(format!("table '{}' not found", table_name)))?;
+        .ok_or_else(|| AppError::NotFound(format!("table '{table_name}' not found")))?;
 
     let query = RestQuery::parse(uri.0.query())?;
     let built = query_builder::build_delete(&table, &query)?;
@@ -222,7 +222,7 @@ async fn execute_select_with_embeds(
                 .collect();
             if cols.is_empty() {
                 // User had * or only embeds -> select all parent columns
-                format!("{}.*", parent_alias)
+                format!("{parent_alias}.*")
             } else {
                 cols.iter()
                     .map(|c| format!("{}.{}", parent_alias, query_builder::quote_ident(c)))
@@ -230,7 +230,7 @@ async fn execute_select_with_embeds(
                     .join(", ")
             }
         }
-        None => format!("{}.*", parent_alias),
+        None => format!("{parent_alias}.*"),
     };
 
     let sql = format!(

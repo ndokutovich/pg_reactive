@@ -46,8 +46,7 @@ pub async fn sql_execute(
     if use_read_only {
         let trimmed = sql.trim_end_matches(';');
         let wrapped = format!(
-            "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({}) t",
-            trimmed
+            "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({trimmed}) t"
         );
         // Wrap in a read-only transaction so PostgreSQL itself rejects any
         // DML/DDL hidden inside CTEs (e.g. WITH x AS (DELETE ...) SELECT ...).
@@ -77,8 +76,7 @@ pub async fn sql_execute(
         // SELECT calling pgr. functions — run read-write (pgr funcs do DML internally).
         let trimmed = sql.trim_end_matches(';');
         let wrapped = format!(
-            "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({}) t",
-            trimmed
+            "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({trimmed}) t"
         );
         match sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(&wrapped)
             .fetch_one(&state.pg_pool)

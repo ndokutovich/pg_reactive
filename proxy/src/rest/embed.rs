@@ -270,7 +270,7 @@ pub fn build_lateral_sql(
 ) -> (String, String) {
     let my_index = *global_counter;
     *global_counter += 1;
-    let alias = format!("_e{}", my_index);
+    let alias = format!("_e{my_index}");
 
     let target_from = format!(
         "{}.{}",

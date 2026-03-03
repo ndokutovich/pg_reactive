@@ -23,8 +23,7 @@ pub async fn call_rpc(
     // Validate function name
     if !is_valid_fn_name(&fn_name) {
         return Err(AppError::BadRequest(format!(
-            "invalid function name: '{}'",
-            fn_name
+            "invalid function name: '{fn_name}'"
         )));
     }
 
@@ -44,8 +43,7 @@ pub async fn call_rpc(
     for (i, (key, val)) in obj.iter().enumerate() {
         if !is_valid_fn_name(key) {
             return Err(AppError::BadRequest(format!(
-                "invalid parameter name: '{}'",
-                key
+                "invalid parameter name: '{key}'"
             )));
         }
         param_names.push(key.clone());

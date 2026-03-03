@@ -34,7 +34,7 @@ pub fn build_select(table: &TableMeta, query: &RestQuery) -> Result<BuiltQuery, 
     let order_clause = build_order(&query.order)?;
 
     // LIMIT / OFFSET
-    let mut sql = format!("SELECT {} FROM {}", select_clause, from_clause);
+    let mut sql = format!("SELECT {select_clause} FROM {from_clause}");
 
     if !where_clause.is_empty() {
         sql.push_str(" WHERE ");
@@ -48,11 +48,11 @@ pub fn build_select(table: &TableMeta, query: &RestQuery) -> Result<BuiltQuery, 
 
     // LIMIT/OFFSET are safe to inline (already validated as i64)
     if let Some(limit) = query.limit {
-        sql.push_str(&format!(" LIMIT {}", limit));
+        sql.push_str(&format!(" LIMIT {limit}"));
     }
 
     if let Some(offset) = query.offset {
-        sql.push_str(&format!(" OFFSET {}", offset));
+        sql.push_str(&format!(" OFFSET {offset}"));
     }
 
     Ok(BuiltQuery { sql, params })
@@ -192,10 +192,7 @@ pub fn build_delete(table: &TableMeta, query: &RestQuery) -> Result<BuiltQuery, 
         ));
     }
 
-    let sql = format!(
-        "DELETE FROM {} WHERE {} RETURNING *",
-        from_clause, where_clause
-    );
+    let sql = format!("DELETE FROM {from_clause} WHERE {where_clause} RETURNING *");
 
     Ok(BuiltQuery { sql, params })
 }

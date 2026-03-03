@@ -888,7 +888,7 @@ pub async fn magiclink_verify(
     let secret = match state.config.jwt_secret.as_ref() {
         Some(s) => s.clone(),
         None => {
-            let redirect_url = format!("{}#error=jwt_not_configured", site_url);
+            let redirect_url = format!("{site_url}#error=jwt_not_configured");
             return Ok(Redirect::to(&redirect_url).into_response());
         }
     };
@@ -908,7 +908,7 @@ pub async fn magiclink_verify(
     let (token_id, user_id) = match row {
         Some(r) => r,
         None => {
-            let redirect_url = format!("{}#error=invalid_magic_link", site_url);
+            let redirect_url = format!("{site_url}#error=invalid_magic_link");
             return Ok(Redirect::to(&redirect_url).into_response());
         }
     };
