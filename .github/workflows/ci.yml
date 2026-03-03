@@ -14,7 +14,7 @@ jobs:
   # ─── Extension tests (pg_regress + isolation) ───────────────────────────────
   test-extension:
     name: Extension tests
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +50,7 @@ jobs:
   # ─── Rust proxy ─────────────────────────────────────────────────────────────
   test-proxy:
     name: Proxy (Rust)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -87,7 +87,7 @@ jobs:
   # ─── TypeScript SDK ──────────────────────────────────────────────────────────
   test-sdk:
     name: SDK (TypeScript)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -121,7 +121,7 @@ jobs:
   # ─── CLI ────────────────────────────────────────────────────────────────────
   test-cli:
     name: CLI (TypeScript)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -150,7 +150,7 @@ jobs:
   # ─── E2E tests (full stack) ──────────────────────────────────────────────────
   test-e2e:
     name: E2E tests
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [test-extension, test-proxy, test-sdk]
     steps:
       - uses: actions/checkout@v4
@@ -213,7 +213,7 @@ jobs:
   # ─── Integration tests ───────────────────────────────────────────────────────
   test-integration:
     name: Integration tests
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [test-extension]
     steps:
       - uses: actions/checkout@v4
@@ -236,7 +236,7 @@ jobs:
   # ─── Security audit ──────────────────────────────────────────────────────────
   security:
     name: Security audit
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
