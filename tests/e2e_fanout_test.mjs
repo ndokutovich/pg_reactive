@@ -39,8 +39,20 @@ async function connectClient(id) {
     messages.push(JSON.parse(data.toString()));
   });
 
-  // Wait for subscribed message
-  await new Promise(r => setTimeout(r, 300));
+  // Wait until subscribed message arrives (up to 5s) instead of a fixed sleep.
+  // A fixed 300ms is too tight on slow CI runners.
+  await new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error(`Client ${id}: subscribed timeout`)), 5000);
+    function check() {
+      if (messages.find(m => m.type === 'subscribed')) {
+        clearTimeout(deadline);
+        resolve();
+      } else {
+        setTimeout(check, 50);
+      }
+    }
+    check();
+  });
 
   return { ws, messages, id };
 }
