@@ -180,7 +180,7 @@ func ResolveEmbed(catalog *Catalog, parentTable *TableMeta, req EmbedRequest, de
 		}
 	}
 
-	return nil, fmt.Errorf("embed: no FK relationship found between %q and %q", parentTable.Name, req.Relation)
+	return nil, fmt.Errorf("embed: no foreign key relationship found between %q and %q", parentTable.Name, req.Relation)
 }
 
 // validateEmbedColumns checks that all user-requested columns exist in the
