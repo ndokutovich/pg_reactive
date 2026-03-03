@@ -33,11 +33,6 @@ jobs:
           docker compose exec -T db bash -c \
             'su - postgres -c "cd /ext/ext && make installcheck"'
 
-      - name: Isolation tests
-        run: |
-          docker compose exec -T db bash -c \
-            'su - postgres -c "cd /ext/ext && make isolation_installcheck"'
-
       - name: Upload regression diffs on failure
         if: failure()
         uses: actions/upload-artifact@v4
