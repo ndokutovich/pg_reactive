@@ -450,12 +450,9 @@ mod tests {
             columns: cols
                 .iter()
                 .enumerate()
-                .map(|(i, (col_name, pg_type))| ColumnMeta {
+                .map(|(_i, (col_name, pg_type))| ColumnMeta {
                     name: col_name.to_string(),
                     pg_type: pg_type.to_string(),
-                    is_nullable: true,
-                    has_default: false,
-                    ordinal: (i + 1) as i32,
                 })
                 .collect(),
             primary_keys: Vec::new(),
