@@ -111,6 +111,11 @@ async function testValidToken() {
   const token = createJwt({ sub: 'user1' }, JWT_SECRET);
   const ws = new WebSocket(`ws://${PROXY_HOST}:${PROXY_PORT}/ws/test_q?token=${token}`);
 
+  // Register message handler BEFORE awaiting open to avoid a race where the
+  // proxy sends 'subscribed' before the listener is registered.
+  const messages = [];
+  ws.on('message', (data) => { messages.push(JSON.parse(data.toString())); });
+
   const result = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 5000);
     ws.on('open', () => {
@@ -132,13 +137,15 @@ async function testValidToken() {
     process.exit(1);
   }
 
-  // Should receive subscribed message
+  // Should receive subscribed message (poll up to 3s)
   const msg = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('no message')), 3000);
-    ws.on('message', (data) => {
-      clearTimeout(timer);
-      resolve(JSON.parse(data.toString()));
-    });
+    function check() {
+      const sub = messages.find(m => m.type === 'subscribed');
+      if (sub) { clearTimeout(timer); resolve(sub); }
+      else { setTimeout(check, 50); }
+    }
+    check();
   });
 
   ws.close();
