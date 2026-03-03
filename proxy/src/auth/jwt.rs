@@ -28,7 +28,7 @@ fn default_role() -> String {
 pub fn generate_token(claims: &Claims, secret: &str) -> Result<String, String> {
     let header = Header::new(Algorithm::HS256);
     let key = EncodingKey::from_secret(secret.as_bytes());
-    encode(&header, claims, &key).map_err(|e| format!("JWT generation failed: {}", e))
+    encode(&header, claims, &key).map_err(|e| format!("JWT generation failed: {e}"))
 }
 
 /// Validate and decode a JWT token.
@@ -42,7 +42,7 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, String> {
 
     decode::<Claims>(token, &key, &validation)
         .map(|data| data.claims)
-        .map_err(|e| format!("JWT validation failed: {}", e))
+        .map_err(|e| format!("JWT validation failed: {e}"))
 }
 
 /// Extract JWT token from Authorization header or apikey header or query param.

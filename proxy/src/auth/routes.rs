@@ -107,7 +107,7 @@ pub async fn signup(
     let pwd = body.password.clone();
     let hash = tokio::task::spawn_blocking(move || password::hash_password(&pwd))
         .await
-        .map_err(|e| AppError::Internal(format!("hash task failed: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("hash task failed: {e}")))?
         .map_err(AppError::Internal)?;
 
     let user_meta = body.data.unwrap_or(serde_json::json!({}));
@@ -146,7 +146,7 @@ pub async fn signup(
             .unwrap_or("http://127.0.0.1:3000");
         let html = verify_email_html(site_url, &verify_token);
         if let Err(e) = state.mailer.send(&email, "Verify your email", &html).await {
-            tracing::warn!("Failed to send verification email to {}: {}", email, e);
+            tracing::warn!("Failed to send verification email to {email}: {e}");
         }
 
         Ok((
@@ -249,7 +249,7 @@ async fn token_password(
         password::verify_password(&pwd_owned, &hash_owned)
     })
     .await
-    .map_err(|e| AppError::Internal(format!("verify task failed: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("verify task failed: {e}")))?
     .map_err(AppError::Internal)?;
 
     if !valid {
@@ -447,7 +447,7 @@ pub async fn update_user(
         let pwd_owned = pwd.clone();
         let hash = tokio::task::spawn_blocking(move || password::hash_password(&pwd_owned))
             .await
-            .map_err(|e| AppError::Internal(format!("hash task failed: {}", e)))?
+            .map_err(|e| AppError::Internal(format!("hash task failed: {e}")))?
             .map_err(AppError::Internal)?;
 
         sqlx::query(
@@ -651,7 +651,7 @@ fn generate_token() -> String {
     let bytes: [u8; 32] = rand::random();
     let mut s = String::with_capacity(64);
     for b in bytes {
-        write!(s, "{:02x}", b).unwrap();
+        write!(s, "{b:02x}").unwrap();
     }
     s
 }
@@ -724,7 +724,7 @@ pub async fn recover(
 
         let html = reset_email_html(site_url, &token);
         if let Err(e) = state.mailer.send(&body.email, "Reset your password", &html).await {
-            tracing::warn!("Failed to send reset email to {}: {}", body.email, e);
+            tracing::warn!("Failed to send reset email to {}: {e}", body.email);
         }
     }
 
@@ -775,7 +775,7 @@ pub async fn recover_confirm(
     let pwd = body.password.clone();
     let hash = tokio::task::spawn_blocking(move || password::hash_password(&pwd))
         .await
-        .map_err(|e| AppError::Internal(format!("hash task failed: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("hash task failed: {e}")))?
         .map_err(AppError::Internal)?;
 
     // Wrap password update + token mark-used in a single transaction
@@ -863,7 +863,7 @@ pub async fn magiclink(
 
     let html = magic_link_email_html(site_url, &token);
     if let Err(e) = state.mailer.send(&body.email, "Your sign-in link", &html).await {
-        tracing::warn!("Failed to send magic link email to {}: {}", body.email, e);
+        tracing::warn!("Failed to send magic link email to {}: {e}", body.email);
     }
 
     Ok(Json(serde_json::json!({ "message": "Magic link sent" })))
@@ -1134,7 +1134,7 @@ pub async fn admin_create_user(
         }
         let h = tokio::task::spawn_blocking(move || password::hash_password(&pwd))
             .await
-            .map_err(|e| AppError::Internal(format!("hash task failed: {}", e)))?
+            .map_err(|e| AppError::Internal(format!("hash task failed: {e}")))?
             .map_err(AppError::Internal)?;
         Some(h)
     } else {

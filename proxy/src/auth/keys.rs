@@ -15,5 +15,5 @@ pub fn is_service_role(headers: &axum::http::HeaderMap, service_role_key: &str) 
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
-        .map_or(false, |token| constant_time_eq(token, service_role_key))
+        .is_some_and(|token| constant_time_eq(token, service_role_key))
 }

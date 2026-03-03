@@ -66,7 +66,7 @@ impl Catalog {
             return Some(t.clone());
         }
         // Try public schema
-        let qualified = format!("public.{}", name);
+        let qualified = format!("public.{name}");
         inner.tables.get(&qualified).cloned()
     }
 

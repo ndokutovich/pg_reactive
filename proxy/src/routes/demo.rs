@@ -17,7 +17,7 @@ pub async fn demo_action(
         .config
         .service_role_key
         .as_deref()
-        .map_or(false, |k| is_service_role(&headers, k));
+        .is_some_and(|k| is_service_role(&headers, k));
     if !state.config.enable_sql_endpoint && !has_service_role {
         return (
             StatusCode::UNAUTHORIZED,

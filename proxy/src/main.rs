@@ -193,10 +193,10 @@ async fn ws_handler(
         let query_str = req.0.query();
 
         // Check anon key first via Bearer header (it's not a JWT, so don't try to validate it as one)
-        let is_anon_key = state.config.anon_key.as_ref().map_or(false, |ak| {
+        let is_anon_key = state.config.anon_key.as_ref().is_some_and(|ak| {
             auth_header
                 .and_then(|h| h.strip_prefix("Bearer "))
-                .map_or(false, |t| auth::keys::constant_time_eq(t, ak))
+                .is_some_and(|t| auth::keys::constant_time_eq(t, ak))
         });
 
         // Also check ?apikey= query param (browsers can't set custom headers on WebSocket)
@@ -207,10 +207,10 @@ async fn ws_handler(
                 if let Some(key) = apikey_value {
                     // Check against anon_key
                     let is_anon = state.config.anon_key.as_ref()
-                        .map_or(false, |ak| auth::keys::constant_time_eq(key, ak));
+                        .is_some_and(|ak| auth::keys::constant_time_eq(key, ak));
                     // Check against service_role_key
                     let is_service = state.config.service_role_key.as_ref()
-                        .map_or(false, |srk| auth::keys::constant_time_eq(key, srk));
+                        .is_some_and(|srk| auth::keys::constant_time_eq(key, srk));
                     is_anon || is_service
                 } else {
                     false

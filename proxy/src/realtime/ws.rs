@@ -28,7 +28,7 @@ async fn fetch_snapshot(pool: &PgPool, query_id: &str) -> Vec<serde_json::Value>
     {
         Ok(rows) => rows,
         Err(e) => {
-            tracing::debug!("snapshot fetch failed for {}: {}", query_id, e);
+            tracing::debug!("snapshot fetch failed for {query_id}: {e}");
             vec![]
         }
     }

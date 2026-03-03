@@ -80,7 +80,7 @@ fn error_redirect(site: &str, error: &str, description: &str) -> Redirect {
         urlencoding::encode(error),
         urlencoding::encode(description)
     );
-    Redirect::temporary(&format!("{}#{}", site, fragment))
+    Redirect::temporary(&format!("{site}#{fragment}"))
 }
 
 fn generate_csrf_state() -> String {
@@ -109,7 +109,7 @@ pub async fn authorize(
     Query(params): Query<AuthorizeParams>,
 ) -> Result<impl IntoResponse, AppError> {
     let site = site_url(&state.config)?;
-    let callback_uri = format!("{}/auth/v1/callback", site);
+    let callback_uri = format!("{site}/auth/v1/callback");
     let csrf_state = generate_csrf_state();
     let code_verifier = generate_code_verifier();
     let code_challenge = compute_code_challenge(&code_verifier);
@@ -162,8 +162,7 @@ pub async fn authorize(
             Ok(Redirect::temporary(&url))
         }
         other => Err(AppError::BadRequest(format!(
-            "unsupported OAuth provider: {}",
-            other
+            "unsupported OAuth provider: {other}"
         ))),
     }
 }
@@ -224,8 +223,7 @@ async fn callback_inner(
         "github" => exchange_github(state, &params.code, site).await?,
         other => {
             return Err(AppError::BadRequest(format!(
-                "unsupported provider: {}",
-                other
+                "unsupported provider: {other}"
             )))
         }
     };
@@ -277,7 +275,7 @@ async fn callback_inner(
         "OAuth login successful"
     );
 
-    Ok(Redirect::temporary(&format!("{}#{}", site, fragment)))
+    Ok(Redirect::temporary(&format!("{site}#{fragment}")))
 }
 
 // ---------- Google exchange ----------
@@ -295,7 +293,7 @@ async fn exchange_google(
         AppError::Internal("GOOGLE_CLIENT_SECRET not configured".into())
     })?;
 
-    let callback_uri = format!("{}/auth/v1/callback", site);
+    let callback_uri = format!("{site}/auth/v1/callback");
 
     let http = reqwest::Client::new();
 
@@ -318,20 +316,19 @@ async fn exchange_google(
         .form(&form_params)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Google token exchange failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Google token exchange failed: {e}")))?;
 
     if !token_resp.status().is_success() {
         let body = token_resp.text().await.unwrap_or_default();
         return Err(AppError::Internal(format!(
-            "Google token exchange returned error: {}",
-            body
+            "Google token exchange returned error: {body}"
         )));
     }
 
     let token_data: GoogleTokenResponse = token_resp
         .json()
         .await
-        .map_err(|e| AppError::Internal(format!("Google token parse failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Google token parse failed: {e}")))?;
 
     // Fetch user info
     let userinfo_resp = http
@@ -339,20 +336,19 @@ async fn exchange_google(
         .bearer_auth(&token_data.access_token)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Google userinfo fetch failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Google userinfo fetch failed: {e}")))?;
 
     if !userinfo_resp.status().is_success() {
         let body = userinfo_resp.text().await.unwrap_or_default();
         return Err(AppError::Internal(format!(
-            "Google userinfo returned error: {}",
-            body
+            "Google userinfo returned error: {body}"
         )));
     }
 
     let user_info: GoogleUserInfo = userinfo_resp
         .json()
         .await
-        .map_err(|e| AppError::Internal(format!("Google userinfo parse failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Google userinfo parse failed: {e}")))?;
 
     Ok((user_info.email, user_info.name, "google".to_string()))
 }
@@ -371,7 +367,7 @@ async fn exchange_github(
         AppError::Internal("GITHUB_CLIENT_SECRET not configured".into())
     })?;
 
-    let callback_uri = format!("{}/auth/v1/callback", site);
+    let callback_uri = format!("{site}/auth/v1/callback");
 
     let http = reqwest::Client::new();
 
@@ -387,20 +383,19 @@ async fn exchange_github(
         ])
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("GitHub token exchange failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("GitHub token exchange failed: {e}")))?;
 
     if !token_resp.status().is_success() {
         let body = token_resp.text().await.unwrap_or_default();
         return Err(AppError::Internal(format!(
-            "GitHub token exchange returned error: {}",
-            body
+            "GitHub token exchange returned error: {body}"
         )));
     }
 
     let token_data: GitHubTokenResponse = token_resp
         .json()
         .await
-        .map_err(|e| AppError::Internal(format!("GitHub token parse failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("GitHub token parse failed: {e}")))?;
 
     // Fetch user profile
     let user_resp = http
@@ -409,20 +404,19 @@ async fn exchange_github(
         .bearer_auth(&token_data.access_token)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("GitHub user fetch failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("GitHub user fetch failed: {e}")))?;
 
     if !user_resp.status().is_success() {
         let body = user_resp.text().await.unwrap_or_default();
         return Err(AppError::Internal(format!(
-            "GitHub user API returned error: {}",
-            body
+            "GitHub user API returned error: {body}"
         )));
     }
 
     let github_user: GitHubUser = user_resp
         .json()
         .await
-        .map_err(|e| AppError::Internal(format!("GitHub user parse failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("GitHub user parse failed: {e}")))?;
 
     // GitHub may not include email in the user profile if it's private.
     // In that case, fetch from the emails endpoint.
@@ -435,20 +429,19 @@ async fn exchange_github(
             .bearer_auth(&token_data.access_token)
             .send()
             .await
-            .map_err(|e| AppError::Internal(format!("GitHub emails fetch failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("GitHub emails fetch failed: {e}")))?;
 
         if !emails_resp.status().is_success() {
             let body = emails_resp.text().await.unwrap_or_default();
             return Err(AppError::Internal(format!(
-                "GitHub emails API returned error: {}",
-                body
+                "GitHub emails API returned error: {body}"
             )));
         }
 
         let emails: Vec<GitHubEmail> = emails_resp
             .json()
             .await
-            .map_err(|e| AppError::Internal(format!("GitHub emails parse failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("GitHub emails parse failed: {e}")))?;
 
         // Prefer primary + verified email
         emails
