@@ -71,18 +71,18 @@ impl RestQuery {
                 "select" => result.select = Some(value.into_owned()),
                 "order" => result.order = parse_order(&value)?,
                 "limit" => {
-                    let v = value.parse::<i64>().map_err(|_| {
-                        AppError::BadRequest("invalid limit value".into())
-                    })?;
+                    let v = value
+                        .parse::<i64>()
+                        .map_err(|_| AppError::BadRequest("invalid limit value".into()))?;
                     if v < 0 {
                         return Err(AppError::BadRequest("limit must not be negative".into()));
                     }
                     result.limit = Some(v);
                 }
                 "offset" => {
-                    let v = value.parse::<i64>().map_err(|_| {
-                        AppError::BadRequest("invalid offset value".into())
-                    })?;
+                    let v = value
+                        .parse::<i64>()
+                        .map_err(|_| AppError::BadRequest("invalid offset value".into()))?;
                     if v < 0 {
                         return Err(AppError::BadRequest("offset must not be negative".into()));
                     }
@@ -197,8 +197,7 @@ fn parse_order(raw: &str) -> Result<Vec<OrderClause>, AppError> {
 fn is_valid_identifier(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 63
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !s.chars().next().unwrap().is_ascii_digit()
 }
 

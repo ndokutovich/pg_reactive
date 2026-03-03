@@ -25,7 +25,11 @@ pub fn build_select(table: &TableMeta, query: &RestQuery) -> Result<BuiltQuery, 
     };
 
     // FROM
-    let from_clause = format!("{}.{}", quote_ident(&table.schema), quote_ident(&table.name));
+    let from_clause = format!(
+        "{}.{}",
+        quote_ident(&table.schema),
+        quote_ident(&table.name)
+    );
 
     // WHERE
     let where_clause = build_where(&query.filters, &mut params, table)?;
@@ -59,10 +63,7 @@ pub fn build_select(table: &TableMeta, query: &RestQuery) -> Result<BuiltQuery, 
 }
 
 /// Build an INSERT query from a JSON body. Returns the query + params.
-pub fn build_insert(
-    table: &TableMeta,
-    body: &serde_json::Value,
-) -> Result<BuiltQuery, AppError> {
+pub fn build_insert(table: &TableMeta, body: &serde_json::Value) -> Result<BuiltQuery, AppError> {
     let rows = match body {
         serde_json::Value::Array(arr) => arr.clone(),
         serde_json::Value::Object(_) => vec![body.clone()],
@@ -115,7 +116,11 @@ pub fn build_insert(
         value_groups.push(format!("({})", placeholders.join(", ")));
     }
 
-    let from_clause = format!("{}.{}", quote_ident(&table.schema), quote_ident(&table.name));
+    let from_clause = format!(
+        "{}.{}",
+        quote_ident(&table.schema),
+        quote_ident(&table.name)
+    );
     let col_list = col_names
         .iter()
         .map(|c| quote_ident(c))
@@ -158,10 +163,19 @@ pub fn build_update(
             .map(|c| c.pg_type.as_str())
             .unwrap_or("text");
         params.push(json_to_pg_param(val));
-        set_clauses.push(format!("{} = ${}::{}", quote_ident(col), params.len(), safe_pg_type(pg_type)));
+        set_clauses.push(format!(
+            "{} = ${}::{}",
+            quote_ident(col),
+            params.len(),
+            safe_pg_type(pg_type)
+        ));
     }
 
-    let from_clause = format!("{}.{}", quote_ident(&table.schema), quote_ident(&table.name));
+    let from_clause = format!(
+        "{}.{}",
+        quote_ident(&table.schema),
+        quote_ident(&table.name)
+    );
     let where_clause = build_where(&query.filters, &mut params, table)?;
 
     if where_clause.is_empty() {
@@ -183,7 +197,11 @@ pub fn build_update(
 /// Build a DELETE query.
 pub fn build_delete(table: &TableMeta, query: &RestQuery) -> Result<BuiltQuery, AppError> {
     let mut params: Vec<String> = Vec::new();
-    let from_clause = format!("{}.{}", quote_ident(&table.schema), quote_ident(&table.name));
+    let from_clause = format!(
+        "{}.{}",
+        quote_ident(&table.schema),
+        quote_ident(&table.name)
+    );
     let where_clause = build_where(&query.filters, &mut params, table)?;
 
     if where_clause.is_empty() {
@@ -235,10 +253,7 @@ fn resolve_columns(table: &TableMeta, select: Option<&str>) -> Result<Vec<String
             if has_star {
                 Ok(Vec::new())
             } else {
-                Ok(cols
-                    .into_iter()
-                    .filter(|c| !c.contains('('))
-                    .collect())
+                Ok(cols.into_iter().filter(|c| !c.contains('(')).collect())
             }
         }
     }
@@ -597,7 +612,10 @@ mod tests {
 
     #[test]
     fn test_select_specific_columns() {
-        let table = make_table("users", &[("id", "integer"), ("name", "text"), ("email", "text")]);
+        let table = make_table(
+            "users",
+            &[("id", "integer"), ("name", "text"), ("email", "text")],
+        );
         let query = RestQuery::parse(Some("select=id,name")).unwrap();
         let built = build_select(&table, &query).unwrap();
         assert!(built.sql.starts_with("SELECT \"id\", \"name\" FROM"));

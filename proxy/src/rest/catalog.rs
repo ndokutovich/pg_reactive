@@ -69,7 +69,6 @@ impl Catalog {
         let qualified = format!("public.{name}");
         inner.tables.get(&qualified).cloned()
     }
-
 }
 
 async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::Error> {
@@ -87,7 +86,7 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
            AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pgr', 'pgstack')
            AND a.attnum > 0
            AND NOT a.attisdropped
-         ORDER BY n.nspname, c.relname, a.attnum"
+         ORDER BY n.nspname, c.relname, a.attnum",
     )
     .fetch_all(pool)
     .await?;
@@ -125,7 +124,7 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
          JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
          WHERE i.indisprimary
            AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pgr', 'pgstack')
-         ORDER BY n.nspname, c.relname, array_position(i.indkey, a.attnum)"
+         ORDER BY n.nspname, c.relname, array_position(i.indkey, a.attnum)",
     )
     .fetch_all(pool)
     .await?;
@@ -159,7 +158,7 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
          WHERE con.contype = 'f'
            AND cn.nspname NOT IN ('pg_catalog', 'information_schema', 'pgr', 'pgstack')
          GROUP BY cn.nspname, cc.relname, fn_.nspname, fc.relname
-         ORDER BY cn.nspname, cc.relname"
+         ORDER BY cn.nspname, cc.relname",
     )
     .fetch_all(pool)
     .await?;

@@ -56,7 +56,12 @@ pub async fn call_rpc(
             .map(|p| p.pg_type.as_str())
             .unwrap_or("text");
         // Use named parameter syntax with cast: param_name := $N::type
-        placeholders.push(format!("{} := ${}::{}", quote_ident(key), i + 1, safe_pg_type(pg_type)));
+        placeholders.push(format!(
+            "{} := ${}::{}",
+            quote_ident(key),
+            i + 1,
+            safe_pg_type(pg_type)
+        ));
     }
 
     // Use to_json() to always get JSON output regardless of return type.
@@ -134,13 +139,7 @@ pub async fn call_rpc_get(
 
     let body = Json(serde_json::Value::Object(obj));
 
-    call_rpc(
-        State(state),
-        Path(fn_name),
-        claims,
-        Some(body),
-    )
-    .await
+    call_rpc(State(state), Path(fn_name), claims, Some(body)).await
 }
 
 fn json_to_param(val: &serde_json::Value) -> String {
@@ -170,8 +169,7 @@ fn safe_pg_type(pg_type: &str) -> &str {
 fn is_valid_fn_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 63
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !s.chars().next().unwrap().is_ascii_digit()
 }
 
@@ -186,10 +184,7 @@ struct FnParam {
 }
 
 /// Look up function parameter names and types from pg_proc.
-async fn lookup_function(
-    pool: &sqlx::PgPool,
-    fn_name: &str,
-) -> Result<FunctionMeta, AppError> {
+async fn lookup_function(pool: &sqlx::PgPool, fn_name: &str) -> Result<FunctionMeta, AppError> {
     // Query pg_proc for function parameter info
     let row = sqlx::query(
         "SELECT
@@ -200,7 +195,7 @@ async fn lookup_function(
          JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE p.proname = $1
            AND n.nspname = 'public'
-         LIMIT 1"
+         LIMIT 1",
     )
     .bind(fn_name)
     .fetch_optional(pool)
@@ -220,7 +215,7 @@ async fn lookup_function(
                  CROSS JOIN LATERAL unnest(p.proargtypes) WITH ORDINALITY AS u(type_oid, ord)
                  JOIN pg_type t ON t.oid = u.type_oid
                  WHERE p.proname = $1 AND n.nspname = 'public'
-                 ORDER BY u.ord"
+                 ORDER BY u.ord",
             )
             .bind(fn_name)
             .fetch_all(pool)
@@ -237,11 +232,17 @@ async fn lookup_function(
                 .map(|(name, pg_type)| FnParam { name, pg_type })
                 .collect();
 
-            Ok(FunctionMeta { params, returns_set })
+            Ok(FunctionMeta {
+                params,
+                returns_set,
+            })
         }
         None => {
             // Function not found — return empty params, let PG produce the error
-            Ok(FunctionMeta { params: Vec::new(), returns_set: false })
+            Ok(FunctionMeta {
+                params: Vec::new(),
+                returns_set: false,
+            })
         }
     }
 }

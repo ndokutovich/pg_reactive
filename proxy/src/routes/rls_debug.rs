@@ -26,7 +26,7 @@ pub async fn rls_debug(
 
     let row = sqlx::query(
         "SELECT current_setting('role') as pg_role,
-                current_setting('request.jwt.claims', true) as jwt_claims"
+                current_setting('request.jwt.claims', true) as jwt_claims",
     )
     .fetch_one(&mut *tx)
     .await?;

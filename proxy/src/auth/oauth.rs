@@ -127,9 +127,11 @@ pub async fn authorize(
 
     match params.provider.as_str() {
         "google" => {
-            let client_id = state.config.google_client_id.as_ref().ok_or_else(|| {
-                AppError::BadRequest("Google OAuth is not configured".into())
-            })?;
+            let client_id = state
+                .config
+                .google_client_id
+                .as_ref()
+                .ok_or_else(|| AppError::BadRequest("Google OAuth is not configured".into()))?;
 
             let url = format!(
                 "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
@@ -145,9 +147,11 @@ pub async fn authorize(
             Ok(Redirect::temporary(&url))
         }
         "github" => {
-            let client_id = state.config.github_client_id.as_ref().ok_or_else(|| {
-                AppError::BadRequest("GitHub OAuth is not configured".into())
-            })?;
+            let client_id = state
+                .config
+                .github_client_id
+                .as_ref()
+                .ok_or_else(|| AppError::BadRequest("GitHub OAuth is not configured".into()))?;
 
             let url = format!(
                 "{}?client_id={}&redirect_uri={}&scope={}&state={}",
@@ -199,9 +203,11 @@ async fn callback_inner(
     params: &CallbackParams,
     site: &str,
 ) -> Result<Redirect, AppError> {
-    let secret = state.config.jwt_secret.as_ref().ok_or_else(|| {
-        AppError::Internal("JWT_SECRET not configured".into())
-    })?;
+    let secret = state
+        .config
+        .jwt_secret
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("JWT_SECRET not configured".into()))?;
 
     // Validate state parameter and retrieve PKCE verifier (one-time use)
     let session = sqlx::query_as::<_, (String, String)>(
@@ -213,9 +219,8 @@ async fn callback_inner(
     .fetch_optional(&state.pg_pool)
     .await?;
 
-    let (code_verifier, provider) = session.ok_or_else(|| {
-        AppError::Unauthorized("invalid or expired OAuth state".into())
-    })?;
+    let (code_verifier, provider) =
+        session.ok_or_else(|| AppError::Unauthorized("invalid or expired OAuth state".into()))?;
 
     // Exchange code for access token and fetch user info
     let (email, name, provider) = match provider.as_str() {
@@ -286,12 +291,16 @@ async fn exchange_google(
     site: &str,
     code_verifier: Option<&str>,
 ) -> Result<(String, Option<String>, String), AppError> {
-    let client_id = state.config.google_client_id.as_ref().ok_or_else(|| {
-        AppError::Internal("GOOGLE_CLIENT_ID not configured".into())
-    })?;
-    let client_secret = state.config.google_client_secret.as_ref().ok_or_else(|| {
-        AppError::Internal("GOOGLE_CLIENT_SECRET not configured".into())
-    })?;
+    let client_id = state
+        .config
+        .google_client_id
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("GOOGLE_CLIENT_ID not configured".into()))?;
+    let client_secret = state
+        .config
+        .google_client_secret
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("GOOGLE_CLIENT_SECRET not configured".into()))?;
 
     let callback_uri = format!("{site}/auth/v1/callback");
 
@@ -360,12 +369,16 @@ async fn exchange_github(
     code: &str,
     site: &str,
 ) -> Result<(String, Option<String>, String), AppError> {
-    let client_id = state.config.github_client_id.as_ref().ok_or_else(|| {
-        AppError::Internal("GITHUB_CLIENT_ID not configured".into())
-    })?;
-    let client_secret = state.config.github_client_secret.as_ref().ok_or_else(|| {
-        AppError::Internal("GITHUB_CLIENT_SECRET not configured".into())
-    })?;
+    let client_id = state
+        .config
+        .github_client_id
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("GITHUB_CLIENT_ID not configured".into()))?;
+    let client_secret = state
+        .config
+        .github_client_secret
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("GITHUB_CLIENT_SECRET not configured".into()))?;
 
     let callback_uri = format!("{site}/auth/v1/callback");
 
@@ -450,9 +463,7 @@ async fn exchange_github(
             .or_else(|| emails.iter().find(|e| e.verified))
             .or_else(|| emails.first())
             .map(|e| e.email.clone())
-            .ok_or_else(|| {
-                AppError::Internal("no email found on GitHub account".into())
-            })?
+            .ok_or_else(|| AppError::Internal("no email found on GitHub account".into()))?
     };
 
     Ok((email, github_user.name, "github".to_string()))

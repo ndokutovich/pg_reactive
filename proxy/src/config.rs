@@ -53,17 +53,27 @@ impl Config {
             }
         }
         let anon_key = std::env::var("ANON_KEY").ok().filter(|s| !s.is_empty());
-        let service_role_key = std::env::var("SERVICE_ROLE_KEY").ok().filter(|s| !s.is_empty());
+        let service_role_key = std::env::var("SERVICE_ROLE_KEY")
+            .ok()
+            .filter(|s| !s.is_empty());
 
         let max_connections: usize = std::env::var("MAX_CONNECTIONS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(10000);
 
-        let google_client_id = std::env::var("GOOGLE_CLIENT_ID").ok().filter(|s| !s.is_empty());
-        let google_client_secret = std::env::var("GOOGLE_CLIENT_SECRET").ok().filter(|s| !s.is_empty());
-        let github_client_id = std::env::var("GITHUB_CLIENT_ID").ok().filter(|s| !s.is_empty());
-        let github_client_secret = std::env::var("GITHUB_CLIENT_SECRET").ok().filter(|s| !s.is_empty());
+        let google_client_id = std::env::var("GOOGLE_CLIENT_ID")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let google_client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let github_client_id = std::env::var("GITHUB_CLIENT_ID")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let github_client_secret = std::env::var("GITHUB_CLIENT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty());
         let site_url = std::env::var("SITE_URL").ok().filter(|s| !s.is_empty());
 
         let auth_rate_limit: usize = std::env::var("AUTH_RATE_LIMIT")
@@ -110,8 +120,8 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
-        let smtp_from = std::env::var("SMTP_FROM")
-            .unwrap_or_else(|_| "noreply@pgstack.local".to_string());
+        let smtp_from =
+            std::env::var("SMTP_FROM").unwrap_or_else(|_| "noreply@pgstack.local".to_string());
 
         let require_email_verification = std::env::var("REQUIRE_EMAIL_VERIFICATION")
             .ok()
@@ -150,14 +160,26 @@ impl fmt::Debug for Config {
         f.debug_struct("Config")
             .field("database_url", &"[REDACTED]")
             .field("listen_addr", &self.listen_addr)
-            .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "jwt_secret",
+                &self.jwt_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("anon_key", &self.anon_key.as_ref().map(|_| "[REDACTED]"))
-            .field("service_role_key", &self.service_role_key.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "service_role_key",
+                &self.service_role_key.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("max_connections", &self.max_connections)
             .field("google_client_id", &self.google_client_id)
-            .field("google_client_secret", &self.google_client_secret.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "google_client_secret",
+                &self.google_client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("github_client_id", &self.github_client_id)
-            .field("github_client_secret", &self.github_client_secret.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "github_client_secret",
+                &self.github_client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("site_url", &self.site_url)
             .field("auth_rate_limit", &self.auth_rate_limit)
             .field("auth_rate_window_secs", &self.auth_rate_window_secs)
@@ -165,11 +187,17 @@ impl fmt::Debug for Config {
             .field("refresh_token_expiry_days", &self.refresh_token_expiry_days)
             .field("broadcast_capacity", &self.broadcast_capacity)
             .field("max_body_size", &self.max_body_size)
-            .field("pg_reconnect_max_backoff_secs", &self.pg_reconnect_max_backoff_secs)
+            .field(
+                "pg_reconnect_max_backoff_secs",
+                &self.pg_reconnect_max_backoff_secs,
+            )
             .field("enable_sql_endpoint", &self.enable_sql_endpoint)
             .field("allowed_origins", &self.allowed_origins)
             .field("smtp_from", &self.smtp_from)
-            .field("require_email_verification", &self.require_email_verification)
+            .field(
+                "require_email_verification",
+                &self.require_email_verification,
+            )
             .finish()
     }
 }

@@ -44,12 +44,10 @@ pub async fn handle_websocket(
     // Subscribe to the broadcast channel for this query_id
     let mut rx = {
         let mut channels_write = channels.write().await;
-        let tx = channels_write
-            .entry(query_id.clone())
-            .or_insert_with(|| {
-                let (tx, _) = broadcast::channel(broadcast_capacity);
-                tx
-            });
+        let tx = channels_write.entry(query_id.clone()).or_insert_with(|| {
+            let (tx, _) = broadcast::channel(broadcast_capacity);
+            tx
+        });
         tx.subscribe()
     };
 

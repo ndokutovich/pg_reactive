@@ -29,10 +29,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config, pg_pool: PgPool) -> Self {
-        let rate_limiter = RateLimiter::new(
-            config.auth_rate_limit,
-            config.auth_rate_window_secs,
-        );
+        let rate_limiter = RateLimiter::new(config.auth_rate_limit, config.auth_rate_window_secs);
         let ws_semaphore = Arc::new(Semaphore::new(config.max_connections));
         let mailer = Arc::new(crate::auth::mailer::Mailer::from_env());
         Self {

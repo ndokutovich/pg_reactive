@@ -7,8 +7,8 @@ use argon2::{
 /// Parameters: 19 MiB memory, 2 iterations, 1 parallelism.
 pub fn hash_password(password: &str) -> Result<String, String> {
     let salt = SaltString::generate(&mut OsRng);
-    let params = Params::new(19 * 1024, 2, 1, None)
-        .map_err(|e| format!("argon2 params error: {e}"))?;
+    let params =
+        Params::new(19 * 1024, 2, 1, None).map_err(|e| format!("argon2 params error: {e}"))?;
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
 
     argon2
@@ -19,8 +19,7 @@ pub fn hash_password(password: &str) -> Result<String, String> {
 
 /// Verify a password against an argon2id hash.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool, String> {
-    let parsed_hash =
-        PasswordHash::new(hash).map_err(|e| format!("invalid hash format: {e}"))?;
+    let parsed_hash = PasswordHash::new(hash).map_err(|e| format!("invalid hash format: {e}"))?;
 
     match Argon2::default().verify_password(password.as_bytes(), &parsed_hash) {
         Ok(()) => Ok(true),
@@ -57,10 +56,26 @@ mod tests {
     fn test_hash_contains_version_and_params() {
         let hash = hash_password("testpass").unwrap();
         // A standard argon2id PHC string includes v= and m=, t=, p= segments
-        assert!(hash.contains("v="), "hash must include version; got: {}", hash);
-        assert!(hash.contains("m="), "hash must include memory param; got: {}", hash);
-        assert!(hash.contains("t="), "hash must include time param; got: {}", hash);
-        assert!(hash.contains("p="), "hash must include parallelism param; got: {}", hash);
+        assert!(
+            hash.contains("v="),
+            "hash must include version; got: {}",
+            hash
+        );
+        assert!(
+            hash.contains("m="),
+            "hash must include memory param; got: {}",
+            hash
+        );
+        assert!(
+            hash.contains("t="),
+            "hash must include time param; got: {}",
+            hash
+        );
+        assert!(
+            hash.contains("p="),
+            "hash must include parallelism param; got: {}",
+            hash
+        );
     }
 
     // ---- salted: different each call ----

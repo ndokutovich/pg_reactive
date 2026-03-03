@@ -63,7 +63,8 @@ async fn main() {
     let pg_url = config.database_url.clone();
     let pg_max_backoff = config.pg_reconnect_max_backoff_secs;
     tokio::spawn(async move {
-        realtime::listener::pg_listener_loop(&pg_url, pg_channels, pg_connected, pg_max_backoff).await;
+        realtime::listener::pg_listener_loop(&pg_url, pg_channels, pg_connected, pg_max_backoff)
+            .await;
     });
 
     // Build router
@@ -83,8 +84,8 @@ async fn main() {
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server error");
+    .await
+    .expect("server error");
 
     info!("shutdown complete");
 }
@@ -108,20 +109,32 @@ fn build_router(state: AppState) -> Router {
         // Auth (rate-limited signup + token)
         .merge(auth_rate_limited)
         // Auth (non-rate-limited)
-        .route("/auth/v1/user", get(auth::routes::get_user).patch(auth::routes::update_user))
+        .route(
+            "/auth/v1/user",
+            get(auth::routes::get_user).patch(auth::routes::update_user),
+        )
         .route("/auth/v1/logout", post(auth::routes::logout))
         // Email auth flows
         .route("/auth/v1/recover", post(auth::routes::recover))
-        .route("/auth/v1/recover/confirm", post(auth::routes::recover_confirm))
+        .route(
+            "/auth/v1/recover/confirm",
+            post(auth::routes::recover_confirm),
+        )
         .route("/auth/v1/verify", get(auth::routes::verify_email))
         .route("/auth/v1/magiclink", post(auth::routes::magiclink))
-        .route("/auth/v1/magiclink/verify", get(auth::routes::magiclink_verify))
+        .route(
+            "/auth/v1/magiclink/verify",
+            get(auth::routes::magiclink_verify),
+        )
         // Admin
         .route(
             "/auth/v1/admin/users",
             get(auth::routes::admin_list_users).post(auth::routes::admin_create_user),
         )
-        .route("/auth/v1/admin/users/{id}", delete(auth::routes::admin_delete_user))
+        .route(
+            "/auth/v1/admin/users/{id}",
+            delete(auth::routes::admin_delete_user),
+        )
         // OAuth
         .route("/auth/v1/authorize", get(auth::oauth::authorize))
         .route("/auth/v1/callback", get(auth::oauth::callback))
@@ -144,9 +157,14 @@ fn build_router(state: AppState) -> Router {
         .route("/api/demo", post(routes::demo::demo_action))
         .route("/api/sql", post(routes::sql::sql_execute))
         // Catalog refresh (force-reload table metadata)
-        .route("/api/catalog/refresh", post(routes::catalog_refresh::catalog_refresh))
+        .route(
+            "/api/catalog/refresh",
+            post(routes::catalog_refresh::catalog_refresh),
+        )
         // Request body size limit
-        .layer(tower_http::limit::RequestBodyLimitLayer::new(state.config.max_body_size))
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(
+            state.config.max_body_size,
+        ))
         // Strict security headers for API
         .layer(axum::middleware::from_fn(
             middleware::security_headers::security_headers,
@@ -202,14 +220,19 @@ async fn ws_handler(
         // Also check ?apikey= query param (browsers can't set custom headers on WebSocket)
         let is_apikey_auth = if !is_anon_key {
             if let Some(q) = query_str {
-                let apikey_value = q.split('&')
-                    .find_map(|pair| pair.strip_prefix("apikey="));
+                let apikey_value = q.split('&').find_map(|pair| pair.strip_prefix("apikey="));
                 if let Some(key) = apikey_value {
                     // Check against anon_key
-                    let is_anon = state.config.anon_key.as_ref()
+                    let is_anon = state
+                        .config
+                        .anon_key
+                        .as_ref()
                         .is_some_and(|ak| auth::keys::constant_time_eq(key, ak));
                     // Check against service_role_key
-                    let is_service = state.config.service_role_key.as_ref()
+                    let is_service = state
+                        .config
+                        .service_role_key
+                        .as_ref()
                         .is_some_and(|srk| auth::keys::constant_time_eq(key, srk));
                     is_anon || is_service
                 } else {
@@ -244,9 +267,7 @@ async fn ws_handler(
         .ws_semaphore
         .clone()
         .try_acquire_owned()
-        .map_err(|_| {
-            error::AppError::TooManyRequests("too many WebSocket connections".into())
-        })?;
+        .map_err(|_| error::AppError::TooManyRequests("too many WebSocket connections".into()))?;
 
     let channels = state.channels.clone();
     let pg_pool = state.pg_pool.clone();
@@ -256,7 +277,8 @@ async fn ws_handler(
         // The permit is moved into the async block and held for the connection lifetime.
         // It is released automatically when the future completes and permit is dropped.
         async move {
-            realtime::ws::handle_websocket(socket, query_id, channels, pg_pool, broadcast_capacity).await;
+            realtime::ws::handle_websocket(socket, query_id, channels, pg_pool, broadcast_capacity)
+                .await;
             drop(permit);
         }
     }))

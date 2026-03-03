@@ -48,7 +48,11 @@ pub async fn select_rows(
         let built = query_builder::build_select(&table, &base_query)?;
         let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
         let rows = execute_select_with_embeds(
-            &mut tx, &built, &table, &resolved_embeds, user_columns.as_deref(),
+            &mut tx,
+            &built,
+            &table,
+            &resolved_embeds,
+            user_columns.as_deref(),
         )
         .await?;
         tx.commit().await?;

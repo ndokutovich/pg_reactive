@@ -80,9 +80,7 @@ pub fn resolve_claims(headers: &HeaderMap, state: &AppState) -> Result<RequestCl
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
 
-    let apikey_header = headers
-        .get("apikey")
-        .and_then(|v| v.to_str().ok());
+    let apikey_header = headers.get("apikey").and_then(|v| v.to_str().ok());
 
     let bearer_token = auth_header.and_then(|h| h.strip_prefix("Bearer "));
 
@@ -189,9 +187,7 @@ pub async fn rls_transaction(
         "service_role" => "SET LOCAL ROLE service_role",
         _ => "SET LOCAL ROLE anon",
     };
-    sqlx::query(role_sql)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(role_sql).execute(&mut *tx).await?;
 
     // SET LOCAL request.jwt.claims — used by RLS policies.
     // Truncate to MAX_CLAIMS_JSON_LEN to prevent oversized GUC values.

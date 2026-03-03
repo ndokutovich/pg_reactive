@@ -1,7 +1,6 @@
 use lettre::{
-    message::header::ContentType,
-    transport::smtp::authentication::Credentials,
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    message::header::ContentType, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
+    AsyncTransport, Message, Tokio1Executor,
 };
 use tracing::{info, warn};
 
@@ -13,8 +12,8 @@ pub struct Mailer {
 
 impl Mailer {
     pub fn from_env() -> Self {
-        let from = std::env::var("SMTP_FROM")
-            .unwrap_or_else(|_| "noreply@pgstack.local".to_string());
+        let from =
+            std::env::var("SMTP_FROM").unwrap_or_else(|_| "noreply@pgstack.local".to_string());
 
         let host = std::env::var("SMTP_HOST").ok();
         let port: u16 = std::env::var("SMTP_PORT")

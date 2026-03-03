@@ -22,7 +22,9 @@ pub async fn sql_execute(
     if !state.config.enable_sql_endpoint && !has_service_role {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "service_role key required for /api/sql (or set ENABLE_SQL_ENDPOINT=true)"})),
+            Json(
+                serde_json::json!({"error": "service_role key required for /api/sql (or set ENABLE_SQL_ENDPOINT=true)"}),
+            ),
         );
     }
 
@@ -63,7 +65,10 @@ pub async fn sql_execute(
         }
         .await;
         match tx_result {
-            Ok(rows) => (StatusCode::OK, Json(serde_json::json!({"ok": true, "rows": rows}))),
+            Ok(rows) => (
+                StatusCode::OK,
+                Json(serde_json::json!({"ok": true, "rows": rows})),
+            ),
             Err(e) => {
                 tracing::error!("SQL SELECT execution failed: {}", e);
                 (
@@ -82,7 +87,10 @@ pub async fn sql_execute(
             .fetch_one(&state.pg_pool)
             .await
         {
-            Ok(rows) => (StatusCode::OK, Json(serde_json::json!({"ok": true, "rows": rows}))),
+            Ok(rows) => (
+                StatusCode::OK,
+                Json(serde_json::json!({"ok": true, "rows": rows})),
+            ),
             Err(e) => {
                 tracing::error!("SQL SELECT (pgr) execution failed: {}", e);
                 (

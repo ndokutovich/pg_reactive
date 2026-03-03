@@ -178,22 +178,16 @@ fn resolve_embed_recursive<'a>(
             )));
         }
 
-        let target = catalog
-            .get_table(&embed.relation)
-            .await
-            .ok_or_else(|| {
-                AppError::BadRequest(format!(
-                    "embedded relation '{}' not found",
-                    embed.relation
-                ))
-            })?;
+        let target = catalog.get_table(&embed.relation).await.ok_or_else(|| {
+            AppError::BadRequest(format!("embedded relation '{}' not found", embed.relation))
+        })?;
 
         let target_qualified = format!("{}.{}", target.schema, target.name);
         let parent_qualified = format!("{}.{}", parent.schema, parent.name);
 
         // Determine the join direction.
-        let join = find_join(parent, &target, &parent_qualified, &target_qualified)
-            .ok_or_else(|| {
+        let join =
+            find_join(parent, &target, &parent_qualified, &target_qualified).ok_or_else(|| {
                 AppError::BadRequest(format!(
                     "no foreign key relationship found between '{}' and '{}'",
                     parent.name, embed.relation
@@ -404,8 +398,7 @@ fn build_inner_select_and_joins(
 
     // Process each child: generates both its select expr and its lateral join
     for child in &emb.children {
-        let (child_select, child_join) =
-            build_lateral_sql(child, "sub", global_counter);
+        let (child_select, child_join) = build_lateral_sql(child, "sub", global_counter);
         select_parts.push(child_select);
         join_clauses.push(child_join);
     }
@@ -431,8 +424,7 @@ mod tests {
 
     #[test]
     fn test_parse_nested_embeds() {
-        let embeds =
-            parse_embeds(Some("*,comments(id,body,author(name,email))"));
+        let embeds = parse_embeds(Some("*,comments(id,body,author(name,email))"));
         assert_eq!(embeds.len(), 1);
         assert_eq!(embeds[0].relation, "comments");
         assert_eq!(embeds[0].columns, vec!["id", "body"]);
@@ -446,9 +438,7 @@ mod tests {
 
     #[test]
     fn test_parse_deeply_nested() {
-        let embeds = parse_embeds(Some(
-            "comments(body,author(name,country(code)))",
-        ));
+        let embeds = parse_embeds(Some("comments(body,author(name,country(code)))"));
         assert_eq!(embeds.len(), 1);
         assert_eq!(embeds[0].relation, "comments");
         assert_eq!(embeds[0].columns, vec!["body"]);
@@ -467,9 +457,7 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_nested_siblings() {
-        let embeds = parse_embeds(Some(
-            "*,comments(id,author(name),tags(label))",
-        ));
+        let embeds = parse_embeds(Some("*,comments(id,author(name),tags(label))"));
         assert_eq!(embeds.len(), 1);
         assert_eq!(embeds[0].relation, "comments");
         assert_eq!(embeds[0].columns, vec!["id"]);

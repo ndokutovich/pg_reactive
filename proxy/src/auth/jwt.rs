@@ -1,4 +1,4 @@
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation, Algorithm};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
 /// JWT claims structure.
@@ -233,10 +233,7 @@ mod tests {
     #[test]
     fn test_default_role_is_authenticated() {
         // Claims without explicit role should get "authenticated" via serde default
-        let json = format!(
-            r#"{{"sub":"u1","exp":{}}}"#,
-            now_unix() + 3600
-        );
+        let json = format!(r#"{{"sub":"u1","exp":{}}}"#, now_unix() + 3600);
         let payload_b64 = {
             use base64ct::{Base64Url, Encoding};
             Base64Url::encode_string(json.as_bytes())
@@ -279,11 +276,8 @@ mod tests {
 
     #[test]
     fn test_extract_bearer_takes_priority_over_apikey() {
-        let token = extract_token_from_header(
-            Some("Bearer from_bearer"),
-            Some("from_apikey"),
-            None,
-        );
+        let token =
+            extract_token_from_header(Some("Bearer from_bearer"), Some("from_apikey"), None);
         assert_eq!(token, Some("from_bearer".to_string()));
     }
 
@@ -317,7 +311,11 @@ mod tests {
         let claims = make_claims("u", Some(now_unix() + 60));
         let token = generate_token(&claims, TEST_SECRET).unwrap();
         let segments: Vec<&str> = token.split('.').collect();
-        assert_eq!(segments.len(), 3, "JWT must have exactly 3 dot-separated segments");
+        assert_eq!(
+            segments.len(),
+            3,
+            "JWT must have exactly 3 dot-separated segments"
+        );
         assert!(!segments[0].is_empty());
         assert!(!segments[1].is_empty());
         assert!(!segments[2].is_empty());

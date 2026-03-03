@@ -1,13 +1,13 @@
-use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Redirect, Response};
-use axum::Json;
-use serde::{Deserialize, Serialize};
 use crate::auth::jwt::{self, Claims};
 use crate::auth::keys::{constant_time_eq, is_service_role};
 use crate::auth::password;
 use crate::error::AppError;
 use crate::state::AppState;
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::Json;
+use serde::{Deserialize, Serialize};
 
 // ---------- Request / Response types ----------
 
@@ -69,9 +69,11 @@ pub async fn signup(
     State(state): State<AppState>,
     Json(body): Json<SignupRequest>,
 ) -> Result<Response, AppError> {
-    let secret = state.config.jwt_secret.as_ref().ok_or_else(|| {
-        AppError::Internal("JWT_SECRET not configured".into())
-    })?;
+    let secret = state
+        .config
+        .jwt_secret
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("JWT_SECRET not configured".into()))?;
 
     // Normalize email: trim whitespace and lowercase
     let email = body.email.trim().to_lowercase();
@@ -92,12 +94,11 @@ pub async fn signup(
     }
 
     // Check if user already exists
-    let existing = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM pgstack.users WHERE email = $1",
-    )
-    .bind(&email)
-    .fetch_one(&state.pg_pool)
-    .await?;
+    let existing =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pgstack.users WHERE email = $1")
+            .bind(&email)
+            .fetch_one(&state.pg_pool)
+            .await?;
 
     if existing > 0 {
         return Err(AppError::Conflict("user already registered".into()));
@@ -125,7 +126,8 @@ pub async fn signup(
         .fetch_one(&state.pg_pool)
         .await?;
 
-        let (user_id, _user_email, _role, _created_at, _updated_at, _raw_user_meta, _raw_app_meta) = row;
+        let (user_id, _user_email, _role, _created_at, _updated_at, _raw_user_meta, _raw_app_meta) =
+            row;
 
         // Generate verification token and store it
         let verify_token = generate_token();
@@ -154,7 +156,8 @@ pub async fn signup(
             Json(serde_json::json!({
                 "message": "Check your email to confirm your account"
             })),
-        ).into_response())
+        )
+            .into_response())
     } else {
         // Insert user with email confirmed immediately
         let row = sqlx::query_as::<_, (String, String, String, String, String, serde_json::Value, serde_json::Value)>(
@@ -191,7 +194,8 @@ pub async fn signup(
                     updated_at,
                 },
             }),
-        ).into_response())
+        )
+            .into_response())
     }
 }
 
@@ -200,9 +204,11 @@ pub async fn token(
     State(state): State<AppState>,
     Json(body): Json<TokenRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let secret = state.config.jwt_secret.clone().ok_or_else(|| {
-        AppError::Internal("JWT_SECRET not configured".into())
-    })?;
+    let secret = state
+        .config
+        .jwt_secret
+        .clone()
+        .ok_or_else(|| AppError::Internal("JWT_SECRET not configured".into()))?;
 
     match body.grant_type.as_str() {
         "password" => token_password(state, &secret, body).await,
@@ -219,12 +225,14 @@ async fn token_password(
     secret: &str,
     body: TokenRequest,
 ) -> Result<(StatusCode, Json<AuthResponse>), AppError> {
-    let email = body.email.as_deref().ok_or_else(|| {
-        AppError::BadRequest("email is required".into())
-    })?;
-    let pwd = body.password.as_deref().ok_or_else(|| {
-        AppError::BadRequest("password is required".into())
-    })?;
+    let email = body
+        .email
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("email is required".into()))?;
+    let pwd = body
+        .password
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("password is required".into()))?;
 
     // Fetch user
     let user = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, serde_json::Value, serde_json::Value)>(
@@ -235,27 +243,31 @@ async fn token_password(
     .fetch_optional(&state.pg_pool)
     .await?;
 
-    let (user_id, user_email, role, encrypted_password, created_at, updated_at, raw_user_meta, raw_app_meta) =
-        user.ok_or_else(|| AppError::Unauthorized("invalid login credentials".into()))?;
+    let (
+        user_id,
+        user_email,
+        role,
+        encrypted_password,
+        created_at,
+        updated_at,
+        raw_user_meta,
+        raw_app_meta,
+    ) = user.ok_or_else(|| AppError::Unauthorized("invalid login credentials".into()))?;
 
-    let hash = encrypted_password.ok_or_else(|| {
-        AppError::Unauthorized("invalid login credentials".into())
-    })?;
+    let hash = encrypted_password
+        .ok_or_else(|| AppError::Unauthorized("invalid login credentials".into()))?;
 
     // Verify password (CPU-intensive)
     let pwd_owned = pwd.to_string();
     let hash_owned = hash.clone();
-    let valid = tokio::task::spawn_blocking(move || {
-        password::verify_password(&pwd_owned, &hash_owned)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("verify task failed: {e}")))?
-    .map_err(AppError::Internal)?;
+    let valid =
+        tokio::task::spawn_blocking(move || password::verify_password(&pwd_owned, &hash_owned))
+            .await
+            .map_err(|e| AppError::Internal(format!("verify task failed: {e}")))?
+            .map_err(AppError::Internal)?;
 
     if !valid {
-        return Err(AppError::Unauthorized(
-            "invalid login credentials".into(),
-        ));
+        return Err(AppError::Unauthorized("invalid login credentials".into()));
     }
 
     // Generate tokens (new family)
@@ -287,9 +299,10 @@ async fn token_refresh(
     secret: &str,
     body: TokenRequest,
 ) -> Result<(StatusCode, Json<AuthResponse>), AppError> {
-    let refresh = body.refresh_token.as_deref().ok_or_else(|| {
-        AppError::BadRequest("refresh_token is required".into())
-    })?;
+    let refresh = body
+        .refresh_token
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("refresh_token is required".into()))?;
 
     // Find refresh token (including revoked, for reuse detection)
     let token_row = sqlx::query_as::<_, (i64, String, bool, Option<String>)>(
@@ -300,9 +313,8 @@ async fn token_refresh(
     .fetch_optional(&state.pg_pool)
     .await?;
 
-    let (token_id, user_id, revoked, family_id) = token_row.ok_or_else(|| {
-        AppError::Unauthorized("invalid or expired refresh token".into())
-    })?;
+    let (token_id, user_id, revoked, family_id) = token_row
+        .ok_or_else(|| AppError::Unauthorized("invalid or expired refresh token".into()))?;
 
     // Token reuse detection: if already revoked, this indicates a breach
     if revoked {
@@ -318,9 +330,7 @@ async fn token_refresh(
             family_id = ?family_id,
             "refresh token reuse detected — entire family revoked"
         );
-        return Err(AppError::Unauthorized(
-            "refresh token already used".into(),
-        ));
+        return Err(AppError::Unauthorized("refresh token already used".into()));
     }
 
     // Wrap revoke + new token insert in a single transaction
@@ -333,7 +343,17 @@ async fn token_refresh(
         .await?;
 
     // Fetch user
-    let user = sqlx::query_as::<_, (String, String, String, String, serde_json::Value, serde_json::Value)>(
+    let user = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            serde_json::Value,
+            serde_json::Value,
+        ),
+    >(
         "SELECT email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta
          FROM pgstack.users WHERE id = $1::uuid",
     )
@@ -344,8 +364,16 @@ async fn token_refresh(
     let (email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = user;
 
     // Generate new token pair (same family for reuse detection) within transaction
-    let (access_token, new_refresh_token) =
-        generate_token_pair_tx(&mut tx, &state, secret, &user_id, &email, &role, family_id.as_deref()).await?;
+    let (access_token, new_refresh_token) = generate_token_pair_tx(
+        &mut tx,
+        &state,
+        secret,
+        &user_id,
+        &email,
+        &role,
+        family_id.as_deref(),
+    )
+    .await?;
 
     tx.commit().await?;
 
@@ -423,13 +451,11 @@ pub async fn update_user(
         if !is_valid_email(email) {
             return Err(AppError::BadRequest("invalid email".into()));
         }
-        sqlx::query(
-            "UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2::uuid",
-        )
-        .bind(email)
-        .bind(&claims.sub)
-        .execute(&state.pg_pool)
-        .await?;
+        sqlx::query("UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2::uuid")
+            .bind(email)
+            .bind(&claims.sub)
+            .execute(&state.pg_pool)
+            .await?;
     }
 
     // Update password if provided
@@ -509,21 +535,18 @@ fn is_valid_email(email: &str) -> bool {
         return false;
     }
     match email.split_once('@') {
-        Some((local, domain)) => {
-            !local.is_empty() && !domain.is_empty() && domain.contains('.')
-        }
+        Some((local, domain)) => !local.is_empty() && !domain.is_empty() && domain.contains('.'),
         None => false,
     }
 }
 
 /// Extract and validate JWT claims from request headers.
-fn extract_claims_from_headers(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<Claims, AppError> {
-    let secret = state.config.jwt_secret.as_ref().ok_or_else(|| {
-        AppError::Internal("JWT_SECRET not configured".into())
-    })?;
+fn extract_claims_from_headers(state: &AppState, headers: &HeaderMap) -> Result<Claims, AppError> {
+    let secret = state
+        .config
+        .jwt_secret
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("JWT_SECRET not configured".into()))?;
 
     let auth_header = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -568,8 +591,7 @@ pub(crate) async fn generate_token_pair(
         exp: Some(now + state.config.access_token_expiry_secs),
     };
 
-    let access_token =
-        jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
+    let access_token = jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
 
     // Generate opaque refresh token
     let refresh_token = generate_refresh_token();
@@ -612,8 +634,7 @@ async fn generate_token_pair_tx(
         exp: Some(now + state.config.access_token_expiry_secs),
     };
 
-    let access_token =
-        jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
+    let access_token = jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
 
     let refresh_token = generate_refresh_token();
 
@@ -703,12 +724,10 @@ pub async fn recover(
         .unwrap_or("http://127.0.0.1:3000");
 
     // Look up user — do not reveal whether the email exists
-    let row = sqlx::query_as::<_, (String,)>(
-        "SELECT id::text FROM pgstack.users WHERE email = $1",
-    )
-    .bind(&body.email)
-    .fetch_optional(&state.pg_pool)
-    .await?;
+    let row = sqlx::query_as::<_, (String,)>("SELECT id::text FROM pgstack.users WHERE email = $1")
+        .bind(&body.email)
+        .fetch_optional(&state.pg_pool)
+        .await?;
 
     if let Some((user_id,)) = row {
         let token = generate_token();
@@ -723,7 +742,11 @@ pub async fn recover(
         .await?;
 
         let html = reset_email_html(site_url, &token);
-        if let Err(e) = state.mailer.send(&body.email, "Reset your password", &html).await {
+        if let Err(e) = state
+            .mailer
+            .send(&body.email, "Reset your password", &html)
+            .await
+        {
             tracing::warn!("Failed to send reset email to {}: {e}", body.email);
         }
     }
@@ -767,9 +790,8 @@ pub async fn recover_confirm(
     .fetch_optional(&state.pg_pool)
     .await?;
 
-    let (token_id, user_id) = row.ok_or_else(|| {
-        AppError::BadRequest("Invalid or expired reset token".into())
-    })?;
+    let (token_id, user_id) =
+        row.ok_or_else(|| AppError::BadRequest("Invalid or expired reset token".into()))?;
 
     // Hash new password
     let pwd = body.password.clone();
@@ -792,12 +814,10 @@ pub async fn recover_confirm(
     .await?;
 
     // Mark token used
-    sqlx::query(
-        "UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid",
-    )
-    .bind(&token_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid")
+        .bind(&token_id)
+        .execute(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
@@ -828,12 +848,11 @@ pub async fn magiclink(
 
     // Look up user; create passwordless user if not found
     let user_id: String = {
-        let existing = sqlx::query_as::<_, (String,)>(
-            "SELECT id::text FROM pgstack.users WHERE email = $1",
-        )
-        .bind(&body.email)
-        .fetch_optional(&state.pg_pool)
-        .await?;
+        let existing =
+            sqlx::query_as::<_, (String,)>("SELECT id::text FROM pgstack.users WHERE email = $1")
+                .bind(&body.email)
+                .fetch_optional(&state.pg_pool)
+                .await?;
 
         if let Some((id,)) = existing {
             id
@@ -862,7 +881,11 @@ pub async fn magiclink(
     .await?;
 
     let html = magic_link_email_html(site_url, &token);
-    if let Err(e) = state.mailer.send(&body.email, "Your sign-in link", &html).await {
+    if let Err(e) = state
+        .mailer
+        .send(&body.email, "Your sign-in link", &html)
+        .await
+    {
         tracing::warn!("Failed to send magic link email to {}: {e}", body.email);
     }
 
@@ -925,12 +948,10 @@ pub async fn magiclink_verify(
     let (email, role, _created_at, _updated_at, uid) = user;
 
     // Mark token used and confirm email (clicking the link proves email ownership)
-    sqlx::query(
-        "UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid",
-    )
-    .bind(&token_id)
-    .execute(&state.pg_pool)
-    .await?;
+    sqlx::query("UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid")
+        .bind(&token_id)
+        .execute(&state.pg_pool)
+        .await?;
 
     sqlx::query(
         "UPDATE pgstack.users SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
@@ -977,9 +998,8 @@ pub async fn verify_email(
     .fetch_optional(&state.pg_pool)
     .await?;
 
-    let (token_id, user_id) = row.ok_or_else(|| {
-        AppError::BadRequest("Invalid or expired verification token".into())
-    })?;
+    let (token_id, user_id) =
+        row.ok_or_else(|| AppError::BadRequest("Invalid or expired verification token".into()))?;
 
     sqlx::query(
         "UPDATE pgstack.users SET email_confirmed_at = now(), updated_at = now()
@@ -989,12 +1009,10 @@ pub async fn verify_email(
     .execute(&state.pg_pool)
     .await?;
 
-    sqlx::query(
-        "UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid",
-    )
-    .bind(&token_id)
-    .execute(&state.pg_pool)
-    .await?;
+    sqlx::query("UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid")
+        .bind(&token_id)
+        .execute(&state.pg_pool)
+        .await?;
 
     Ok(Json(serde_json::json!({ "message": "Email verified" })))
 }
@@ -1022,13 +1040,13 @@ pub async fn admin_list_users(
     headers: HeaderMap,
     Query(params): Query<AdminListParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    let srk = state.config.service_role_key.as_deref().ok_or_else(|| {
-        AppError::Internal("SERVICE_ROLE_KEY not configured".into())
-    })?;
+    let srk = state
+        .config
+        .service_role_key
+        .as_deref()
+        .ok_or_else(|| AppError::Internal("SERVICE_ROLE_KEY not configured".into()))?;
     if !is_service_role(&headers, srk) {
-        return Err(AppError::Forbidden(
-            "service_role key required".into(),
-        ));
+        return Err(AppError::Forbidden("service_role key required".into()));
     }
 
     let page_size = params.page_size.unwrap_or(50).clamp(1, 1000);
@@ -1048,13 +1066,15 @@ pub async fn admin_list_users(
 
     let users: Vec<AdminUserRow> = rows
         .into_iter()
-        .map(|(id, email, role, created_at, email_confirmed_at)| AdminUserRow {
-            id,
-            email,
-            role,
-            created_at,
-            email_confirmed_at,
-        })
+        .map(
+            |(id, email, role, created_at, email_confirmed_at)| AdminUserRow {
+                id,
+                email,
+                role,
+                created_at,
+                email_confirmed_at,
+            },
+        )
         .collect();
 
     Ok(Json(users))
@@ -1066,13 +1086,13 @@ pub async fn admin_delete_user(
     headers: HeaderMap,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let srk = state.config.service_role_key.as_deref().ok_or_else(|| {
-        AppError::Internal("SERVICE_ROLE_KEY not configured".into())
-    })?;
+    let srk = state
+        .config
+        .service_role_key
+        .as_deref()
+        .ok_or_else(|| AppError::Internal("SERVICE_ROLE_KEY not configured".into()))?;
     if !is_service_role(&headers, srk) {
-        return Err(AppError::Forbidden(
-            "service_role key required".into(),
-        ));
+        return Err(AppError::Forbidden("service_role key required".into()));
     }
 
     // Validate that the path parameter is a valid UUID
@@ -1080,12 +1100,10 @@ pub async fn admin_delete_user(
         return Err(AppError::BadRequest("invalid user id".into()));
     }
 
-    let result = sqlx::query(
-        "DELETE FROM pgstack.users WHERE id = $1::uuid",
-    )
-    .bind(&user_id)
-    .execute(&state.pg_pool)
-    .await?;
+    let result = sqlx::query("DELETE FROM pgstack.users WHERE id = $1::uuid")
+        .bind(&user_id)
+        .execute(&state.pg_pool)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("user not found".into()));
@@ -1108,13 +1126,13 @@ pub async fn admin_create_user(
     headers: HeaderMap,
     Json(body): Json<AdminCreateUserRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let srk = state.config.service_role_key.as_deref().ok_or_else(|| {
-        AppError::Internal("SERVICE_ROLE_KEY not configured".into())
-    })?;
+    let srk = state
+        .config
+        .service_role_key
+        .as_deref()
+        .ok_or_else(|| AppError::Internal("SERVICE_ROLE_KEY not configured".into()))?;
     if !is_service_role(&headers, srk) {
-        return Err(AppError::Forbidden(
-            "service_role key required".into(),
-        ));
+        return Err(AppError::Forbidden("service_role key required".into()));
     }
 
     if !is_valid_email(&body.email) {

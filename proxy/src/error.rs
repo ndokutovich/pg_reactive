@@ -44,9 +44,7 @@ impl From<sqlx::Error> for AppError {
                 // Return sanitized messages to client — never leak internal DB details
                 if code == "23505" {
                     // unique_violation
-                    AppError::Conflict(
-                        "duplicate value violates unique constraint".into(),
-                    )
+                    AppError::Conflict("duplicate value violates unique constraint".into())
                 } else if code == "42501" {
                     // insufficient_privilege (RLS)
                     AppError::Forbidden("insufficient privileges".into())

@@ -1,9 +1,9 @@
+use crate::auth::keys::is_service_role;
+use crate::state::AppState;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
-use crate::auth::keys::is_service_role;
-use crate::state::AppState;
 
 /// POST /api/demo — execute a predefined demo action.
 /// Requires service_role key OR ENABLE_SQL_ENDPOINT=true.
@@ -21,7 +21,9 @@ pub async fn demo_action(
     if !state.config.enable_sql_endpoint && !has_service_role {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "service_role key required for /api/demo (or set ENABLE_SQL_ENDPOINT=true)"})),
+            Json(
+                serde_json::json!({"error": "service_role key required for /api/demo (or set ENABLE_SQL_ENDPOINT=true)"}),
+            ),
         );
     }
 
