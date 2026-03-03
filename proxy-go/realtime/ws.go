@@ -41,7 +41,7 @@ var safeQueryIDRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 func WSHandler(
 	cfg middleware.RLSConfig,
 	pool *pgxpool.Pool,
-	channels *sync.Map,
+	hub *Hub,
 	semaphore chan struct{},
 	broadcastCapacity int,
 ) http.HandlerFunc {
@@ -111,7 +111,7 @@ func WSHandler(
 			return
 		}
 
-		go handleWebSocket(conn, queryID, channels, pool, broadcastCapacity, semaphore)
+		go handleWebSocket(conn, queryID, hub, pool, broadcastCapacity, semaphore)
 	}
 }
 
@@ -120,21 +120,20 @@ func WSHandler(
 func handleWebSocket(
 	conn *websocket.Conn,
 	queryID string,
-	channels *sync.Map,
+	hub *Hub,
 	pool *pgxpool.Pool,
 	broadcastCapacity int,
 	semaphore chan struct{},
 ) {
+	// Subscribe first so the channel is registered before the defer runs.
+	ch := hub.Subscribe(queryID, broadcastCapacity)
 	defer func() {
 		conn.Close()
 		<-semaphore // release connection slot
-		cleanupChannel(queryID, channels)
+		hub.Unsubscribe(queryID, ch)
 	}()
 
 	log.Info().Str("query_id", queryID).Msg("WebSocket connected")
-
-	// Get or create broadcast channel for this query_id.
-	ch := getOrCreateChannel(queryID, channels, broadcastCapacity)
 
 	// write mutex: gorilla/websocket requires serialised writes.
 	var wmu sync.Mutex
@@ -222,25 +221,6 @@ type wsMessage struct {
 	err     error
 }
 
-// getOrCreateChannel returns an existing broadcast channel for queryID or
-// creates a new one with the given capacity. Uses sync.Map.LoadOrStore for
-// safe concurrent creation.
-func getOrCreateChannel(queryID string, channels *sync.Map, capacity int) chan string {
-	ch := make(chan string, capacity)
-	actual, _ := channels.LoadOrStore(queryID, ch)
-	return actual.(chan string)
-}
-
-// cleanupChannel removes the broadcast channel for queryID from channels if
-// no goroutines are blocked on it (best-effort; channels may be recreated).
-func cleanupChannel(queryID string, channels *sync.Map) {
-	// We cannot know the receiver count with a plain channel, so we only remove
-	// the channel if it still refers to the same instance we stored (i.e. no
-	// concurrent replacement has happened). For simplicity we always remove —
-	// the next subscriber will simply create a fresh channel.
-	channels.Delete(queryID)
-	log.Info().Str("query_id", queryID).Msg("removed broadcast channel")
-}
 
 // fetchSnapshot queries pgr._snap_<queryID> and returns rows as JSON objects.
 func fetchSnapshot(pool *pgxpool.Pool, queryID string) ([]json.RawMessage, error) {

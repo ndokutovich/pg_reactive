@@ -3,8 +3,6 @@ package realtime
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,15 +15,15 @@ import (
 //
 // On each NOTIFY payload it parses the JSON, extracts the query_id and
 // forwards the raw payload string to the matching broadcast channel in
-// channels (sync.Map keyed by query_id → chan string).
+// the Hub, which fans the payload out to all per-subscriber channels.
 //
 // The loop applies exponential back-off on failures: 1s → 2s → 4s → … up to
 // maxBackoff. On clean exit (context cancelled) it returns immediately.
-func ListenLoop(dbURL string, channels *sync.Map, connected *atomic.Bool, maxBackoff time.Duration) {
+func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.Duration) {
 	backoff := time.Second
 	for {
 		connected.Store(false)
-		if err := listenOnce(context.Background(), dbURL, channels, connected); err != nil {
+		if err := listenOnce(context.Background(), dbURL, hub, connected); err != nil {
 			log.Error().Err(err).Dur("retry_in", backoff).Msg("PG listener error, reconnecting")
 		} else {
 			log.Info().Msg("PG listener exited normally, reconnecting")
@@ -42,7 +40,7 @@ func ListenLoop(dbURL string, channels *sync.Map, connected *atomic.Bool, maxBac
 
 // listenOnce opens a dedicated PG connection, executes LISTEN pgr and pumps
 // notifications until an error occurs or the context is cancelled.
-func listenOnce(ctx context.Context, dbURL string, channels *sync.Map, connected *atomic.Bool) error {
+func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.Bool) error {
 	conn, err := pgx.Connect(ctx, dbURL)
 	if err != nil {
 		return err
@@ -75,27 +73,6 @@ func listenOnce(ctx context.Context, dbURL string, channels *sync.Map, connected
 			continue
 		}
 
-		if v, ok := channels.Load(msg.QueryID); ok {
-			ch := v.(chan string)
-			// Non-blocking send: if the channel is full, drain one item
-			// and push an overflow notification so the client knows to
-			// refetch the full snapshot.
-			select {
-			case ch <- payload:
-			default:
-				// Channel full — drain the oldest message to make room.
-				// Since listenOnce is the sole writer to this channel,
-				// the slot freed by the drain is guaranteed to be available.
-				select {
-				case <-ch:
-				default:
-				}
-				overflow := fmt.Sprintf(
-					`{"type":"overflow","query_id":%q,"fetch":true}`,
-					msg.QueryID,
-				)
-				ch <- overflow
-			}
-		}
+		hub.Broadcast(msg.QueryID, payload)
 	}
 }

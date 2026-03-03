@@ -1,11 +1,11 @@
 package main
 
 import (
-	"sync"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"pgstack-proxy-go/middleware"
+	"pgstack-proxy-go/realtime"
 )
 
 // AppState is the shared application state injected into all HTTP handlers.
@@ -19,10 +19,9 @@ type AppState struct {
 	// PGConnected is true when the dedicated LISTEN connection is healthy.
 	PGConnected atomic.Bool
 
-	// Channels is a sync.Map keyed by query_id (string) → chan string.
-	// Each entry is the broadcast channel for that live query.
-	// Use LoadOrStore to create channels lazily.
-	Channels sync.Map
+	// Hub manages fan-out delivery from PG NOTIFY to WebSocket subscribers.
+	// Each subscriber gets its own channel; Broadcast sends to all of them.
+	Hub *realtime.Hub
 
 	// RateLimiter for auth endpoints (/auth/v1/signup, /auth/v1/token).
 	RateLimiter *middleware.RateLimiter
@@ -40,6 +39,7 @@ func NewAppState(cfg Config, pool *pgxpool.Pool) *AppState {
 	s := &AppState{
 		Config:      cfg,
 		Pool:        pool,
+		Hub:         realtime.NewHub(),
 		RateLimiter: middleware.NewRateLimiter(cfg.AuthRateLimit, cfg.AuthRateWindow),
 		WSSemaphore: make(chan struct{}, cfg.MaxConnections),
 		Mailer:      NewMailer(cfg),

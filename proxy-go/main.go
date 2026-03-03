@@ -56,7 +56,7 @@ func main() {
 	// Kick off the dedicated PG LISTEN connection in a background goroutine.
 	go realtime.ListenLoop(
 		cfg.DatabaseURL,
-		&state.Channels,
+		state.Hub,
 		&state.PGConnected,
 		cfg.PGReconnectMaxBackoff,
 	)
@@ -192,7 +192,7 @@ func buildRouter(state *AppState) http.Handler {
 		r.Get("/ws/{queryID}", realtime.WSHandler(
 			rlsCfg,
 			state.Pool,
-			&state.Channels,
+			state.Hub,
 			state.WSSemaphore,
 			state.Config.BroadcastCapacity,
 		))
