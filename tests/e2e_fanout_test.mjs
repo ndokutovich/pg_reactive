@@ -29,14 +29,18 @@ async function connectClient(id) {
   const ws = new WebSocket(PROXY_URL, { headers: { Authorization: `Bearer ${ANON_KEY}` } });
   const messages = [];
 
+  // Register the message handler BEFORE awaiting the connection open.
+  // The proxy sends the 'subscribed' message immediately on upgrade; if we
+  // register the handler only after the open-event await, the message may
+  // arrive (and be dropped) before the listener exists.
+  ws.on('message', (data) => {
+    messages.push(JSON.parse(data.toString()));
+  });
+
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Client ${id}: connect timeout`)), 5000);
     ws.on('open', () => { clearTimeout(timer); resolve(); });
     ws.on('error', (e) => { clearTimeout(timer); reject(e); });
-  });
-
-  ws.on('message', (data) => {
-    messages.push(JSON.parse(data.toString()));
   });
 
   // Wait until subscribed message arrives (up to 5s) instead of a fixed sleep.
