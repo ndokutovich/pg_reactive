@@ -16,3 +16,7 @@ PG_CFLAGS = -Wall -Werror
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
+
+# Alias: isolation tests are already part of installcheck in PGXS 16+.
+# This target exists so CI can call it explicitly without error.
+isolation_installcheck: installcheck
