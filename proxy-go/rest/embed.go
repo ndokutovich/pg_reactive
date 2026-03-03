@@ -254,12 +254,14 @@ func collectJoinCols(embeds []ResolvedEmbed, plainCols []string) []string {
 	var extra []string
 	seen := make(map[string]bool)
 	for _, em := range embeds {
-		if em.JoinType == ManyToOne {
-			for _, col := range em.ParentCols {
-				if !colSet[col] && !seen[col] {
-					extra = append(extra, col)
-					seen[col] = true
-				}
+		// For both ManyToOne and OneToMany embeds, em.ParentCols are the
+		// columns in the parent (base) table used in the lateral join
+		// condition.  They must be present in the base CTE even if the user
+		// didn't explicitly select them.
+		for _, col := range em.ParentCols {
+			if !colSet[col] && !seen[col] {
+				extra = append(extra, col)
+				seen[col] = true
 			}
 		}
 	}
