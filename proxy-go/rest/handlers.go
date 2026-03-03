@@ -79,7 +79,18 @@ func Select(d *RestDeps) http.HandlerFunc {
 				resolvedEmbeds = append(resolvedEmbeds, *re)
 			}
 
-			bq, err := BuildSelect(tm, q, plainCols)
+			// For ManyToOne embeds the lateral join references FK columns in the
+			// base CTE.  If the user didn't select those columns explicitly we
+			// must add them to the base query — but keep plainCols as the
+			// user-visible projection so they don't appear in the response.
+			baseCols := plainCols
+			if extras := collectJoinCols(resolvedEmbeds, plainCols); len(extras) > 0 {
+				baseCols = make([]string, len(plainCols)+len(extras))
+				copy(baseCols, plainCols)
+				copy(baseCols[len(plainCols):], extras)
+			}
+
+			bq, err := BuildSelect(tm, q, baseCols)
 			if err != nil {
 				writeJSONError(w, http.StatusBadRequest, err.Error())
 				return

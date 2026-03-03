@@ -236,6 +236,36 @@ func ExecuteSelectWithEmbeds(
 	return result, nil
 }
 
+// collectJoinCols returns FK join columns from ManyToOne embeds that are not
+// already present in the user-requested plain column list.  These columns must
+// be added to the base CTE so the LATERAL JOIN conditions can reference them,
+// but they should not appear in the final response.
+func collectJoinCols(embeds []ResolvedEmbed, plainCols []string) []string {
+	// SELECT * already fetches everything — no extras needed.
+	for _, c := range plainCols {
+		if c == "*" {
+			return nil
+		}
+	}
+	colSet := make(map[string]bool, len(plainCols))
+	for _, c := range plainCols {
+		colSet[c] = true
+	}
+	var extra []string
+	seen := make(map[string]bool)
+	for _, em := range embeds {
+		if em.JoinType == ManyToOne {
+			for _, col := range em.ParentCols {
+				if !colSet[col] && !seen[col] {
+					extra = append(extra, col)
+					seen[col] = true
+				}
+			}
+		}
+	}
+	return extra
+}
+
 // buildEmbedSQL constructs the full SQL with WITH … LATERAL … structure.
 func buildEmbedSQL(builtSelect *BuiltQuery, parent *TableMeta, embeds []ResolvedEmbed, plainCols []string) (string, error) {
 	var sb strings.Builder
@@ -246,8 +276,28 @@ func buildEmbedSQL(builtSelect *BuiltQuery, parent *TableMeta, embeds []Resolved
 	sb.WriteString(")\n")
 
 	// Outer SELECT with LATERAL joins.
+	// When the user requested explicit columns (not *), project only those
+	// columns from base — not any extra FK join columns that were added to the
+	// base CTE to support ManyToOne lateral conditions.
 	sb.WriteString("SELECT COALESCE(json_agg(row_to_json(combined)), '[]'::json) AS data FROM (\n")
-	sb.WriteString("  SELECT base.*")
+
+	isSelectStar := len(plainCols) == 0 || (len(plainCols) == 1 && plainCols[0] == "*")
+	if isSelectStar {
+		sb.WriteString("  SELECT base.*")
+	} else {
+		var outerCols strings.Builder
+		for i, c := range plainCols {
+			if i > 0 {
+				outerCols.WriteString(", ")
+			}
+			if c == "*" {
+				outerCols.WriteString("base.*")
+			} else {
+				outerCols.WriteString("base." + QuoteIdent(c))
+			}
+		}
+		sb.WriteString("  SELECT " + outerCols.String())
+	}
 
 	laterals := make([]string, 0, len(embeds))
 	for i, em := range embeds {
