@@ -32,6 +32,12 @@ function psql(sql) {
 async function main() {
   console.log('--- E2E WebSocket Test ---');
 
+  // Setup test fixtures
+  psql('CREATE EXTENSION IF NOT EXISTS pg_reactive');
+  psql('DROP TABLE IF EXISTS e2e_test CASCADE');
+  psql('CREATE TABLE e2e_test(id serial PRIMARY KEY, name text)');
+  psql("SELECT pgr.subscribe('e2e_q1', 'SELECT * FROM e2e_test')");
+
   // 1. Connect WebSocket
   const ws = new WebSocket(PROXY_URL, { headers: { Authorization: `Bearer ${ANON_KEY}` } });
   const messages = [];
@@ -131,6 +137,11 @@ async function main() {
   console.log('7. Delete delta correct');
 
   ws.close();
+
+  // Cleanup
+  try { psql("SELECT pgr.unsubscribe('e2e_q1')"); } catch (_) {}
+  try { psql('DROP TABLE e2e_test'); } catch (_) {}
+
   console.log('\n--- ALL E2E TESTS PASSED ---');
   process.exit(0);
 }

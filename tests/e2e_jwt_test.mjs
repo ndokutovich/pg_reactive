@@ -26,6 +26,14 @@ const PROXY_HOST = '127.0.0.1';
 const PROXY_PORT = 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-jwt-secret-do-not-use-in-production';
 
+function psql(sql) {
+  return execFileSync(
+    'docker',
+    ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-t', '-A', '-c', sql],
+    { encoding: 'utf-8' }
+  ).trim();
+}
+
 /**
  * Create a minimal HS256 JWT token.
  */
@@ -160,11 +168,21 @@ async function testHealthNoAuth() {
 async function main() {
   console.log('--- JWT Auth E2E Test ---\n');
 
+  // Setup: register test_q subscription (needed for testValidToken WebSocket connection)
+  psql('CREATE EXTENSION IF NOT EXISTS pg_reactive');
+  psql('DROP TABLE IF EXISTS jwt_test CASCADE');
+  psql('CREATE TABLE jwt_test(id serial PRIMARY KEY)');
+  psql("SELECT pgr.subscribe('test_q', 'SELECT * FROM jwt_test')");
+
   await testHealthNoAuth();
   await testNoToken();
   await testInvalidToken();
   await testWrongSecret();
   await testValidToken();
+
+  // Cleanup
+  try { psql("SELECT pgr.unsubscribe('test_q')"); } catch (_) {}
+  try { psql('DROP TABLE jwt_test'); } catch (_) {}
 
   console.log('\n--- JWT AUTH TEST PASSED ---');
   process.exit(0);
