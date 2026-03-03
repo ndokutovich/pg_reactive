@@ -85,7 +85,7 @@ SELECT count(*) AS recursive_diff FROM (
     EXCEPT
     (SELECT * FROM pgr."_snap_adv_recursive")
 ) t;
- recursive_diff
+ recursive_diff 
 ----------------
               0
 (1 row)
@@ -103,7 +103,7 @@ SELECT count(*) AS recursive_bidi_diff FROM (
     )
     SELECT id, name, path FROM tree ORDER BY id)
 ) t;
- recursive_bidi_diff
+ recursive_bidi_diff 
 ---------------------
                    0
 (1 row)

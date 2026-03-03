@@ -196,6 +196,9 @@ jobs:
       - name: E2E — SDK integration
         run: node tests/e2e_sdk_test.mjs
 
+      - name: E2E — Shopping list PATCH regression
+        run: node tests/e2e_shopping_patch_test.mjs
+
       - name: Collect logs on failure
         if: failure()
         run: docker compose logs > docker-logs.txt
@@ -256,5 +259,5 @@ jobs:
       - name: cargo audit
         working-directory: proxy
         run: |
-          cargo install cargo-audit --quiet
+          cargo install cargo-audit --locked --quiet
           cargo audit
