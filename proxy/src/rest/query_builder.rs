@@ -407,11 +407,6 @@ fn build_order(orders: &[super::filter::OrderClause]) -> Result<String, AppError
     Ok(parts.join(", "))
 }
 
-/// Indicates if a param value should be treated as SQL NULL.
-fn is_null_param(val: &serde_json::Value) -> bool {
-    val.is_null()
-}
-
 fn json_to_pg_param(val: &serde_json::Value) -> String {
     match val {
         serde_json::Value::Null => String::new(),

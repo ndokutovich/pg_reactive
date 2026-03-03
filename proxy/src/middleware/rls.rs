@@ -1,6 +1,6 @@
 use axum::http::HeaderMap;
 use serde::Serialize;
-use sqlx::{PgPool, Postgres, Row};
+use sqlx::{PgPool, Postgres};
 use tracing::debug;
 
 use crate::auth::jwt;
@@ -211,29 +211,4 @@ pub async fn rls_transaction(
         .await?;
 
     Ok(tx)
-}
-
-/// Execute a read-only query with RLS context and return JSON rows.
-/// Convenience wrapper for simple SELECT queries on REST endpoints.
-pub async fn rls_query_json(
-    pool: &PgPool,
-    claims: &RequestClaims,
-    sql: &str,
-    params: &[&(dyn sqlx::Encode<'_, Postgres> + Sync)],
-) -> Result<Vec<serde_json::Value>, AppError> {
-    let mut tx = rls_transaction(pool, claims).await?;
-
-    // Wrap in row_to_json to get JSON output
-    let wrapped = format!("SELECT row_to_json(t) as data FROM ({}) t", sql);
-    let rows = sqlx::query(&wrapped)
-        .fetch_all(&mut *tx)
-        .await?;
-
-    let result: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|row| row.get::<serde_json::Value, _>("data"))
-        .collect();
-
-    tx.commit().await?;
-    Ok(result)
 }

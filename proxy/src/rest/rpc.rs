@@ -145,24 +145,6 @@ pub async fn call_rpc_get(
     .await
 }
 
-async fn execute_rpc(
-    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
-    sql: &str,
-    params: &[String],
-) -> Result<Vec<serde_json::Value>, AppError> {
-    let mut q = sqlx::query(sql);
-    for param in params {
-        q = q.bind(param);
-    }
-
-    let rows = q.fetch_all(&mut **tx).await?;
-
-    Ok(rows
-        .iter()
-        .map(|row| row.get::<serde_json::Value, _>("data"))
-        .collect())
-}
-
 fn json_to_param(val: &serde_json::Value) -> String {
     match val {
         serde_json::Value::Null => String::new(),

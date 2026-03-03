@@ -30,9 +30,6 @@ pub struct TableMeta {
 pub struct ColumnMeta {
     pub name: String,
     pub pg_type: String,
-    pub is_nullable: bool,
-    pub has_default: bool,
-    pub ordinal: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -43,8 +40,6 @@ pub struct ForeignKey {
     pub referenced_table: String,
     /// Referenced column(s)
     pub referenced_columns: Vec<String>,
-    /// Constraint name (used as relation name in ?select=)
-    pub constraint_name: String,
 }
 
 impl Catalog {
@@ -75,16 +70,6 @@ impl Catalog {
         inner.tables.get(&qualified).cloned()
     }
 
-    /// List all tables in a given schema.
-    pub async fn list_tables(&self, schema: &str) -> Vec<TableMeta> {
-        let inner = self.inner.read().await;
-        inner
-            .tables
-            .values()
-            .filter(|t| t.schema == schema)
-            .cloned()
-            .collect()
-    }
 }
 
 async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::Error> {
@@ -94,10 +79,7 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
             n.nspname AS schema_name,
             c.relname AS table_name,
             a.attname AS column_name,
-            format_type(a.atttypid, a.atttypmod) AS data_type,
-            a.attnotnull AS not_null,
-            a.atthasdef AS has_default,
-            a.attnum AS ordinal
+            format_type(a.atttypid, a.atttypmod) AS data_type
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          JOIN pg_attribute a ON a.attrelid = c.oid
@@ -128,9 +110,6 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
         entry.columns.push(ColumnMeta {
             name: row.get("column_name"),
             pg_type: row.get("data_type"),
-            is_nullable: !row.get::<bool, _>("not_null"),
-            has_default: row.get("has_default"),
-            ordinal: row.get::<i16, _>("ordinal") as i32,
         });
     }
 
@@ -165,7 +144,6 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
         "SELECT
             cn.nspname AS schema_name,
             cc.relname AS table_name,
-            con.conname AS constraint_name,
             array_agg(a1.attname ORDER BY pos) AS columns,
             fn_.nspname AS ref_schema,
             fc.relname AS ref_table,
@@ -180,8 +158,8 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
          JOIN pg_attribute a2 ON a2.attrelid = con.confrelid AND a2.attnum = u.ref_col
          WHERE con.contype = 'f'
            AND cn.nspname NOT IN ('pg_catalog', 'information_schema', 'pgr', 'pgstack')
-         GROUP BY cn.nspname, cc.relname, con.conname, fn_.nspname, fc.relname
-         ORDER BY cn.nspname, cc.relname, con.conname"
+         GROUP BY cn.nspname, cc.relname, fn_.nspname, fc.relname
+         ORDER BY cn.nspname, cc.relname"
     )
     .fetch_all(pool)
     .await?;
@@ -198,7 +176,6 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
                 columns: row.get("columns"),
                 referenced_table: format!("{}.{}", ref_schema, ref_table),
                 referenced_columns: row.get("ref_columns"),
-                constraint_name: row.get("constraint_name"),
             });
         }
     }
