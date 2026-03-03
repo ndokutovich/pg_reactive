@@ -1,8 +1,17 @@
 /**
  * E2E test: Multi-client fan-out — multiple WebSocket clients receive the same delta.
  */
-import WebSocket from 'ws';
 import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+// Auto-install ws if not available (CI may not have it pre-installed)
+const _testDir = dirname(fileURLToPath(import.meta.url));
+if (!existsSync(join(_testDir, 'node_modules', 'ws'))) {
+  execFileSync('npm', ['install'], { cwd: _testDir, stdio: 'inherit' });
+}
+const { default: WebSocket } = await import('ws');
 
 const PROXY_URL = 'ws://127.0.0.1:8080/ws/fanout_q';
 const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';

@@ -8,9 +8,19 @@
  *
  * Requires: proxy running with JWT_SECRET set (reads from env, defaults to docker-compose value)
  */
-import WebSocket from 'ws';
+import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
 import http from 'http';
 import crypto from 'crypto';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+// Auto-install ws if not available (CI may not have it pre-installed)
+const _testDir = dirname(fileURLToPath(import.meta.url));
+if (!existsSync(join(_testDir, 'node_modules', 'ws'))) {
+  execFileSync('npm', ['install'], { cwd: _testDir, stdio: 'inherit' });
+}
+const { default: WebSocket } = await import('ws');
 
 const PROXY_HOST = '127.0.0.1';
 const PROXY_PORT = 8080;
