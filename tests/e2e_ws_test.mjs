@@ -9,6 +9,7 @@ import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { psql, waitForMessage } from './helpers.mjs';
 
 // Auto-install ws if not available (CI may not have it pre-installed)
 const _testDir = dirname(fileURLToPath(import.meta.url));
@@ -20,14 +21,6 @@ const { default: WebSocket } = await import('ws');
 const PROXY_URL = 'ws://127.0.0.1:8080/ws/e2e_q1';
 const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const TIMEOUT_MS = 10000;
-
-function psql(sql) {
-  return execFileSync(
-    'docker',
-    ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-t', '-A', '-c', sql],
-    { encoding: 'utf-8' }
-  ).trim();
-}
 
 async function main() {
   console.log('--- E2E WebSocket Test ---');
@@ -57,14 +50,8 @@ async function main() {
   await connected;
   console.log('1. WebSocket connected');
 
-  // Wait for subscribed message
-  await new Promise(r => setTimeout(r, 500));
-
-  const subMsg = messages.find(m => m.type === 'subscribed');
-  if (!subMsg) {
-    console.error('FAIL: no subscribed message received');
-    process.exit(1);
-  }
+  // Wait for subscribed message (poll up to 3s)
+  await waitForMessage(messages, m => m.type === 'subscribed');
   console.log('2. Received subscribed confirmation');
 
   // 2. Do an INSERT to trigger delta

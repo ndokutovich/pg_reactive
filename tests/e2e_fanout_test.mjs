@@ -5,6 +5,7 @@ import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { psql } from './helpers.mjs';
 
 // Auto-install ws if not available (CI may not have it pre-installed)
 const _testDir = dirname(fileURLToPath(import.meta.url));
@@ -16,14 +17,6 @@ const { default: WebSocket } = await import('ws');
 const PROXY_URL = 'ws://127.0.0.1:8080/ws/fanout_q';
 const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const NUM_CLIENTS = 3;
-
-function psql(sql) {
-  return execFileSync(
-    'docker',
-    ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-t', '-A', '-c', sql],
-    { encoding: 'utf-8' }
-  ).trim();
-}
 
 async function connectClient(id) {
   const ws = new WebSocket(PROXY_URL, { headers: { Authorization: `Bearer ${ANON_KEY}` } });

@@ -14,6 +14,7 @@ import http from 'http';
 import crypto from 'crypto';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { psql, waitForMessage } from './helpers.mjs';
 
 // Auto-install ws if not available (CI may not have it pre-installed)
 const _testDir = dirname(fileURLToPath(import.meta.url));
@@ -25,14 +26,6 @@ const { default: WebSocket } = await import('ws');
 const PROXY_HOST = '127.0.0.1';
 const PROXY_PORT = 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-jwt-secret-do-not-use-in-production';
-
-function psql(sql) {
-  return execFileSync(
-    'docker',
-    ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-t', '-A', '-c', sql],
-    { encoding: 'utf-8' }
-  ).trim();
-}
 
 /**
  * Create a minimal HS256 JWT token.
@@ -138,15 +131,7 @@ async function testValidToken() {
   }
 
   // Should receive subscribed message (poll up to 3s)
-  const msg = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('no message')), 3000);
-    function check() {
-      const sub = messages.find(m => m.type === 'subscribed');
-      if (sub) { clearTimeout(timer); resolve(sub); }
-      else { setTimeout(check, 50); }
-    }
-    check();
-  });
+  const msg = await waitForMessage(messages, m => m.type === 'subscribed');
 
   ws.close();
 

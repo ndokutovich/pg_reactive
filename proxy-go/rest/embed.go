@@ -287,18 +287,17 @@ func buildEmbedSQL(builtSelect *BuiltQuery, parent *TableMeta, embeds []Resolved
 	if isSelectStar {
 		sb.WriteString("  SELECT base.*")
 	} else {
-		var outerCols strings.Builder
+		sb.WriteString("  SELECT ")
 		for i, c := range plainCols {
 			if i > 0 {
-				outerCols.WriteString(", ")
+				sb.WriteString(", ")
 			}
 			if c == "*" {
-				outerCols.WriteString("base.*")
+				sb.WriteString("base.*")
 			} else {
-				outerCols.WriteString("base." + QuoteIdent(c))
+				sb.WriteString("base." + QuoteIdent(c))
 			}
 		}
-		sb.WriteString("  SELECT " + outerCols.String())
 	}
 
 	laterals := make([]string, 0, len(embeds))

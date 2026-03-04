@@ -55,9 +55,10 @@ func (h *Hub) Unsubscribe(queryID string, ch chan string) {
 // is silently dropped for that subscriber only; all others still receive it.
 func (h *Hub) Broadcast(queryID, payload string) {
 	h.mu.RLock()
-	subs := h.subs[queryID]
+	snap := make([]chan string, len(h.subs[queryID]))
+	copy(snap, h.subs[queryID])
 	h.mu.RUnlock()
-	for _, ch := range subs {
+	for _, ch := range snap {
 		select {
 		case ch <- payload:
 		default:
