@@ -6,8 +6,8 @@ A PostgreSQL extension that turns any SQL `SELECT` into a live query with real-t
 
 ```
 +-------------------+       +------------------+       +------------------+
-|  PostgreSQL       |       |  Rust Proxy      |       |  TypeScript SDK  |
-|  C Extension      | ----> |  axum Server     | ----> |  LiveQuery       |
+|  PostgreSQL       |       |  Go Proxy        |       |  TypeScript SDK  |
+|  C Extension      | ----> |  chi Server      | ----> |  LiveQuery       |
 |  (ext/)           | NOTIFY|  (proxy/)        |  WS   |  Client (sdk/)   |
 +-------------------+       +------------------+       +------------------+
                             |  Auth, REST,     |       |  CLI (cli/)      |
@@ -20,7 +20,7 @@ A PostgreSQL extension that turns any SQL `SELECT` into a live query with real-t
 
 1. **C Extension** — Manages subscriptions in shared memory, installs DML triggers and DDL event hooks, computes deltas using EXCEPT-based snapshot comparison, sends `NOTIFY` on channel `pgr`.
 
-2. **Rust Proxy (axum)** — Modular server providing:
+2. **Go Proxy (chi)** — Modular server providing:
    - WebSocket fan-out (pg_reactive live queries)
    - Auth endpoints (signup, login, refresh, logout, OAuth)
    - PostgREST-compatible REST API (CRUD, resource embedding, RPC)
@@ -302,21 +302,20 @@ ext/                              PostgreSQL C extension
     recompute.c                   EXCEPT-based delta, NOTIFY dispatch
     bgworker.c                    Optional async recompute worker
   pg_reactive--0.1.sql            Extension install script (pgr schema)
-  sql/                            pg_regress tests (8 files)
+  sql/                            pg_regress tests (10 files)
   expected/                       Expected test output
   specs/                          Isolation test specs (3 files)
 
-proxy/                            Rust proxy (axum)
-  src/
-    main.rs                       Router, WebSocket handler, shutdown
-    config.rs                     Environment variable configuration
-    state.rs                      Shared app state (pool, catalog, channels)
-    error.rs                      Error types
-    auth/                         JWT, password hashing, OAuth, API keys
-    rest/                         Catalog, filters, query builder, handlers, embedding, RPC
-    realtime/                     PG LISTEN loop, WebSocket fan-out
-    middleware/                   CORS, rate limiting, RLS, security headers
-    routes/                       Health, SQL endpoint, demo, catalog refresh
+proxy-go/                         Go proxy (chi)
+  main.go                         Router, middleware, server startup
+  config.go                       Environment variable configuration
+  state.go                        Shared app state (pool, catalog, hub)
+  auth/                           JWT, password hashing, OAuth, API keys
+  rest/                           Catalog, filters, query builder, handlers, embedding, RPC
+  realtime/                       PG LISTEN loop, WebSocket fan-out hub
+  middleware/                     CORS, rate limiting, RLS, security headers
+  functions/                     Edge functions (Deno, PL/v8, goja embedded)
+  routes/                         Health, SQL endpoint, catalog refresh
 
 cli/                              pgstack CLI tool
   src/
@@ -346,7 +345,7 @@ Dockerfile.dev                    PostgreSQL 16 with build tools
 ## Requirements
 
 - PostgreSQL 16+
-- Rust 1.88+ (for proxy)
+- Go 1.25+ (for proxy)
 - Node.js 18+ (for SDK and CLI)
 - Docker and Docker Compose (for development)
 

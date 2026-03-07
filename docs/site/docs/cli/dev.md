@@ -85,7 +85,7 @@ Opens the Studio admin dashboard in your default browser.
 
 ## Rebuilding after code changes
 
-If you've modified the PostgreSQL extension C code or the Rust proxy source, rebuild the images:
+If you've modified the PostgreSQL extension C code or the proxy source, rebuild the images:
 
 ```bash
 docker compose up -d --build

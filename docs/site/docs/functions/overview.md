@@ -16,7 +16,7 @@ pgStack supports three runtimes, choosable per function:
 |---------|----------|--------------|---------|----------|
 | **Deno** | TypeScript/JS | Yes (full `fetch`) | Sidecar container | Full-featured functions, npm packages |
 | **PL/v8** | JavaScript | No | Inside PostgreSQL | ACID transactions, data-heavy logic |
-| **Embedded** | JavaScript | Limited | Go proxy process | Simple transforms, webhooks (coming soon) |
+| **Embedded** | JavaScript | Limited | Go proxy process | Simple transforms, webhooks, lightweight handlers |
 
 ## Quick start
 

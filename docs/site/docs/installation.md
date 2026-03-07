@@ -41,7 +41,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The `--build` flag compiles the PostgreSQL extension and the Rust proxy from source. This takes 2-5 minutes the first time. Subsequent builds are cached.
+The `--build` flag compiles the PostgreSQL extension and the proxy from source. This takes 2-5 minutes the first time. Subsequent builds are cached.
 
 ## Option 3: Pre-built images (production)
 

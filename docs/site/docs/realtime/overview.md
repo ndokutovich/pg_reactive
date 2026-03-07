@@ -36,7 +36,7 @@ When a row changes in a subscribed table:
 1. An AFTER STATEMENT trigger fires
 2. pg_reactive re-runs your query and computes the difference using SQL `EXCEPT`
 3. The diff is serialized as JSON and published via `pg_notify('pgr', ...)`
-4. The Rust proxy receives the NOTIFY, routes it to subscribed WebSocket connections
+4. The proxy receives the NOTIFY, routes it to subscribed WebSocket connections
 5. The SDK receives the delta, applies it to the local snapshot
 
 ### Delta format

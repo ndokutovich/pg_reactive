@@ -45,6 +45,7 @@ These must be set for production. In development, the compose file provides inse
 | `PROXY_PORT` | `8080` | Host port mapping (for `docker compose`). |
 | `RUST_LOG` | `pgstack_proxy=info` | Rust log level. Set to `debug` for verbose output. |
 | `ENABLE_SQL_ENDPOINT` | `false` | Enable `/api/sql` endpoint for raw SQL (dev only). **Never enable in production.** |
+| `PUBLIC_DIR` | *(empty — disabled)* | Directory for serving static files at the root path. When set, files in this directory are served with SPA fallback (unknown paths serve `index.html`). |
 
 ## Auth variables
 

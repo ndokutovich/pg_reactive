@@ -13,9 +13,9 @@ pgStack is designed as a self-hosted Supabase alternative. This page covers the 
 | Feature | Supabase | pgStack |
 |---------|----------|---------|
 | **Containers** | 15+ (GoTrue, PostgREST, Realtime, Storage, Kong, ...) | **2** (PostgreSQL + Proxy) |
-| **Auth provider** | GoTrue (Go service) | Built-in Rust proxy |
-| **REST API** | PostgREST | pgstack-proxy (axum, PostgREST-compatible) |
-| **Real-time** | Phoenix Elixir server | pg_reactive C extension + Rust proxy |
+| **Auth provider** | GoTrue (Go service) | Built-in Go proxy |
+| **REST API** | PostgREST | pgstack-proxy (Go, PostgREST-compatible) |
+| **Real-time** | Phoenix Elixir server | pg_reactive C extension + Go proxy |
 | **Row Level Security** | Yes | Yes |
 | **Storage** | S3-backed (Supabase Storage) | Built-in (PostgreSQL-backed) |
 | **Edge Functions** | Deno runtime | Deno + PL/v8 + Embedded (3 backends) |
@@ -27,7 +27,7 @@ pgStack is designed as a self-hosted Supabase alternative. This page covers the 
 | **Migrations** | Supabase CLI | pgstack CLI |
 | **Type generation** | supabase gen types | pgstack generate types |
 | **OAuth** | Google, GitHub, Discord, Twitter, Apple, ... | Google, GitHub |
-| **Magic links** | Yes | Planned |
+| **Magic links** | Yes | Yes |
 | **Phone auth** | Yes (Twilio) | Not included |
 | **Pricing** | Free tier + paid cloud | Open source (self-host free) |
 | **PostgreSQL version** | 15 (cloud: managed) | 16 (your own) |
