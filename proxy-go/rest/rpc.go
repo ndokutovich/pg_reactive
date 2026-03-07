@@ -161,7 +161,7 @@ SELECT
         JOIN pg_type t ON t.oid = type_oid
     ) AS arg_types,
     p.proretset,
-    p.provolatile
+    p.provolatile::text
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE p.proname = $1
