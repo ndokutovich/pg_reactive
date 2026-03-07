@@ -25,7 +25,7 @@ Host access: PG at `127.0.0.1:15432`, WebSocket proxy at `127.0.0.1:8080`.
 # Build + install
 docker compose exec -T db bash -c 'cd /ext/ext && make clean && make && make install'
 
-# pg_regress tests (7 SQL test files)
+# pg_regress tests (10 SQL test files)
 docker compose exec -T db bash -c 'su - postgres -c "cd /ext/ext && make installcheck"'
 
 # Isolation tests (3 concurrency specs)

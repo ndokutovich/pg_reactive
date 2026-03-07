@@ -52,6 +52,9 @@ These must be set for production. In development, the compose file provides inse
 |----------|---------|-------------|
 | `ACCESS_TOKEN_EXPIRY_SECS` | `3600` | JWT access token lifetime (1 hour). |
 | `REFRESH_TOKEN_EXPIRY_DAYS` | `30` | Refresh token lifetime (30 days). |
+| `AUTH_RATE_LIMIT` | `30` | Auth endpoint rate limit (requests per window). |
+| `AUTH_RATE_WINDOW` | `60` | Rate limit window in seconds. |
+| `REQUIRE_EMAIL_VERIFICATION` | `false` | Block login for unverified emails. Requires SMTP to be configured. |
 
 ## OAuth variables (optional)
 
@@ -83,6 +86,12 @@ Required for email verification and password reset emails. If not set, these fea
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ALLOWED_ORIGINS` | *(empty — permissive)* | Comma-separated list of allowed CORS origins. Empty allows all origins (development). For production, set explicitly: `https://app.example.com,https://admin.example.com` |
+
+## Reverse proxy variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRUSTED_PROXIES` | *(empty)* | Comma-separated list of trusted reverse proxy IPs. When empty, `X-Forwarded-For` is ignored and rate limiting uses `RemoteAddr` directly. Set this when running behind a load balancer or reverse proxy (e.g., `10.0.0.1,172.17.0.1`). |
 
 ## Edge Functions variables
 
@@ -187,3 +196,6 @@ Before going to production:
 - [ ] `SITE_URL` is set to your production URL
 - [ ] `.env` is in `.gitignore` (never committed)
 - [ ] PostgreSQL port (`5432`) is not exposed to the internet
+- [ ] `TRUSTED_PROXIES` is set if running behind a reverse proxy (prevents rate limit bypass via spoofed `X-Forwarded-For` headers)
+- [ ] `JWT_SECRET` does not contain `dev-only` (the proxy warns on startup if it does)
+- [ ] `REQUIRE_EMAIL_VERIFICATION` is `true` if SMTP is configured

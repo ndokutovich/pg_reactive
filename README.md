@@ -225,6 +225,8 @@ pgstack generate types     # Generate TypeScript types from schema
 | `PG_RECONNECT_MAX_BACKOFF` | `30` | Max PG reconnect backoff (seconds) |
 | `ENABLE_SQL_ENDPOINT` | `false` | Enable `/api/sql` (dev only) |
 | `ALLOWED_ORIGINS` | (unset) | Comma-separated CORS origins |
+| `TRUSTED_PROXIES` | (unset) | Trusted reverse proxy IPs for X-Forwarded-For |
+| `REQUIRE_EMAIL_VERIFICATION` | `false` | Block login for unverified emails |
 | `READ_TIMEOUT` | `30` | HTTP read timeout (seconds) |
 | `WRITE_TIMEOUT` | `60` | HTTP write timeout (seconds) |
 | `IDLE_TIMEOUT` | `120` | HTTP keep-alive idle timeout (seconds) |
@@ -249,7 +251,7 @@ See [Environment Variables](docs/site/docs/deploy/env-vars.md) for the complete 
 ### Extension tests
 
 ```bash
-# pg_regress (8 SQL test files)
+# pg_regress (10 SQL test files)
 docker compose exec -T db bash -c 'su - postgres -c "cd /ext/ext && make installcheck"'
 
 # Isolation tests (3 concurrency specs)

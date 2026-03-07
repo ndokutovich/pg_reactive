@@ -14,6 +14,7 @@ Before launching pgStack in production, review the following checklist.
 
 - [ ] `POSTGRES_PASSWORD` is a strong random value generated with `openssl rand -base64 32`
 - [ ] `JWT_SECRET` is 32+ characters, generated randomly
+- [ ] `JWT_SECRET` does not contain `dev-only` — the proxy warns on startup if it does
 - [ ] `ANON_KEY` is a strong random value
 - [ ] `SERVICE_ROLE_KEY` is a strong random value — treat it like a database root password
 - [ ] `.env` file is in `.gitignore` and never committed to version control
@@ -27,6 +28,9 @@ Before launching pgStack in production, review the following checklist.
 - [ ] `ALLOWED_ORIGINS` is set to your specific domain(s), not empty
 - [ ] Studio (`/studio/`) is restricted to trusted IPs or protected with additional auth
 - [ ] Configure `TLS_MODE=auto` for automatic HTTPS, or use a reverse proxy with `TLS_MODE=off` (default)
+- [ ] `TRUSTED_PROXIES` is set to the IP(s) of your reverse proxy — prevents rate limit bypass via `X-Forwarded-For` spoofing
+- [ ] HSTS is automatically added when TLS is active (via `TLS_MODE=auto` or `TLS_MODE=manual`)
+- [ ] WebSocket connections validate Origin header against `ALLOWED_ORIGINS`
 
 ### Database
 
@@ -34,6 +38,7 @@ Before launching pgStack in production, review the following checklist.
 - [ ] `ENABLE_SQL_ENDPOINT` is `false`
 - [ ] RLS is enabled on all user-facing tables
 - [ ] `anon` and `authenticated` roles have only the minimum necessary permissions
+- [ ] Internal auth tables (`pgstack.refresh_tokens`, `pgstack.oauth_sessions`, `pgstack.email_tokens`) have RLS enabled
 
 ## Reliability
 

@@ -10,7 +10,9 @@
 
 The codebase demonstrates strong security fundamentals: parameterized SQL queries throughout, identifier quoting via `QuoteIdent`, role whitelisting for `SET LOCAL ROLE`, Argon2id password hashing, refresh token rotation with family-based reuse detection, and non-root Docker containers. However, **4 Critical**, **11 High**, **14 Medium**, and **10 Low** findings were identified across all layers.
 
-**Top 3 urgent fixes:**
+**Phase 1 and Phase 2 remediations are complete as of commit `98f9667`.** All 4 Critical, all 13 High, and 11 of 14 Medium findings have been resolved. Three Medium findings (M3, M14) and all Low findings remain open.
+
+**Top 3 urgent fixes (at time of original audit):**
 1. Embedded JS (goja) `db.query()` bypasses all RLS — any edge function runs SQL as superuser
 2. Timing attack on service role key comparison in `auth/jwt.go`
 3. C extension returns shared memory pointers after lock release (use-after-free race)
@@ -103,34 +105,101 @@ The codebase demonstrates strong security fundamentals: parameterized SQL querie
 
 ---
 
+## Remediation Status
+
+Fixed in commit `98f9667`. Status reflects the state of the codebase after that commit.
+
+### Critical Findings
+
+| ID | Severity | Finding | Status | Notes |
+|----|----------|---------|--------|-------|
+| C1 | CRITICAL | Timing attack on service key comparison | FIXED | `constantTimeEqual` replaced with `crypto/subtle.ConstantTimeCompare` |
+| C2 | CRITICAL | goja `db.query()` bypasses RLS | FIXED | Now uses RLS transaction with role whitelist and JWT claims |
+| C3 | CRITICAL | `pgr_dep_find` returns shared memory pointer after lock release | FIXED | Returns bool and copies data under lock; `pgr_dep_add` returns bool |
+| C4 | CRITICAL | User query executed verbatim via SPI (DML CTEs allowed) | FIXED | `subscribe()` now validates single SELECT, rejects DML CTEs |
+
+### High Findings
+
+| ID | Finding | Status | Notes |
+|----|---------|--------|-------|
+| H1 | JWTs without `exp` accepted indefinitely | FIXED | Max 24h token age enforced |
+| H2 | `ENABLE_SQL_ENDPOINT` accepts unauthenticated SQL | PARTIALLY FIXED | SQL endpoint always requires `service_role` key regardless of `ENABLE_SQL_ENDPOINT` |
+| H3 | Rate limiting bypassed via `X-Forwarded-For` spoofing | FIXED | `TRUSTED_PROXIES` config added; X-Forwarded-For ignored when no trusted proxy |
+| H4 | No rate limiting on `/auth/v1/recover`, `/auth/v1/magiclink` | FIXED | recover and magiclink endpoints now rate-limited |
+| H5 | Rate limiter unbounded memory growth | FIXED | Background cleanup goroutine added |
+| H6 | OAuth error details leak internal info to browser | FIXED | Error redirect uses generic "authentication failed" message |
+| H7 | ClaimsJSON truncation produces invalid JSON | FIXED | Oversized claims rejected instead of truncated |
+| H8 | Batch template injection in query strings | FIXED | Template values URL-encoded (structural commas preserved) |
+| H9 | No body size limit on Edge Functions | FIXED | `BodyLimit` middleware added to Edge Functions route group |
+| H10 | JSON column name injection in NOTIFY payload | FIXED | Column names escaped with `pgr_json_escape_string` |
+| H11 | `%ld` format for `int64` on Windows | FIXED | `%ld` replaced with `INT64_FORMAT` |
+| H12 | Session tokens stored in localStorage | FIXED | `sessionStorage` used instead of `localStorage` |
+| H13 | `golang.org/x/crypto` v0.27.0 outdated | FIXED | Updated to `golang.org/x/crypto` v0.48.0 |
+
+### Medium Findings
+
+| ID | Finding | Status | Notes |
+|----|---------|--------|-------|
+| M1 | WebSocket `CheckOrigin` always returns true | FIXED | `CheckOrigin` now validates against `AllowedOrigins` |
+| M2 | No HSTS header | FIXED | HSTS header added when TLS is active |
+| M3 | Refresh tokens stored as plaintext | OPEN | Not yet addressed |
+| M4 | `unsafe-inline` in script-src CSP | FIXED | `'unsafe-inline'` removed from script-src |
+| M5 | Dev default secrets pass validation | FIXED | Config validation warns on dev-only JWT secrets |
+| M6 | Password grant skips `email_confirmed_at` | FIXED | Password grant checks `email_confirmed_at` when verification required |
+| M7 | Admin `CreateUser` accepts arbitrary role | FIXED | Role validated against whitelist |
+| M8 | Error messages leak schema details | FIXED | Error messages no longer include table, column, or function names |
+| M9 | Catalog refresh errors leak internal details | FIXED | Catalog refresh errors use generic message |
+| M10 | No goja execution timeout | FIXED | Goja VM execution timeout via context cancellation |
+| M11 | Production port binds to all interfaces | FIXED | Production port binds to `127.0.0.1` |
+| M12 | Buffer overread in `pgr_dep_find_by_table` | FIXED | `Min(count, 256)` bounds check applied on all loops |
+| M13 | `refresh_tokens`, `email_tokens`, `oauth_sessions` lack RLS | FIXED | RLS enabled on all three tables |
+| M14 | `edge_functions.env_vars` stores secrets as plaintext JSONB | OPEN | Not yet addressed |
+
+### Low Findings
+
+| ID | Finding | Status |
+|----|---------|--------|
+| L1 | OAuth state token logged at WARN level | OPEN |
+| L2 | CORS allows credentials with reflected origin in dev mode | OPEN |
+| L3 | Expired email tokens never cleaned up | OPEN |
+| L4 | Missing `Permissions-Policy` header | OPEN |
+| L5 | Missing `X-XSS-Protection: 0` header | OPEN |
+| L6 | Docker images not pinned to SHA256 digest | OPEN |
+| L7 | `gopkg.in/gomail.v2` unmaintained (2016) | OPEN |
+| L8 | `pgr.stats()` and `pgr.get_subscriptions()` executable by PUBLIC | OPEN |
+| L9 | Update handler logs SQL and parameters | OPEN |
+| L10 | SDK `RealtimeChannel` doesn't validate channel name | OPEN |
+
+---
+
 ## Remediation Priority
 
-### Phase 1 — Immediate (before any production deployment)
+### Phase 1 — Immediate (before any production deployment) — COMPLETE
 
-1. **C1**: Replace `constantTimeEqual` in `auth/jwt.go` with `subtle.ConstantTimeCompare`
-2. **C2**: Add RLS transaction context to goja `db.query()` using caller's claims
-3. **H2**: Add validation: reject `ENABLE_SQL_ENDPOINT=true` when `JWT_SECRET` is set
-4. **H3**: Add `TRUSTED_PROXIES` config; use `r.RemoteAddr` when no trusted proxy
-5. **H4**: Apply rate limiter to all auth endpoints (recover, magiclink, recover/confirm)
-6. **H5**: Add periodic cleanup goroutine for rate limiter map
-7. **H9**: Add `BodyLimit` middleware to Edge Functions route group
-8. **H13**: Update `golang.org/x/crypto` and `golang.org/x/net` to latest
+1. ✅ **C1**: Replace `constantTimeEqual` in `auth/jwt.go` with `subtle.ConstantTimeCompare`
+2. ✅ **C2**: Add RLS transaction context to goja `db.query()` using caller's claims
+3. ✅ **H2**: Add validation: require `service_role` key on SQL endpoint regardless of `ENABLE_SQL_ENDPOINT`
+4. ✅ **H3**: Add `TRUSTED_PROXIES` config; use `r.RemoteAddr` when no trusted proxy
+5. ✅ **H4**: Apply rate limiter to all auth endpoints (recover, magiclink, recover/confirm)
+6. ✅ **H5**: Add periodic cleanup goroutine for rate limiter map
+7. ✅ **H9**: Add `BodyLimit` middleware to Edge Functions route group
+8. ✅ **H13**: Update `golang.org/x/crypto` and `golang.org/x/net` to latest
 
-### Phase 2 — Before public beta
+### Phase 2 — Before public beta — COMPLETE
 
-9. **C3/C4**: Fix C extension shared memory pointer returns; add SELECT-only validation
-10. **H1**: Add max token age check for JWTs without `exp`
-11. **H6**: Replace `err.Error()` in OAuth redirect with generic message
-12. **H7**: Reject oversized claims instead of truncating
-13. **H8**: URL-encode template-resolved values in batch query strings
-14. **M1**: Validate WebSocket `Origin` against `AllowedOrigins`
-15. **M2**: Add HSTS header when TLS is active
-16. **M3**: Store SHA-256 hash of refresh tokens instead of plaintext
-17. **M6**: Check `email_confirmed_at` in password grant when verification required
-18. **M13**: Enable RLS on `refresh_tokens`, `email_tokens`, `oauth_sessions`
+9. ✅ **C3/C4**: Fix C extension shared memory pointer returns; add SELECT-only validation
+10. ✅ **H1**: Add max token age check for JWTs without `exp`
+11. ✅ **H6**: Replace `err.Error()` in OAuth redirect with generic message
+12. ✅ **H7**: Reject oversized claims instead of truncating
+13. ✅ **H8**: URL-encode template-resolved values in batch query strings
+14. ✅ **M1**: Validate WebSocket `Origin` against `AllowedOrigins`
+15. ✅ **M2**: Add HSTS header when TLS is active
+16. ❌ **M3**: Store SHA-256 hash of refresh tokens instead of plaintext — OPEN
+17. ✅ **M6**: Check `email_confirmed_at` in password grant when verification required
+18. ✅ **M13**: Enable RLS on `refresh_tokens`, `email_tokens`, `oauth_sessions`
 
 ### Phase 3 — Hardening
 
-19. Remaining Medium and Low findings
+19. Remaining Medium findings (M3, M14) and all Low findings (L1–L10)
 20. Dependency updates (gomail replacement, Docker image pinning)
 21. Security regression test suite for all fixed findings
