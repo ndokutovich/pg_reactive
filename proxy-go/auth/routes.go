@@ -140,8 +140,7 @@ func Signup(d *Deps) http.HandlerFunc {
 
 			if d.Mailer != nil {
 				verifyURL := fmt.Sprintf("%s/auth/v1/verify?token=%s", d.SiteURL, tok)
-				htmlBody := fmt.Sprintf(`<p>Verify your email: <a href="%s">%s</a></p>`, verifyURL, verifyURL)
-				if err := d.Mailer.Send(body.Email, "Verify your email", htmlBody); err != nil {
+				if err := d.Mailer.SendEmailVerification(body.Email, verifyURL); err != nil {
 					log.Error().Err(err).Msg("send verification email")
 				}
 			}
@@ -570,8 +569,7 @@ func Recover(d *Deps) http.HandlerFunc {
 
 		if d.Mailer != nil {
 			resetURL := fmt.Sprintf("%s/auth/v1/recover/confirm?token=%s", d.SiteURL, tok)
-			htmlBody := fmt.Sprintf(`<p>Reset your password: <a href="%s">%s</a></p><p>This link expires in 1 hour.</p>`, resetURL, resetURL)
-			if err := d.Mailer.Send(body.Email, "Reset your password", htmlBody); err != nil {
+			if err := d.Mailer.SendPasswordReset(body.Email, resetURL); err != nil {
 				log.Error().Err(err).Str("to", body.Email).Msg("send recovery email")
 			}
 		}
@@ -727,8 +725,7 @@ func Magiclink(d *Deps) http.HandlerFunc {
 
 		if d.Mailer != nil {
 			verifyURL := fmt.Sprintf("%s/auth/v1/magiclink/verify?token=%s", d.SiteURL, tok)
-			htmlBody := fmt.Sprintf(`<p>Sign in: <a href="%s">%s</a></p><p>This link expires in 1 hour.</p>`, verifyURL, verifyURL)
-			if err := d.Mailer.Send(body.Email, "Your sign-in link", htmlBody); err != nil {
+			if err := d.Mailer.SendMagicLink(body.Email, verifyURL); err != nil {
 				log.Error().Err(err).Str("to", body.Email).Msg("send magic link email")
 			}
 		}

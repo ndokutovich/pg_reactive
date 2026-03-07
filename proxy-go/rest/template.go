@@ -23,24 +23,19 @@ func ResolveTemplates(raw json.RawMessage, results map[string]json.RawMessage) (
 		return raw, nil
 	}
 
-	var resolveErr error
+	var errs []string
 	resolved := templateRe.ReplaceAllStringFunc(s, func(match string) string {
-		if resolveErr != nil {
-			return match
-		}
-
-		// Strip {{ and }}
 		expr := match[2 : len(match)-2]
 		val, err := resolveExpression(expr, results)
 		if err != nil {
-			resolveErr = err
+			errs = append(errs, err.Error())
 			return match
 		}
 		return val
 	})
 
-	if resolveErr != nil {
-		return nil, resolveErr
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("template resolution errors: %s", strings.Join(errs, "; "))
 	}
 
 	return json.RawMessage(resolved), nil
@@ -53,23 +48,19 @@ func ResolveTemplatesInString(s string, results map[string]json.RawMessage) (str
 		return s, nil
 	}
 
-	var resolveErr error
+	var errs []string
 	resolved := templateRe.ReplaceAllStringFunc(s, func(match string) string {
-		if resolveErr != nil {
-			return match
-		}
-
 		expr := match[2 : len(match)-2]
 		val, err := resolveExpression(expr, results)
 		if err != nil {
-			resolveErr = err
+			errs = append(errs, err.Error())
 			return match
 		}
 		return val
 	})
 
-	if resolveErr != nil {
-		return "", resolveErr
+	if len(errs) > 0 {
+		return "", fmt.Errorf("template resolution errors: %s", strings.Join(errs, "; "))
 	}
 	return resolved, nil
 }
@@ -102,10 +93,36 @@ func navigatePath(data json.RawMessage, path string) (string, error) {
 	segments := strings.Split(path, ".")
 	current := data
 
-	for _, seg := range segments {
+	for i, seg := range segments {
 		trimmed := strings.TrimSpace(string(current))
 		if trimmed == "null" {
 			return "", fmt.Errorf("template: cannot navigate into null at %q", seg)
+		}
+
+		// Wildcard: collect a field from every element of an array.
+		// {{op1.*.id}} → comma-separated list of id values, suitable for
+		// PostgREST in-filters: ?id=in.({{op1.*.id}})
+		if seg == "*" {
+			var arr []json.RawMessage
+			if err := json.Unmarshal(current, &arr); err != nil {
+				return "", fmt.Errorf("template: expected array for wildcard *, got non-array")
+			}
+			remaining := strings.Join(segments[i+1:], ".")
+			vals := make([]string, 0, len(arr))
+			for _, item := range arr {
+				var v string
+				var err error
+				if remaining == "" {
+					v = unquoteJSON(item)
+				} else {
+					v, err = navigatePath(item, remaining)
+					if err != nil {
+						return "", err
+					}
+				}
+				vals = append(vals, v)
+			}
+			return strings.Join(vals, ","), nil
 		}
 
 		// Try as array index first.

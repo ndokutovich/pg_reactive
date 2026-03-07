@@ -274,6 +274,13 @@ func (c *Catalog) ListTables(schema string) []*TableMeta {
 	return out
 }
 
+// TableCount returns the number of tables currently in the catalog.
+func (c *Catalog) TableCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.tables)
+}
+
 // columnSet returns a set of column names for fast lookup.
 func (tm *TableMeta) columnSet() map[string]struct{} {
 	s := make(map[string]struct{}, len(tm.Columns))

@@ -2,9 +2,27 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"gopkg.in/gomail.v2"
+)
+
+// Email HTML templates. Links are inserted via %s.
+const (
+	tmplVerification = `<p>Thanks for signing up!</p>
+<p>Verify your email address by clicking the link below:</p>
+<p><a href="%s">%s</a></p>
+<p>This link expires in 24 hours.</p>`
+
+	tmplPasswordReset = `<p>You requested a password reset.</p>
+<p>Click the link below to set a new password:</p>
+<p><a href="%s">%s</a></p>
+<p>This link expires in 1 hour. If you did not request this, you can ignore this email.</p>`
+
+	tmplMagicLink = `<p>Use the link below to sign in:</p>
+<p><a href="%s">%s</a></p>
+<p>This link expires in 1 hour. If you did not request this, you can ignore this email.</p>`
 )
 
 // Mailer sends transactional email via SMTP.
@@ -53,10 +71,43 @@ func (m *Mailer) Send(to, subject, htmlBody string) error {
 	msg.SetHeader("Subject", subject)
 	msg.SetBody("text/html", htmlBody)
 
-	if err := m.dialer.DialAndSend(msg); err != nil {
+	if err := m.sendWithRetry(msg); err != nil {
 		return fmt.Errorf("SMTP send failed: %w", err)
 	}
 
 	log.Info().Str("to", to).Str("subject", subject).Msg("email sent")
 	return nil
+}
+
+// sendWithRetry attempts delivery up to 3 times with exponential backoff
+// (1s, 2s) to handle transient SMTP errors.
+func (m *Mailer) sendWithRetry(msg *gomail.Message) error {
+	var lastErr error
+	for attempt := range 3 {
+		if lastErr = m.dialer.DialAndSend(msg); lastErr == nil {
+			return nil
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(1<<attempt) * time.Second)
+		}
+	}
+	return lastErr
+}
+
+// SendEmailVerification sends a verification link to a newly registered user.
+func (m *Mailer) SendEmailVerification(to, verifyURL string) error {
+	body := fmt.Sprintf(tmplVerification, verifyURL, verifyURL)
+	return m.Send(to, "Verify your email", body)
+}
+
+// SendPasswordReset sends a password-reset link.
+func (m *Mailer) SendPasswordReset(to, resetURL string) error {
+	body := fmt.Sprintf(tmplPasswordReset, resetURL, resetURL)
+	return m.Send(to, "Reset your password", body)
+}
+
+// SendMagicLink sends a one-time sign-in link.
+func (m *Mailer) SendMagicLink(to, linkURL string) error {
+	body := fmt.Sprintf(tmplMagicLink, linkURL, linkURL)
+	return m.Send(to, "Your sign-in link", body)
 }

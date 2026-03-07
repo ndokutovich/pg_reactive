@@ -1,11 +1,13 @@
 package main
 
 import (
+	"strconv"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"pgstack-proxy-go/middleware"
 	"pgstack-proxy-go/realtime"
+	"pgstack-proxy-go/rest"
 )
 
 // AppState is the shared application state injected into all HTTP handlers.
@@ -32,6 +34,9 @@ type AppState struct {
 
 	// Mailer sends transactional email (or logs in dev mode).
 	Mailer *Mailer
+
+	// Catalog caches pg_catalog table metadata for REST handlers.
+	Catalog *rest.Catalog
 }
 
 // NewAppState constructs AppState from a loaded Config and pool.
@@ -43,6 +48,29 @@ func NewAppState(cfg Config, pool *pgxpool.Pool) *AppState {
 		RateLimiter: middleware.NewRateLimiter(cfg.AuthRateLimit, cfg.AuthRateWindow),
 		WSSemaphore: make(chan struct{}, cfg.MaxConnections),
 		Mailer:      NewMailer(cfg),
+		Catalog:     rest.NewCatalog(),
 	}
 	return s
+}
+
+// Health returns a snapshot of key runtime indicators. Used by /health and
+// operational dashboards.
+func (s *AppState) Health() map[string]string {
+	pg := "ok"
+	if !s.PGConnected.Load() {
+		pg = "disconnected"
+	}
+	active := s.Config.MaxConnections - len(s.WSSemaphore)
+	return map[string]string{
+		"db":             pg,
+		"ws_active":      strconv.Itoa(active),
+		"ws_max":         strconv.Itoa(s.Config.MaxConnections),
+		"catalog_tables": strconv.Itoa(s.Catalog.TableCount()),
+	}
+}
+
+// Close releases shared resources. Should be called on graceful shutdown
+// after the HTTP server has stopped accepting new connections.
+func (s *AppState) Close() {
+	s.Pool.Close()
 }

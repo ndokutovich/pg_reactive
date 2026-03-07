@@ -16,6 +16,9 @@ import (
 // The concrete *Mailer in the main package satisfies this interface.
 type MailerIface interface {
 	Send(to, subject, htmlBody string) error
+	SendEmailVerification(to, verifyURL string) error
+	SendPasswordReset(to, resetURL string) error
+	SendMagicLink(to, linkURL string) error
 }
 
 // Deps carries every dependency the auth handlers need.

@@ -2,6 +2,7 @@ package rest
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -118,4 +119,57 @@ func TestResolveTemplates_Empty(t *testing.T) {
 	if result != nil {
 		t.Fatalf("expected nil, got %s", result)
 	}
+}
+
+func TestResolveTemplates_MultipleErrors(t *testing.T) {
+	results := map[string]json.RawMessage{
+		"op1": json.RawMessage(`{"id":1}`),
+	}
+	// Two broken references in the same template.
+	raw := json.RawMessage(`{"a":"{{missing1.id}}","b":"{{missing2.id}}"}`)
+	_, err := ResolveTemplates(raw, results)
+	if err == nil {
+		t.Fatal("expected error for multiple missing operations")
+	}
+	errStr := err.Error()
+	if !containsAll(errStr, "missing1", "missing2") {
+		t.Fatalf("expected both missing ops in error, got: %s", errStr)
+	}
+}
+
+func TestResolveTemplates_Wildcard(t *testing.T) {
+	results := map[string]json.RawMessage{
+		"rows": json.RawMessage(`[{"id":10},{"id":20},{"id":30}]`),
+	}
+	s := "id=in.({{rows.*.id}})"
+	result, err := ResolveTemplatesInString(s, results)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "id=in.(10,20,30)" {
+		t.Fatalf("expected id=in.(10,20,30), got %s", result)
+	}
+}
+
+func TestResolveTemplates_WildcardScalar(t *testing.T) {
+	results := map[string]json.RawMessage{
+		"tags": json.RawMessage(`["alpha","beta","gamma"]`),
+	}
+	s := "{{tags.*}}"
+	result, err := ResolveTemplatesInString(s, results)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "alpha,beta,gamma" {
+		t.Fatalf("expected alpha,beta,gamma, got %s", result)
+	}
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }

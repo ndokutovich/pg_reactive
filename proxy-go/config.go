@@ -83,12 +83,6 @@ func FromEnv() Config {
 	cfg.ListenAddr = envOrDefault("LISTEN_ADDR", "0.0.0.0:8080")
 
 	cfg.JWTSecret = os.Getenv("JWT_SECRET")
-	if cfg.JWTSecret != "" && len(cfg.JWTSecret) < 32 {
-		panic(fmt.Sprintf(
-			"JWT_SECRET must be at least 32 characters (got %d). Use a cryptographically random string for security.",
-			len(cfg.JWTSecret),
-		))
-	}
 
 	cfg.AnonKey = os.Getenv("ANON_KEY")
 	cfg.ServiceRoleKey = os.Getenv("SERVICE_ROLE_KEY")
@@ -161,8 +155,42 @@ func envIntOrDefault(key string, def int) int {
 }
 
 func envBoolOrDefault(key string, def bool) bool {
-	if v := os.Getenv(key); v != "" {
-		return v == "true" || v == "1"
+	v := os.Getenv(key)
+	if v == "" {
+		return def
 	}
+	if v == "true" || v == "1" {
+		return true
+	}
+	if v == "false" || v == "0" {
+		return false
+	}
+	// Unrecognised value — warn so misconfiguration is visible, use default.
+	fmt.Fprintf(os.Stderr, "WARNING: %s=%q is not a valid boolean (use true/false/1/0) — using default %v\n", key, v, def)
 	return def
+}
+
+// Validate checks the loaded configuration and returns human-readable errors.
+// Callers should log all errors and abort startup if any are returned.
+func (c Config) Validate() []string {
+	var errs []string
+	if c.JWTSecret != "" && len(c.JWTSecret) < 32 {
+		errs = append(errs, fmt.Sprintf(
+			"JWT_SECRET must be at least 32 characters (got %d); use a cryptographically random string",
+			len(c.JWTSecret),
+		))
+	}
+	if c.RequireEmailVerification && c.SMTPHost == "" {
+		errs = append(errs, "REQUIRE_EMAIL_VERIFICATION=true but SMTP_HOST is not set")
+	}
+	if c.MaxConnections < 1 {
+		errs = append(errs, "MAX_CONNECTIONS must be >= 1")
+	}
+	if c.AccessTokenExpirySecs < 60 {
+		errs = append(errs, fmt.Sprintf(
+			"ACCESS_TOKEN_EXPIRY_SECS=%d is dangerously short (minimum 60s recommended)",
+			c.AccessTokenExpirySecs,
+		))
+	}
+	return errs
 }

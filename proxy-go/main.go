@@ -31,6 +31,13 @@ func main() {
 
 	cfg := FromEnv()
 
+	if errs := cfg.Validate(); len(errs) > 0 {
+		for _, e := range errs {
+			log.Error().Msg(e)
+		}
+		log.Fatal().Msg("configuration errors — fix the above before starting")
+	}
+
 	if cfg.JWTSecret != "" {
 		log.Info().Msg("JWT authentication enabled")
 	} else {
@@ -137,17 +144,15 @@ func buildRouter(state *AppState) http.Handler {
 		GitHubClientSecret:       state.Config.GitHubClientSecret,
 	}
 
-	// Build the REST dependency bundle.  The catalog is loaded once at startup;
-	// callers can refresh it via POST /api/catalog/refresh (service_role only).
-	catalog := rest.NewCatalog()
-	if err := catalog.Refresh(context.Background(), state.Pool); err != nil {
+	// Load REST catalog (already allocated in state; refresh from DB here).
+	if err := state.Catalog.Refresh(context.Background(), state.Pool); err != nil {
 		log.Warn().Err(err).Msg("initial catalog load failed — REST endpoints may return 404 until refreshed")
 	} else {
 		log.Info().Msg("REST catalog loaded")
 	}
 	restDeps := &rest.RestDeps{
 		Pool:    state.Pool,
-		Catalog: catalog,
+		Catalog: state.Catalog,
 		ResolveClaims: func(r *http.Request) (*rest.RequestClaims, error) {
 			claims, err := appMiddleware.ResolveClaims(r, rlsCfg)
 			if err != nil {
@@ -231,8 +236,8 @@ func buildRouter(state *AppState) http.Handler {
 		r.Post("/rest/v1/rpc/{function}", rest.RPCPost(restDeps))
 
 		// OpenAPI spec (must be before {table} wildcard)
-		r.Get("/rest/v1", routes.OpenAPISpec(catalog))
-		r.Get("/rest/v1/", routes.OpenAPISpec(catalog))
+		r.Get("/rest/v1", routes.OpenAPISpec(state.Catalog))
+		r.Get("/rest/v1/", routes.OpenAPISpec(state.Catalog))
 
 		// Batch transactions (must be before {table} wildcard)
 		r.Post("/rest/v1/batch", rest.Batch(restDeps, state.Config.MaxBatchOperations))
@@ -252,7 +257,7 @@ func buildRouter(state *AppState) http.Handler {
 			ServiceRoleKey:    state.Config.ServiceRoleKey,
 			RLS:               rlsCfg,
 			CatalogRefreshFn: func() error {
-				return catalog.Refresh(context.Background(), state.Pool)
+				return state.Catalog.Refresh(context.Background(), state.Pool)
 			},
 		}))
 
@@ -266,7 +271,7 @@ func buildRouter(state *AppState) http.Handler {
 			state.Pool,
 			rlsCfg,
 			func(pool *pgxpool.Pool) error {
-				return catalog.Refresh(context.Background(), pool)
+				return state.Catalog.Refresh(context.Background(), pool)
 			},
 		))
 	})

@@ -16,6 +16,13 @@ FAIL=0
 SKIP=0
 RESULTS=()
 
+# JSON result record — populated at the end.
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+DATE=$(date -u +%Y-%m-%d)
+declare -A METRICS  # key → value, filled by individual tests via $PERF_METRICS_FILE
+export PERF_METRICS_FILE="$DIR/.metrics_tmp.$$"
+rm -f "$PERF_METRICS_FILE"
+
 header() { echo -e "\n======================================"; echo " $1"; echo "======================================"; }
 
 run_test() {
@@ -94,6 +101,9 @@ run_test "P4: Fan-Out Scaling" \
 run_test "P5: Soak Test" \
   "node tests/perf/p5_soak.mjs"
 
+run_test "P7: Concurrent Subscribe/Unsubscribe" \
+  "node tests/perf/p7_concurrent_subscribe.mjs"
+
 # --- Summary ---
 header "RESULTS SUMMARY"
 for r in "${RESULTS[@]}"; do
@@ -101,6 +111,27 @@ for r in "${RESULTS[@]}"; do
 done
 echo ""
 echo "PASS: $PASS  FAIL: $FAIL"
+
+# --- Append JSON result line to results.jsonl ---
+METRICS_JSON="{}"
+if [ -f "$PERF_METRICS_FILE" ]; then
+  # Each line in the metrics file: key=value
+  pairs=""
+  while IFS='=' read -r k v; do
+    [ -n "$k" ] && pairs="${pairs}\"$k\":$v,"
+  done < "$PERF_METRICS_FILE"
+  pairs="${pairs%,}"
+  METRICS_JSON="{$pairs}"
+  rm -f "$PERF_METRICS_FILE"
+fi
+
+SUITE_RESULT="pass"
+[ "$FAIL" -gt 0 ] && SUITE_RESULT="fail"
+
+RECORD="{\"date\":\"$DATE\",\"commit\":\"$COMMIT\",\"suite\":\"$SUITE_RESULT\",\"pass\":$PASS,\"fail\":$FAIL,\"metrics\":$METRICS_JSON}"
+echo "$RECORD" >> "$DIR/results.jsonl"
+echo ""
+echo "Result appended to tests/perf/results.jsonl"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "=== SUITE: FAIL ==="
