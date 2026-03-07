@@ -3,6 +3,7 @@ package rest
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -43,6 +44,11 @@ func ResolveTemplates(raw json.RawMessage, results map[string]json.RawMessage) (
 
 // ResolveTemplatesInString replaces {{opId.field}} references in a plain string
 // (e.g., a query string).  Returns the resolved string.
+//
+// Individual resolved values are URL-encoded before substitution to prevent
+// injection of additional query parameters via characters like '&' or '=' in
+// the value. Wildcard expansions encode each element separately so that the
+// structural commas between elements are preserved.
 func ResolveTemplatesInString(s string, results map[string]json.RawMessage) (string, error) {
 	if !strings.Contains(s, "{{") {
 		return s, nil
@@ -56,13 +62,25 @@ func ResolveTemplatesInString(s string, results map[string]json.RawMessage) (str
 			errs = append(errs, err.Error())
 			return match
 		}
-		return val
+		return urlEncodePreservingCommas(val)
 	})
 
 	if len(errs) > 0 {
 		return "", fmt.Errorf("template resolution errors: %s", strings.Join(errs, "; "))
 	}
 	return resolved, nil
+}
+
+// urlEncodePreservingCommas URL-encodes each comma-separated segment
+// individually so that structural commas (from wildcard expansions like
+// {{op.*.id}}) are not encoded, while values containing '&' or '=' are
+// safely escaped.
+func urlEncodePreservingCommas(s string) string {
+	parts := strings.Split(s, ",")
+	for i, p := range parts {
+		parts[i] = url.QueryEscape(p)
+	}
+	return strings.Join(parts, ",")
 }
 
 // resolveExpression navigates a dot-path like "op1.id" or "op1.0.name" into

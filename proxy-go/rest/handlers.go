@@ -23,13 +23,15 @@ func Select(d *RestDeps) http.HandlerFunc {
 
 		tm := d.Catalog.GetTable(tableName)
 		if tm == nil {
-			writeJSONError(w, http.StatusNotFound, "table not found: "+tableName)
+			log.Warn().Str("table", tableName).Msg("select: relation not found")
+			writeJSONError(w, http.StatusNotFound, "relation not found")
 			return
 		}
 
 		q, err := ParseQuery(r.URL.RawQuery)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid query parameters: "+err.Error())
+			log.Warn().Err(err).Msg("select: invalid query parameters")
+			writeJSONError(w, http.StatusBadRequest, "invalid query parameters")
 			return
 		}
 
@@ -56,7 +58,8 @@ func Select(d *RestDeps) http.HandlerFunc {
 			// Simple path: no embeds.
 			bq, err := BuildSelect(tm, q, plainCols)
 			if err != nil {
-				writeJSONError(w, http.StatusBadRequest, err.Error())
+				log.Warn().Err(err).Str("table", tableName).Msg("select: query build failed")
+				writeJSONError(w, http.StatusBadRequest, "unknown column in request")
 				return
 			}
 			wrappedSQL := `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) AS data FROM (` +
@@ -73,7 +76,8 @@ func Select(d *RestDeps) http.HandlerFunc {
 			for _, req := range embedReqs {
 				re, err := ResolveEmbed(d.Catalog, tm, req, 0)
 				if err != nil {
-					writeJSONError(w, http.StatusBadRequest, "embed error: "+err.Error())
+					log.Warn().Err(err).Str("table", tableName).Msg("select: embed resolution failed")
+					writeJSONError(w, http.StatusBadRequest, "invalid embed in request")
 					return
 				}
 				resolvedEmbeds = append(resolvedEmbeds, *re)
@@ -92,7 +96,8 @@ func Select(d *RestDeps) http.HandlerFunc {
 
 			bq, err := BuildSelect(tm, q, baseCols)
 			if err != nil {
-				writeJSONError(w, http.StatusBadRequest, err.Error())
+				log.Warn().Err(err).Str("table", tableName).Msg("select: query build failed")
+				writeJSONError(w, http.StatusBadRequest, "unknown column in request")
 				return
 			}
 
@@ -127,7 +132,8 @@ func Insert(d *RestDeps) http.HandlerFunc {
 
 		tm := d.Catalog.GetTable(tableName)
 		if tm == nil {
-			writeJSONError(w, http.StatusNotFound, "table not found: "+tableName)
+			log.Warn().Str("table", tableName).Msg("insert: relation not found")
+			writeJSONError(w, http.StatusNotFound, "relation not found")
 			return
 		}
 
@@ -176,7 +182,8 @@ func Insert(d *RestDeps) http.HandlerFunc {
 
 			bq, err := BuildBulkInsert(tm, rows)
 			if err != nil {
-				writeJSONError(w, http.StatusBadRequest, err.Error())
+				log.Warn().Err(err).Str("table", tableName).Msg("insert: query build failed")
+				writeJSONError(w, http.StatusBadRequest, "unknown column in request")
 				return
 			}
 
@@ -213,7 +220,8 @@ func Insert(d *RestDeps) http.HandlerFunc {
 
 		bq, err := BuildInsert(tm, row)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			log.Warn().Err(err).Str("table", tableName).Msg("insert: query build failed")
+			writeJSONError(w, http.StatusBadRequest, "unknown column in request")
 			return
 		}
 
@@ -261,13 +269,15 @@ func Update(d *RestDeps) http.HandlerFunc {
 
 		tm := d.Catalog.GetTable(tableName)
 		if tm == nil {
-			writeJSONError(w, http.StatusNotFound, "table not found: "+tableName)
+			log.Warn().Str("table", tableName).Msg("update: relation not found")
+			writeJSONError(w, http.StatusNotFound, "relation not found")
 			return
 		}
 
 		q, err := ParseQuery(r.URL.RawQuery)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid query parameters: "+err.Error())
+			log.Warn().Err(err).Msg("update: invalid query parameters")
+			writeJSONError(w, http.StatusBadRequest, "invalid query parameters")
 			return
 		}
 		if len(q.Filters) == 0 {
@@ -288,7 +298,8 @@ func Update(d *RestDeps) http.HandlerFunc {
 
 		bq, err := BuildUpdate(tm, body, q)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			log.Warn().Err(err).Str("table", tableName).Msg("update: query build failed")
+			writeJSONError(w, http.StatusBadRequest, "unknown column in request")
 			return
 		}
 
@@ -337,13 +348,15 @@ func Delete(d *RestDeps) http.HandlerFunc {
 
 		tm := d.Catalog.GetTable(tableName)
 		if tm == nil {
-			writeJSONError(w, http.StatusNotFound, "table not found: "+tableName)
+			log.Warn().Str("table", tableName).Msg("delete: relation not found")
+			writeJSONError(w, http.StatusNotFound, "relation not found")
 			return
 		}
 
 		q, err := ParseQuery(r.URL.RawQuery)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid query parameters: "+err.Error())
+			log.Warn().Err(err).Msg("delete: invalid query parameters")
+			writeJSONError(w, http.StatusBadRequest, "invalid query parameters")
 			return
 		}
 		if len(q.Filters) == 0 {
@@ -353,7 +366,8 @@ func Delete(d *RestDeps) http.HandlerFunc {
 
 		bq, err := BuildDelete(tm, q)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			log.Warn().Err(err).Str("table", tableName).Msg("delete: query build failed")
+			writeJSONError(w, http.StatusBadRequest, "unknown column in request")
 			return
 		}
 

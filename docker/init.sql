@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS pgstack.refresh_tokens (
   expires_at timestamptz NOT NULL,
   created_at timestamptz DEFAULT now()
 );
+ALTER TABLE pgstack.refresh_tokens ENABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS pgstack.oauth_sessions (
   state text PRIMARY KEY,
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS pgstack.oauth_sessions (
   created_at timestamptz DEFAULT now(),
   expires_at timestamptz DEFAULT now() + interval '10 minutes'
 );
+ALTER TABLE pgstack.oauth_sessions ENABLE ROW LEVEL SECURITY;
 
 -- Email tokens for verification, password reset, and magic links
 CREATE TABLE IF NOT EXISTS pgstack.email_tokens (
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS pgstack.email_tokens (
     expires_at  timestamptz NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE pgstack.email_tokens ENABLE ROW LEVEL SECURITY;
 CREATE INDEX IF NOT EXISTS idx_email_tokens_token ON pgstack.email_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON pgstack.email_tokens(user_id);
 

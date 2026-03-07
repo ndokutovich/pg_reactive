@@ -1,7 +1,6 @@
 package routes
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -24,7 +23,8 @@ type SQLConfig struct {
 
 // SQL returns an http.HandlerFunc for POST /api/sql.
 //
-// Requires service_role key OR EnableSQLEndpoint=true.
+// Always requires service_role key authentication. EnableSQLEndpoint controls
+// route registration only, not access control.
 //
 // SELECT/WITH statements are wrapped in a read-only transaction:
 //
@@ -33,11 +33,12 @@ type SQLConfig struct {
 // Other statements are executed directly and the rows_affected count is returned.
 func SQL(pool *pgxpool.Pool, cfg SQLConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Auth: require service_role key OR explicit flag.
-		hasServiceRole := isServiceRole(r, cfg.ServiceRoleKey)
-		if !cfg.EnableSQLEndpoint && !hasServiceRole {
+		// Auth: always require service_role key — EnableSQLEndpoint controls
+		// whether the route is registered at all, but access still requires
+		// proper authentication.
+		if !isServiceRole(r, cfg.ServiceRoleKey) {
 			writeJSONError(w, http.StatusUnauthorized,
-				"service_role key required for /api/sql (or set ENABLE_SQL_ENDPOINT=true)")
+				"service_role key required for /api/sql")
 			return
 		}
 
@@ -109,7 +110,7 @@ func SQL(pool *pgxpool.Pool, cfg SQLConfig) http.HandlerFunc {
 			}
 			writeJSONOK(w, map[string]any{"ok": true, "rows": raw})
 		} else {
-			ct, err := pool.Exec(context.Background(), sql)
+			ct, err := pool.Exec(ctx, sql)
 			if err != nil {
 				log.Error().Err(err).Msg("SQL execution failed")
 				writeJSONError(w, http.StatusInternalServerError, "SQL execution failed")

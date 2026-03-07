@@ -34,11 +34,11 @@ const SESSION_KEY = 'pgstack-session';
 
 function loadSession(): Session | null {
   try {
-    const raw = localStorage.getItem(SESSION_KEY);
+    const raw = sessionStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw) as Session;
     if (Date.now() / 1000 > s.expires_at) {
-      localStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(SESSION_KEY);
       return null;
     }
     return s;
@@ -46,12 +46,12 @@ function loadSession(): Session | null {
 }
 
 function saveSession(s: Session | null) {
-  if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
-  else localStorage.removeItem(SESSION_KEY);
+  if (s) sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
+  else sessionStorage.removeItem(SESSION_KEY);
 }
 
 /**
- * Standalone auth hook that manages session in localStorage.
+ * Standalone auth hook that manages session in sessionStorage.
  *
  * @param baseUrl - The pgStack proxy URL (e.g. 'http://127.0.0.1:8080')
  * @param anonKey - The anonymous API key

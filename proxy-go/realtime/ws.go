@@ -15,14 +15,6 @@ import (
 	"pgstack-proxy-go/middleware"
 )
 
-var upgrader = websocket.Upgrader{
-	HandshakeTimeout: 10 * time.Second,
-	CheckOrigin: func(r *http.Request) bool {
-		// Origin checking is handled by the CORS middleware on the outer router.
-		return true
-	},
-}
-
 // safeQueryIDRe matches only alphanumeric characters, underscores, and hyphens.
 // Any query_id that doesn't match is rejected to prevent SQL injection via the
 // dynamic table name in the snapshot query.
@@ -30,6 +22,10 @@ var safeQueryIDRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // WSHandler returns an http.HandlerFunc that upgrades HTTP to WebSocket and
 // manages the live-query connection lifecycle.
+//
+// allowedOrigins controls WebSocket Origin header validation. When empty, all
+// origins are permitted (development mode). When set, only requests whose
+// Origin header matches one of the listed origins are accepted.
 //
 // Lifecycle:
 //  1. Resolve auth claims (honours JWT, service_role key, anon key).
@@ -44,7 +40,24 @@ func WSHandler(
 	hub *Hub,
 	semaphore chan struct{},
 	broadcastCapacity int,
+	allowedOrigins []string,
 ) http.HandlerFunc {
+	upgrader := websocket.Upgrader{
+		HandshakeTimeout: 10 * time.Second,
+		CheckOrigin: func(r *http.Request) bool {
+			if len(allowedOrigins) == 0 {
+				return true // dev mode: allow all origins
+			}
+			origin := r.Header.Get("Origin")
+			for _, ao := range allowedOrigins {
+				if origin == ao {
+					return true
+				}
+			}
+			return false
+		},
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		queryID := chi.URLParam(r, "queryID")
 		if queryID == "" {

@@ -45,7 +45,7 @@ func NewAppState(cfg Config, pool *pgxpool.Pool) *AppState {
 		Config:      cfg,
 		Pool:        pool,
 		Hub:         realtime.NewHub(),
-		RateLimiter: middleware.NewRateLimiter(cfg.AuthRateLimit, cfg.AuthRateWindow),
+		RateLimiter: middleware.NewRateLimiterWithProxies(cfg.AuthRateLimit, cfg.AuthRateWindow, cfg.TrustedProxies),
 		WSSemaphore: make(chan struct{}, cfg.MaxConnections),
 		Mailer:      NewMailer(cfg),
 		Catalog:     rest.NewCatalog(),

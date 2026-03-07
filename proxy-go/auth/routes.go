@@ -254,6 +254,12 @@ func handlePasswordGrant(w http.ResponseWriter, r *http.Request, ctx context.Con
 		return
 	}
 
+	// Reject login if email verification is required but not confirmed.
+	if d.RequireEmailVerification && emailConfirmedAt == nil {
+		writeError(w, http.StatusForbidden, "email not verified")
+		return
+	}
+
 	access, refresh, err := generateTokenPair(ctx, d, userID, email, role)
 	if err != nil {
 		log.Error().Err(err).Msg("generate token pair (password grant)")
@@ -996,6 +1002,13 @@ func AdminCreateUser(d *Deps) http.HandlerFunc {
 		}
 		if body.Role == "" {
 			body.Role = "authenticated"
+		}
+
+		// Validate role against whitelist to prevent privilege escalation.
+		validRoles := map[string]bool{"anon": true, "authenticated": true, "service_role": true}
+		if !validRoles[body.Role] {
+			writeError(w, http.StatusBadRequest, "invalid role")
+			return
 		}
 
 		var hashedPwd *string

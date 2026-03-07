@@ -102,12 +102,12 @@ pgr_is_valid_query_id(const char *query_id)
 /* dependency.c */
 extern void pgr_shmem_request(void);
 extern void pgr_shmem_startup(void);
-extern PgrDepEntry *pgr_dep_add(const char *query_id, const char *query_text,
-								Oid *table_oids, uint64 *col_masks,
-								int num_tables, char mode,
-								PgrEvictedInfo *evicted);
+extern bool pgr_dep_add(const char *query_id, const char *query_text,
+						Oid *table_oids, uint64 *col_masks,
+						int num_tables, char mode,
+						PgrEvictedInfo *evicted);
 extern bool pgr_dep_remove(const char *query_id);
-extern PgrDepEntry *pgr_dep_find(const char *query_id);
+extern bool pgr_dep_find(const char *query_id, PgrDepEntry *out);
 extern int pgr_dep_copy_tables(const char *query_id, Oid *table_oids,
 							   int max_tables);
 extern int pgr_dep_find_by_table(Oid table_oid, char query_ids[][PGR_QUERY_ID_LEN],

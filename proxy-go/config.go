@@ -69,6 +69,9 @@ type Config struct {
 	// CORS
 	AllowedOrigins []string
 
+	// Trusted reverse proxies (for X-Forwarded-For)
+	TrustedProxies []string
+
 	// SMTP / email
 	SMTPFrom                 string
 	RequireEmailVerification bool
@@ -155,6 +158,15 @@ func FromEnv() Config {
 		}
 	}
 
+	rawProxies := os.Getenv("TRUSTED_PROXIES")
+	if rawProxies != "" {
+		for _, p := range strings.Split(rawProxies, ",") {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				cfg.TrustedProxies = append(cfg.TrustedProxies, trimmed)
+			}
+		}
+	}
+
 	cfg.SMTPFrom = envOrDefault("SMTP_FROM", "noreply@pgstack.local")
 	cfg.RequireEmailVerification = envBoolOrDefault("REQUIRE_EMAIL_VERIFICATION", false)
 	cfg.SMTPHost = os.Getenv("SMTP_HOST")
@@ -226,6 +238,9 @@ func (c Config) Validate() []string {
 			"JWT_SECRET must be at least 32 characters (got %d); use a cryptographically random string",
 			len(c.JWTSecret),
 		))
+	}
+	if c.JWTSecret != "" && strings.Contains(c.JWTSecret, "dev-only") {
+		errs = append(errs, "JWT_SECRET contains 'dev-only' — set a proper secret for production")
 	}
 	if c.RequireEmailVerification && c.SMTPHost == "" {
 		errs = append(errs, "REQUIRE_EMAIL_VERIFICATION=true but SMTP_HOST is not set")

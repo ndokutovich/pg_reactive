@@ -162,7 +162,7 @@ func Callback(d *Deps) http.HandlerFunc {
 		if err != nil {
 			log.Error().Err(err).Str("provider", provider).Msg("oauth exchange")
 			redirectURL := fmt.Sprintf("%s#error=server_error&error_description=%s",
-				d.SiteURL, url.QueryEscape("oauth provider error: "+err.Error()))
+				d.SiteURL, url.QueryEscape("authentication failed"))
 			http.Redirect(w, r, redirectURL, http.StatusFound)
 			return
 		}

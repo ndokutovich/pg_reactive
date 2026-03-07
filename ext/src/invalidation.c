@@ -148,8 +148,12 @@ pgr_invalidate_table(Oid table_oid)
 
 	count = pgr_dep_find_by_table(table_oid, query_ids, 256);
 
-	for (i = 0; i < count; i++)
-		pgr_mark_dirty(query_ids[i]);
+	{
+		int safe_count = Min(count, 256);
+
+		for (i = 0; i < safe_count; i++)
+			pgr_mark_dirty(query_ids[i]);
+	}
 
 	/* Update shared stats */
 	if (count > 0)
@@ -620,24 +624,28 @@ pgr_notify_schema_changed_and_unsubscribe(Oid table_oid, const char *table_name)
 	if (count == 0)
 		return;
 
-	for (i = 0; i < count; i++)
 	{
-		StringInfoData payload;
+		int safe_count = Min(count, 256);
 
-		/* Emit schema_changed notification on the configured channel */
-		initStringInfo(&payload);
-		appendStringInfoString(&payload, "{\"type\":\"schema_changed\",\"query_id\":");
-		pgr_json_escape_string(&payload, query_ids[i]);
-		appendStringInfoString(&payload, ",\"table\":");
-		pgr_json_escape_string(&payload, table_name);
-		appendStringInfoChar(&payload, '}');
+		for (i = 0; i < safe_count; i++)
+		{
+			StringInfoData payload;
 
-		Async_Notify(pgr_notify_channel, payload.data);
-		pfree(payload.data);
+			/* Emit schema_changed notification on the configured channel */
+			initStringInfo(&payload);
+			appendStringInfoString(&payload, "{\"type\":\"schema_changed\",\"query_id\":");
+			pgr_json_escape_string(&payload, query_ids[i]);
+			appendStringInfoString(&payload, ",\"table\":");
+			pgr_json_escape_string(&payload, table_name);
+			appendStringInfoChar(&payload, '}');
 
-		elog(DEBUG1,
-			 "pg_reactive: schema_changed emitted for query %s on table %s",
-			 query_ids[i], table_name);
+			Async_Notify(pgr_notify_channel, payload.data);
+			pfree(payload.data);
+
+			elog(DEBUG1,
+				 "pg_reactive: schema_changed emitted for query %s on table %s",
+				 query_ids[i], table_name);
+		}
 	}
 
 	/*

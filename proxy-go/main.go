@@ -63,6 +63,11 @@ func main() {
 
 	state := NewAppState(cfg, pool)
 
+	// Start rate limiter cleanup goroutine (H5: prevent unbounded memory growth).
+	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
+	defer cleanupCancel()
+	go state.RateLimiter.StartCleanup(cleanupCtx)
+
 	// Kick off the dedicated PG LISTEN connection in a background goroutine.
 	go realtime.ListenLoop(
 		cfg.DatabaseURL,
@@ -136,10 +141,12 @@ func startAutoTLS(cfg Config, handler http.Handler) []*http.Server {
 	}
 
 	// HTTPS server
+	tlsCfg := m.TLSConfig()
+	tlsCfg.MinVersion = tls.VersionTLS12
 	tlsSrv := &http.Server{
 		Addr:         cfg.HTTPSAddr,
 		Handler:      handler,
-		TLSConfig:    m.TLSConfig(),
+		TLSConfig:    tlsCfg,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 		IdleTimeout:  cfg.IdleTimeout,
@@ -285,6 +292,9 @@ func buildRouter(state *AppState) http.Handler {
 		r.Use(chiMiddleware.Compress(state.Config.GzipLevel))
 	}
 	r.Use(appMiddleware.CORSMiddleware(state.Config.AllowedOrigins))
+	if state.Config.TLSMode != "off" {
+		r.Use(appMiddleware.HSTSHeaders)
+	}
 
 	// ── Studio SPA (relaxed CSP) ──────────────────────────────────────────
 	r.Group(func(r chi.Router) {
@@ -312,24 +322,25 @@ func buildRouter(state *AppState) http.Handler {
 			state.Hub,
 			state.WSSemaphore,
 			state.Config.BroadcastCapacity,
+			state.Config.AllowedOrigins,
 		))
 
 		// ── Auth routes ───────────────────────────────────────────────────
-		// Rate-limited auth endpoints (signup + token are brute-force targets).
+		// Rate-limited auth endpoints (brute-force and email-bombing targets).
 		r.Group(func(r chi.Router) {
 			r.Use(state.RateLimiter.Middleware)
 			r.Post("/auth/v1/signup", auth.Signup(authDeps))
 			r.Post("/auth/v1/token", auth.Token(authDeps))
+			r.Post("/auth/v1/recover", auth.Recover(authDeps))
+			r.Post("/auth/v1/recover/confirm", auth.RecoverConfirm(authDeps))
+			r.Post("/auth/v1/magiclink", auth.Magiclink(authDeps))
 		})
 
 		// Non-rate-limited auth endpoints.
 		r.Get("/auth/v1/user", auth.GetUser(authDeps))
 		r.Patch("/auth/v1/user", auth.UpdateUser(authDeps))
 		r.Post("/auth/v1/logout", auth.Logout(authDeps))
-		r.Post("/auth/v1/recover", auth.Recover(authDeps))
-		r.Post("/auth/v1/recover/confirm", auth.RecoverConfirm(authDeps))
 		r.Get("/auth/v1/verify", auth.VerifyEmail(authDeps))
-		r.Post("/auth/v1/magiclink", auth.Magiclink(authDeps))
 		r.Get("/auth/v1/magiclink/verify", auth.MagiclinkVerify(authDeps))
 
 		// Admin
@@ -440,6 +451,7 @@ func buildRouter(state *AppState) http.Handler {
 	fnCatalog.StartAutoRefresh(context.Background(), state.Config.DatabaseURL, state.Pool, nil)
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.SecurityHeaders)
+		r.Use(appMiddleware.BodyLimit(state.Config.MaxBodySize))
 		r.Get("/functions/v1/", functions.List(fnDeps))
 		r.Post("/functions/v1/_refresh", functions.Refresh(fnDeps))
 		r.Get("/functions/v1/{name}", functions.InvokeGet(fnDeps))

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"strings"
@@ -97,6 +98,16 @@ func ValidateToken(tokenStr, secret string) (*Claims, error) {
 		return nil, fmt.Errorf("token missing sub claim")
 	}
 
+	// Enforce max token age for tokens without an exp claim.
+	if c.Exp == 0 {
+		if c.Iat == 0 {
+			return nil, fmt.Errorf("token must have exp or iat claim")
+		}
+		if time.Since(time.Unix(c.Iat, 0)) > 24*time.Hour {
+			return nil, fmt.Errorf("token without exp expired (iat too old)")
+		}
+	}
+
 	return c, nil
 }
 
@@ -152,16 +163,7 @@ func requireServiceRole(w http.ResponseWriter, r *http.Request, serviceRoleKey s
 	return true
 }
 
-// constantTimeEqual compares two strings in constant time.
+// constantTimeEqual compares two strings in constant time using crypto/subtle.
 func constantTimeEqual(a, b string) bool {
-	if len(a) != len(b) {
-		// Still do a dummy compare to keep timing constant.
-		_ = strings.Compare(a, "")
-		return false
-	}
-	var result byte
-	for i := range a {
-		result |= a[i] ^ b[i]
-	}
-	return result == 0
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }

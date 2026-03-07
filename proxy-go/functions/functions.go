@@ -49,7 +49,8 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 
 	fm := d.Catalog.Get(fnName)
 	if fm == nil {
-		writeJSONError(w, http.StatusNotFound, "function not found: "+fnName)
+		log.Warn().Str("fn", fnName).Msg("functions: function not found")
+		writeJSONError(w, http.StatusNotFound, "function not found")
 		return
 	}
 
@@ -60,7 +61,7 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fm.VerifyJWT && claims.Role == "anon" {
-		writeJSONError(w, http.StatusUnauthorized, "JWT required for function: "+fnName)
+		writeJSONError(w, http.StatusUnauthorized, "JWT required for this function")
 		return
 	}
 
@@ -74,7 +75,8 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 	case "embedded":
 		result, execErr := executeEmbedded(r.Context(), fm.Code, bodyBytes, claims, d.Pool)
 		if execErr != nil {
-			writeJSONError(w, http.StatusInternalServerError, execErr.Error())
+			log.Error().Err(execErr).Str("fn", fnName).Msg("functions: embedded execution failed")
+			writeJSONError(w, http.StatusInternalServerError, "function execution failed")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -88,7 +90,8 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 		invokePLRuntime(d, w, r.Context(), fnName, bodyBytes, claims, "pgstack")
 
 	default:
-		writeJSONError(w, http.StatusBadRequest, "unknown runtime: "+fm.Runtime)
+		log.Warn().Str("fn", fnName).Str("runtime", fm.Runtime).Msg("functions: unknown runtime")
+		writeJSONError(w, http.StatusBadRequest, "unsupported function runtime")
 	}
 }
 
@@ -187,7 +190,7 @@ func Refresh(d *FunctionsDeps) http.HandlerFunc {
 		}
 		if err := d.Catalog.Refresh(r.Context(), d.Pool); err != nil {
 			log.Error().Err(err).Msg("functions: catalog refresh failed")
-			writeJSONError(w, http.StatusInternalServerError, "catalog refresh failed: "+err.Error())
+			writeJSONError(w, http.StatusInternalServerError, "catalog refresh failed")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

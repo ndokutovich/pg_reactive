@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
 	"pgstack-proxy-go/middleware"
 )
 
@@ -20,7 +21,7 @@ func CatalogRefresh(
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, err := middleware.ResolveClaims(r, cfg)
 		if err != nil {
-			writeJSONError(w, http.StatusUnauthorized, err.Error())
+			writeJSONError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		if claims.Role != "service_role" {
@@ -29,7 +30,8 @@ func CatalogRefresh(
 		}
 
 		if err := refreshFn(pool); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "catalog refresh failed: "+err.Error())
+			log.Error().Err(err).Msg("catalog refresh failed")
+			writeJSONError(w, http.StatusInternalServerError, "catalog refresh failed")
 			return
 		}
 

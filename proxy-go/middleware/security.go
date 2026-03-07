@@ -51,6 +51,17 @@ func StudioSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// HSTSHeaders adds the Strict-Transport-Security header to every response.
+// Apply this middleware only when TLS is active — sending HSTS over plain HTTP
+// is meaningless and can cause issues if the service is behind a TLS-terminating
+// proxy that also talks to backends over HTTP.
+func HSTSHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // BodyLimit wraps the request body with an http.MaxBytesReader to enforce a
 // maximum body size. Requests exceeding the limit will fail during body reads.
 func BodyLimit(maxBytes int64) func(http.Handler) http.Handler {

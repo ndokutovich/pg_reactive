@@ -224,11 +224,12 @@ func RLSTransaction(ctx context.Context, pool *pgxpool.Pool, claims RequestClaim
 		return nil, fmt.Errorf("SET LOCAL ROLE: %w", err)
 	}
 
-	// Truncate claims JSON to prevent oversized GUC values.
+	// Reject oversized claims instead of silently truncating. Truncation could
+	// produce malformed JSON that breaks downstream RLS policies.
 	claimsJSON := claims.ClaimsJSON
 	if len(claimsJSON) > maxClaimsJSONLen {
-		// Trim to a valid UTF-8 boundary.
-		claimsJSON = truncateUTF8(claimsJSON, maxClaimsJSONLen)
+		_ = tx.Rollback(ctx)
+		return nil, fmt.Errorf("JWT claims too large (%d bytes, max %d)", len(claimsJSON), maxClaimsJSONLen)
 	}
 
 	if _, err = tx.Exec(ctx, "SELECT set_config('request.jwt.claims', $1, true)", claimsJSON); err != nil {
@@ -239,20 +240,3 @@ func RLSTransaction(ctx context.Context, pool *pgxpool.Pool, claims RequestClaim
 	return tx, nil
 }
 
-// truncateUTF8 truncates s to at most maxBytes bytes, respecting UTF-8 boundaries.
-func truncateUTF8(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
-	}
-	s = s[:maxBytes]
-	// Walk back from the end to find a valid UTF-8 rune boundary.
-	for len(s) > 0 {
-		// A continuation byte has the top two bits set to 10 (0x80–0xBF).
-		last := s[len(s)-1]
-		if last&0xC0 != 0x80 {
-			break
-		}
-		s = s[:len(s)-1]
-	}
-	return s
-}

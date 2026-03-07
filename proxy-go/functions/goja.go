@@ -13,6 +13,14 @@ import (
 	"pgstack-proxy-go/rest"
 )
 
+// gojaValidRoles is the whitelist for SET LOCAL ROLE to prevent SQL injection
+// inside the goja VM's db.query() calls.
+var gojaValidRoles = map[string]string{
+	"anon":          "SET LOCAL ROLE anon",
+	"authenticated": "SET LOCAL ROLE authenticated",
+	"service_role":  "SET LOCAL ROLE service_role",
+}
+
 // executeEmbedded runs a JavaScript function using the goja VM.
 //
 // Function code must define a top-level `handler` function:
@@ -53,9 +61,9 @@ func executeEmbedded(ctx context.Context, code string, body []byte, claims *rest
 	}
 
 	// ── db.query(sql, ...params) → []object ───────────────────────────────
-	// Executes a parameterized SQL query synchronously (goja has no async
-	// event loop) and returns rows as a JavaScript array of plain objects.
-	// Uses a short-lived pool connection acquired for the duration of the call.
+	// Executes a parameterized SQL query inside an RLS transaction using the
+	// caller's claims. Each call opens its own transaction so that SET LOCAL
+	// ROLE applies only to that query.
 	if pool != nil {
 		dbObj := vm.NewObject()
 		_ = dbObj.Set("query", func(call goja.FunctionCall) goja.Value {
@@ -68,13 +76,25 @@ func executeEmbedded(ctx context.Context, code string, body []byte, claims *rest
 				params = append(params, arg.Export())
 			}
 
-			conn, err := pool.Acquire(ctx)
+			tx, err := pool.Begin(ctx)
 			if err != nil {
-				panic(vm.ToValue(fmt.Sprintf("db.query: acquire connection: %v", err)))
+				panic(vm.ToValue(fmt.Sprintf("db.query: begin transaction: %v", err)))
 			}
-			defer conn.Release()
+			defer tx.Rollback(ctx) //nolint:errcheck // best-effort cleanup
 
-			rows, err := conn.Query(ctx, sql, params...)
+			// Apply RLS context: set role + JWT claims.
+			roleSQL, ok := gojaValidRoles[claims.Role]
+			if !ok {
+				roleSQL = "SET LOCAL ROLE anon"
+			}
+			if _, err = tx.Exec(ctx, roleSQL); err != nil {
+				panic(vm.ToValue(fmt.Sprintf("db.query: set role: %v", err)))
+			}
+			if _, err = tx.Exec(ctx, "SELECT set_config('request.jwt.claims', $1, true)", claims.ClaimsJSON); err != nil {
+				panic(vm.ToValue(fmt.Sprintf("db.query: set claims: %v", err)))
+			}
+
+			rows, err := tx.Query(ctx, sql, params...)
 			if err != nil {
 				panic(vm.ToValue(fmt.Sprintf("db.query: %v", err)))
 			}
@@ -96,6 +116,11 @@ func executeEmbedded(ctx context.Context, code string, body []byte, claims *rest
 			if err := rows.Err(); err != nil {
 				panic(vm.ToValue(fmt.Sprintf("db.query: rows error: %v", err)))
 			}
+
+			if err := tx.Commit(ctx); err != nil {
+				panic(vm.ToValue(fmt.Sprintf("db.query: commit: %v", err)))
+			}
+
 			if result == nil {
 				result = []map[string]any{}
 			}
@@ -128,6 +153,15 @@ func executeEmbedded(ctx context.Context, code string, body []byte, claims *rest
 	if err := vm.Set("request", reqObj); err != nil {
 		return nil, fmt.Errorf("embedded: vm setup: %w", err)
 	}
+
+	// ── execution timeout via context cancellation ──────────────────────
+	// The request context carries the HTTP server's WriteTimeout. A
+	// background goroutine watches the context and interrupts the VM when
+	// the deadline is exceeded or the request is cancelled.
+	go func() {
+		<-ctx.Done()
+		vm.Interrupt("execution timeout")
+	}()
 
 	// ── execute function code ─────────────────────────────────────────────
 	if _, err := vm.RunString(code); err != nil {

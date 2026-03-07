@@ -173,8 +173,12 @@ pgr_recompute_for_table(Oid table_oid)
 	if (count == 0)
 		return;
 
-	for (i = 0; i < count; i++)
-		pgr_recompute_query(query_ids[i]);
+	{
+		int safe_count = Min(count, 256);
+
+		for (i = 0; i < safe_count; i++)
+			pgr_recompute_query(query_ids[i]);
+	}
 }
 
 /*
@@ -411,7 +415,8 @@ pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 
 			value = SPI_getvalue(tuple, tupdesc, j);
 
-			appendStringInfo(&buf, "\"%s\":", colname);
+			pgr_json_escape_string(&buf, colname);
+			appendStringInfoChar(&buf, ':');
 
 			if (value == NULL)
 			{

@@ -362,7 +362,6 @@ pgr_extract_deps(const char *query_text, Oid *table_oids,
 				 uint64 *col_masks, int max_tables)
 {
 	List		   *raw_parsetree_list;
-	ListCell	   *lc;
 	ExtractDepsContext ctx;
 	int				i;
 
@@ -374,12 +373,41 @@ pgr_extract_deps(const char *query_text, Oid *table_oids,
 
 	raw_parsetree_list = raw_parser(query_text, RAW_PARSE_DEFAULT);
 
-	foreach(lc, raw_parsetree_list)
-	{
-		RawStmt	   *rawstmt = lfirst_node(RawStmt, lc);
+	/* C4: Validate that the query is a single SELECT statement */
+	if (list_length(raw_parsetree_list) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("subscribe: query must be a single SELECT statement")));
 
-		if (IsA(rawstmt->stmt, SelectStmt))
-			pgr_extract_from_select((SelectStmt *) rawstmt->stmt, &ctx);
+	{
+		RawStmt	   *rawstmt = linitial_node(RawStmt, raw_parsetree_list);
+		SelectStmt *sel;
+
+		if (nodeTag(rawstmt->stmt) != T_SelectStmt)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("subscribe: only SELECT queries are allowed")));
+
+		sel = (SelectStmt *) rawstmt->stmt;
+
+		/* Reject CTEs that contain DML (INSERT/UPDATE/DELETE) */
+		if (sel->withClause)
+		{
+			ListCell   *cte_lc;
+
+			foreach(cte_lc, sel->withClause->ctes)
+			{
+				CommonTableExpr *cte = lfirst_node(CommonTableExpr, cte_lc);
+
+				if (cte->ctequery &&
+					!IsA(cte->ctequery, SelectStmt))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("subscribe: DML-capable CTEs are not allowed")));
+			}
+		}
+
+		pgr_extract_from_select(sel, &ctx);
 	}
 
 	/* If SELECT * was used, mark all tables as all-columns */
@@ -627,59 +655,63 @@ pgr_unsubscribe_all_for_table(Oid table_oid, const char *reason)
 	if (count == 0)
 		return;
 
-	for (i = 0; i < count; i++)
 	{
-		Oid			tbl_oids[PGR_MAX_DEPS_PER_QUERY];
-		int			num_tables;
-		char		entry_mode = 'd';
-		bool		found;
-		int			j;
-		char		dummy[1][PGR_QUERY_ID_LEN];
+		int		safe_count = Min(count, 256);
 
-		/* Read mode under lock before removing (pointer invalid after release) */
+		for (i = 0; i < safe_count; i++)
 		{
-			char		find_key[PGR_QUERY_ID_LEN];
-			PgrDepEntry *e;
-			bool		found_e;
+			Oid			tbl_oids[PGR_MAX_DEPS_PER_QUERY];
+			int			num_tables;
+			char		entry_mode = 'd';
+			bool		found;
+			int			j;
+			char		dummy[1][PGR_QUERY_ID_LEN];
 
-			memset(find_key, 0, PGR_QUERY_ID_LEN);
-			strlcpy(find_key, query_ids[i], PGR_QUERY_ID_LEN);
-			LWLockAcquire(pgr_state->lock, LW_SHARED);
-			e = (PgrDepEntry *) hash_search(pgr_dep_hash, find_key, HASH_FIND, &found_e);
-			if (found_e && e != NULL)
-				entry_mode = e->mode;
-			LWLockRelease(pgr_state->lock);
-		}
+			/* Read mode under lock before removing (pointer invalid after release) */
+			{
+				char		find_key[PGR_QUERY_ID_LEN];
+				PgrDepEntry *e;
+				bool		found_e;
 
-		num_tables = pgr_dep_copy_tables(query_ids[i], tbl_oids,
-										 PGR_MAX_DEPS_PER_QUERY);
+				memset(find_key, 0, PGR_QUERY_ID_LEN);
+				strlcpy(find_key, query_ids[i], PGR_QUERY_ID_LEN);
+				LWLockAcquire(pgr_state->lock, LW_SHARED);
+				e = (PgrDepEntry *) hash_search(pgr_dep_hash, find_key, HASH_FIND, &found_e);
+				if (found_e && e != NULL)
+					entry_mode = e->mode;
+				LWLockRelease(pgr_state->lock);
+			}
 
-		found = pgr_dep_remove(query_ids[i]);
+			num_tables = pgr_dep_copy_tables(query_ids[i], tbl_oids,
+											 PGR_MAX_DEPS_PER_QUERY);
 
-		if (!found)
-			continue;
+			found = pgr_dep_remove(query_ids[i]);
 
-		/* Drop snapshot table in delta mode */
-		if (entry_mode == 'd')
-			pgr_snapshot_drop(query_ids[i]);
+			if (!found)
+				continue;
 
-		/* Remove per-query UPDATE triggers and check base trigger cleanup */
-		for (j = 0; j < num_tables; j++)
-		{
-			int		remaining;
+			/* Drop snapshot table in delta mode */
+			if (entry_mode == 'd')
+				pgr_snapshot_drop(query_ids[i]);
 
-			pgr_remove_update_trigger(tbl_oids[j], query_ids[i]);
+			/* Remove per-query UPDATE triggers and check base trigger cleanup */
+			for (j = 0; j < num_tables; j++)
+			{
+				int		remaining;
 
-			remaining = pgr_dep_find_by_table(tbl_oids[j], dummy, 1);
-			if (remaining == 0)
-				pgr_remove_triggers(tbl_oids[j]);
+				pgr_remove_update_trigger(tbl_oids[j], query_ids[i]);
+
+				remaining = pgr_dep_find_by_table(tbl_oids[j], dummy, 1);
+				if (remaining == 0)
+					pgr_remove_triggers(tbl_oids[j]);
+			}
 		}
 	}
 
 	if (reason != NULL)
 		elog(WARNING,
 			 "pg_reactive: auto-unsubscribed %d %s due to %s",
-			 count,
+			 Min(count, 256),
 			 count == 1 ? "query" : "queries",
 			 reason);
 }
@@ -813,27 +845,27 @@ pgr_stats(PG_FUNCTION_ARGS)
 				break;
 			case 2:
 				values[0] = CStringGetTextDatum("total_subscribes");
-				snprintf(valbuf, sizeof(valbuf), "%ld",
+				snprintf(valbuf, sizeof(valbuf), INT64_FORMAT,
 						 pgr_state->subscribe_count);
 				break;
 			case 3:
 				values[0] = CStringGetTextDatum("total_unsubscribes");
-				snprintf(valbuf, sizeof(valbuf), "%ld",
+				snprintf(valbuf, sizeof(valbuf), INT64_FORMAT,
 						 pgr_state->unsubscribe_count);
 				break;
 			case 4:
 				values[0] = CStringGetTextDatum("total_invalidations");
-				snprintf(valbuf, sizeof(valbuf), "%ld",
+				snprintf(valbuf, sizeof(valbuf), INT64_FORMAT,
 						 pgr_state->invalidation_count);
 				break;
 			case 5:
 				values[0] = CStringGetTextDatum("total_evictions");
-				snprintf(valbuf, sizeof(valbuf), "%ld",
+				snprintf(valbuf, sizeof(valbuf), INT64_FORMAT,
 						 pgr_state->eviction_count);
 				break;
 			case 6:
 				values[0] = CStringGetTextDatum("total_recomputes");
-				snprintf(valbuf, sizeof(valbuf), "%ld",
+				snprintf(valbuf, sizeof(valbuf), INT64_FORMAT,
 						 pgr_state->recompute_count);
 				break;
 			default:

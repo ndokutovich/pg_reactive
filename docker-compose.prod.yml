@@ -95,7 +95,7 @@ services:
       - ./public:/public:ro
       - certs:/data/certs
     ports:
-      - "${PROXY_PORT:-8080}:8080"
+      - "127.0.0.1:${PROXY_PORT:-8080}:8080"
       # Uncomment for TLS_MODE=auto:
       # - "443:443"
       # - "80:80"

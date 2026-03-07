@@ -96,7 +96,7 @@ pgr_shmem_startup(void)
  * If the hash table is full, evicts the oldest entry (by subscribed_at)
  * and fills evicted info for caller cleanup.
  */
-PgrDepEntry *
+bool
 pgr_dep_add(const char *query_id, const char *query_text,
 			Oid *table_oids, uint64 *col_masks, int num_tables,
 			char mode, PgrEvictedInfo *evicted)
@@ -199,7 +199,7 @@ pgr_dep_add(const char *query_id, const char *query_text,
 	}
 
 	LWLockRelease(pgr_state->lock);
-	return entry;
+	return true;
 }
 
 /*
@@ -228,11 +228,11 @@ pgr_dep_remove(const char *query_id)
 
 /*
  * Find a dependency entry by query_id.
- * Returns NULL if not found.
- * Caller must hold at least LW_SHARED lock or accept race conditions.
+ * Returns true if found. If out is non-NULL, copies the entry data
+ * into the caller-provided buffer while holding the lock.
  */
-PgrDepEntry *
-pgr_dep_find(const char *query_id)
+bool
+pgr_dep_find(const char *query_id, PgrDepEntry *out)
 {
 	PgrDepEntry *entry;
 	bool		found;
@@ -245,9 +245,11 @@ pgr_dep_find(const char *query_id)
 
 	entry = (PgrDepEntry *) hash_search(pgr_dep_hash, key,
 										HASH_FIND, &found);
+	if (found && out)
+		memcpy(out, entry, sizeof(PgrDepEntry));
 
 	LWLockRelease(pgr_state->lock);
-	return found ? entry : NULL;
+	return found;
 }
 
 /*
