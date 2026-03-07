@@ -24,6 +24,8 @@ export class PgStackJobQueue {
   }
 
   private newClient(): PgClient {
+    // Dynamic require keeps 'pg' as a peer dependency — the class can be
+    // imported even if 'pg' is not installed, failing only when actually used.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { Client } = require('pg') as typeof import('pg');
     return new Client({ connectionString: this.config.connectionString });

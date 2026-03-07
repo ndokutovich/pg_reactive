@@ -65,6 +65,7 @@ export function SessionList({ userId }: SessionListProps): React.ReactElement {
   return (
     <DataGrid
       columns={columns}
+      // TS interfaces lack an index signature — assertion required for DataGrid's untyped prop
       data={(sessions ?? []) as unknown as Record<string, unknown>[]}
       isLoading={isLoading}
       emptyMessage="No sessions found"

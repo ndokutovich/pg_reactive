@@ -349,7 +349,7 @@ export function useRpc<T = unknown>(
         setLoading(false);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- paramsKey is JSON.stringify(params) for deep-equality; options object would cause infinite loop
   }, [client, fnName, paramsKey, options?.method]);
 
   useEffect(() => {

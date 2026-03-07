@@ -45,6 +45,7 @@ export function LogViewer(): React.ReactElement {
       `;
       const result = await postSql(sql);
       if (result.error) throw new Error(result.error);
+      // postSql returns Record<string, unknown>[] — assert the shape we know the query produces
       return (result.rows ?? []) as unknown as PgActivity[];
     },
     refetchInterval: 3_000,

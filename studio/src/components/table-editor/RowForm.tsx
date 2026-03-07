@@ -43,8 +43,8 @@ export function RowForm({ columns, initialData, mode, onSubmit, onClose }: RowFo
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
+    e?.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
@@ -148,7 +148,7 @@ export function RowForm({ columns, initialData, mode, onSubmit, onClose }: RowFo
         <Button variant="secondary" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" loading={submitting} onClick={(e) => { void handleSubmit(e as unknown as React.FormEvent); }}>
+        <Button variant="primary" loading={submitting} onClick={() => { void handleSubmit(); }}>
           {mode === 'insert' ? 'Insert' : 'Save Changes'}
         </Button>
       </div>

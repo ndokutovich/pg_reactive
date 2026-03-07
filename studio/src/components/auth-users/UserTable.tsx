@@ -14,6 +14,8 @@ interface UserTableProps {
 
 export function UserTable({ page, pageSize, onPageChange, onSelectUser, selectedUserId }: UserTableProps): React.ReactElement {
   const { usersQuery, countQuery } = useUsers(page, pageSize);
+  // TS interfaces lack an index signature, so User[] can't directly satisfy
+  // Record<string,unknown>[] without assertion (DataGrid uses an untyped prop).
   const users = (usersQuery.data ?? []) as unknown as Record<string, unknown>[];
   const total = countQuery.data ?? 0;
 
@@ -23,7 +25,7 @@ export function UserTable({ page, pageSize, onPageChange, onSelectUser, selected
       header: 'Email',
       render: (_val: unknown, row: Record<string, unknown>) => (
         <button
-          onClick={() => onSelectUser(row as unknown as User)}
+          onClick={() => onSelectUser(row as unknown as User /* downcast: row shape matches User */  )}
           className={`text-left hover:text-brand transition-colors ${
             selectedUserId === String(row['id']) ? 'text-brand' : 'text-gray-200'
           }`}

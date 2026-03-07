@@ -193,6 +193,7 @@ export function SubscriptionTable(): React.ReactElement {
     <div>
       <DataGrid
         columns={columns}
+        // TS interfaces lack an index signature — assertion required for DataGrid's untyped prop
         data={(data ?? []) as unknown as Record<string, unknown>[]}
         isLoading={isLoading}
         emptyMessage="No active subscriptions"

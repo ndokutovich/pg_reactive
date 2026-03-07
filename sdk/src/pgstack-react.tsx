@@ -221,7 +221,7 @@ export function useQuery<T = unknown>(
         setLoading(false);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- spread deps array can't be statically analyzed; callers are responsible for memoizing deps
   }, [client, table, ...deps]);
 
   useEffect(() => {

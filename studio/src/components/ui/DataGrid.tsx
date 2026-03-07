@@ -132,6 +132,7 @@ export function DataGrid({
                 </tr>
               ))
             )}
+
           </tbody>
         </table>
       </div>
