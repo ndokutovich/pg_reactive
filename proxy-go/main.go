@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/acme/autocert"
 
 	"pgstack-proxy-go/auth"
 	"pgstack-proxy-go/functions"
@@ -51,7 +54,7 @@ func main() {
 	}
 
 	// Build PG connection pool.
-	pool, err := buildPool(cfg.DatabaseURL)
+	pool, err := buildPool(cfg.DatabaseURL, cfg.PGPoolMaxConns, cfg.PGPoolMinConns, cfg.PGPoolMaxConnIdleTime)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to PostgreSQL")
 	}
@@ -71,48 +74,154 @@ func main() {
 	// Build and start the HTTP server.
 	r := buildRouter(state)
 
-	srv := &http.Server{
-		Addr:         cfg.ListenAddr,
-		Handler:      r,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-
 	// Graceful shutdown on SIGINT / SIGTERM.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		log.Info().
-			Str("addr", cfg.ListenAddr).
-			Int("max_connections", cfg.MaxConnections).
-			Msg("pgstack-proxy-go listening")
+	var servers []*http.Server
 
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal().Err(err).Msg("server error")
-		}
-	}()
+	switch cfg.TLSMode {
+	case "auto":
+		servers = startAutoTLS(cfg, r)
+	case "manual":
+		servers = startManualTLS(cfg, r)
+	default: // "off"
+		servers = startPlainHTTP(cfg, r)
+	}
 
 	<-quit
 	log.Info().Msg("shutdown signal received")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Error().Err(err).Msg("graceful shutdown failed")
+	for _, srv := range servers {
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Msg("graceful shutdown failed")
+		}
 	}
 	log.Info().Msg("shutdown complete")
 }
 
-// buildPool creates a pgxpool.Pool for request-handler use (max 50 connections).
-func buildPool(dbURL string) (*pgxpool.Pool, error) {
+// startPlainHTTP starts a single HTTP server (TLS_MODE=off).
+func startPlainHTTP(cfg Config, handler http.Handler) []*http.Server {
+	srv := &http.Server{
+		Addr:         cfg.ListenAddr,
+		Handler:      handler,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		IdleTimeout:  cfg.IdleTimeout,
+	}
+	go func() {
+		log.Info().
+			Str("addr", cfg.ListenAddr).
+			Msg("pgstack listening (HTTP)")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("server error")
+		}
+	}()
+	return []*http.Server{srv}
+}
+
+// startAutoTLS starts HTTPS with automatic Let's Encrypt certificates (TLS_MODE=auto).
+// Also starts an HTTP server on port 80 for ACME HTTP-01 challenges and HTTP→HTTPS redirect.
+func startAutoTLS(cfg Config, handler http.Handler) []*http.Server {
+	m := &autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(cfg.TLSDomains...),
+		Cache:      autocert.DirCache(cfg.TLSCertDir),
+	}
+	if cfg.TLSACMEEmail != "" {
+		m.Email = cfg.TLSACMEEmail
+	}
+
+	// HTTPS server
+	tlsSrv := &http.Server{
+		Addr:         cfg.HTTPSAddr,
+		Handler:      handler,
+		TLSConfig:    m.TLSConfig(),
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		IdleTimeout:  cfg.IdleTimeout,
+	}
+	go func() {
+		log.Info().
+			Str("addr", cfg.HTTPSAddr).
+			Str("domains", strings.Join(cfg.TLSDomains, ", ")).
+			Msg("pgstack listening (HTTPS auto-TLS)")
+		if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("HTTPS server error")
+		}
+	}()
+
+	// HTTP server for ACME challenges + redirect to HTTPS
+	httpSrv := &http.Server{
+		Addr:         cfg.HTTPAddr,
+		Handler:      m.HTTPHandler(httpToHTTPSRedirect()),
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		IdleTimeout:  cfg.IdleTimeout,
+	}
+	go func() {
+		log.Info().
+			Str("addr", cfg.HTTPAddr).
+			Msg("pgstack listening (HTTP → HTTPS redirect + ACME)")
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("HTTP redirect server error")
+		}
+	}()
+
+	return []*http.Server{tlsSrv, httpSrv}
+}
+
+// startManualTLS starts HTTPS with user-provided certificate files (TLS_MODE=manual).
+func startManualTLS(cfg Config, handler http.Handler) []*http.Server {
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load TLS certificate")
+	}
+
+	tlsSrv := &http.Server{
+		Addr:    cfg.HTTPSAddr,
+		Handler: handler,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		},
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		IdleTimeout:  cfg.IdleTimeout,
+	}
+	go func() {
+		log.Info().
+			Str("addr", cfg.HTTPSAddr).
+			Str("cert", cfg.TLSCertFile).
+			Msg("pgstack listening (HTTPS manual TLS)")
+		if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("HTTPS server error")
+		}
+	}()
+
+	return []*http.Server{tlsSrv}
+}
+
+// httpToHTTPSRedirect returns a handler that 301-redirects all HTTP requests to HTTPS.
+func httpToHTTPSRedirect() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := "https://" + r.Host + r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	})
+}
+
+// buildPool creates a pgxpool.Pool for request-handler use.
+func buildPool(dbURL string, maxConns, minConns int32, maxIdleTime time.Duration) (*pgxpool.Pool, error) {
 	poolCfg, err := pgxpool.ParseConfig(dbURL)
 	if err != nil {
 		return nil, err
 	}
-	poolCfg.MaxConns = 50
+	poolCfg.MaxConns = maxConns
+	poolCfg.MinConns = minConns
+	poolCfg.MaxConnIdleTime = maxIdleTime
 	return pgxpool.NewWithConfig(context.Background(), poolCfg)
 }
 
@@ -172,6 +281,9 @@ func buildRouter(state *AppState) http.Handler {
 	// Global middleware
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.RealIP)
+	if state.Config.GzipLevel > 0 {
+		r.Use(chiMiddleware.Compress(state.Config.GzipLevel))
+	}
 	r.Use(appMiddleware.CORSMiddleware(state.Config.AllowedOrigins))
 
 	// ── Studio SPA (relaxed CSP) ──────────────────────────────────────────
