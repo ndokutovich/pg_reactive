@@ -17,6 +17,7 @@ export async function postSql(query: string): Promise<SqlResult> {
   try {
     const client = getApiClient();
     const res = await client.post<ApiSqlResponse>('/api/sql', { sql: query });
+    if (!res) return { rows: [] };
     if (res.error) {
       return { error: res.error };
     }

@@ -319,8 +319,8 @@ export class PgStackAuth {
     for (const listener of this.listeners) {
       try {
         listener(event, session);
-      } catch {
-        // swallow
+      } catch (err) {
+        console.warn('[pgstack-auth] uncaught error in auth listener:', err);
       }
     }
   }

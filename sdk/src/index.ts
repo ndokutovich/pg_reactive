@@ -190,7 +190,7 @@ export class LiveQuery {
   }
 
   /** Apply a delta to the local snapshot */
-  private applyDelta(delta: Delta): void {
+  protected applyDelta(delta: Delta): void {
     // Remove deleted rows (match by deep equality)
     if (delta.deleted.length > 0) {
       const deleteSet = new Set(delta.deleted.map(rowKey));
@@ -421,17 +421,12 @@ export class HubSubscription extends LiveQuery {
   // ---- internal hooks (called by HubSubscription to extend LiveQuery) ----
 
   private applyOptimisticDelta(delta: Delta): void {
-    // Reach into the inherited applyDelta method via protected access pattern.
-    // We expose it here via a public bridge so optimistic mutations work the
-    // same way as real deltas.
-    (this as unknown as { applyDelta(d: Delta): void }).applyDelta(delta);
+    this.applyDelta(delta);
   }
 
   private restoreSnapshot(rows: DeltaRow[]): void {
-    // Overwrite internal rows. We use a hack-free approach: emit a synthetic
-    // "reset" delta that clears and repopulates the snapshot.
     const current = [...this.snapshot];
-    (this as unknown as { applyDelta(d: Delta): void }).applyDelta({
+    this.applyDelta({
       query_id: this.queryId,
       inserted: rows,
       deleted: current,

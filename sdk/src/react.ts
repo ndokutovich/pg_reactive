@@ -129,7 +129,7 @@ export function useAuth(baseUrl: string, anonKey: string) {
       await fetch(`${baseUrl}/auth/v1/logout`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.access_token}` },
-      }).catch(() => {});
+      }).catch(() => { /* best-effort server-side revocation; local session cleared regardless */ });
     }
     saveSession(null);
     setState({ user: null, session: null, loading: false });

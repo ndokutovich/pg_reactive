@@ -23,7 +23,7 @@ export class ApiClient {
     };
   }
 
-  private async handleResponse<T>(res: Response): Promise<T> {
+  private async handleResponse<T>(res: Response): Promise<T | undefined> {
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
       try {
@@ -35,11 +35,11 @@ export class ApiClient {
       throw new ApiError(res.status, message);
     }
     const text = await res.text();
-    if (!text) return undefined as unknown as T;
+    if (!text) return undefined; // 204 No Content
     return JSON.parse(text) as T;
   }
 
-  async get<T>(path: string, params?: Record<string, string>): Promise<T> {
+  async get<T>(path: string, params?: Record<string, string>): Promise<T | undefined> {
     const url = new URL(path, window.location.origin);
     if (params) {
       Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
@@ -48,7 +48,7 @@ export class ApiClient {
     return this.handleResponse<T>(res);
   }
 
-  async post<T>(path: string, body?: unknown): Promise<T> {
+  async post<T>(path: string, body?: unknown): Promise<T | undefined> {
     const res = await fetch(path, {
       method: 'POST',
       headers: this.headers,
@@ -57,7 +57,7 @@ export class ApiClient {
     return this.handleResponse<T>(res);
   }
 
-  async patch<T>(path: string, body: unknown): Promise<T> {
+  async patch<T>(path: string, body: unknown): Promise<T | undefined> {
     const res = await fetch(path, {
       method: 'PATCH',
       headers: this.headers,
@@ -66,7 +66,7 @@ export class ApiClient {
     return this.handleResponse<T>(res);
   }
 
-  async delete<T>(path: string, params?: Record<string, string>): Promise<T> {
+  async delete<T>(path: string, params?: Record<string, string>): Promise<T | undefined> {
     const url = new URL(path, window.location.origin);
     if (params) {
       Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));

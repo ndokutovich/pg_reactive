@@ -69,7 +69,9 @@ export async function insertRow(
   data: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const client = getApiClient();
-  return client.post<Record<string, unknown>>(`/rest/${table}`, data);
+  const result = await client.post<Record<string, unknown>>(`/rest/${table}`, data);
+  if (!result) throw new Error(`INSERT into ${table} returned no data`);
+  return result;
 }
 
 export async function updateRow(

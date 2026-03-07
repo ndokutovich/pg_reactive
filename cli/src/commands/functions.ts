@@ -1,8 +1,7 @@
 import { Command } from "commander";
 import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
-import { watch } from "node:fs";
+import { watch, existsSync, readdirSync } from "node:fs";
 import { resolve, join, basename } from "node:path";
-import { existsSync } from "node:fs";
 import chalk from "chalk";
 import ora from "ora";
 
@@ -285,14 +284,13 @@ export function registerFunctionsCommand(program: Command): void {
         await fetch(`${opts.url}/functions/v1/_refresh`, {
           method: "POST",
           headers: { "Authorization": `Bearer ${key}`, "apikey": key! },
-        }).catch(() => {});
+        }).catch(() => { /* non-fatal: DB NOTIFY will refresh the catalog anyway */ });
 
         console.log(chalk.green(`  ↻ ${name}`), chalk.dim(`[${new Date().toLocaleTimeString()}]`));
       }
 
       // Initial deploy of all existing functions.
       const entries = await stat(fnDir).then(() => {
-        const { readdirSync } = require("node:fs") as typeof import("node:fs");
         return readdirSync(fnDir, { withFileTypes: true })
           .filter(d => d.isDirectory())
           .map(d => d.name);

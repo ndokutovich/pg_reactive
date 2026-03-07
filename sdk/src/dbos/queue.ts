@@ -169,7 +169,7 @@ export class PgStackJobQueue {
       lockClient.query(
         `UPDATE ${this.config.schema}.job_queue SET progress = $2, progress_message = $3 WHERE id = $1::uuid`,
         [job.id, Math.min(100, Math.max(0, progress)), message ?? null],
-      ).catch(() => {});
+      ).catch(() => { /* progress update is best-effort; job still runs if this fails */ });
     };
 
     try {

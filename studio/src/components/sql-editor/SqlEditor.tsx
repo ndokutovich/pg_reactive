@@ -118,7 +118,7 @@ export function SqlEditor({ value, onChange, onRun }: SqlEditorProps): React.Rea
       view.destroy();
       viewRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: editor must initialize once; prop updates are applied via the second useEffect below
   }, []);
 
   useEffect(() => {
