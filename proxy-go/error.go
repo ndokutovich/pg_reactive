@@ -47,17 +47,30 @@ func pgErrorStatus(err error) (int, string) {
 	code := pgErrCode(err)
 	log.Error().Err(err).Str("pg_code", code).Msg("database error")
 
-	switch {
-	case code == "23505":
+	switch code {
+	case "23505":
 		// unique_violation
 		return http.StatusConflict, "duplicate value violates unique constraint"
-	case code == "42501":
+	case "23503":
+		// foreign_key_violation
+		return http.StatusConflict, "foreign key constraint violation"
+	case "23502":
+		// not_null_violation
+		return http.StatusBadRequest, "null value not allowed"
+	case "23514":
+		// check_violation
+		return http.StatusBadRequest, "value violates check constraint"
+	case "22P02":
+		// invalid_text_representation
+		return http.StatusBadRequest, "invalid input value"
+	case "42501":
 		// insufficient_privilege (RLS)
 		return http.StatusForbidden, "insufficient privileges"
-	case len(code) >= 2 && code[:2] == "42":
-		// syntax_error, undefined_table, undefined_column, etc.
-		return http.StatusBadRequest, "invalid request"
 	default:
+		if len(code) >= 2 && code[:2] == "42" {
+			// syntax_error, undefined_table, undefined_column, etc.
+			return http.StatusBadRequest, "invalid request"
+		}
 		return http.StatusInternalServerError, "internal database error"
 	}
 }
