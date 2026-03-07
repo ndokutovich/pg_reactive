@@ -57,12 +57,21 @@ cd proxy && cargo build   # Build
 
 The proxy is built and run via Docker in development. Direct `cargo build` is for quick compile checks only.
 
+### Go Proxy
+
+```bash
+cd proxy-go && go build ./...             # Build all packages
+cd proxy-go && go test ./...              # Run all unit tests (config, gzip, TLS, template)
+cd proxy-go && go test -v -run TestValidate ./...  # Run specific tests
+```
+
 ### E2E Tests (require running docker compose)
 
 ```bash
 node tests/e2e_ws_test.mjs               # WebSocket delta delivery
 node tests/e2e_fanout_test.mjs            # Multi-client fan-out
 node tests/e2e_jwt_test.mjs              # JWT auth scenarios (uses proxy default secret)
+node tests/e2e_gzip_test.mjs             # Gzip compression verification
 ```
 
 ### Integration Tests (run inside container)
