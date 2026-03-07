@@ -225,6 +225,16 @@ pgstack generate types     # Generate TypeScript types from schema
 | `PG_RECONNECT_MAX_BACKOFF` | `30` | Max PG reconnect backoff (seconds) |
 | `ENABLE_SQL_ENDPOINT` | `false` | Enable `/api/sql` (dev only) |
 | `ALLOWED_ORIGINS` | (unset) | Comma-separated CORS origins |
+| `READ_TIMEOUT` | `30` | HTTP read timeout (seconds) |
+| `WRITE_TIMEOUT` | `60` | HTTP write timeout (seconds) |
+| `IDLE_TIMEOUT` | `120` | HTTP keep-alive idle timeout (seconds) |
+| `GZIP_LEVEL` | `5` | Gzip compression (0=off, 1-9) |
+| `PG_POOL_MAX_CONNS` | `50` | Max PG pool connections |
+| `PG_POOL_MIN_CONNS` | `5` | Min idle PG connections |
+| `TLS_MODE` | `off` | `off`, `auto` (Let's Encrypt), or `manual` |
+| `TLS_DOMAINS` | (unset) | Domains for auto mode |
+
+See [Environment Variables](docs/site/docs/deploy/env-vars.md) for the complete list including TLS, SMTP, and OAuth settings.
 
 ### Extension (postgresql.conf)
 

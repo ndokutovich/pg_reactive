@@ -106,6 +106,43 @@ Required for email verification and password reset emails. If not set, these fea
 | `MAX_BODY_SIZE` | `1048576` | Maximum request body size in bytes (default: 1 MB). |
 | `MAX_FILE_SIZE` | `52428800` | Maximum storage upload size in bytes (default: 50 MB). |
 
+## HTTP Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `READ_TIMEOUT` | `30` | HTTP read timeout in seconds |
+| `WRITE_TIMEOUT` | `60` | HTTP write timeout in seconds |
+| `IDLE_TIMEOUT` | `120` | HTTP keep-alive idle timeout in seconds |
+| `SHUTDOWN_TIMEOUT` | `15` | Graceful shutdown deadline in seconds |
+| `GZIP_LEVEL` | `5` | Gzip compression level (0=disabled, 1=fastest, 9=best) |
+
+WebSocket connections may need longer `WRITE_TIMEOUT` values. The default 60s is sufficient for most use cases.
+
+## PostgreSQL Connection Pool
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PG_POOL_MAX_CONNS` | `50` | Maximum connections in the proxy's PG pool |
+| `PG_POOL_MIN_CONNS` | `5` | Minimum idle connections kept warm |
+| `PG_POOL_MAX_CONN_IDLE_TIME` | `300` | Seconds before an idle connection is closed |
+
+This is the proxy's built-in pool. For advanced pooling (transaction mode, prepared statements), use PgBouncer in front of PostgreSQL.
+
+## TLS / HTTPS
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TLS_MODE` | `off` | TLS mode: `off` (use reverse proxy), `auto` (Let's Encrypt), `manual` (own certs) |
+| `TLS_DOMAINS` | — | Comma-separated domains for auto mode (required when `TLS_MODE=auto`) |
+| `TLS_CERT_DIR` | `/data/certs` | Directory to cache Let's Encrypt certificates |
+| `TLS_ACME_EMAIL` | — | Email for Let's Encrypt expiry notifications (optional) |
+| `TLS_CERT_FILE` | — | Path to TLS certificate (required when `TLS_MODE=manual`) |
+| `TLS_KEY_FILE` | — | Path to TLS private key (required when `TLS_MODE=manual`) |
+| `HTTPS_ADDR` | `:443` | Listen address for HTTPS (ignored when `TLS_MODE=off`) |
+| `HTTP_ADDR` | `:80` | Listen address for ACME challenges + HTTP→HTTPS redirect |
+
+In `auto` mode the proxy handles Let's Encrypt certificate issuance and renewal automatically. Ports 80 and 443 must be publicly reachable. For most deployments behind a load balancer or CDN, use `TLS_MODE=off` with a reverse proxy (Caddy, nginx) handling TLS termination.
+
 ## PostgreSQL tuning (via docker-compose command flags)
 
 These are set as PostgreSQL GUC parameters via the `command:` field in `docker-compose.prod.yml`, not as environment variables:

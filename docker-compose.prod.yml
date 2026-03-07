@@ -72,10 +72,33 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
       ENABLE_SQL_ENDPOINT: "false"
       PUBLIC_DIR: ${PUBLIC_DIR:-/public}
+      # HTTP server
+      READ_TIMEOUT: ${READ_TIMEOUT:-30}
+      WRITE_TIMEOUT: ${WRITE_TIMEOUT:-60}
+      IDLE_TIMEOUT: ${IDLE_TIMEOUT:-120}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-15}
+      GZIP_LEVEL: ${GZIP_LEVEL:-5}
+      # PG pool
+      PG_POOL_MAX_CONNS: ${PG_POOL_MAX_CONNS:-50}
+      PG_POOL_MIN_CONNS: ${PG_POOL_MIN_CONNS:-5}
+      PG_POOL_MAX_CONN_IDLE_TIME: ${PG_POOL_MAX_CONN_IDLE_TIME:-300}
+      # TLS (default off — use reverse proxy)
+      TLS_MODE: ${TLS_MODE:-off}
+      TLS_DOMAINS: ${TLS_DOMAINS:-}
+      TLS_CERT_DIR: ${TLS_CERT_DIR:-/data/certs}
+      TLS_ACME_EMAIL: ${TLS_ACME_EMAIL:-}
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-}
+      HTTPS_ADDR: ${HTTPS_ADDR:-:443}
+      HTTP_ADDR: ${HTTP_ADDR:-:80}
     volumes:
       - ./public:/public:ro
+      - certs:/data/certs
     ports:
       - "${PROXY_PORT:-8080}:8080"
+      # Uncomment for TLS_MODE=auto:
+      # - "443:443"
+      # - "80:80"
     depends_on:
       db:
         condition: service_healthy
@@ -91,4 +114,6 @@ services:
 
 volumes:
   pgdata:
+    driver: local
+  certs:
     driver: local

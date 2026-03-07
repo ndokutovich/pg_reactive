@@ -141,6 +141,48 @@ nginx -t && systemctl reload nginx
 certbot --nginx -d your-app.example.com
 ```
 
+### Native TLS (no reverse proxy)
+
+pgStack can terminate TLS directly, eliminating the need for a separate reverse proxy container.
+
+**Auto mode (Let's Encrypt):**
+
+```yaml
+proxy:
+  environment:
+    TLS_MODE: auto
+    TLS_DOMAINS: app.example.com
+    TLS_CERT_DIR: /data/certs
+    TLS_ACME_EMAIL: admin@example.com
+  ports:
+    - "443:443"
+    - "80:80"
+  volumes:
+    - certs:/data/certs
+```
+
+Certificates are issued and renewed automatically. Ports 80 and 443 must be publicly accessible.
+
+**Manual mode (own certificates):**
+
+```yaml
+proxy:
+  environment:
+    TLS_MODE: manual
+    TLS_CERT_FILE: /certs/fullchain.pem
+    TLS_KEY_FILE: /certs/privkey.pem
+  ports:
+    - "443:443"
+  volumes:
+    - ./certs:/certs:ro
+```
+
+:::tip Choosing an approach
+- **Reverse proxy** — best when you already have nginx/Caddy, need HTTP/2, or run multiple services on the same host
+- **TLS_MODE=auto** — simplest for single-service deployments with a public domain
+- **TLS_MODE=manual** — for internal CAs, self-signed certs, or environments without outbound ACME access
+:::
+
 ## Running migrations in production
 
 Copy your migration files to the server and run them:

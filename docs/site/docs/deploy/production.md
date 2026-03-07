@@ -26,6 +26,7 @@ Before launching pgStack in production, review the following checklist.
 - [ ] HTTPS is enforced — HTTP redirects to HTTPS
 - [ ] `ALLOWED_ORIGINS` is set to your specific domain(s), not empty
 - [ ] Studio (`/studio/`) is restricted to trusted IPs or protected with additional auth
+- [ ] Configure `TLS_MODE=auto` for automatic HTTPS, or use a reverse proxy with `TLS_MODE=off` (default)
 
 ### Database
 
@@ -127,6 +128,18 @@ pgbouncer:
 ```
 
 Then point `DATABASE_URL` at PgBouncer instead of PostgreSQL directly.
+
+Tune the proxy's built-in connection pool before reaching for PgBouncer:
+
+- [ ] `PG_POOL_MAX_CONNS` (default 50) — raise for high-concurrency workloads
+- [ ] `PG_POOL_MIN_CONNS` (default 5) — keeps connections warm to avoid cold-start latency
+
+For advanced pooling (transaction mode), add PgBouncer between the proxy and PostgreSQL as shown above.
+
+### Proxy configuration
+
+- [ ] **Compression** — Gzip compression is enabled by default (`GZIP_LEVEL=5`). Set to `0` to disable if your reverse proxy handles compression.
+- [ ] **Timeouts** — Adjust `READ_TIMEOUT` (default 30s) and `WRITE_TIMEOUT` (default 60s) based on expected query complexity. Long-running queries may need higher write timeouts.
 
 ## Monitoring
 

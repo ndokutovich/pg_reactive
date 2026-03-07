@@ -117,6 +117,15 @@ Required for email verification and magic links.
 | `REFRESH_TOKEN_EXPIRY_DAYS` | `30` | Refresh token lifetime in days. |
 | `MAX_BODY_SIZE` | `1048576` | Maximum request body size in bytes (1 MB). |
 | `ALLOWED_ORIGINS` | `` (permissive) | CORS allowed origins, comma-separated. Example: `https://app.example.com`. Empty = all origins allowed (dev only). |
+| `READ_TIMEOUT` | `30` | HTTP read timeout in seconds. |
+| `WRITE_TIMEOUT` | `60` | HTTP write timeout in seconds. |
+| `IDLE_TIMEOUT` | `120` | HTTP keep-alive idle timeout in seconds. |
+| `GZIP_LEVEL` | `5` | Gzip compression level (0=disabled, 1-9). |
+| `PG_POOL_MAX_CONNS` | `50` | Max connections in the proxy's PostgreSQL pool. |
+| `PG_POOL_MIN_CONNS` | `5` | Minimum idle connections kept warm. |
+| `TLS_MODE` | `off` | `off` (reverse proxy), `auto` (Let's Encrypt), `manual` (own certs). |
+
+See [Environment Variables](/docs/deploy/env-vars) for the complete list including TLS certificate settings.
 
 ### Advanced PostgreSQL
 
