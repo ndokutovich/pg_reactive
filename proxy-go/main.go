@@ -319,10 +319,13 @@ func buildRouter(state *AppState) http.Handler {
 				ClaimsJSON: claims.ClaimsJSON,
 			}, nil
 		},
-		EdgeRuntimeURL: state.Config.EdgeRuntimeURL,
-		Catalog:        fnCatalog,
-		DatabaseURL:    state.Config.DatabaseURL,
+		Catalog:     fnCatalog,
+		DatabaseURL: state.Config.DatabaseURL,
 	}
+
+	// Auto-refresh the functions catalog via NOTIFY whenever a function is
+	// deployed, updated, or deleted (trigger fires pg_notify('pgstack_fn_changed')).
+	fnCatalog.StartAutoRefresh(context.Background(), state.Config.DatabaseURL, state.Pool, nil)
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.SecurityHeaders)
 		r.Get("/functions/v1/", functions.List(fnDeps))

@@ -1,6 +1,7 @@
 import { Command } from "commander";
-import { mkdir, writeFile, readdir, readFile } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
+import { watch } from "node:fs";
+import { resolve, join, basename } from "node:path";
 import { existsSync } from "node:fs";
 import chalk from "chalk";
 import ora from "ora";
@@ -219,5 +220,104 @@ export function registerFunctionsCommand(program: Command): void {
         spinner.fail(chalk.red(`Delete failed: ${e instanceof Error ? e.message : String(e)}`));
         process.exit(1);
       }
+    });
+
+  cmd
+    .command("serve")
+    .description("Watch supabase/functions/ and hot-reload on file changes")
+    .option("--url <url>", "pgStack proxy URL", "http://127.0.0.1:8080")
+    .option("--service-role-key <key>", "Service role key")
+    .option("--runtime <runtime>", "Runtime for watched functions", "embedded")
+    .action(async (opts: { url: string; serviceRoleKey?: string; runtime: string }) => {
+      const key = opts.serviceRoleKey || process.env.SERVICE_ROLE_KEY;
+      if (!key) {
+        console.error(chalk.red("--service-role-key or SERVICE_ROLE_KEY env required"));
+        process.exit(1);
+      }
+
+      const fnDir = resolve(FUNCTIONS_DIR);
+      if (!existsSync(fnDir)) {
+        console.error(chalk.red(`Functions directory not found: ${fnDir}`));
+        console.error(chalk.dim("Run: pgstack functions new <name>"));
+        process.exit(1);
+      }
+
+      console.log(chalk.cyan(`Watching ${fnDir} for changes...`));
+      console.log(chalk.dim("Press Ctrl+C to stop.\n"));
+
+      // Deploy a single function by name.
+      async function deploy(name: string): Promise<void> {
+        const fnFile = join(fnDir, name, "index.ts");
+        if (!existsSync(fnFile)) return;
+
+        let code: string | null = null;
+        if (opts.runtime === "embedded" || opts.runtime === "plv8" || opts.runtime === "plpython3u") {
+          code = await readFile(fnFile, "utf-8");
+        }
+
+        const sql = `
+          INSERT INTO pgstack.edge_functions (name, runtime, verify_jwt, status, code, updated_at)
+          VALUES ($1, $2, true, 'active', $3, now())
+          ON CONFLICT (name) DO UPDATE SET
+            runtime = EXCLUDED.runtime,
+            code = EXCLUDED.code,
+            status = 'active',
+            updated_at = now()
+        `;
+
+        const res = await fetch(`${opts.url}/api/sql`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${key}`,
+            "apikey": key!,
+          },
+          body: JSON.stringify({ query: sql, params: [name, opts.runtime, code] }),
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          console.error(chalk.red(`  ✗ ${name}: ${(body as Record<string, string>).error || res.statusText}`));
+          return;
+        }
+
+        // Trigger catalog refresh (NOTIFY also fires via DB trigger, but be explicit).
+        await fetch(`${opts.url}/functions/v1/_refresh`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${key}`, "apikey": key! },
+        }).catch(() => {});
+
+        console.log(chalk.green(`  ↻ ${name}`), chalk.dim(`[${new Date().toLocaleTimeString()}]`));
+      }
+
+      // Initial deploy of all existing functions.
+      const entries = await stat(fnDir).then(() => {
+        const { readdirSync } = require("node:fs") as typeof import("node:fs");
+        return readdirSync(fnDir, { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => d.name);
+      }).catch(() => [] as string[]);
+
+      for (const name of entries) {
+        await deploy(name).catch(e => console.error(chalk.red(`  ✗ ${name}: ${e}`)));
+      }
+
+      // Watch for changes with debounce.
+      const pending = new Map<string, ReturnType<typeof setTimeout>>();
+      watch(fnDir, { recursive: true }, (_event, filename) => {
+        if (!filename?.endsWith(".ts") && !filename?.endsWith(".js") && !filename?.endsWith(".py")) return;
+        // Derive function name from first directory segment of the changed path.
+        const fnName = filename.split(/[\\/]/)[0];
+        if (!fnName) return;
+
+        if (pending.has(fnName)) clearTimeout(pending.get(fnName)!);
+        pending.set(fnName, setTimeout(() => {
+          pending.delete(fnName);
+          deploy(fnName).catch(e => console.error(chalk.red(`  ✗ ${fnName}: ${e}`)));
+        }, 200));
+      });
+
+      // Keep running until Ctrl+C.
+      await new Promise(() => {});
     });
 }

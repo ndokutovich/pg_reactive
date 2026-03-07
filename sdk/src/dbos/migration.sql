@@ -5,17 +5,31 @@
 CREATE SCHEMA IF NOT EXISTS dbos;
 
 CREATE TABLE IF NOT EXISTS dbos.job_queue (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    job_name      text NOT NULL,
-    payload       jsonb NOT NULL DEFAULT '{}',
-    status        text NOT NULL DEFAULT 'pending'
-                  CHECK (status IN ('pending', 'running', 'completed', 'failed')),
-    attempt       int NOT NULL DEFAULT 0,
-    max_attempts  int NOT NULL DEFAULT 3,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    scheduled_for timestamptz NOT NULL DEFAULT now(),
-    completed_at  timestamptz,
-    error         text
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_name          text NOT NULL,
+    payload           jsonb NOT NULL DEFAULT '{}',
+    status            text NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+    attempt           int NOT NULL DEFAULT 0,
+    max_attempts      int NOT NULL DEFAULT 3,
+    progress          int,
+    progress_message  text,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    scheduled_for     timestamptz NOT NULL DEFAULT now(),
+    completed_at      timestamptz,
+    error             text
+);
+
+-- Dead letter queue: permanently-failed jobs are moved here after exhausting retries.
+CREATE TABLE IF NOT EXISTS dbos.failed_jobs (
+    id                   uuid PRIMARY KEY,
+    job_name             text NOT NULL,
+    payload              jsonb NOT NULL DEFAULT '{}',
+    attempt              int NOT NULL,
+    max_attempts         int NOT NULL,
+    error                text,
+    original_created_at  timestamptz NOT NULL DEFAULT now(),
+    failed_at            timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_dbos_job_queue_status_scheduled

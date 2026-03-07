@@ -13,6 +13,8 @@ export interface JobQueueItem {
   status: 'pending' | 'running' | 'completed' | 'failed';
   attempt: number;
   max_attempts: number;
+  progress: number | null;
+  progress_message: string | null;
   created_at: string;
   scheduled_for: string;
   completed_at: string | null;

@@ -358,3 +358,216 @@ export function createClient(options: LiveQueryClientOptions): LiveQueryClient {
     },
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LiveQueryHub — optimistic updates + offline mutation queue
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type MutationFn = () => Promise<void>;
+
+export interface HubOptions extends LiveQueryClientOptions {
+  /** Max mutations to buffer while offline (default: 100) */
+  maxOfflineQueue?: number;
+}
+
+/**
+ * Subscription handle returned by LiveQueryHub.subscribe().
+ * Extends LiveQuery with optimistic update capabilities.
+ */
+export class HubSubscription extends LiveQuery {
+  // Rows before any optimistic mutations (allows rollback).
+  private preOptimisticSnapshot: DeltaRow[] | null = null;
+
+  /**
+   * Optimistically insert a row into the local snapshot immediately, before
+   * the server confirms. Call rollback() to undo if the mutation fails.
+   */
+  optimisticInsert(row: DeltaRow): void {
+    if (this.preOptimisticSnapshot === null) {
+      this.preOptimisticSnapshot = [...this.snapshot];
+    }
+    // Access internal rows via the public snapshot + a delta application trick.
+    this.applyOptimisticDelta({ query_id: this.queryId, inserted: [row], deleted: [] });
+  }
+
+  /**
+   * Optimistically delete a row from the local snapshot by matching all fields.
+   */
+  optimisticDelete(row: DeltaRow): void {
+    if (this.preOptimisticSnapshot === null) {
+      this.preOptimisticSnapshot = [...this.snapshot];
+    }
+    this.applyOptimisticDelta({ query_id: this.queryId, inserted: [], deleted: [row] });
+  }
+
+  /**
+   * Roll back all optimistic changes made since the last server-confirmed delta.
+   */
+  rollback(): void {
+    if (this.preOptimisticSnapshot !== null) {
+      this.restoreSnapshot(this.preOptimisticSnapshot);
+      this.preOptimisticSnapshot = null;
+    }
+  }
+
+  /**
+   * Commit optimistic changes — called automatically when a delta arrives from
+   * the server (the server is now the source of truth again).
+   */
+  commitOptimistic(): void {
+    this.preOptimisticSnapshot = null;
+  }
+
+  // ---- internal hooks (called by HubSubscription to extend LiveQuery) ----
+
+  private applyOptimisticDelta(delta: Delta): void {
+    // Reach into the inherited applyDelta method via protected access pattern.
+    // We expose it here via a public bridge so optimistic mutations work the
+    // same way as real deltas.
+    (this as unknown as { applyDelta(d: Delta): void }).applyDelta(delta);
+  }
+
+  private restoreSnapshot(rows: DeltaRow[]): void {
+    // Overwrite internal rows. We use a hack-free approach: emit a synthetic
+    // "reset" delta that clears and repopulates the snapshot.
+    const current = [...this.snapshot];
+    (this as unknown as { applyDelta(d: Delta): void }).applyDelta({
+      query_id: this.queryId,
+      inserted: rows,
+      deleted: current,
+    });
+  }
+}
+
+/**
+ * LiveQueryHub manages multiple subscriptions, coordinates lifecycle, and
+ * provides an offline mutation queue that drains automatically on reconnect.
+ *
+ * @example
+ * ```ts
+ * const hub = new LiveQueryHub({ url: "ws://127.0.0.1:8080", token: "..." });
+ *
+ * const orders = hub.subscribe("orders_q");
+ * orders.on((event, data) => console.log(event, data));
+ *
+ * // Optimistic insert — shows in UI immediately:
+ * orders.optimisticInsert({ id: 999, status: "pending" });
+ * try {
+ *   await hub.mutate(() => fetch("/rest/v1/orders", { method: "POST", body: ... }));
+ *   orders.commitOptimistic();
+ * } catch {
+ *   orders.rollback();
+ * }
+ *
+ * // Offline-safe mutation — queued and replayed on reconnect:
+ * hub.queueMutation(() => fetch("/rest/v1/todos", { method: "POST", ... }));
+ *
+ * hub.close(); // close all subscriptions
+ * ```
+ */
+export class LiveQueryHub {
+  private options: HubOptions;
+  private subscriptions = new Map<string, HubSubscription>();
+  private mutationQueue: MutationFn[] = [];
+  private maxQueue: number;
+  private connected = false;
+  private flushing = false;
+
+  constructor(options: HubOptions) {
+    this.options = options;
+    this.maxQueue = options.maxOfflineQueue ?? 100;
+  }
+
+  /**
+   * Subscribe to a live query. Returns a HubSubscription that supports
+   * optimistic updates. Multiple calls with the same queryId return the
+   * same subscription.
+   */
+  subscribe(queryId: string): HubSubscription {
+    if (this.subscriptions.has(queryId)) {
+      return this.subscriptions.get(queryId)!;
+    }
+    const sub = new HubSubscription(queryId, this.options);
+
+    // Track connection state to know when to flush the mutation queue.
+    sub.on((event) => {
+      if (event === "connected") {
+        this.connected = true;
+        this.flushQueue();
+      } else if (event === "disconnected") {
+        this.connected = false;
+      } else if (event === "delta") {
+        sub.commitOptimistic();
+      }
+    });
+
+    this.subscriptions.set(queryId, sub);
+    return sub;
+  }
+
+  /**
+   * Execute a mutation immediately if online, or queue it for later if offline.
+   * Throws if online and the mutation fails (caller should handle rollback).
+   */
+  async mutate(fn: MutationFn): Promise<void> {
+    if (this.connected) {
+      await fn();
+    } else {
+      this.queueMutation(fn);
+    }
+  }
+
+  /**
+   * Queue a mutation to be executed when the connection is restored.
+   * The queue is drained in order on the next successful reconnect.
+   */
+  queueMutation(fn: MutationFn): void {
+    if (this.mutationQueue.length >= this.maxQueue) {
+      this.mutationQueue.shift(); // drop oldest to make room
+    }
+    this.mutationQueue.push(fn);
+  }
+
+  /** Number of mutations waiting to be flushed. */
+  get pendingMutations(): number {
+    return this.mutationQueue.length;
+  }
+
+  /** Close all subscriptions and clear the mutation queue. */
+  close(): void {
+    for (const sub of this.subscriptions.values()) {
+      sub.close();
+    }
+    this.subscriptions.clear();
+    this.mutationQueue = [];
+    this.connected = false;
+  }
+
+  private async flushQueue(): Promise<void> {
+    if (this.flushing || this.mutationQueue.length === 0) return;
+    this.flushing = true;
+    try {
+      while (this.mutationQueue.length > 0 && this.connected) {
+        const fn = this.mutationQueue[0];
+        try {
+          await fn();
+          this.mutationQueue.shift();
+        } catch (err) {
+          // Stop draining on first failure — don't lose subsequent mutations.
+          console.warn("[LiveQueryHub] queued mutation failed — stopping flush:", err);
+          break;
+        }
+      }
+    } finally {
+      this.flushing = false;
+    }
+  }
+}
+
+/**
+ * Create a LiveQueryHub — the recommended entry point for apps that need
+ * optimistic updates, offline support, or manage multiple subscriptions.
+ */
+export function createHub(options: HubOptions): LiveQueryHub {
+  return new LiveQueryHub(options);
+}

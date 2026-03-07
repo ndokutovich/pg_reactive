@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"regexp"
 
 	"github.com/go-chi/chi/v5"
@@ -21,36 +19,24 @@ import (
 
 // fnNameRe validates an edge function name: starts with a letter or underscore,
 // followed by up to 62 alphanumeric, underscore, or hyphen characters.
-// Hyphens are allowed (unlike PG function names) because edge functions use
-// filesystem-style naming conventions.
 var fnNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]{0,62}$`)
 
 // FunctionsDeps is the dependency bundle passed to all handler constructors.
 type FunctionsDeps struct {
-	Pool           *pgxpool.Pool
-	ResolveClaims  func(r *http.Request) (*rest.RequestClaims, error)
-	EdgeRuntimeURL string // empty = deno backend disabled
-	Catalog        *FunctionsCatalog
-	DatabaseURL    string // passed to functions as env
+	Pool          *pgxpool.Pool
+	ResolveClaims func(r *http.Request) (*rest.RequestClaims, error)
+	Catalog       *FunctionsCatalog
+	DatabaseURL   string // passed to functions as PGSTACK_DB_URL env hint
 }
 
 // Invoke returns an http.HandlerFunc for POST /functions/v1/{name}.
-//
-// It looks up the function in the catalog, checks JWT requirements, and
-// dispatches to the appropriate runtime backend (deno, plv8, or embedded).
 func Invoke(d *FunctionsDeps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		invoke(d, w, r)
-	}
+	return func(w http.ResponseWriter, r *http.Request) { invoke(d, w, r) }
 }
 
 // InvokeGet returns an http.HandlerFunc for GET /functions/v1/{name}.
-//
-// Same logic as Invoke but accepts GET requests.
 func InvokeGet(d *FunctionsDeps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		invoke(d, w, r)
-	}
+	return func(w http.ResponseWriter, r *http.Request) { invoke(d, w, r) }
 }
 
 // invoke is the shared execution path for both POST and GET function invocation.
@@ -73,79 +59,10 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If the function requires JWT verification and the caller is anonymous,
-	// reject the request.
 	if fm.VerifyJWT && claims.Role == "anon" {
 		writeJSONError(w, http.StatusUnauthorized, "JWT required for function: "+fnName)
 		return
 	}
-
-	switch fm.Runtime {
-	case "deno":
-		if d.EdgeRuntimeURL == "" {
-			writeJSONError(w, http.StatusServiceUnavailable, "deno runtime not configured")
-			return
-		}
-		proxy := denoProxy(d, fnName, claims)
-		proxy.ServeHTTP(w, r)
-
-	case "plv8":
-		invokePLv8(d, w, r, fnName, claims)
-
-	case "embedded":
-		bodyBytes, readErr := io.ReadAll(r.Body)
-		if readErr != nil {
-			writeJSONError(w, http.StatusBadRequest, "cannot read body")
-			return
-		}
-		result, execErr := executeEmbedded(r.Context(), fm.Code, bodyBytes, claims)
-		if execErr != nil {
-			writeJSONError(w, http.StatusNotImplemented, execErr.Error())
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(result)
-
-	default:
-		writeJSONError(w, http.StatusBadRequest, "unknown runtime: "+fm.Runtime)
-	}
-}
-
-// denoProxy creates a reverse proxy handler that forwards the request to the
-// Supabase edge-runtime container, injecting pgstack identity headers.
-func denoProxy(d *FunctionsDeps, fnName string, claims *rest.RequestClaims) http.Handler {
-	target, err := url.Parse(d.EdgeRuntimeURL)
-	if err != nil {
-		log.Error().Err(err).Str("url", d.EdgeRuntimeURL).Msg("functions: invalid edge runtime URL")
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			writeJSONError(w, http.StatusInternalServerError, "invalid edge runtime configuration")
-		})
-	}
-
-	proxy := httputil.NewSingleHostReverseProxy(target)
-
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.URL.Path = "/functions/v1/" + fnName
-		req.Header.Set("x-pgstack-role", claims.Role)
-		req.Header.Set("x-pgstack-claims", claims.ClaimsJSON)
-		req.Header.Set("x-pgstack-sub", claims.Sub)
-	}
-
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Error().Err(err).Str("fn", fnName).Msg("functions: deno proxy error")
-		writeJSONError(w, http.StatusBadGateway, "edge runtime unavailable")
-	}
-
-	return proxy
-}
-
-// invokePLv8 calls a PG function pgstack.fn_{name} via an RLS transaction,
-// passing the request body as a JSONB argument.
-func invokePLv8(d *FunctionsDeps, w http.ResponseWriter, r *http.Request, fnName string, claims *rest.RequestClaims) {
-	ctx := r.Context()
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -153,21 +70,58 @@ func invokePLv8(d *FunctionsDeps, w http.ResponseWriter, r *http.Request, fnName
 		return
 	}
 
-	// Default to empty JSON object if no body.
+	switch fm.Runtime {
+	case "embedded":
+		result, execErr := executeEmbedded(r.Context(), fm.Code, bodyBytes, claims, d.Pool)
+		if execErr != nil {
+			writeJSONError(w, http.StatusInternalServerError, execErr.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(result)
+
+	case "plv8":
+		invokePLRuntime(d, w, r.Context(), fnName, bodyBytes, claims, "pgstack")
+
+	case "plpython3u":
+		invokePLRuntime(d, w, r.Context(), fnName, bodyBytes, claims, "pgstack")
+
+	default:
+		writeJSONError(w, http.StatusBadRequest, "unknown runtime: "+fm.Runtime)
+	}
+}
+
+// invokePLRuntime calls a PostgreSQL-hosted function pgstack.fn_{name}(body jsonb)
+// via an RLS transaction. This is the shared execution path for both plv8 and
+// plpython3u runtimes since both expose the same calling convention from the
+// Go side — the difference is only in how the SQL function body is written.
+//
+// PL/v8 example:
+//
+//	CREATE FUNCTION pgstack.fn_hello(body jsonb) RETURNS jsonb
+//	LANGUAGE plv8 AS $$ return { message: "hello from JS" }; $$;
+//
+// PL/Python 3u example:
+//
+//	CREATE FUNCTION pgstack.fn_hello(body jsonb) RETURNS jsonb
+//	LANGUAGE plpython3u AS $$
+//	import json
+//	return json.dumps({"message": "hello from Python"})
+//	$$;
+func invokePLRuntime(d *FunctionsDeps, w http.ResponseWriter, ctx context.Context, fnName string, bodyBytes []byte, claims *rest.RequestClaims, schema string) {
 	if len(bodyBytes) == 0 {
 		bodyBytes = []byte("{}")
 	}
-
-	// Validate that the body is valid JSON.
 	if !json.Valid(bodyBytes) {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
-	// Call pgstack.fn_{name}(body jsonb) -- the naming convention for plv8 edge functions.
 	pgFnName := "fn_" + fnName
 	sql := fmt.Sprintf(
-		`SELECT to_json(pgstack.%s($1::jsonb)) AS data`,
+		`SELECT to_json(%s.%s($1::jsonb)) AS data`,
+		rest.QuoteIdent(schema),
 		rest.QuoteIdent(pgFnName),
 	)
 
@@ -180,9 +134,8 @@ func invokePLv8(d *FunctionsDeps, w http.ResponseWriter, r *http.Request, fnName
 	defer tx.Rollback(ctx)
 
 	var result json.RawMessage
-	row := tx.QueryRow(ctx, sql, string(bodyBytes))
-	if err := row.Scan(&result); err != nil {
-		log.Error().Err(err).Str("fn", fnName).Msg("functions: plv8 execution failed")
+	if err := tx.QueryRow(ctx, sql, string(bodyBytes)).Scan(&result); err != nil {
+		log.Error().Err(err).Str("fn", fnName).Msg("functions: PL runtime execution failed")
 		status, msg := pgHTTPStatus(err)
 		writeJSONError(w, status, msg)
 		return
@@ -199,7 +152,7 @@ func invokePLv8(d *FunctionsDeps, w http.ResponseWriter, r *http.Request, fnName
 	_, _ = w.Write(result)
 }
 
-// List returns an http.HandlerFunc for GET /functions/v1/ that lists all
+// List returns an http.HandlerFunc for GET /functions/v1/ — lists all
 // registered edge functions. Restricted to service_role only.
 func List(d *FunctionsDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -212,9 +165,7 @@ func List(d *FunctionsDeps) http.HandlerFunc {
 			writeJSONError(w, http.StatusForbidden, "listing functions requires service_role")
 			return
 		}
-
 		funcs := d.Catalog.List()
-
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(funcs)
@@ -222,8 +173,7 @@ func List(d *FunctionsDeps) http.HandlerFunc {
 }
 
 // Refresh returns an http.HandlerFunc for POST /functions/v1/_refresh that
-// reloads the edge functions catalog from the database.
-// Restricted to service_role only.
+// reloads the catalog from the database. Restricted to service_role only.
 func Refresh(d *FunctionsDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, err := d.ResolveClaims(r)
@@ -235,33 +185,24 @@ func Refresh(d *FunctionsDeps) http.HandlerFunc {
 			writeJSONError(w, http.StatusForbidden, "functions refresh requires service_role")
 			return
 		}
-
 		if err := d.Catalog.Refresh(r.Context(), d.Pool); err != nil {
 			log.Error().Err(err).Msg("functions: catalog refresh failed")
 			writeJSONError(w, http.StatusInternalServerError, "catalog refresh failed: "+err.Error())
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	}
 }
 
-// ---------- helpers (package-local, mirrors rest package) ----------
+// ---------- helpers ----------
 
-// beginRLSTx opens a pgx transaction and applies RLS context:
-//
-//	SET LOCAL ROLE <whitelisted-role>
-//	SET LOCAL request.jwt.claims = <claims-json>
-//
-// The caller is responsible for Commit or Rollback.
 func beginRLSTx(ctx context.Context, pool *pgxpool.Pool, claims *rest.RequestClaims) (pgx.Tx, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-
 	roleSQL, ok := validRoles[claims.Role]
 	if !ok {
 		roleSQL = "SET LOCAL ROLE anon"
@@ -270,23 +211,19 @@ func beginRLSTx(ctx context.Context, pool *pgxpool.Pool, claims *rest.RequestCla
 		_ = tx.Rollback(ctx)
 		return nil, err
 	}
-
 	if _, err = tx.Exec(ctx, "SELECT set_config('request.jwt.claims', $1, true)", claims.ClaimsJSON); err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, err
 	}
-
 	return tx, nil
 }
 
-// validRoles is the whitelist for SET LOCAL ROLE to prevent SQL injection.
 var validRoles = map[string]string{
 	"anon":          "SET LOCAL ROLE anon",
 	"authenticated": "SET LOCAL ROLE authenticated",
 	"service_role":  "SET LOCAL ROLE service_role",
 }
 
-// writeJSONError writes a JSON {"error":"<msg>"} body with the given status.
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -294,11 +231,8 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	_, _ = w.Write(body)
 }
 
-// pgHTTPStatus maps a pgx/pgconn error to an HTTP status code and sanitised
-// message.
 func pgHTTPStatus(err error) (int, string) {
 	type pgError interface{ SQLState() string }
-
 	var pge pgError
 	if errors.As(err, &pge) {
 		code := pge.SQLState()

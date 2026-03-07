@@ -1,7 +1,61 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useEffect } from 'react';
 import { DataGrid } from '../ui/DataGrid';
 import { useSubscriptions } from '../../hooks/useSubscriptions';
 import type { Subscription } from '../../api/realtime';
+
+const SPARKLINE_CAPACITY = 20;
+const SPARK_W = 64;
+const SPARK_H = 20;
+
+function Sparkline({ history }: { history: number[] }): React.ReactElement {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = SPARK_W * dpr;
+    canvas.height = SPARK_H * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, SPARK_W, SPARK_H);
+
+    if (history.length < 2) return;
+
+    const maxVal = Math.max(...history, 1);
+    const step = SPARK_W / (history.length - 1);
+
+    ctx.beginPath();
+    history.forEach((v, i) => {
+      const x = i * step;
+      const y = SPARK_H - (v / maxVal) * (SPARK_H - 2) - 1;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#3fb950';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Fill under line
+    ctx.lineTo((history.length - 1) * step, SPARK_H);
+    ctx.lineTo(0, SPARK_H);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(63,185,80,0.15)';
+    ctx.fill();
+  }, [history]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={SPARK_W}
+      height={SPARK_H}
+      style={{ width: SPARK_W, height: SPARK_H, verticalAlign: 'middle' }}
+      title={`Last ${history.length} polls: ${history.join(', ')}`}
+    />
+  );
+}
 
 function formatAge(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -19,6 +73,7 @@ export function SubscriptionTable(): React.ReactElement {
   // Track invalidation_count per query_id between polls to compute delta rate.
   const prevCountsRef = useRef<Record<string, number>>({});
   const deltaRatesRef = useRef<Record<string, number>>({});
+  const sparkHistoryRef = useRef<Record<string, number[]>>({});
 
   // On each render with fresh data, compute deltas vs previous snapshot.
   const buildDeltaRates = useCallback((rows: Subscription[]) => {
@@ -26,7 +81,14 @@ export function SubscriptionTable(): React.ReactElement {
     const rates: Record<string, number> = {};
     for (const row of rows) {
       const prevCount = prev[row.query_id] ?? row.invalidation_count;
-      rates[row.query_id] = Math.max(0, row.invalidation_count - prevCount);
+      const delta = Math.max(0, row.invalidation_count - prevCount);
+      rates[row.query_id] = delta;
+
+      // Append to sparkline history ring buffer
+      const hist = sparkHistoryRef.current[row.query_id] ?? [];
+      hist.push(delta);
+      if (hist.length > SPARKLINE_CAPACITY) hist.shift();
+      sparkHistoryRef.current[row.query_id] = hist;
     }
     prevCountsRef.current = Object.fromEntries(
       rows.map((r) => [r.query_id, r.invalidation_count])
@@ -87,17 +149,22 @@ export function SubscriptionTable(): React.ReactElement {
     {
       key: 'invalidation_count',
       header: 'Invalidations',
-      width: 120,
+      width: 160,
       render: (val: unknown, row: Record<string, unknown>) => {
-        const rate = deltaRates[row['query_id'] as string] ?? 0;
+        const qid = row['query_id'] as string;
+        const rate = deltaRates[qid] ?? 0;
+        const history = sparkHistoryRef.current[qid] ?? [];
         return (
-          <span className="text-brand font-semibold">
-            {String(val)}
-            {rate > 0 && (
-              <span className="ml-1.5 text-xs text-green-400 font-normal">
-                +{rate}
-              </span>
-            )}
+          <span className="flex items-center gap-2">
+            <span className="text-brand font-semibold">
+              {String(val)}
+              {rate > 0 && (
+                <span className="ml-1 text-xs text-green-400 font-normal">
+                  +{rate}
+                </span>
+              )}
+            </span>
+            {history.length >= 2 && <Sparkline history={history} />}
           </span>
         );
       },

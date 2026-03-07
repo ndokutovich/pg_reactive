@@ -1,13 +1,16 @@
 import type { Client as PgClient } from 'pg';
 import type { PgStackDBOSConfig, JobQueueItem } from './types.js';
 
+export type JobProgressFn = (progress: number, message?: string) => void;
+export type JobHandler = (payload: unknown, reportProgress: JobProgressFn) => Promise<void>;
+
 /**
  * Durable job queue backed by PostgreSQL.
  * Jobs survive crashes and are retried automatically.
  */
 export class PgStackJobQueue {
   private config: Required<PgStackDBOSConfig>;
-  private handlers: Map<string, (payload: unknown) => Promise<void>> = new Map();
+  private handlers: Map<string, JobHandler> = new Map();
   private running = false;
   private intervalId: ReturnType<typeof setInterval> | null = null;
 
@@ -26,8 +29,8 @@ export class PgStackJobQueue {
     return new Client({ connectionString: this.config.connectionString });
   }
 
-  /** Register a job handler */
-  register(jobName: string, handler: (payload: unknown) => Promise<void>): this {
+  /** Register a job handler. The handler receives (payload, reportProgress). */
+  register(jobName: string, handler: JobHandler): this {
     this.handlers.set(jobName, handler);
     return this;
   }
@@ -122,7 +125,8 @@ export class PgStackJobQueue {
     const client = this.newClient();
     await client.connect();
     try {
-      // Claim one pending job atomically
+      // Claim one pending job atomically using advisory lock to prevent
+      // duplicate execution across multiple workers on the same PG instance.
       const result = await client.query<JobQueueItem>(`
         UPDATE ${this.config.schema}.job_queue
         SET status = 'running', attempt = attempt + 1
@@ -131,6 +135,7 @@ export class PgStackJobQueue {
           WHERE status IN ('pending', 'failed')
             AND attempt < max_attempts
             AND scheduled_for <= now()
+            AND pg_try_advisory_lock(hashtext(id::text))
           ORDER BY scheduled_for ASC
           FOR UPDATE SKIP LOCKED
           LIMIT 1
@@ -139,7 +144,9 @@ export class PgStackJobQueue {
       `);
 
       for (const job of result.rows) {
-        await this.executeJob(job);
+        await this.executeJob(job, client);
+        // Release advisory lock after job completes
+        await client.query(`SELECT pg_advisory_unlock(hashtext($1))`, [job.id]);
       }
     } catch (e) {
       console.error('[pgstack-dbos] poll error:', e);
@@ -150,19 +157,33 @@ export class PgStackJobQueue {
 
   private async executeJob(
     job: Partial<JobQueueItem> & { id: string; job_name: string },
+    lockClient: PgClient,
   ): Promise<void> {
     const handler = this.handlers.get(job.job_name);
     if (!handler) {
-      await this.markFailed(job.id, `No handler registered for job: ${job.job_name}`);
+      await this.moveToDeadLetter(job.id, `No handler registered for job: ${job.job_name}`);
       return;
     }
 
+    const reportProgress: JobProgressFn = (progress, message) => {
+      lockClient.query(
+        `UPDATE ${this.config.schema}.job_queue SET progress = $2, progress_message = $3 WHERE id = $1::uuid`,
+        [job.id, Math.min(100, Math.max(0, progress)), message ?? null],
+      ).catch(() => {});
+    };
+
     try {
-      await handler(job.payload);
+      await handler(job.payload, reportProgress);
       await this.markCompleted(job.id);
     } catch (e) {
-      const delay = this.config.retryDelayMs * Math.pow(2, (job.attempt ?? 1) - 1);
-      await this.markFailed(job.id, String(e), new Date(Date.now() + delay));
+      const attempt = job.attempt ?? 1;
+      const maxAttempts = job.max_attempts ?? this.config.maxRetries;
+      if (attempt >= maxAttempts) {
+        await this.moveToDeadLetter(job.id, String(e));
+      } else {
+        const delay = this.config.retryDelayMs * Math.pow(2, attempt - 1);
+        await this.markFailed(job.id, String(e), new Date(Date.now() + delay));
+      }
     }
   }
 
@@ -186,11 +207,85 @@ export class PgStackJobQueue {
     try {
       await client.query(`
         UPDATE ${this.config.schema}.job_queue
-        SET status = CASE WHEN attempt >= max_attempts THEN 'failed'::text ELSE 'pending'::text END,
+        SET status = 'pending',
             error = $2,
             scheduled_for = COALESCE($3, scheduled_for)
         WHERE id = $1::uuid
       `, [id, error, retryAt ?? null]);
+    } finally {
+      await client.end();
+    }
+  }
+
+  /**
+   * Move a permanently-failed job to the dead letter queue.
+   * The job is deleted from job_queue and inserted into failed_jobs.
+   */
+  private async moveToDeadLetter(id: string, error: string): Promise<void> {
+    const client = this.newClient();
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query<JobQueueItem>(`
+        DELETE FROM ${this.config.schema}.job_queue WHERE id = $1::uuid
+        RETURNING job_name, payload, attempt, max_attempts, created_at
+      `, [id]);
+      if (rows.length > 0) {
+        const j = rows[0];
+        await client.query(`
+          INSERT INTO ${this.config.schema}.failed_jobs
+            (id, job_name, payload, attempt, max_attempts, error, original_created_at)
+          VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+        `, [id, j.job_name, j.payload, j.attempt, j.max_attempts, error, j.created_at]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      console.error('[pgstack-dbos] DLQ insert failed:', e);
+    } finally {
+      await client.end();
+    }
+  }
+
+  /** List jobs in the dead letter queue */
+  async listDeadLetterJobs(limit = 50): Promise<JobQueueItem[]> {
+    const client = this.newClient();
+    await client.connect();
+    try {
+      const result = await client.query<JobQueueItem>(`
+        SELECT id::text, job_name, payload, 'failed' AS status, attempt, max_attempts,
+               original_created_at::text AS created_at, failed_at::text AS completed_at, error
+        FROM ${this.config.schema}.failed_jobs
+        ORDER BY failed_at DESC
+        LIMIT ${limit}
+      `);
+      return result.rows;
+    } finally {
+      await client.end();
+    }
+  }
+
+  /** Retry a dead letter job by moving it back to the queue */
+  async retryDeadLetterJob(id: string): Promise<string> {
+    const client = this.newClient();
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query<JobQueueItem>(`
+        DELETE FROM ${this.config.schema}.failed_jobs WHERE id = $1::uuid
+        RETURNING job_name, payload, max_attempts
+      `, [id]);
+      if (rows.length === 0) throw new Error(`DLQ job ${id} not found`);
+      const j = rows[0];
+      const { rows: newRows } = await client.query<{ id: string }>(`
+        INSERT INTO ${this.config.schema}.job_queue (job_name, payload, max_attempts)
+        VALUES ($1, $2, $3) RETURNING id::text
+      `, [j.job_name, j.payload, j.max_attempts]);
+      await client.query('COMMIT');
+      return newRows[0].id;
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
     } finally {
       await client.end();
     }

@@ -5,1581 +5,447 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive / pgStack — Repository Report</title>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;line-height:1.6}
+a{color:#58a6ff;text-decoration:none}
+a:hover{text-decoration:underline}
 
-  :root {
-    --bg:        #0f1117;
-    --surface:   #161b22;
-    --surface2:  #1c2128;
-    --border:    #30363d;
-    --text:      #e6edf3;
-    --text-muted:#8b949e;
-    --accent:    #58a6ff;
-    --green:     #3fb950;
-    --amber:     #d29922;
-    --red:       #f85149;
-    --purple:    #bc8cff;
-  }
+/* ── Hero ── */
+.hero{background:linear-gradient(135deg,#161b22 0%,#0f1117 60%);border-bottom:1px solid #30363d;padding:40px 40px 32px}
+.hero-title{font-size:2rem;font-weight:700;color:#e6edf3;margin-bottom:4px}
+.hero-sub{color:#8b949e;font-size:15px;margin-bottom:20px}
+.badges{display:flex;flex-wrap:wrap;gap:8px}
+.badge{background:#21262d;border:1px solid #30363d;border-radius:20px;padding:4px 12px;font-size:12px;color:#c9d1d9}
+.badge.green{border-color:#3fb950;color:#3fb950}
+.badge.blue{border-color:#58a6ff;color:#58a6ff}
 
-  html { scroll-behavior: smooth; }
+/* ── Stats row ── */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;padding:24px 40px;border-bottom:1px solid #30363d}
+.stat-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px 16px;text-align:center}
+.stat-card .num{font-size:1.8rem;font-weight:700;color:#e6edf3}
+.stat-card .lbl{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    font-size: 14px;
-    line-height: 1.6;
-    min-height: 100vh;
-  }
+/* ── Tier legend ── */
+.legend{padding:24px 40px;border-bottom:1px solid #30363d}
+.legend h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e;margin-bottom:14px}
+.legend-row{display:flex;gap:10px;flex-wrap:wrap}
+.legend-item{display:flex;align-items:center;gap:8px;background:#161b22;border:1px solid #21262d;border-radius:6px;padding:8px 14px;font-size:13px}
+.tier-badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;font-weight:700;font-size:12px;cursor:help;flex-shrink:0}
+.tier-a{background:#0d3d17;color:#3fb950;border:1px solid #3fb950}
+.tier-b{background:#0d2a47;color:#58a6ff;border:1px solid #58a6ff}
+.tier-c{background:#3d2f00;color:#d29922;border:1px solid #d29922}
+.tier-d{background:#3d0c0c;color:#f85149;border:1px solid #f85149}
+.legend-item .desc{color:#8b949e}
 
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+/* ── Tabs ── */
+.tabs-wrap{padding:0 40px;border-bottom:1px solid #30363d;overflow-x:auto}
+.tabs{display:flex;gap:0;white-space:nowrap}
+.tab{padding:12px 18px;font-size:13px;cursor:pointer;color:#8b949e;border-bottom:2px solid transparent;transition:all .15s;user-select:none}
+.tab:hover{color:#c9d1d9}
+.tab.active{color:#58a6ff;border-bottom-color:#58a6ff}
 
-  /* ── Layout ── */
-  .container {
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 0 24px;
-  }
+/* ── Cards grid ── */
+.cards-section{padding:24px 40px 40px}
+.domain-head{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#8b949e;margin:20px 0 12px;padding-bottom:6px;border-bottom:1px solid #21262d}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+.card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px 16px;display:flex;gap:12px;align-items:flex-start;transition:border-color .15s}
+.card:hover{border-color:#30363d}
+.card.hidden{display:none}
+.card-body{flex:1;min-width:0}
+.card-name{font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px;font-family:'SFMono-Regular',Consolas,monospace}
+.card-desc{font-size:12px;color:#8b949e;line-height:1.5}
+.card-tags{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
+.tag{background:#21262d;border-radius:3px;padding:1px 7px;font-size:10px;color:#8b949e}
 
-  /* ── Hero ── */
-  .hero {
-    background: linear-gradient(180deg, #1a2235 0%, var(--bg) 100%);
-    border-bottom: 1px solid var(--border);
-    padding: 56px 0 40px;
-  }
-  .hero-inner {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  .hero-title {
-    font-size: 32px;
-    font-weight: 700;
-    color: var(--text);
-    letter-spacing: -0.5px;
-  }
-  .hero-title span { color: var(--accent); }
-  .hero-desc {
-    font-size: 16px;
-    color: var(--text-muted);
-    max-width: 720px;
-  }
-  .hero-badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 4px;
-  }
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 600;
-    border: 1px solid;
-    white-space: nowrap;
-  }
-  .badge-blue   { background: rgba(88,166,255,.12); border-color: rgba(88,166,255,.4); color: var(--accent); }
-  .badge-green  { background: rgba(63,185,80,.12);  border-color: rgba(63,185,80,.4);  color: var(--green); }
-  .badge-amber  { background: rgba(210,153,34,.12); border-color: rgba(210,153,34,.4); color: var(--amber); }
-  .badge-purple { background: rgba(188,140,255,.12);border-color: rgba(188,140,255,.4);color: var(--purple); }
-  .badge-gray   { background: rgba(139,148,158,.12);border-color: rgba(139,148,158,.4);color: var(--text-muted); }
+/* ── Architecture tree ── */
+.tree-section{padding:0 40px 40px}
+.tree-section h2{font-size:14px;font-weight:600;color:#e6edf3;margin-bottom:14px}
+.tree{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:20px 24px;font-size:12px;font-family:monospace;line-height:1.8}
+.tree-node{display:flex;align-items:baseline;gap:12px;padding:2px 0}
+.tree-node-name{color:#58a6ff;font-weight:600;min-width:220px}
+.tree-node-desc{color:#8b949e}
+.tree-node-count{color:#3fb950;font-size:11px;margin-left:auto}
 
-  /* ── Stats row ── */
-  .stats-section { padding: 32px 0; }
-  .stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 12px;
-  }
-  .stat-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px 18px;
-    transition: border-color .2s;
-  }
-  .stat-card:hover { border-color: var(--accent); }
-  .stat-value {
-    font-size: 28px;
-    font-weight: 700;
-    color: var(--accent);
-    line-height: 1.1;
-  }
-  .stat-label {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-top: 4px;
-  }
-
-  /* ── Section headings ── */
-  .section { padding: 32px 0; border-top: 1px solid var(--border); }
-  .section-title {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--text);
-    margin-bottom: 20px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .section-title::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
-
-  /* ── Architecture diagram ── */
-  .arch-box {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 24px;
-    overflow-x: auto;
-  }
-  .arch-box pre {
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    font-size: 13px;
-    color: var(--text);
-    line-height: 1.7;
-    white-space: pre;
-  }
-  .arch-box pre .hl-green  { color: var(--green); }
-  .arch-box pre .hl-blue   { color: var(--accent); }
-  .arch-box pre .hl-amber  { color: var(--amber); }
-  .arch-box pre .hl-purple { color: var(--purple); }
-  .arch-box pre .hl-muted  { color: var(--text-muted); }
-
-  /* ── Tabs ── */
-  .tabs-wrapper { padding: 32px 0; border-top: 1px solid var(--border); }
-  .tabs-header {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 24px;
-    flex-wrap: wrap;
-  }
-  .tab-btn {
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-    padding: 8px 16px;
-    margin-bottom: -1px;
-    transition: color .15s, border-color .15s;
-  }
-  .tab-btn:hover { color: var(--text); }
-  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-  .tab-panel { display: none; }
-  .tab-panel.active { display: block; }
-
-  /* ── File cards grid ── */
-  .cards-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-    gap: 14px;
-  }
-  .file-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px 18px;
-    transition: border-color .2s, transform .15s;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .file-card:hover { border-color: var(--accent); transform: translateY(-1px); }
-  .file-card-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .file-name {
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    font-size: 13px;
-    color: var(--accent);
-    word-break: break-all;
-    flex: 1;
-  }
-  .tier-badge {
-    flex-shrink: 0;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
-    cursor: help;
-    border: 1px solid transparent;
-  }
-  .tier-A { background: rgba(63,185,80,.15);  border-color: rgba(63,185,80,.5);  color: var(--green); }
-  .tier-B { background: rgba(88,166,255,.15); border-color: rgba(88,166,255,.5); color: var(--accent); }
-  .tier-C { background: rgba(210,153,34,.15); border-color: rgba(210,153,34,.5); color: var(--amber); }
-  .tier-D { background: rgba(248,81,73,.15);  border-color: rgba(248,81,73,.5);  color: var(--red); }
-
-  .file-meta {
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-  .file-desc {
-    font-size: 13px;
-    color: #c9d1d9;
-    line-height: 1.5;
-  }
-
-  /* ── Directory tree ── */
-  .tree-box {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 24px;
-    overflow-x: auto;
-  }
-  .tree-box pre {
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    font-size: 13px;
-    color: var(--text);
-    line-height: 1.8;
-    white-space: pre;
-  }
-  .tree-dir   { color: var(--accent); font-weight: 600; }
-  .tree-file  { color: var(--text-muted); }
-  .tree-note  { color: #556068; }
-
-  /* ── Commit list ── */
-  .commit-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .commit-item {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 12px 16px;
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    transition: border-color .2s;
-  }
-  .commit-item:hover { border-color: var(--accent); }
-  .commit-hash {
-    font-family: "SFMono-Regular", Consolas, monospace;
-    font-size: 12px;
-    color: var(--purple);
-    white-space: nowrap;
-    margin-top: 1px;
-  }
-  .commit-msg { font-size: 13px; color: var(--text); }
-  .commit-type {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 3px;
-    white-space: nowrap;
-  }
-  .ct-fix      { background: rgba(248,81,73,.15);  color: var(--red);   border: 1px solid rgba(248,81,73,.4); }
-  .ct-refactor { background: rgba(88,166,255,.15); color: var(--accent);border: 1px solid rgba(88,166,255,.4); }
-  .ct-ci       { background: rgba(210,153,34,.15); color: var(--amber); border: 1px solid rgba(210,153,34,.4); }
-  .ct-feat     { background: rgba(63,185,80,.15);  color: var(--green); border: 1px solid rgba(63,185,80,.4); }
-
-  /* ── Tables ── */
-  .data-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-  .data-table th {
-    background: var(--surface2);
-    color: var(--text-muted);
-    font-weight: 600;
-    padding: 10px 14px;
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .data-table td {
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
-    color: var(--text);
-  }
-  .data-table tr:last-child td { border-bottom: none; }
-  .data-table tr:hover td { background: var(--surface2); }
-  .data-table .val { font-weight: 600; color: var(--accent); font-family: "SFMono-Regular", monospace; }
-  .table-wrap {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-  }
-
-  /* ── GUC table ── */
-  .guc-table { margin-top: 8px; }
-
-  /* ── Footer ── */
-  footer {
-    border-top: 1px solid var(--border);
-    padding: 24px 0;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-  footer span { color: var(--text); font-weight: 600; }
-
-  /* ── Responsive ── */
-  @media (max-width: 640px) {
-    .hero-title { font-size: 22px; }
-    .cards-grid { grid-template-columns: 1fr; }
-    .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  }
-
-  /* ── Scrollbar ── */
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-track { background: var(--bg); }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: #484f58; }
-
-  /* ── Inline code ── */
-  code {
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    background: rgba(110,118,129,.2);
-    border-radius: 3px;
-    padding: 1px 5px;
-    font-size: 85%;
-    color: #e6edf3;
-  }
-
-  /* ── Divider ── */
-  .vdiv { color: var(--border); margin: 0 6px; }
+/* ── Footer ── */
+footer{padding:20px 40px;border-top:1px solid #30363d;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+footer span{font-size:12px;color:#8b949e}
 </style>
 </head>
 <body>
 
-<!-- ══════════════════════════════════════════
-     HERO
-══════════════════════════════════════════ -->
+<!-- ── Hero ── -->
 <div class="hero">
-  <div class="container">
-    <div class="hero-inner">
-      <div class="hero-title">
-        <span>pg_reactive</span> / pgStack
-      </div>
-      <div class="hero-desc">
-        PostgreSQL C extension turning SQL SELECTs into live queries with real-time delta notifications,
-        paired with a Go proxy, Rust proxy, TypeScript SDK, React Studio, and pgstack CLI.
-      </div>
-      <div class="hero-badges">
-        <span class="badge badge-blue">v0.1.0</span>
-        <span class="badge badge-green">PostgreSQL License</span>
-        <span class="badge badge-gray">branch: master</span>
-        <span class="badge badge-amber">C · Go · Rust · TypeScript</span>
-        <span class="badge badge-purple">~722 source files</span>
-        <span class="badge badge-blue">7 commits last week</span>
-      </div>
-    </div>
+  <div class="hero-title">pg_reactive / pgStack</div>
+  <div class="hero-sub">PostgreSQL C extension for reactive live queries · Full-stack BaaS (Go proxy, React Studio, TypeScript SDK)</div>
+  <div class="badges">
+    <span class="badge green">v0.1 — pgStack MVP Complete</span>
+    <span class="badge blue">Monorepo · 7 domains</span>
+    <span class="badge">C · Go · Rust · TypeScript · Python</span>
+    <span class="badge">MIT License</span>
+    <span class="badge">922 files · 49 components</span>
+    <span class="badge">210+ E2E assertions</span>
+    <span class="badge">Self-hosted CI · Docker</span>
   </div>
 </div>
 
-<!-- ══════════════════════════════════════════
-     STATS
-══════════════════════════════════════════ -->
-<div class="container">
-  <div class="stats-section">
-    <div class="section-title">Repository Metrics</div>
-    <div class="stats-grid">
-      <div class="stat-card"><div class="stat-value">~722</div><div class="stat-label">Total source files</div></div>
-      <div class="stat-card"><div class="stat-value">10</div><div class="stat-label">Top-level directories</div></div>
-      <div class="stat-card"><div class="stat-value">9</div><div class="stat-label">C source files</div></div>
-      <div class="stat-card"><div class="stat-value">~35</div><div class="stat-label">Go source files</div></div>
-      <div class="stat-card"><div class="stat-value">~30</div><div class="stat-label">Rust source files</div></div>
-      <div class="stat-card"><div class="stat-value">~150</div><div class="stat-label">TypeScript files</div></div>
-      <div class="stat-card"><div class="stat-value">13</div><div class="stat-label">SQL test files</div></div>
-      <div class="stat-card"><div class="stat-value">14</div><div class="stat-label">E2E test files</div></div>
-      <div class="stat-card"><div class="stat-value">7</div><div class="stat-label">Perf test files</div></div>
-      <div class="stat-card"><div class="stat-value">6</div><div class="stat-label">Python integration tests</div></div>
-      <div class="stat-card"><div class="stat-value">3</div><div class="stat-label">CI/CD workflows</div></div>
-      <div class="stat-card"><div class="stat-value">~237</div><div class="stat-label">Documentation pages</div></div>
-      <div class="stat-card"><div class="stat-value">12+</div><div class="stat-label">Example apps</div></div>
-      <div class="stat-card"><div class="stat-value">50+</div><div class="stat-label">Markdown files</div></div>
-      <div class="stat-card"><div class="stat-value">210</div><div class="stat-label">Total tests</div></div>
-    </div>
+<!-- ── Stats ── -->
+<div class="stats">
+  <div class="stat-card"><div class="num">922</div><div class="lbl">Total Files</div></div>
+  <div class="stat-card"><div class="num">49</div><div class="lbl">Components</div></div>
+  <div class="stat-card"><div class="num" style="color:#3fb950">25</div><div class="lbl">Tier A</div></div>
+  <div class="stat-card"><div class="num" style="color:#58a6ff">24</div><div class="lbl">Tier B</div></div>
+  <div class="stat-card"><div class="num">137</div><div class="lbl">TS/TSX Files</div></div>
+  <div class="stat-card"><div class="num">41</div><div class="lbl">Go Files</div></div>
+  <div class="stat-card"><div class="num">33</div><div class="lbl">Rust Files</div></div>
+  <div class="stat-card"><div class="num">9</div><div class="lbl">C/H Files</div></div>
+  <div class="stat-card"><div class="num">24</div><div class="lbl">MJS E2E Tests</div></div>
+  <div class="stat-card"><div class="num">31</div><div class="lbl">SQL Files</div></div>
+  <div class="stat-card"><div class="num">57</div><div class="lbl">Docs (.md)</div></div>
+  <div class="stat-card"><div class="num">3</div><div class="lbl">CI Workflows</div></div>
+</div>
+
+<!-- ── Tier Legend ── -->
+<div class="legend">
+  <h2>Quality Tier Legend</h2>
+  <div class="legend-row">
+    <div class="legend-item"><span class="tier-badge tier-a">A</span><span><strong style="color:#3fb950">Real Tools</strong> <span class="desc">— Domain-accurate algorithms, proper error handling, actually useful in production</span></span></div>
+    <div class="legend-item"><span class="tier-badge tier-b">B</span><span><strong style="color:#58a6ff">Useful Scaffolding</strong> <span class="desc">— Generates real output, non-trivial logic, covers real use cases</span></span></div>
+    <div class="legend-item"><span class="tier-badge tier-c">C</span><span><strong style="color:#d29922">Adequate</strong> <span class="desc">— Correct but straightforward, template-driven</span></span></div>
+    <div class="legend-item"><span class="tier-badge tier-d">D</span><span><strong style="color:#f85149">Too Simplistic</strong> <span class="desc">— Hardcoded, minimal logic, or no real value</span></span></div>
   </div>
+</div>
 
-  <!-- ── Recent Commits ── -->
-  <div class="section">
-    <div class="section-title">Recent Commits (last week)</div>
-    <div class="commit-list">
-      <div class="commit-item">
-        <span class="commit-hash">a3ddbc7</span>
-        <span class="commit-type ct-refactor">refactor</span>
-        <span class="commit-msg">fix hub broadcast data race and deduplicate test helpers</span>
-      </div>
-      <div class="commit-item">
-        <span class="commit-hash">c10cb30</span>
-        <span class="commit-type ct-ci">ci</span>
-        <span class="commit-msg">revert to ubuntu-latest (local runner port conflicts with dev stack)</span>
-      </div>
-      <div class="commit-item">
-        <span class="commit-hash">f25d48e</span>
-        <span class="commit-type ct-ci">ci</span>
-        <span class="commit-msg">switch all jobs to self-hosted runner</span>
-      </div>
-      <div class="commit-item">
-        <span class="commit-hash">88635b7</span>
-        <span class="commit-type ct-fix">fix</span>
-        <span class="commit-msg">rest: also add OneToMany parent join cols to base CTE</span>
-      </div>
-      <div class="commit-item">
-        <span class="commit-hash">f85b931</span>
-        <span class="commit-type ct-fix">fix</span>
-        <span class="commit-msg">tests: fix message handler race condition in JWT WebSocket test</span>
-      </div>
-      <div class="commit-item">
-        <span class="commit-hash">d72aa14</span>
-        <span class="commit-type ct-feat">feat</span>
-        <span class="commit-msg">proxy-go: add batch/transaction endpoint with rollback on failure</span>
-      </div>
-      <div class="commit-item">
-        <span class="commit-hash">1a8c042</span>
-        <span class="commit-type ct-refactor">refactor</span>
-        <span class="commit-msg">ext: extract bgworker into bgworker.c, reduce pg_reactive.c coupling</span>
-      </div>
-    </div>
+<!-- ── Tabs ── -->
+<div class="tabs-wrap">
+  <div class="tabs">
+    <div class="tab active" data-filter="all">All (49)</div>
+    <div class="tab" data-filter="ext">C Extension (7)</div>
+    <div class="tab" data-filter="goproxy">Go Proxy (14)</div>
+    <div class="tab" data-filter="rustproxy">Rust Proxy (1)</div>
+    <div class="tab" data-filter="sdk">SDK (5)</div>
+    <div class="tab" data-filter="studio">Studio (6)</div>
+    <div class="tab" data-filter="cli">CLI (5)</div>
+    <div class="tab" data-filter="examples">Examples (3)</div>
+    <div class="tab" data-filter="tests">Tests (5)</div>
+    <div class="tab" data-filter="infra">CI/Infra (3)</div>
   </div>
+</div>
 
-  <!-- ── Architecture ── -->
-  <div class="section">
-    <div class="section-title">Architecture</div>
-    <div class="arch-box">
-<pre>
-<span class="hl-muted">┌──────────────────────────────────────────────────────────────────────────────────┐</span>
-<span class="hl-muted">│                           pg_reactive / pgStack                                  │</span>
-<span class="hl-muted">└──────────────────────────────────────────────────────────────────────────────────┘</span>
+<!-- ── Cards ── -->
+<div class="cards-section">
+  <div class="cards" id="cards">
 
-  <span class="hl-blue">CLIENT LAYER</span>
-  ┌──────────────────┐  ┌───────────────────┐  ┌──────────────────┐
-  │  Browser / Node  │  │  React (useLive-  │  │  pgstack CLI     │
-  │  LiveQuery class │  │  Query hook)      │  │  init/dev/mig    │
-  └────────┬─────────┘  └────────┬──────────┘  └────────┬─────────┘
-           │                     │                       │
-           └─────────────────────┴───────────────────────┘
-                                 │ WebSocket / REST / HTTP
-  <span class="hl-green">PROXY LAYER (Go — proxy-go/)</span>
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  main.go: axum-style router, JWT middleware, graceful shutdown  │
-  │  ┌──────────────┐  ┌──────────────────┐  ┌──────────────────┐  │
-  │  │ realtime/    │  │ rest/            │  │ auth/            │  │
-  │  │  hub.go      │  │  handlers.go     │  │  JWT HS256       │  │
-  │  │  ws.go       │  │  catalog.go      │  │  OAuth PKCE      │  │
-  │  │  listener.go │  │  filter.go       │  │  refresh tokens  │  │
-  │  │              │  │  embed.go        │  │  rate limiting   │  │
-  │  │  fan-out via │  │  query_builder   │  │  family reuse    │  │
-  │  │  broadcast   │  │  rpc.go          │  │  detection       │  │
-  │  │  channel     │  │  batch.go        │  │                  │  │
-  │  └──────────────┘  └──────────────────┘  └──────────────────┘  │
-  └───────────────────────────────┬─────────────────────────────────┘
-                                  │ libpq / LISTEN pgr
-  <span class="hl-amber">DATABASE LAYER (PostgreSQL + C Extension — ext/)</span>
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  pg_reactive.c  →  pgr.subscribe() / pgr.unsubscribe()         │
-  │                    ProcessUtility_hook (DDL auto-unsubscribe)   │
-  │  dependency.c   →  ShmemInitHash (query_id ↔ table OIDs)       │
-  │                    LRW eviction + LWLock protection             │
-  │  invalidation.c →  AFTER STATEMENT triggers per table          │
-  │                    uint64 column bitmask change tracking        │
-  │  recompute.c    →  EXCEPT-based delta via temp table           │
-  │                    NOTIFY "pgr" JSON payload                    │
-  │                    sequence numbers for gap detection           │
-  │  bgworker.c     →  optional async recompute background worker  │
-  └─────────────────────────────────────────────────────────────────┘
-
-  <span class="hl-purple">NOTIFY WIRE FORMAT (channel: pgr)</span>
-  Delta:    {"query_id":"...","inserted":[...],"deleted":[...],"seq":N}
-  Overflow: {"type":"overflow","query_id":"...","fetch":true}
-  Welcome:  {"type":"subscribed","query_id":"..."}
-</pre>
+    <!-- C Extension -->
+    <div class="card" data-d="ext">
+      <span class="tier-badge tier-a" title="ProcessUtility_hook intercepts DDL (TRUNCATE/ALTER/DROP) for auto-unsubscribe; pgr.subscribe() parses the SELECT query string to extract table OIDs and column masks; DDL hooks prevent dangling subscriptions on schema changes.">A</span>
+      <div class="card-body"><div class="card-name">ext/src/pg_reactive.c</div><div class="card-desc">Core extension: _PG_init, ProcessUtility_hook for DDL interception, pgr.subscribe/unsubscribe with query parse-tree table OID extraction.</div><div class="card-tags"><span class="tag">C</span><span class="tag">PostgreSQL</span><span class="tag">hooks</span></div></div>
     </div>
+
+    <div class="card" data-d="ext">
+      <span class="tier-badge tier-a" title="AFTER STATEMENT triggers with per-query uint64 column bitmask tracking; tgnargs distinguishes per-query vs shared triggers; auto-installs and removes triggers on subscribe/unsubscribe — no redundant recomputes for unaffected columns.">A</span>
+      <div class="card-body"><div class="card-name">ext/src/invalidation.c</div><div class="card-desc">AFTER STATEMENT trigger engine: column-level uint64 bitmask invalidation, automatic trigger lifecycle on subscribe/unsubscribe.</div><div class="card-tags"><span class="tag">C</span><span class="tag">triggers</span><span class="tag">bitmask</span></div></div>
+    </div>
+
+    <div class="card" data-d="ext">
+      <span class="tier-badge tier-a" title="EXCEPT-based delta computation between UNLOGGED snapshot tables; stores snapshot after each DML, emits pg_notify with JSON {inserted,deleted}; detects 7800-byte overflow and sends a fetch-signal so reconnecting clients can pull fresh state.">A</span>
+      <div class="card-body"><div class="card-name">ext/src/recompute.c</div><div class="card-desc">EXCEPT-based delta: UNLOGGED snapshots, pg_notify with JSON delta payload, overflow detection with client fetch-signal.</div><div class="card-tags"><span class="tag">C</span><span class="tag">delta</span><span class="tag">NOTIFY</span></div></div>
+    </div>
+
+    <div class="card" data-d="ext">
+      <span class="tier-badge tier-a" title="ShmemInitHash with LWLock protecting a query_id→table-OIDs dependency map with LRU eviction; reverse index table_oid→query_ids for O(1) invalidation lookup; proper shmem_request_hook + shmem_startup_hook lifecycle.">A</span>
+      <div class="card-body"><div class="card-name">ext/src/dependency.c</div><div class="card-desc">Shared memory LRU hash (ShmemInitHash + LWLock) mapping query_id→table OIDs with reverse index for O(1) invalidation lookup.</div><div class="card-tags"><span class="tag">C</span><span class="tag">shmem</span><span class="tag">LRU</span></div></div>
+    </div>
+
+    <div class="card" data-d="ext">
+      <span class="tier-badge tier-b" title="Optional async background worker for deferred recompute; PGDLLEXPORT entry with BackgroundWorkerUnblockSignals; controlled by PGC_POSTMASTER GUC so it doesn't interfere with pg_regress — correct but secondary to the main extension logic.">B</span>
+      <div class="card-body"><div class="card-name">ext/src/bgworker.c</div><div class="card-desc">Optional async recompute background worker; PGDLLEXPORT, BackgroundWorkerUnblockSignals, GUC-controlled activation.</div><div class="card-tags"><span class="tag">C</span><span class="tag">bgworker</span></div></div>
+    </div>
+
+    <div class="card" data-d="ext">
+      <span class="tier-badge tier-b" title="Extension install script creating the pgr schema, pgr.subscribe/unsubscribe SQL functions, trigger infrastructure, and GUC registration — necessary DDL but straightforward template work.">B</span>
+      <div class="card-body"><div class="card-name">ext/pg_reactive--0.1.sql</div><div class="card-desc">Extension install DDL: pgr schema, subscribe/unsubscribe functions, trigger infrastructure, GUC registration.</div><div class="card-tags"><span class="tag">SQL</span><span class="tag">DDL</span></div></div>
+    </div>
+
+    <div class="card" data-d="ext">
+      <span class="tier-badge tier-a" title="7 pg_regress SQL tests (setup through column tracking) plus 3 pg_isolation specs (concurrent_dml, concurrent_subscribe, concurrent_invalidation) that exercise actual concurrency correctness — not just happy-path SQL.">A</span>
+      <div class="card-body"><div class="card-name">ext/sql/ + ext/expected/ + ext/specs/</div><div class="card-desc">7 pg_regress tests + 3 isolation concurrency specs covering concurrent DML, subscribe, and invalidation correctness.</div><div class="card-tags"><span class="tag">SQL</span><span class="tag">pg_regress</span><span class="tag">isolation</span></div></div>
+    </div>
+
+    <!-- Go Proxy -->
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="PostgREST-compatible filter parser implementing 13 operators (eq/neq/gt/gte/lt/lte/like/ilike/is/in/cs/cd/fts) with not. negation prefix, column whitelist validation, and fully parameterized SQL binding — no injection possible by construction.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/rest/filter.go</div><div class="card-desc">PostgREST-compatible filter parser: 13 operators, negation prefix, column validation, fully parameterized SQL — zero injection surface.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">REST</span><span class="tag">filters</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="CRUD handlers (GET/POST/PATCH/DELETE) with beginRLSTx for per-request SET LOCAL ROLE; pgx error-to-HTTP-status translation (23505→409, 23503→400); json_agg/row_to_json for consistent array output from all DML RETURNING clauses.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/rest/handlers.go</div><div class="card-desc">CRUD handlers with RLS transaction context, pgx error→HTTP status mapping, json_agg/row_to_json for consistent array output.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">REST</span><span class="tag">RLS</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="Multi-op batch in one PG transaction: atomic mode (rollback on first failure → 422) and partial mode (SAVEPOINT per op → 207 on partial success); enforces MaxBatchOperations; resolves {{templates}} before each op; per-op result collection with id/status/data/error.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/rest/batch.go</div><div class="card-desc">Atomic/partial transaction batching: SAVEPOINT per op, 207/422 semantics, MaxBatchOperations limit, {{template}} resolution — differentiator vs Supabase.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">batch</span><span class="tag">transactions</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="{{opId.field}} resolver with dot-path navigation, numeric array indexing (op1.0.id), wildcard * to collect a field from every array element for IN filters (op1.*.id), and proper multi-error accumulation before rejecting a batch.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/rest/template.go</div><div class="card-desc">{{opId.field}} template resolver: dot-path nav, array index, wildcard * collect, multi-error accumulation — powers cross-op references in batch.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">templates</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="PostgreSQL function introspection via pg_proc (proargnames, proargtypes, proretset, provolatile); volatility-based Cache-Control headers (IMMUTABLE→3600s, STABLE→60s); typed $N::type binding from pg_type — mirrors PostgREST RPC behaviour.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/rest/rpc.go</div><div class="card-desc">PG function introspection via pg_proc; volatility Cache-Control (IMMUTABLE=3600s, STABLE=60s); typed parameter binding.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">RPC</span><span class="tag">caching</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="FK-aware embedding: parses nested select syntax (table(cols)), introspects pg_constraint for FK join columns, builds LEFT JOIN CTEs with jsonb_agg for one-to-many and row_to_json for many-to-one — full PostgREST embedding compatibility.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/rest/embed.go + catalog.go</div><div class="card-desc">FK-aware embedding: nested select parsing, pg_constraint introspection, LEFT JOIN CTEs with jsonb_agg for 1:many relations.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">embedding</span><span class="tag">FK</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="JWT HS256 auth with refresh token family-based reuse detection (compromised replay revokes entire family); PKCE S256 OAuth (Google + GitHub) with state validation; email verify, password reset, magic links via lettre SMTP mailer — production-grade auth stack.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/auth/</div><div class="card-desc">JWT HS256 + refresh family reuse detection, PKCE OAuth (Google/GitHub), email verify/reset/magic-links, lettre SMTP mailer.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">auth</span><span class="tag">JWT</span><span class="tag">OAuth</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="Thread-safe fan-out hub: RWMutex snapshot copy before Broadcast so the write lock is not held during delivery; per-subscriber buffered channel; swap-with-last O(1) Unsubscribe; non-blocking select with drop-on-full per subscriber only.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/realtime/hub.go</div><div class="card-desc">Fan-out hub: RWMutex snapshot for non-blocking delivery, per-subscriber channel, swap-with-last unsubscribe, drop-on-full isolation.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">realtime</span><span class="tag">concurrency</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="Dedicated PG LISTEN connection on the 'pgr' channel with automatic reconnect loop on error; parses NOTIFY payloads and routes to Hub.Broadcast per query_id — the core data pipeline from PostgreSQL to all WebSocket clients.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/realtime/listener.go + ws.go</div><div class="card-desc">PG LISTEN connection with reconnect loop; routes NOTIFY payloads to Hub per query_id; WebSocket upgrade with semaphore connection limit.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">LISTEN</span><span class="tag">WebSocket</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="NOTIFY-triggered auto-refresh via dedicated listenLoop goroutine (LISTEN pgstack_fn_changed); atomic map swap under write lock; Get/List under read lock; onRefresh callback for downstream notification — zero-downtime hot reload of function metadata.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/functions/catalog.go</div><div class="card-desc">NOTIFY-based auto-refresh of edge function catalog; atomic map swap under write lock; zero-downtime hot reload on function deploy.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">LISTEN</span><span class="tag">catalog</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-a" title="goja VM per-invocation (goroutine-safe isolation); db.query(sql, ...params) via pgxpool with column name mapping; console.log/error → zerolog; request.{body,role,sub,claims} injection; AssertFunction validation; proper panic→error wrapping for JS exceptions.">A</span>
+      <div class="card-body"><div class="card-name">proxy-go/functions/goja.go</div><div class="card-desc">Embedded JS runtime: goja VM, db.query() via pgxpool, console→zerolog, JWT claims injection, panic→error wrapping.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">JavaScript</span><span class="tag">goja</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-b" title="Runtime dispatcher routing requests to embedded/plv8/plpython3u based on catalog entry; JWT verify check before invocation; invokePLRuntime calls pgstack.fn_{name}($1::jsonb) in RLS transaction — correct routing logic but not algorithmically complex.">B</span>
+      <div class="card-body"><div class="card-name">proxy-go/functions/functions.go</div><div class="card-desc">Runtime dispatcher: embedded/plv8/plpython3u routing, JWT verify, invokePLRuntime in RLS transaction, catalog lookup per request.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">edge functions</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-b" title="CORS with configurable origins, token-bucket rate limiting per IP (configurable via AUTH_RATE_LIMIT), RLS transaction wrapper injecting SET LOCAL ROLE, Helmet-style security headers — standard middleware stack, well-implemented but not novel.">B</span>
+      <div class="card-body"><div class="card-name">proxy-go/middleware/</div><div class="card-desc">CORS, token-bucket rate limiting per IP, RLS role injector, security headers (Helmet-style) — standard but correct middleware stack.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">middleware</span><span class="tag">security</span></div></div>
+    </div>
+
+    <div class="card" data-d="goproxy">
+      <span class="tier-badge tier-b" title="10 route handlers covering: catalog refresh (POST /api/catalog-refresh), OpenAPI JSON, health (GET /health), demo data seeding, SQL passthrough, studio SPA via ServeDir, storage proxy, RLS debug endpoint, Swagger UI, public static files.">B</span>
+      <div class="card-body"><div class="card-name">proxy-go/routes/</div><div class="card-desc">10 route handlers: catalog refresh, OpenAPI spec, health, SQL passthrough, studio SPA serve, storage, RLS debug, Swagger, demo.</div><div class="card-tags"><span class="tag">Go</span><span class="tag">routes</span></div></div>
+    </div>
+
+    <!-- Rust Proxy -->
+    <div class="card" data-d="rustproxy">
+      <span class="tier-badge tier-a" title="Full Rust WebSocket proxy: hyper for HTTP, tokio-tungstenite for WebSocket; broadcast::channel fan-out to N concurrent clients; JWT HS256 via jwtk; Semaphore-based connection limit (10K default); single-file, zero-copy NOTIFY pipeline — the original realtime proxy.">A</span>
+      <div class="card-body"><div class="card-name">proxy/src/main.rs</div><div class="card-desc">Rust WebSocket proxy: hyper + tokio-tungstenite, broadcast::channel fan-out, JWT HS256, semaphore connection limit (10K).</div><div class="card-tags"><span class="tag">Rust</span><span class="tag">WebSocket</span><span class="tag">tokio</span></div></div>
+    </div>
+
+    <!-- SDK -->
+    <div class="card" data-d="sdk">
+      <span class="tier-badge tier-a" title="LiveQuery with exponential reconnect backoff and local snapshot management; LiveQueryHub with per-queryId HubSubscription, preOptimisticSnapshot saved before each optimistic mutation and restored on rollback, offline mutation queue that drains on reconnect with stop-on-first-failure ordering.">A</span>
+      <div class="card-body"><div class="card-name">sdk/src/index.ts</div><div class="card-desc">LiveQuery (reconnect + snapshot) + LiveQueryHub with optimistic updates, snapshot rollback, offline mutation queue draining on reconnect.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">WebSocket</span><span class="tag">optimistic</span></div></div>
+    </div>
+
+    <div class="card" data-d="sdk">
+      <span class="tier-badge tier-a" title="Full pgStack BaaS client: type-safe chained query builder (.select/.eq/.gt/.order/.limit), auth client with session management, RealtimeChannel with presence tracking, functions.invoke() with method/headers, and batch() with op-id cross-referencing — mirrors Supabase JS client API.">A</span>
+      <div class="card-body"><div class="card-name">sdk/src/pgstack.ts</div><div class="card-desc">Full pgStack client: typed query builder chain, auth, RealtimeChannel with presence, functions.invoke(), batch() — Supabase-compatible API.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">client</span><span class="tag">query builder</span></div></div>
+    </div>
+
+    <div class="card" data-d="sdk">
+      <span class="tier-badge tier-b" title="useLiveQuery hook managing WebSocket lifecycle with useEffect/useCallback and stable snapshot updates; useAuth hook wrapping the auth client with token refresh; clean React integration without over-abstraction or unnecessary re-renders.">B</span>
+      <div class="card-body"><div class="card-name">sdk/src/react.ts</div><div class="card-desc">useLiveQuery + useAuth hooks: WebSocket lifecycle via useEffect, stable snapshot updates, clean React integration.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">React</span><span class="tag">hooks</span></div></div>
+    </div>
+
+    <div class="card" data-d="sdk">
+      <span class="tier-badge tier-b" title="PgReactiveAdmin class for server-side subscription management via pg driver; createSubscription/deleteSubscription/listSubscriptions with typed results — useful for backend/serverless contexts that cannot use WebSocket.">B</span>
+      <div class="card-body"><div class="card-name">sdk/src/server.ts</div><div class="card-desc">PgReactiveAdmin: server-side subscription management via pg driver — for backend/serverless use without WebSocket.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">Node.js</span><span class="tag">admin</span></div></div>
+    </div>
+
+    <div class="card" data-d="sdk">
+      <span class="tier-badge tier-a" title="pg_try_advisory_lock(hashtext(id::text)) for distributed worker deduplication across parallel consumers; dead letter queue with atomic DELETE+INSERT transaction; retryDeadLetterJob() moves exhausted jobs back to queue; reportProgress(pct, msg) callback updates job_queue in real time; cron scheduler with cron-parser.">A</span>
+      <div class="card-body"><div class="card-name">sdk/src/dbos/</div><div class="card-desc">Durable job queue: advisory locks for distributed dedup, dead letter queue with DLQ retry, progress reporting, cron scheduler.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">job queue</span><span class="tag">PostgreSQL</span></div></div>
+    </div>
+
+    <!-- Studio -->
+    <div class="card" data-d="studio">
+      <span class="tier-badge tier-a" title="Canvas sparklines with 20-point ring buffer per query_id, devicePixelRatio-aware Canvas 2D rendering, green fill gradient under the line, delta badges and sparkline rendered side-by-side in the Invalidations column — actual visual analytics, not just a number.">A</span>
+      <div class="card-body"><div class="card-name">studio: SubscriptionTable.tsx</div><div class="card-desc">Live subscription table with Canvas sparklines (20-point ring buffer per query_id), dPR-aware rendering, delta badges — visual invalidation analytics.</div><div class="card-tags"><span class="tag">React</span><span class="tag">Canvas</span><span class="tag">realtime</span></div></div>
+    </div>
+
+    <div class="card" data-d="studio">
+      <span class="tier-badge tier-b" title="SQL editor with QueryHistory (local storage of recent queries), EditorToolbar with run/format/explain actions, ResultsGrid with sortable column resize, and metadata panel for table info — a real IDE-in-browser pattern, solid for an embedded tool.">B</span>
+      <div class="card-body"><div class="card-name">studio: sql-editor/</div><div class="card-desc">SQL editor with query history, run/format/explain toolbar, sortable ResultsGrid with column resize — real IDE-in-browser.</div><div class="card-tags"><span class="tag">React</span><span class="tag">TypeScript</span><span class="tag">SQL</span></div></div>
+    </div>
+
+    <div class="card" data-d="studio">
+      <span class="tier-badge tier-b" title="SchemaTree sidebar with schema/table navigation via REST introspection; TableDetail with tabbed panels for ColumnList (type, nullable, default), IndexList (method, unique, columns), FKList (referenced table, on-delete action) — live schema browser covering most DBA needs.">B</span>
+      <div class="card-body"><div class="card-name">studio: database/</div><div class="card-desc">Schema browser: SchemaTree, TableDetail with tabbed ColumnList/IndexList/FKList panels — live introspection via REST API.</div><div class="card-tags"><span class="tag">React</span><span class="tag">TypeScript</span><span class="tag">schema</span></div></div>
+    </div>
+
+    <div class="card" data-d="studio">
+      <span class="tier-badge tier-b" title="Data grid with FilterBar for per-column filtering, RowForm for insert/update with type-aware inputs (text, number, boolean, jsonb), TableList sidebar with search — covers the full CRUD workflow for non-SQL users via REST API.">B</span>
+      <div class="card-body"><div class="card-name">studio: table-editor/</div><div class="card-desc">Data grid with FilterBar, RowForm (type-aware inputs), TableList sidebar — visual CRUD workflow for non-SQL users.</div><div class="card-tags"><span class="tag">React</span><span class="tag">TypeScript</span><span class="tag">CRUD</span></div></div>
+    </div>
+
+    <div class="card" data-d="studio">
+      <span class="tier-badge tier-b" title="Auth user management: UserTable with search/filter, UserDetailPanel with role/email/metadata editing, SessionList showing active refresh tokens, CreateUserModal — mirrors the Supabase Auth admin UI panel.">B</span>
+      <div class="card-body"><div class="card-name">studio: auth-users/</div><div class="card-desc">User management: UserTable, UserDetailPanel (role/metadata edit), SessionList, CreateUserModal — mirrors Supabase Auth admin UI.</div><div class="card-tags"><span class="tag">React</span><span class="tag">TypeScript</span><span class="tag">auth</span></div></div>
+    </div>
+
+    <div class="card" data-d="studio">
+      <span class="tier-badge tier-b" title="useSubscriptions hook (TanStack Query, 5s refetch interval) for realtime subscription polling; useAuth wrapping auth API with token refresh; Zustand store for connection URL and service-role key state shared across all studio panels.">B</span>
+      <div class="card-body"><div class="card-name">studio: hooks/ + store/</div><div class="card-desc">useSubscriptions (5s polling via TanStack Query), useAuth, Zustand store for connection URL and API key — data layer for all panels.</div><div class="card-tags"><span class="tag">React</span><span class="tag">Zustand</span><span class="tag">react-query</span></div></div>
+    </div>
+
+    <!-- CLI -->
+    <div class="card" data-d="cli">
+      <span class="tier-badge tier-a" title="Full edge function lifecycle: new (scaffolds supabase/functions/{name}/index.ts), deploy (upserts code to pgstack.edge_functions + triggers refresh), list (fetches /functions/v1/), delete (soft-deactivate), serve (fs.watch hot-reload with 200ms debounce + initial deploy of all existing functions on startup).">A</span>
+      <div class="card-body"><div class="card-name">cli: commands/functions.ts</div><div class="card-desc">Full edge function lifecycle: new/deploy/list/delete/serve with fs.watch hot-reload, 200ms debounce, initial-deploy on start.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">CLI</span><span class="tag">edge functions</span></div></div>
+    </div>
+
+    <div class="card" data-d="cli">
+      <span class="tier-badge tier-b" title="Timestamped migration file creation (YYYYMMDDHHMMSS_name.sql), apply via proxy /api/sql endpoint, rollback via -- DOWN section parsing, list with applied/pending status tracking — covers the essential migration workflow without requiring direct DB access.">B</span>
+      <div class="card-body"><div class="card-name">cli: commands/migration.ts</div><div class="card-desc">Timestamped migration create/run/rollback/list via proxy /api/sql — no direct DB access required.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">migrations</span></div></div>
+    </div>
+
+    <div class="card" data-d="cli">
+      <span class="tier-badge tier-b" title="Project scaffold generating docker-compose.yml with proxy+db services, .env with crypto.randomBytes-generated JWT_SECRET and API keys, pgstack.config.json with project metadata, and placeholder migration — generates real working output, not just a README.">B</span>
+      <div class="card-body"><div class="card-name">cli: commands/init.ts</div><div class="card-desc">Project scaffold: docker-compose.yml, .env with crypto.randomBytes secrets, pgstack.config.json — generates real working output.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">scaffold</span></div></div>
+    </div>
+
+    <div class="card" data-d="cli">
+      <span class="tier-badge tier-b" title="Global --verbose/--url/--json options with preAction hook propagating values to env vars for subcommands; version read from package.json via createRequire; SIGINT handler for clean Ctrl+C and unhandledRejection for clean async error display — proper CLI boilerplate.">B</span>
+      <div class="card-body"><div class="card-name">cli: src/index.ts</div><div class="card-desc">Global --verbose/--url/--json options, preAction env-var propagation, version from package.json, SIGINT + unhandledRejection handlers.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">commander</span></div></div>
+    </div>
+
+    <div class="card" data-d="cli">
+      <span class="tier-badge tier-b" title="db push (apply local SQL files via /api/sql), pull (introspects PG schema → TypeScript type definitions), reset (truncates all user tables), status (shows migration tracking state) — covers the essential database workflow for pgStack projects.">B</span>
+      <div class="card-body"><div class="card-name">cli: commands/db.ts</div><div class="card-desc">db push/pull/reset/status via proxy /api/sql — push local SQL, pull schema to TypeScript types, reset tables, check status.</div><div class="card-tags"><span class="tag">TypeScript</span><span class="tag">database</span></div></div>
+    </div>
+
+    <!-- Examples -->
+    <div class="card" data-d="examples">
+      <span class="tier-badge tier-a" title="WebSocket with full exponential-backoff reconnect (1s→30s with jitter); interactive filter panel (name text + min/max price) with client-side rowMatchesFilter(); filter-aware animateInsert skips non-matching rows; animated card in/out with DOM-safe construction (no innerHTML with user data).">A</span>
+      <div class="card-body"><div class="card-name">examples/01-live-products/app.html</div><div class="card-desc">Live product catalog: WebSocket reconnect backoff, interactive name/price filter panel, filter-aware card animations, safe DOM construction.</div><div class="card-tags"><span class="tag">JavaScript</span><span class="tag">WebSocket</span><span class="tag">interactive</span></div></div>
+    </div>
+
+    <div class="card" data-d="examples">
+      <span class="tier-badge tier-b" title="Complete shopping list application with user sign-in via pgStack auth, live-query subscription for real-time item updates, add/complete/delete CRUD operations, and proper WebSocket lifecycle management — a good full-stack reference implementation.">B</span>
+      <div class="card-body"><div class="card-name">examples/apps/shopping-list</div><div class="card-desc">Complete app: pgStack auth sign-in, live-query subscription, add/complete/delete items, WebSocket lifecycle — full-stack reference.</div><div class="card-tags"><span class="tag">JavaScript</span><span class="tag">full-stack</span></div></div>
+    </div>
+
+    <div class="card" data-d="examples">
+      <span class="tier-badge tier-b" title="11 themed live-query demos: order-feed (02), revenue-dashboard (03), category-leaderboard (04), CRM-contacts (05), inventory-monitor (06), multi-filter (07), order-analytics (08), price-comparison (09), executive-scorecard (10), notify-mode (11), tutorial (12) — comprehensive domain coverage.">B</span>
+      <div class="card-body"><div class="card-name">examples/02–12 (11 examples)</div><div class="card-desc">11 themed demos: order feed, revenue dashboard, CRM, inventory, analytics, leaderboard, executive scorecard, notify mode, tutorial.</div><div class="card-tags"><span class="tag">JavaScript</span><span class="tag">demos</span></div></div>
+    </div>
+
+    <!-- Tests -->
+    <div class="card" data-d="tests">
+      <span class="tier-badge tier-a" title="210+ assertions across 13 test files: auth (37 — signup/login/refresh/reuse/logout), REST CRUD (34 — filters/ordering/pagination/errors), SDK (29 — auth flow/query builder/embedding/RPC), embed+RPC (40 — FK joins/nested/scalar/set functions), batch (11 — atomic/partial/templates) + fanout/JWT/RLS/shopping-patch.">A</span>
+      <div class="card-body"><div class="card-name">tests/e2e_*.mjs (13 files)</div><div class="card-desc">210+ E2E assertions covering auth, REST CRUD, SDK, embedding, RPC, batch, fanout, JWT, RLS — full API surface against live Docker stack.</div><div class="card-tags"><span class="tag">Node.js</span><span class="tag">E2E</span><span class="tag">integration</span></div></div>
+    </div>
+
+    <div class="card" data-d="tests">
+      <span class="tier-badge tier-a" title="SQL injection test crafts filter payloads (UNION, comment injection, quote escaping, boolean manipulation) asserting 400 or safe 200, never 5xx; JWT manipulation test covers algo confusion (RS256), expired tokens, tampered claims, missing sub — adversarial security regression suite.">A</span>
+      <div class="card-body"><div class="card-name">tests/security/*.mjs</div><div class="card-desc">SQL injection (crafted filter payloads, asserts safe 400/200 never 5xx) + JWT manipulation (algo confusion, tampered claims) regression tests.</div><div class="card-tags"><span class="tag">Node.js</span><span class="tag">security</span><span class="tag">adversarial</span></div></div>
+    </div>
+
+    <div class="card" data-d="tests">
+      <span class="tier-badge tier-b" title="runner.sh orchestrates P1-P6 benchmarks with JSONL metrics output (commit hash + date); chart.sh generates Canvas 2D trend chart from results.jsonl with 15% regression detection threshold (exit 1 on regress) — captures performance trends over commits.">B</span>
+      <div class="card-body"><div class="card-name">tests/perf/runner.sh + chart.sh</div><div class="card-desc">P1-P6 benchmark suite with JSONL metrics; Canvas 2D HTML trend chart with 15% regression detection — performance history tracking.</div><div class="card-tags"><span class="tag">bash</span><span class="tag">Node.js</span><span class="tag">perf</span></div></div>
+    </div>
+
+    <div class="card" data-d="tests">
+      <span class="tier-badge tier-b" title="Python tests running inside the Docker container: LRU eviction correctness (fill shared memory past limit, verify oldest entries evicted), shmem pressure (concurrent subscribes at capacity), NOTIFY throughput measurement — tests internal C extension internals.">B</span>
+      <div class="card-body"><div class="card-name">tests/integration/*.py</div><div class="card-desc">Docker-internal Python tests: LRU eviction correctness, shmem pressure at capacity, pg_notify throughput — tests C extension internals.</div><div class="card-tags"><span class="tag">Python</span><span class="tag">integration</span><span class="tag">Docker</span></div></div>
+    </div>
+
+    <div class="card" data-d="tests">
+      <span class="tier-badge tier-b" title="k6 load test scripts for auth (signup/token rate, rate-limit verification), REST (concurrent CRUD throughput), and WebSocket (multi-client fan-out latency) — production-readiness validation under sustained load beyond what unit tests cover.">B</span>
+      <div class="card-body"><div class="card-name">tests/load/*.js</div><div class="card-desc">k6 load tests: auth rate-limiting, REST concurrent throughput, WebSocket multi-client fan-out — production-readiness validation.</div><div class="card-tags"><span class="tag">k6</span><span class="tag">load</span><span class="tag">performance</span></div></div>
+    </div>
+
+    <!-- CI/Infra -->
+    <div class="card" data-d="infra">
+      <span class="tier-badge tier-b" title="ci.yml runs ext pg_regress + sdk/cli vitest + E2E suite on self-hosted Docker runner; deploy.yml SSHs to VPS for docker-compose pull+up; release.yml publishes npm packages and Go binaries — covers the full deploy pipeline from test to ship.">B</span>
+      <div class="card-body"><div class="card-name">.github/workflows/</div><div class="card-desc">ci.yml (test matrix), deploy.yml (SSH Docker deploy to VPS), release.yml (npm publish + Go binaries) — full CI/CD pipeline.</div><div class="card-tags"><span class="tag">GitHub Actions</span><span class="tag">CI/CD</span></div></div>
+    </div>
+
+    <div class="card" data-d="infra">
+      <span class="tier-badge tier-b" title="Docusaurus 3 site with 33 docs across 9 sidebar categories (Getting Started, REST API, Auth, Realtime, Edge Functions, Batch API, TypeScript SDK, CLI Reference, DBOS); versioned API reference with code examples — proper product documentation covering the full feature set.">B</span>
+      <div class="card-body"><div class="card-name">docs/site/ (Docusaurus 3)</div><div class="card-desc">33 docs, 9 sidebar categories, API reference with code examples — covers Getting Started through DBOS job queue.</div><div class="card-tags"><span class="tag">Docusaurus</span><span class="tag">docs</span></div></div>
+    </div>
+
+    <div class="card" data-d="infra">
+      <span class="tier-badge tier-b" title="Multi-stage Dockerfiles (Go proxy with scratch final stage, PG with plpython3u + plv8 extension packages); init.sql creates pgstack schema with edge_functions table, NOTIFY trigger; docker-compose.prod.yml with nginx reverse proxy and gateway network — production-ready infrastructure.">B</span>
+      <div class="card-body"><div class="card-name">docker/ + docker-compose.yml</div><div class="card-desc">Multi-stage Dockerfiles (Go/PG/studio), init.sql with pgstack schema + NOTIFY trigger, prod compose with nginx reverse proxy.</div><div class="card-tags"><span class="tag">Docker</span><span class="tag">infrastructure</span></div></div>
+    </div>
+
+  </div><!-- /cards -->
+</div><!-- /cards-section -->
+
+<!-- ── Architecture Tree ── -->
+<div class="tree-section">
+  <h2>Repository Architecture</h2>
+  <div class="tree">
+    <div class="tree-node"><div class="tree-node-name">pg_reactive/</div><div class="tree-node-desc">Root — monorepo, 7 major domains</div><div class="tree-node-count">922 files · 241 dirs</div></div>
+    <div class="tree-node"><div class="tree-node-name">  ext/</div><div class="tree-node-desc">PostgreSQL C extension (reactive live queries)</div><div class="tree-node-count">9 C/H · 7 SQL tests</div></div>
+    <div class="tree-node"><div class="tree-node-name">    src/</div><div class="tree-node-desc">pg_reactive.c · invalidation.c · recompute.c · dependency.c · bgworker.c</div><div class="tree-node-count">A-tier core</div></div>
+    <div class="tree-node"><div class="tree-node-name">    sql/ + expected/ + specs/</div><div class="tree-node-desc">pg_regress tests (7) + isolation specs (3)</div><div class="tree-node-count">10 test files</div></div>
+    <div class="tree-node"><div class="tree-node-name">  proxy-go/</div><div class="tree-node-desc">Go BaaS proxy (REST · Auth · Realtime · Functions · Batch)</div><div class="tree-node-count">41 Go files</div></div>
+    <div class="tree-node"><div class="tree-node-name">    auth/</div><div class="tree-node-desc">JWT · refresh tokens · PKCE OAuth · SMTP mailer · rate limiting</div><div class="tree-node-count">A-tier</div></div>
+    <div class="tree-node"><div class="tree-node-name">    rest/</div><div class="tree-node-desc">filter · handlers · batch · template · rpc · embed · catalog · query_builder</div><div class="tree-node-count">A-tier</div></div>
+    <div class="tree-node"><div class="tree-node-name">    realtime/</div><div class="tree-node-desc">hub (fan-out) · listener (PG LISTEN) · ws (WebSocket upgrade)</div><div class="tree-node-count">A-tier</div></div>
+    <div class="tree-node"><div class="tree-node-name">    functions/</div><div class="tree-node-desc">catalog (NOTIFY refresh) · goja (embedded JS VM) · functions (dispatcher)</div><div class="tree-node-count">A/B-tier</div></div>
+    <div class="tree-node"><div class="tree-node-name">    middleware/ · routes/</div><div class="tree-node-desc">CORS · rate limit · RLS · health · OpenAPI · SQL endpoint · studio SPA</div><div class="tree-node-count">B-tier</div></div>
+    <div class="tree-node"><div class="tree-node-name">  proxy/</div><div class="tree-node-desc">Rust WebSocket proxy (hyper + tokio-tungstenite, original proxy)</div><div class="tree-node-count">33 Rust files</div></div>
+    <div class="tree-node"><div class="tree-node-name">  sdk/</div><div class="tree-node-desc">TypeScript SDK (LiveQuery · pgStack client · React hooks · DBOS queue)</div><div class="tree-node-count">11 TS files</div></div>
+    <div class="tree-node"><div class="tree-node-name">    src/dbos/</div><div class="tree-node-desc">Job queue · scheduler · dead letter queue · advisory locks · progress</div><div class="tree-node-count">A-tier</div></div>
+    <div class="tree-node"><div class="tree-node-name">  studio/</div><div class="tree-node-desc">React SPA (Vite + TailwindCSS) served at /studio/</div><div class="tree-node-count">37 TSX files</div></div>
+    <div class="tree-node"><div class="tree-node-name">    src/components/</div><div class="tree-node-desc">realtime (sparklines) · sql-editor · database · table-editor · auth-users · ui</div><div class="tree-node-count">30+ components</div></div>
+    <div class="tree-node"><div class="tree-node-name">  cli/</div><div class="tree-node-desc">TypeScript CLI (commander-based, ESM) — pgstack commands</div><div class="tree-node-count">8 TS command files</div></div>
+    <div class="tree-node"><div class="tree-node-name">  examples/</div><div class="tree-node-desc">12 live-query demos + 2 full apps (shopping-list, expenses)</div><div class="tree-node-count">12 HTML apps</div></div>
+    <div class="tree-node"><div class="tree-node-name">  tests/</div><div class="tree-node-desc">E2E (13 mjs) · security (2) · perf (runner+chart) · integration (3 py) · load (k6)</div><div class="tree-node-count">210+ assertions</div></div>
+    <div class="tree-node"><div class="tree-node-name">  docs/site/</div><div class="tree-node-desc">Docusaurus 3 documentation site — 33 docs, 9 categories</div><div class="tree-node-count">33 docs</div></div>
+    <div class="tree-node"><div class="tree-node-name">  .github/workflows/</div><div class="tree-node-desc">ci.yml · deploy.yml · release.yml</div><div class="tree-node-count">3 workflows</div></div>
+    <div class="tree-node"><div class="tree-node-name">  docker/</div><div class="tree-node-desc">init.sql · Dockerfiles · docker-compose.yml (dev + prod)</div><div class="tree-node-count">infra</div></div>
   </div>
-
-  <!-- ── File Ratings (tabbed) ── -->
-  <div class="tabs-wrapper">
-    <div class="section-title">File Quality Ratings</div>
-
-    <div class="tabs-header">
-      <button class="tab-btn active" onclick="switchTab(event,'all')">All Files</button>
-      <button class="tab-btn" onclick="switchTab(event,'c-ext')">C Extension</button>
-      <button class="tab-btn" onclick="switchTab(event,'go-proxy')">Go Proxy</button>
-      <button class="tab-btn" onclick="switchTab(event,'sdk-cli')">SDK + CLI</button>
-      <button class="tab-btn" onclick="switchTab(event,'tests')">Tests</button>
-      <button class="tab-btn" onclick="switchTab(event,'examples')">Examples + Docs</button>
-    </div>
-
-    <!-- ── ALL ── -->
-    <div class="tab-panel active" id="tab-all">
-      <div class="cards-grid">
-
-        <!-- TIER A -->
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/recompute.c</span>
-            <span class="tier-badge tier-A" title="EXCEPT-based delta computation with proper SPI memory context management, sequence numbers for gap detection, temp-table optimization (1 query execution instead of 3), and NOTIFY overflow handling.">TIER A</span>
-          </div>
-          <div class="file-meta">529 lines &nbsp;·&nbsp; C &nbsp;·&nbsp; PostgreSQL extension</div>
-          <div class="file-desc">EXCEPT-based delta computation with proper SPI memory context management, sequence numbers for gap detection, temp-table optimization (1 query execution instead of 3), and NOTIFY overflow handling at 7800 bytes.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/invalidation.c</span>
-            <span class="tier-badge tier-A" title="Per-table AFTER STATEMENT trigger management with column-level change tracking via uint64 bitmasks; handles DDL hooks for TRUNCATE/ALTER/DROP auto-unsubscribe.">TIER A</span>
-          </div>
-          <div class="file-meta">1011 lines &nbsp;·&nbsp; C &nbsp;·&nbsp; PostgreSQL extension</div>
-          <div class="file-desc">Per-table AFTER STATEMENT trigger management with column-level change tracking via <code>uint64</code> bitmasks. Handles DDL hooks for TRUNCATE/ALTER/DROP auto-unsubscribe. Longest file in the extension.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/dependency.c</span>
-            <span class="tier-badge tier-A" title="LRU-eviction shared memory hash table (ShmemInitHash) with LWLock, explicit capacity enforcement, and bidirectional table_oid↔query_id reverse index.">TIER A</span>
-          </div>
-          <div class="file-meta">386 lines &nbsp;·&nbsp; C &nbsp;·&nbsp; PostgreSQL extension</div>
-          <div class="file-desc">LRU-eviction shared memory hash table (<code>ShmemInitHash</code>) with <code>LWLock</code>, explicit capacity enforcement via <code>hash_get_num_entries()</code>, and bidirectional <code>table_oid ↔ query_id</code> reverse index.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/pg_reactive.c</span>
-            <span class="tier-badge tier-A" title="Extension entry point: _PG_init, ProcessUtility_hook for DDL, pgr.subscribe/unsubscribe with query parsing to extract table OIDs and column masks.">TIER A</span>
-          </div>
-          <div class="file-meta">940 lines &nbsp;·&nbsp; C &nbsp;·&nbsp; PostgreSQL extension</div>
-          <div class="file-desc">Extension entry point: <code>_PG_init()</code>, <code>ProcessUtility_hook</code> for DDL, <code>pgr.subscribe()</code> / <code>pgr.unsubscribe()</code> with query parsing to extract table OIDs and column masks.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/realtime/hub.go</span>
-            <span class="tier-badge tier-A" title="Correct fan-out pattern: RWMutex + per-subscriber buffered channels, snap-before-release to prevent data race with concurrent Unsubscribe.">TIER A</span>
-          </div>
-          <div class="file-meta">68 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Realtime fan-out</div>
-          <div class="file-desc">Correct fan-out pattern: <code>RWMutex</code> + per-subscriber buffered channels, snap-before-release to prevent data race with concurrent <code>Unsubscribe</code>. Fixed in most recent refactor commit.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/embed.go</span>
-            <span class="tier-badge tier-A" title="FK-discovery from pg_catalog + CTE/LATERAL SQL generation for ManyToOne and OneToMany relationships with nested embed support up to depth 3.">TIER A</span>
-          </div>
-          <div class="file-meta">424 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; REST embedding</div>
-          <div class="file-desc">FK-discovery from <code>pg_catalog</code> + CTE/LATERAL SQL generation for ManyToOne and OneToMany relationships with nested embed support up to depth 3. Includes parent join-column fix for OneToMany base CTE.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/query_builder.go</span>
-            <span class="tier-badge tier-A" title="Full PostgREST-compatible filter/ordering/pagination SQL builder with parameterized queries, explicit type casts, and RLS role injection.">TIER A</span>
-          </div>
-          <div class="file-meta">408 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; REST query builder</div>
-          <div class="file-desc">Full PostgREST-compatible filter/ordering/pagination SQL builder with parameterized queries, explicit type casts from <code>pg_catalog</code> column types, and RLS role injection via <code>SET LOCAL ROLE</code>.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">sdk/src/index.ts</span>
-            <span class="tier-badge tier-A" title="LiveQuery class with exponential backoff reconnect, local snapshot delta application using canonical row keys, and overflow/invalidation handling.">TIER A</span>
-          </div>
-          <div class="file-meta">361 lines &nbsp;·&nbsp; TypeScript &nbsp;·&nbsp; SDK core</div>
-          <div class="file-desc"><code>LiveQuery</code> class with exponential backoff reconnect, local snapshot delta application using canonical row keys, overflow/invalidation handling, and <code>createClient()</code> factory.</div>
-        </div>
-
-        <!-- TIER B -->
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/handlers.go</span>
-            <span class="tier-badge tier-B" title="REST CRUD handler wiring (GET/POST/PATCH/DELETE) with catalog lookup, RLS transaction wrapping, and JSON response serialization.">TIER B</span>
-          </div>
-          <div class="file-meta">392 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; REST handlers</div>
-          <div class="file-desc">REST CRUD handler wiring (GET/POST/PATCH/DELETE) with catalog lookup, RLS transaction wrapping, and JSON response serialization. Clean separation from query builder logic.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/catalog.go</span>
-            <span class="tier-badge tier-B" title="pg_catalog introspection at startup: tables, columns, foreign keys — memoized in a Catalog struct used by all REST handlers.">TIER B</span>
-          </div>
-          <div class="file-meta">295 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Catalog introspection</div>
-          <div class="file-desc"><code>pg_catalog</code> introspection at startup: tables, columns, foreign keys — memoized in a <code>Catalog</code> struct used by all REST handlers. Startup-only; NOTIFY-based refresh is a TODO.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/filter.go</span>
-            <span class="tier-badge tier-B" title="PostgREST-style filter parser handling operators (eq, gt, like, is, in, etc.) with SQL injection prevention via parameterized bindings.">TIER B</span>
-          </div>
-          <div class="file-meta">263 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Filter parser</div>
-          <div class="file-desc">PostgREST-style filter parser handling operators (<code>eq</code>, <code>gt</code>, <code>like</code>, <code>is</code>, <code>in</code>, etc.) with SQL injection prevention via parameterized bindings and explicit type casts.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/main.go</span>
-            <span class="tier-badge tier-B" title="Go server entrypoint: routes, middleware chain, graceful shutdown, JWT middleware, and both REST + WebSocket handler registration.">TIER B</span>
-          </div>
-          <div class="file-meta">350 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Server entrypoint</div>
-          <div class="file-desc">Go server entrypoint: routes, middleware chain, graceful shutdown, JWT middleware, and both REST + WebSocket handler registration. Clean composition with no business logic.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/rpc.go</span>
-            <span class="tier-badge tier-B" title="RPC function invocation via pg_catalog introspection — correctly distinguishes set-returning vs scalar functions for JSON response shape.">TIER B</span>
-          </div>
-          <div class="file-meta">284 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; RPC functions</div>
-          <div class="file-desc">RPC function invocation via <code>pg_catalog</code> introspection — correctly distinguishes set-returning (<code>proretset</code>) vs scalar functions for JSON response shape. Prevents single-row RETURNS TABLE results from being unwrapped.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/batch.go</span>
-            <span class="tier-badge tier-B" title="Batch/transaction endpoint: executes multiple REST operations atomically with proper rollback on any step failure.">TIER B</span>
-          </div>
-          <div class="file-meta">433 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Batch transactions</div>
-          <div class="file-desc">Batch/transaction endpoint: executes multiple REST operations atomically within a single PG transaction, with proper rollback on any step failure and step-indexed error responses.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/realtime/ws.go</span>
-            <span class="tier-badge tier-B" title="WebSocket upgrade handler with JWT validation, Hub subscribe/unsubscribe lifecycle, and per-connection goroutine management.">TIER B</span>
-          </div>
-          <div class="file-meta">260 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; WebSocket handler</div>
-          <div class="file-desc">WebSocket upgrade handler with JWT validation, Hub subscribe/unsubscribe lifecycle, and per-connection goroutine management. Sends welcome <code>subscribed</code> message on connection.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/sql/02_invalidation.sql</span>
-            <span class="tier-badge tier-B" title="pg_regress test suite covering INSERT/UPDATE/DELETE trigger installation, column-specific change tracking, and unsubscribe cleanup.">TIER B</span>
-          </div>
-          <div class="file-meta">SQL &nbsp;·&nbsp; pg_regress test</div>
-          <div class="file-desc">pg_regress test suite covering INSERT/UPDATE/DELETE trigger installation, column-specific change tracking, and unsubscribe cleanup verification.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/specs/concurrent_dml.spec</span>
-            <span class="tier-badge tier-B" title="pg_isolation_tester spec exercising concurrent INSERT/DELETE races against subscription recompute to detect phantom reads.">TIER B</span>
-          </div>
-          <div class="file-meta">Isolation spec &nbsp;·&nbsp; Concurrency test</div>
-          <div class="file-desc"><code>pg_isolation_tester</code> spec exercising concurrent INSERT/DELETE races against subscription recompute to detect phantom reads and missed invalidations.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">.github/workflows/ci.yml</span>
-            <span class="tier-badge tier-B" title="Multi-job CI: pg_regress, isolation tests, Rust check, Go build, SDK vitest, E2E WebSocket/auth/REST — with artifact upload on failure.">TIER B</span>
-          </div>
-          <div class="file-meta">YAML &nbsp;·&nbsp; GitHub Actions</div>
-          <div class="file-desc">Multi-job CI: pg_regress, isolation tests, Rust check, Go build, SDK vitest, E2E WebSocket/auth/REST — with artifact upload on failure and self-hosted runner support.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_auth_test.mjs</span>
-            <span class="tier-badge tier-B" title="37-scenario auth E2E covering signup, login, JWT refresh, refresh-token reuse detection, logout, and error cases.">TIER B</span>
-          </div>
-          <div class="file-meta">268 lines &nbsp;·&nbsp; JavaScript &nbsp;·&nbsp; E2E test</div>
-          <div class="file-desc">37-scenario auth E2E covering signup, login, JWT refresh, refresh-token reuse detection (family invalidation), logout, rate limiting, and malformed-token error cases.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_embed_test.mjs</span>
-            <span class="tier-badge tier-B" title="Comprehensive embed/FK join tests: ManyToOne, OneToMany, nested 2-level, column selection, and error cases.">TIER B</span>
-          </div>
-          <div class="file-meta">316 lines &nbsp;·&nbsp; JavaScript &nbsp;·&nbsp; E2E test</div>
-          <div class="file-desc">Comprehensive embed/FK join tests: ManyToOne, OneToMany, nested 2-level, column selection subset, missing-resource 404, and ambiguous FK error cases.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_ws_test.mjs</span>
-            <span class="tier-badge tier-B" title="Full WebSocket lifecycle E2E: subscribe confirmation, INSERT delta delivery, DELETE delta delivery — with polling instead of fixed sleeps.">TIER B</span>
-          </div>
-          <div class="file-meta">139 lines &nbsp;·&nbsp; JavaScript &nbsp;·&nbsp; E2E test</div>
-          <div class="file-desc">Full WebSocket lifecycle E2E: subscribe confirmation, INSERT delta delivery, DELETE delta delivery — uses <code>waitForMessage()</code> polling helper instead of fragile fixed sleeps.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/sql/00_setup.sql – 09_batch_invalidation.sql</span>
-            <span class="tier-badge tier-B" title="10 pg_regress SQL test files covering subscription lifecycle, recompute correctness, overflow, column tracking, and batch invalidation.">TIER B</span>
-          </div>
-          <div class="file-meta">10 SQL files &nbsp;·&nbsp; pg_regress test suite</div>
-          <div class="file-desc">10 pg_regress SQL test files covering subscription lifecycle, recompute correctness, NOTIFY overflow, column-level tracking, DDL auto-unsubscribe, stats counters, and batch invalidation.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">sdk/src/react.ts</span>
-            <span class="tier-badge tier-B" title="useLiveQuery React hook with snapshot state management and cleanup on unmount.">TIER B</span>
-          </div>
-          <div class="file-meta">TypeScript &nbsp;·&nbsp; React integration</div>
-          <div class="file-desc"><code>useLiveQuery()</code> React hook with snapshot state management, loading/error states, and cleanup on unmount. Wraps the <code>LiveQuery</code> class with React lifecycle integration.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/perf/runner.sh</span>
-            <span class="tier-badge tier-B" title="Performance test harness running P1–P6 benchmarks with PASS/FAIL thresholds and summary report.">TIER B</span>
-          </div>
-          <div class="file-meta">Bash &nbsp;·&nbsp; Performance harness</div>
-          <div class="file-desc">Performance test harness running P1–P6 benchmarks with PASS/FAIL thresholds and summary report. Full suite runs ~10 minutes on Docker/Windows.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/perf/p1_write_throughput.py</span>
-            <span class="tier-badge tier-B" title="Write throughput benchmark measuring TPS with 1 and 10 subscriptions under sustained INSERT load.">TIER B</span>
-          </div>
-          <div class="file-meta">Python &nbsp;·&nbsp; P1 performance test</div>
-          <div class="file-desc">Write throughput benchmark measuring TPS with 1 and 10 subscriptions under sustained INSERT load. Baseline: ~222 TPS (1 sub), ~99 TPS (10 subs) — 8–33x improvement over pre-optimization.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">examples/01-live-products – 12-tutorial</span>
-            <span class="tier-badge tier-B" title="12 runnable single-file demo apps covering products, orders, dashboards, CRM, inventory, analytics — each with mock SQL and live query wiring.">TIER B</span>
-          </div>
-          <div class="file-meta">12 apps &nbsp;·&nbsp; HTML/JS demos</div>
-          <div class="file-desc">12 runnable single-file demo apps covering products, orders, dashboards, CRM, inventory, analytics, and tutorial walkthrough — each with mock SQL setup and live query wiring.</div>
-        </div>
-
-        <!-- TIER C -->
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/config.go</span>
-            <span class="tier-badge tier-C" title="Environment variable configuration loading with sensible defaults for JWT secret, DB URL, port, and limits.">TIER C</span>
-          </div>
-          <div class="file-meta">168 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Configuration</div>
-          <div class="file-desc">Environment variable configuration loading with sensible defaults for JWT secret, DB URL, port, and connection limits. Straightforward but correct — no logic.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/error.go</span>
-            <span class="tier-badge tier-C" title="Typed API error structs with HTTP status code mapping — straightforward but correct.">TIER C</span>
-          </div>
-          <div class="file-meta">69 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Error types</div>
-          <div class="file-desc">Typed API error structs with HTTP status code mapping. Straightforward but correct — enables consistent JSON error responses across all handlers.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/mailer.go</span>
-            <span class="tier-badge tier-C" title="SMTP email sender using net/smtp with basic TLS — functional for email verification flows.">TIER C</span>
-          </div>
-          <div class="file-meta">62 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Email</div>
-          <div class="file-desc">SMTP email sender using <code>net/smtp</code> with basic TLS — functional for email verification and password reset flows. Minimal but sufficient.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/state.go</span>
-            <span class="tier-badge tier-C" title="Application state container holding DB pool, catalog, hub, and mailer — simple struct, no logic.">TIER C</span>
-          </div>
-          <div class="file-meta">48 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; App state</div>
-          <div class="file-desc">Application state container holding DB pool, catalog, hub, and mailer. Simple struct, no logic — passed to all handlers as dependency injection.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/helpers.mjs</span>
-            <span class="tier-badge tier-C" title="Shared test utilities: psql() runner and waitForMessage() polling helper extracted from E2E tests.">TIER C</span>
-          </div>
-          <div class="file-meta">28 lines &nbsp;·&nbsp; JavaScript &nbsp;·&nbsp; Test helpers</div>
-          <div class="file-desc">Shared test utilities: <code>psql()</code> runner and <code>waitForMessage()</code> polling helper extracted from E2E tests to avoid duplication. Small but prevents race conditions.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/template.go</span>
-            <span class="tier-badge tier-C" title="SQL template renderer for parameterized query generation — straightforward string interpolation with QuoteIdent safety.">TIER C</span>
-          </div>
-          <div class="file-meta">150 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; SQL templates</div>
-          <div class="file-desc">SQL template renderer for parameterized query generation — straightforward string interpolation with <code>QuoteIdent</code> safety for table and column names.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/template_test.go</span>
-            <span class="tier-badge tier-C" title="Unit tests for the template renderer — table-driven, good coverage of edge cases in QuoteIdent and column projection.">TIER C</span>
-          </div>
-          <div class="file-meta">121 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Unit tests</div>
-          <div class="file-desc">Unit tests for the template renderer — table-driven, good coverage of edge cases in <code>QuoteIdent</code> and column projection. Clean test structure.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">cli/src/commands/</span>
-            <span class="tier-badge tier-C" title="pgstack CLI commands (init, dev, migration, db, generate) using commander — mostly file scaffolding and process management.">TIER C</span>
-          </div>
-          <div class="file-meta">TypeScript &nbsp;·&nbsp; CLI commands</div>
-          <div class="file-desc">pgstack CLI commands (<code>init</code>, <code>dev</code>, <code>migration</code>, <code>db</code>, <code>generate</code>) using commander — mostly file scaffolding and process management with no complex logic.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">bench/ (51 files)</span>
-            <span class="tier-badge tier-C" title="Benchmark suite with k6 load tests and Python scripts — covers throughput, snapshot stress, latency, fan-out, soak, and cascade scenarios.">TIER C</span>
-          </div>
-          <div class="file-meta">51 files &nbsp;·&nbsp; k6 + Python &nbsp;·&nbsp; Benchmarks</div>
-          <div class="file-desc">Benchmark suite with k6 load tests and Python scripts — covers throughput, snapshot stress, latency, fan-out, soak, and cascade scenarios. Useful baselines but results are environment-dependent.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">studio/src/ (65 files)</span>
-            <span class="tier-badge tier-C" title="React admin SPA with Vite — functional table browser, query explorer, and auth management UI using standard React patterns.">TIER C</span>
-          </div>
-          <div class="file-meta">65 files &nbsp;·&nbsp; React + Vite &nbsp;·&nbsp; Studio</div>
-          <div class="file-desc">React admin SPA with Vite — functional table browser, query explorer, and auth management UI using standard React patterns. Three-stage Dockerfile for production deployment.</div>
-        </div>
-
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">docs/plans/</span>
-            <span class="tier-badge tier-C" title="Development plan documents tracking implementation phases — valuable for project history but now mostly superseded by code.">TIER C</span>
-          </div>
-          <div class="file-meta">Markdown &nbsp;·&nbsp; Plan documents</div>
-          <div class="file-desc">Development plan documents tracking implementation phases P1–P9. Valuable for project history and decision rationale, but now mostly superseded by working code.</div>
-        </div>
-
-      </div>
-    </div>
-
-    <!-- ── C EXTENSION ── -->
-    <div class="tab-panel" id="tab-c-ext">
-      <div class="cards-grid">
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/recompute.c</span>
-            <span class="tier-badge tier-A" title="EXCEPT-based delta computation with proper SPI memory context management, sequence numbers for gap detection, temp-table optimization (1 query execution instead of 3), and NOTIFY overflow handling.">TIER A</span>
-          </div>
-          <div class="file-meta">529 lines &nbsp;·&nbsp; C</div>
-          <div class="file-desc">EXCEPT-based delta computation with proper SPI memory context management. Temp-table optimization reduced query execution from 3× to 1× per DML trigger — 8–33× TPS improvement. Sequence numbers enable gap detection. NOTIFY overflow at 7800 bytes emits fetch directive.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/invalidation.c</span>
-            <span class="tier-badge tier-A" title="Per-table AFTER STATEMENT trigger management with column-level change tracking via uint64 bitmasks; handles DDL hooks for TRUNCATE/ALTER/DROP auto-unsubscribe.">TIER A</span>
-          </div>
-          <div class="file-meta">1011 lines &nbsp;·&nbsp; C</div>
-          <div class="file-desc">Largest file in the extension. Per-query UPDATE triggers (named <code>pgr_upd_&lt;tableoid&gt;_&lt;queryid&gt;</code>) with <code>tgarg</code> passing <code>query_id</code>. Column-level change tracking via <code>uint64</code> bitmasks prevents unnecessary recomputes.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/dependency.c</span>
-            <span class="tier-badge tier-A" title="LRU-eviction shared memory hash table (ShmemInitHash) with LWLock, explicit capacity enforcement, and bidirectional table_oid↔query_id reverse index.">TIER A</span>
-          </div>
-          <div class="file-meta">386 lines &nbsp;·&nbsp; C</div>
-          <div class="file-desc">Shared memory hash table protected by <code>LWLock</code>. Critical insight: PG's internal hash rounds to power-of-2 so <code>HASH_ENTER_NULL</code> may never return NULL. Uses <code>hash_get_num_entries() &gt;= limit</code> explicit check before insert.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/pg_reactive.c</span>
-            <span class="tier-badge tier-A" title="Extension entry point: _PG_init, ProcessUtility_hook for DDL, pgr.subscribe/unsubscribe with query parsing to extract table OIDs and column masks.">TIER A</span>
-          </div>
-          <div class="file-meta">940 lines &nbsp;·&nbsp; C</div>
-          <div class="file-desc">Extension entrypoint. GUCs: <code>pg_reactive.max_subscriptions</code> (PGC_POSTMASTER, default 1024) and <code>pg_reactive.async_recompute</code> (PGC_POSTMASTER, default off). <code>ProcessUtility_hook</code> intercepts TRUNCATE/ALTER/DROP for auto-unsubscribe.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/src/bgworker.c</span>
-            <span class="tier-badge tier-B" title="Optional background worker for async recompute — PGDLLEXPORT entry, BackgroundWorkerUnblockSignals early, registered only when GUC enabled.">TIER B</span>
-          </div>
-          <div class="file-meta">C &nbsp;·&nbsp; Background worker</div>
-          <div class="file-desc">Optional background worker for async recompute. Must call <code>BackgroundWorkerUnblockSignals()</code> early — without it SIGTERM is blocked and PG can't shut down. Registered only when GUC enabled to avoid pg_regress DROP DATABASE conflict.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/sql/ (10 test files)</span>
-            <span class="tier-badge tier-B" title="10 pg_regress SQL test files covering subscription lifecycle, recompute correctness, overflow, column tracking, and batch invalidation.">TIER B</span>
-          </div>
-          <div class="file-meta">SQL &nbsp;·&nbsp; pg_regress test suite</div>
-          <div class="file-desc">Files 00–09: setup, subscribe/unsubscribe, invalidation, recompute, overflow, stats (uses <code>\gset</code> for relative checks), column tracking, DDL hooks, concurrency, batch invalidation. Expected output in <code>ext/expected/</code>.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/specs/ (3 isolation specs)</span>
-            <span class="tier-badge tier-B" title="3 pg_isolation_tester specs: concurrent_dml, concurrent_subscribe, concurrent_invalidation.">TIER B</span>
-          </div>
-          <div class="file-meta">Isolation specs &nbsp;·&nbsp; Concurrency</div>
-          <div class="file-desc">3 <code>pg_isolation_tester</code> specs: <code>concurrent_dml</code> (INSERT/DELETE races), <code>concurrent_subscribe</code> (parallel subscription), <code>concurrent_invalidation</code> (multi-table simultaneous DML).</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">ext/pg_reactive--0.1.sql</span>
-            <span class="tier-badge tier-B" title="Extension install script: creates pgr schema, snapshot tables, subscribe/unsubscribe functions, stats view.">TIER B</span>
-          </div>
-          <div class="file-meta">SQL &nbsp;·&nbsp; Install script</div>
-          <div class="file-desc">Extension install script: creates <code>pgr</code> schema, snapshot tables, <code>pgr.subscribe()</code> / <code>pgr.unsubscribe()</code> / <code>pgr.get_subscriptions()</code> functions, stats view. Note: control file does NOT set <code>schema =</code>.</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── GO PROXY ── -->
-    <div class="tab-panel" id="tab-go-proxy">
-      <div class="cards-grid">
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/realtime/hub.go</span>
-            <span class="tier-badge tier-A" title="Correct fan-out pattern: RWMutex + per-subscriber buffered channels, snap-before-release to prevent data race with concurrent Unsubscribe.">TIER A</span>
-          </div>
-          <div class="file-meta">68 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Fan-out hub</div>
-          <div class="file-desc">Compact but critical. <code>RWMutex</code> + per-subscriber buffered channels. Snap-before-release pattern prevents data race where concurrent <code>Unsubscribe</code> removes channel while broadcast is iterating. Fixed in <code>a3ddbc7</code>.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/embed.go</span>
-            <span class="tier-badge tier-A" title="FK-discovery from pg_catalog + CTE/LATERAL SQL generation for ManyToOne and OneToMany relationships with nested embed support up to depth 3.">TIER A</span>
-          </div>
-          <div class="file-meta">424 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Embedding engine</div>
-          <div class="file-desc">Parses <code>embed[relation]</code> query params. Generates CTE + LATERAL SQL for ManyToOne (child references parent FK) and OneToMany (parent has children). Nested up to depth 3. Fix in <code>88635b7</code>: parent join-cols added to base CTE.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/query_builder.go</span>
-            <span class="tier-badge tier-A" title="Full PostgREST-compatible filter/ordering/pagination SQL builder with parameterized queries, explicit type casts, and RLS role injection.">TIER A</span>
-          </div>
-          <div class="file-meta">408 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Query builder</div>
-          <div class="file-desc">All params bound as <code>String</code> with explicit <code>::type</code> casts from <code>pg_catalog</code> column types. RLS via <code>SET LOCAL ROLE authenticated</code> (not <code>set_config('role', ...)</code> which only sets a GUC). Supports <code>select=</code>, <code>order=</code>, <code>limit=</code>, <code>offset=</code>.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/main.go</span>
-            <span class="tier-badge tier-B" title="Go server entrypoint: routes, middleware chain, graceful shutdown, JWT middleware, and both REST + WebSocket handler registration.">TIER B</span>
-          </div>
-          <div class="file-meta">350 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Entrypoint</div>
-          <div class="file-desc">Initializes DB pool, catalog, hub, listener goroutine. Registers routes: <code>/rest/v1/</code>, <code>/realtime/v1/websocket</code>, <code>/auth/v1/</code>, <code>/rpc/</code>, <code>/batch</code>. Graceful shutdown on SIGINT/SIGTERM.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/handlers.go</span>
-            <span class="tier-badge tier-B" title="REST CRUD handler wiring (GET/POST/PATCH/DELETE) with catalog lookup, RLS transaction wrapping, and JSON response serialization.">TIER B</span>
-          </div>
-          <div class="file-meta">392 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; REST handlers</div>
-          <div class="file-desc">GET uses <code>pgx.Rows</code> → JSON array. POST/PATCH/DELETE use CTE: <code>WITH result AS (... RETURNING *) SELECT row_to_json(result)</code>. All wrapped in <code>rls_transaction()</code> for RLS enforcement.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/catalog.go</span>
-            <span class="tier-badge tier-B" title="pg_catalog introspection at startup: tables, columns, foreign keys — memoized in a Catalog struct used by all REST handlers.">TIER B</span>
-          </div>
-          <div class="file-meta">295 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Catalog</div>
-          <div class="file-desc">Queries <code>information_schema</code> + <code>pg_catalog</code> at startup. Memoized <code>Catalog</code> struct: tables map, columns map (with PG type names for casting), FK map. No NOTIFY-based refresh yet.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/filter.go</span>
-            <span class="tier-badge tier-B" title="PostgREST-style filter parser handling operators (eq, gt, like, is, in, etc.) with SQL injection prevention via parameterized bindings.">TIER B</span>
-          </div>
-          <div class="file-meta">263 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Filter parser</div>
-          <div class="file-desc">Parses <code>?col=eq.value</code> style params. Supported operators: <code>eq</code>, <code>neq</code>, <code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>, <code>like</code>, <code>ilike</code>, <code>is</code>, <code>in</code>, <code>cs</code>, <code>cd</code>. All values as parameterized bindings.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/rpc.go</span>
-            <span class="tier-badge tier-B" title="RPC function invocation via pg_catalog introspection — correctly distinguishes set-returning vs scalar functions for JSON response shape.">TIER B</span>
-          </div>
-          <div class="file-meta">284 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; RPC</div>
-          <div class="file-desc">Looks up function via <code>pg_proc</code>. Uses <code>proretset</code> to decide response shape: set-returning → always return JSON array; scalar → unwrap single value. Prevents regression where single-row <code>RETURNS TABLE</code> gets incorrectly unwrapped.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/batch.go</span>
-            <span class="tier-badge tier-B" title="Batch/transaction endpoint: executes multiple REST operations atomically with proper rollback on any step failure.">TIER B</span>
-          </div>
-          <div class="file-meta">433 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Batch</div>
-          <div class="file-desc">POST <code>/batch</code> accepts array of operations. Opens single PG transaction, executes each step, rolls back entire transaction on first error. Returns step-indexed results or error with step index.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/realtime/ws.go</span>
-            <span class="tier-badge tier-B" title="WebSocket upgrade handler with JWT validation, Hub subscribe/unsubscribe lifecycle, and per-connection goroutine management.">TIER B</span>
-          </div>
-          <div class="file-meta">260 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; WebSocket</div>
-          <div class="file-desc">Upgrades HTTP to WebSocket, validates JWT if <code>JWT_SECRET</code> set, subscribes to Hub with buffered channel, spawns write goroutine. Sends <code>{"type":"subscribed","query_id":"..."}</code> welcome. Clean defer-based cleanup.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/config.go</span>
-            <span class="tier-badge tier-C" title="Environment variable configuration loading with sensible defaults for JWT secret, DB URL, port, and limits.">TIER C</span>
-          </div>
-          <div class="file-meta">168 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; Config</div>
-          <div class="file-desc">Reads env vars: <code>DATABASE_URL</code>, <code>PORT</code> (default 8080), <code>JWT_SECRET</code> (min 32 chars), <code>MAX_CONNECTIONS</code>, <code>AUTH_RATE_LIMIT</code>. Validates and returns typed <code>Config</code> struct.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">proxy-go/rest/template.go + template_test.go</span>
-            <span class="tier-badge tier-C" title="SQL template renderer with QuoteIdent safety + table-driven unit tests.">TIER C</span>
-          </div>
-          <div class="file-meta">150 + 121 lines &nbsp;·&nbsp; Go &nbsp;·&nbsp; SQL templates</div>
-          <div class="file-desc">SQL template renderer with <code>QuoteIdent</code> for safe table/column name interpolation. 121-line table-driven test suite covers edge cases including reserved words, Unicode identifiers, and column projection subsets.</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── SDK + CLI ── -->
-    <div class="tab-panel" id="tab-sdk-cli">
-      <div class="cards-grid">
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">sdk/src/index.ts</span>
-            <span class="tier-badge tier-A" title="LiveQuery class with exponential backoff reconnect, local snapshot delta application using canonical row keys, and overflow/invalidation handling.">TIER A</span>
-          </div>
-          <div class="file-meta">361 lines &nbsp;·&nbsp; TypeScript &nbsp;·&nbsp; Core SDK</div>
-          <div class="file-desc">Core SDK. <code>LiveQuery</code> class: exponential backoff reconnect (100ms → 30s), local snapshot maintained via delta application with canonical row keys, overflow triggers full re-fetch, <code>createClient()</code> factory, JWT token option.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">sdk/src/react.ts</span>
-            <span class="tier-badge tier-B" title="useLiveQuery React hook with snapshot state management and cleanup on unmount.">TIER B</span>
-          </div>
-          <div class="file-meta">TypeScript &nbsp;·&nbsp; React hook</div>
-          <div class="file-desc"><code>useLiveQuery(query, options)</code> React hook. Returns <code>{ data, loading, error }</code>. Subscribes on mount, unsubscribes on unmount. Uses <code>useRef</code> for stable <code>LiveQuery</code> instance across renders.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">sdk/src/server.ts</span>
-            <span class="tier-badge tier-B" title="PgReactiveAdmin class for server-side subscription management using pg driver.">TIER B</span>
-          </div>
-          <div class="file-meta">TypeScript &nbsp;·&nbsp; Server-side SDK</div>
-          <div class="file-desc"><code>PgReactiveAdmin</code> class for server-side subscription management using <code>pg</code> driver. Enables SSR/SSG use cases where subscriptions need to be managed outside the browser.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">sdk/src/dbos/</span>
-            <span class="tier-badge tier-B" title="DBOS job queue SDK: queue, scheduler, client, migration.sql.">TIER B</span>
-          </div>
-          <div class="file-meta">TypeScript &nbsp;·&nbsp; Job queue</div>
-          <div class="file-desc">DBOS job queue SDK (P4 implementation): queue manager, scheduler with cron expressions, typed client, and <code>migration.sql</code> for the queue/job tables. Enables durable background job execution.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">cli/src/commands/</span>
-            <span class="tier-badge tier-C" title="pgstack CLI commands (init, dev, migration, db, generate) using commander.">TIER C</span>
-          </div>
-          <div class="file-meta">TypeScript &nbsp;·&nbsp; CLI commands</div>
-          <div class="file-desc">commander-based CLI. Commands: <code>init</code> (scaffold project), <code>dev</code> (start dev stack), <code>migration create/run/rollback/list</code>, <code>db push/pull/reset</code>, <code>generate types</code>. 29 vitest tests (12 integration + 17 unit).</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">studio/src/ (65 files)</span>
-            <span class="tier-badge tier-C" title="React admin SPA with Vite — functional table browser, query explorer, auth management, three-stage Dockerfile.">TIER C</span>
-          </div>
-          <div class="file-meta">65 files &nbsp;·&nbsp; React + Vite &nbsp;·&nbsp; Studio UI</div>
-          <div class="file-desc">React admin SPA served at <code>/studio/</code> via tower-http <code>ServeDir</code>. Table browser, live query explorer, auth/user management, migration runner. Vite build → static assets → three-stage Dockerfile.</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── TESTS ── -->
-    <div class="tab-panel" id="tab-tests">
-      <div class="cards-grid">
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_ws_test.mjs</span>
-            <span class="tier-badge tier-B" title="Full WebSocket lifecycle E2E: subscribe, INSERT delta, DELETE delta — polling-based.">TIER B</span>
-          </div>
-          <div class="file-meta">139 lines &nbsp;·&nbsp; JavaScript &nbsp;·&nbsp; WebSocket E2E</div>
-          <div class="file-desc">Tests: subscribe confirmation, INSERT row appears as delta, DELETE row appears as delta, multi-client fan-out. Uses <code>waitForMessage()</code> polling helper. Runs against live Docker stack.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_auth_test.mjs</span>
-            <span class="tier-badge tier-B" title="37-scenario auth E2E: signup, login, JWT refresh, reuse detection, logout, rate limiting.">TIER B</span>
-          </div>
-          <div class="file-meta">268 lines &nbsp;·&nbsp; JavaScript &nbsp;·&nbsp; Auth E2E</div>
-          <div class="file-desc">37 scenarios: signup (success + duplicate), login (success + wrong password), JWT token expiry, refresh token rotation, reuse detection (family invalidation), logout invalidation, rate limit (30/min), malformed token rejection.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_embed_test.mjs</span>
-            <span class="tier-badge tier-B" title="FK join embed tests: ManyToOne, OneToMany, nested 2-level, column selection, error cases.">TIER B</span>
-          </div>
-          <div class="file-meta">316 lines &nbsp;·&nbsp; JavaScript &nbsp;·&nbsp; Embed E2E</div>
-          <div class="file-desc">ManyToOne (order → customer), OneToMany (customer → orders), nested 2-level (order → customer → address), column selection subset (<code>select=id,name</code>), missing relation 404, ambiguous FK 400. Added after <code>88635b7</code> fix.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_rest_test.mjs</span>
-            <span class="tier-badge tier-B" title="34 REST E2E tests: CRUD, filters, ordering, pagination, errors.">TIER B</span>
-          </div>
-          <div class="file-meta">JavaScript &nbsp;·&nbsp; REST E2E</div>
-          <div class="file-desc">34 scenarios: GET list, GET single, POST create, PATCH update, DELETE, filter operators (eq/gt/like/in), ordering (asc/desc), pagination (limit/offset), 404 not found, 400 invalid filter, 401 unauthorized with RLS.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_jwt_test.mjs</span>
-            <span class="tier-badge tier-B" title="JWT auth scenarios for WebSocket: valid token, expired token, missing token when required.">TIER B</span>
-          </div>
-          <div class="file-meta">JavaScript &nbsp;·&nbsp; JWT WebSocket E2E</div>
-          <div class="file-desc">JWT auth scenarios for WebSocket: valid token → connected, expired token → 401, missing token when <code>JWT_SECRET</code> set → 401, token via query param vs Authorization header. Requires <code>JWT_SECRET=test</code> env.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/e2e_fanout_test.mjs</span>
-            <span class="tier-badge tier-B" title="Multi-client fan-out: 200 clients receive same delta, 0 misses.">TIER B</span>
-          </div>
-          <div class="file-meta">JavaScript &nbsp;·&nbsp; Fan-out E2E</div>
-          <div class="file-desc">Opens 200 concurrent WebSocket connections, subscribes all to same query, triggers INSERT, verifies all 200 receive the delta. 0 misses at 200 clients. Degrades at 500 clients (buffer overflow).</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/perf/runner.sh</span>
-            <span class="tier-badge tier-B" title="P1–P6 benchmark harness with PASS/FAIL thresholds.">TIER B</span>
-          </div>
-          <div class="file-meta">Bash &nbsp;·&nbsp; Performance harness</div>
-          <div class="file-desc">Runs P1 (write throughput), P2 (snapshot stress), P3 (E2E latency), P4 (fan-out scale), P5 (soak 3min), P6 (cascade) with PASS/FAIL thresholds. Summary report. ~10 min total on Docker/Windows.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/perf/p1_write_throughput.py</span>
-            <span class="tier-badge tier-B" title="Write throughput: ~222 TPS (1 sub), ~99 TPS (10 subs).">TIER B</span>
-          </div>
-          <div class="file-meta">Python &nbsp;·&nbsp; P1 benchmark</div>
-          <div class="file-desc">Sustained INSERT load with 1 and 10 active subscriptions. Measures TPS over 10s window. Baseline: ~222 TPS / 4.4ms p50 (1 sub), ~99 TPS / 9ms p50 (10 subs). 8–33× improvement over pre-temp-table version.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/perf/p2_snapshot_stress.py</span>
-            <span class="tier-badge tier-B" title="EXCEPT delta on 1K/10K/100K rows: 2.8ms / 18.5ms / 263ms p50.">TIER B</span>
-          </div>
-          <div class="file-meta">Python &nbsp;·&nbsp; P2 benchmark</div>
-          <div class="file-desc">EXCEPT-based delta computation stress on 1K, 10K, 100K rows. Baselines: 2.8ms p50 (1K), 18.5ms p50 (10K), 263ms p50 (100K). Validates snapshot table approach scales reasonably.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/helpers.mjs</span>
-            <span class="tier-badge tier-C" title="psql() runner + waitForMessage() polling helper.">TIER C</span>
-          </div>
-          <div class="file-meta">28 lines &nbsp;·&nbsp; JavaScript &nbsp;·&nbsp; Shared helpers</div>
-          <div class="file-desc">Two exported functions: <code>psql(sql)</code> wraps child_process exec for running SQL via psql, and <code>waitForMessage(ws, predicate, timeout=5000)</code> polls WebSocket messages to avoid race conditions from fixed sleeps.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/integration/test_shmem_pressure.py</span>
-            <span class="tier-badge tier-C" title="Shared memory pressure test: creates max_subscriptions+1 to verify LRU eviction.">TIER C</span>
-          </div>
-          <div class="file-meta">Python &nbsp;·&nbsp; Integration test</div>
-          <div class="file-desc">Creates <code>max_subscriptions + 1</code> subscriptions to verify LRU eviction triggers correctly and doesn't SEGFAULT. Runs inside the container. Validates <code>HASH_ENTER_NULL</code> workaround in dependency.c.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">tests/integration/test_notify_throughput.py</span>
-            <span class="tier-badge tier-C" title="NOTIFY throughput measurement from inside the container.">TIER C</span>
-          </div>
-          <div class="file-meta">Python &nbsp;·&nbsp; Integration test</div>
-          <div class="file-desc">Measures NOTIFY delivery throughput from inside the container — validates that the PG LISTEN/NOTIFY pipeline doesn't become a bottleneck at high insert rates. Separate from proxy-level fan-out.</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── EXAMPLES + DOCS ── -->
-    <div class="tab-panel" id="tab-examples">
-      <div class="cards-grid">
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">examples/01-live-products</span>
-            <span class="tier-badge tier-B" title="Single-file live product catalog demo with mock SQL and WebSocket subscription.">TIER B</span>
-          </div>
-          <div class="file-meta">HTML/JS &nbsp;·&nbsp; Demo app</div>
-          <div class="file-desc">Single-file live product catalog. Sets up mock <code>products</code> table, subscribes via <code>LiveQuery</code>, renders rows in real-time. Canonical starting point for new users.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">examples/02-live-orders through 12-tutorial</span>
-            <span class="tier-badge tier-B" title="11 more runnable demos: orders, dashboards, CRM, inventory, analytics, tutorial.">TIER B</span>
-          </div>
-          <div class="file-meta">HTML/JS &nbsp;·&nbsp; Demo apps</div>
-          <div class="file-desc">11 progressive demos: orders, analytics dashboard, CRM contacts, inventory management, multi-table joins, aggregate queries, error handling, authentication, batch operations, and full tutorial walkthrough.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">examples/apps/todo/</span>
-            <span class="tier-badge tier-B" title="Full todo app with React, live queries, and REST CRUD.">TIER B</span>
-          </div>
-          <div class="file-meta">React &nbsp;·&nbsp; Full demo app</div>
-          <div class="file-desc">Full todo application: React frontend, live query for real-time updates, REST API for CRUD, user authentication. Best end-to-end demo of the full stack.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">examples/apps/expenses/</span>
-            <span class="tier-badge tier-B" title="Expense tracker with multi-user support and live aggregate queries.">TIER B</span>
-          </div>
-          <div class="file-meta">React &nbsp;·&nbsp; Full demo app</div>
-          <div class="file-desc">Expense tracker with multi-user support, live aggregate queries (totals by category), and date-range filtering. Demonstrates <code>pgr.subscribe()</code> with filtered queries.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">examples/apps/shopping-list/</span>
-            <span class="tier-badge tier-B" title="Collaborative shopping list with real-time sync across browser tabs.">TIER B</span>
-          </div>
-          <div class="file-meta">HTML/JS &nbsp;·&nbsp; Demo app</div>
-          <div class="file-desc">Collaborative shopping list with real-time sync across browser tabs. Simple single-page app demonstrating the core value proposition: multi-client delta delivery without polling.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">examples/apps/angular/ + react/ + svelte/ + vue/</span>
-            <span class="tier-badge tier-B" title="Framework-specific examples showing SDK integration in Angular, React, Svelte, Vue.">TIER B</span>
-          </div>
-          <div class="file-meta">Multiple frameworks &nbsp;·&nbsp; Integration examples</div>
-          <div class="file-desc">Framework-specific examples showing SDK integration in Angular, React, Svelte, and Vue. Each demonstrates the framework's idiomatic pattern for consuming the <code>LiveQuery</code> or <code>useLiveQuery</code> API.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">docs/site/ (Docusaurus 3, 33 docs)</span>
-            <span class="tier-badge tier-C" title="Docusaurus 3 documentation site: 33 docs, 9 sidebar categories, ~237 pages.">TIER C</span>
-          </div>
-          <div class="file-meta">Markdown + MDX &nbsp;·&nbsp; Documentation site</div>
-          <div class="file-desc">Docusaurus 3 docs site with 9 sidebar categories: Getting Started, C Extension, Proxy, SDK, CLI, Studio, Deployment, API Reference, Examples. ~237 pages total. Built as part of P5 implementation.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">docs/plans/ (plan documents)</span>
-            <span class="tier-badge tier-C" title="Implementation plan documents P1–P9 — project history, mostly superseded by code.">TIER C</span>
-          </div>
-          <div class="file-meta">Markdown &nbsp;·&nbsp; Plan documents</div>
-          <div class="file-desc">Implementation plan documents tracking phases P1–P9: Studio UI, auth gaps, SDK gaps, DBOS job queue, docs site, CI/CD, CLI gaps, C extension hardening, test coverage. Valuable historical record of design decisions.</div>
-        </div>
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-name">bench/ (51 files)</span>
-            <span class="tier-badge tier-C" title="k6 load tests and Python benchmarks for all performance scenarios.">TIER C</span>
-          </div>
-          <div class="file-meta">51 files &nbsp;·&nbsp; k6 + Python &nbsp;·&nbsp; Benchmarks</div>
-          <div class="file-desc">k6 load tests for API endpoints + Python scripts for DB-level benchmarks. Covers: write throughput, snapshot stress, E2E latency, fan-out scale, soak test (3 min), cascade invalidation. Environment-sensitive results.</div>
-        </div>
-      </div>
-    </div>
-
-  </div><!-- end tabs-wrapper -->
-
-  <!-- ── Directory Tree ── -->
-  <div class="section">
-    <div class="section-title">Directory Structure</div>
-    <div class="tree-box">
-<pre>
-<span class="tree-dir">pg_reactive/</span>
-├── <span class="tree-dir">ext/</span>                    <span class="tree-note">C PostgreSQL extension (40 files)</span>
-│   ├── <span class="tree-dir">src/</span>               <span class="tree-note">9 C/H source files: pg_reactive.c, dependency.c,</span>
-│   │                          <span class="tree-note">invalidation.c, recompute.c, bgworker.c + headers</span>
-│   ├── <span class="tree-dir">sql/</span>               <span class="tree-note">10 pg_regress test SQL files (00_setup – 09_batch)</span>
-│   ├── <span class="tree-dir">expected/</span>          <span class="tree-note">Expected output files for pg_regress</span>
-│   ├── <span class="tree-dir">specs/</span>             <span class="tree-note">3 isolation specs: concurrent_dml, concurrent_subscribe,</span>
-│   │                          <span class="tree-note">concurrent_invalidation</span>
-│   ├── <span class="tree-file">pg_reactive--0.1.sql</span>  <span class="tree-note">Extension install script</span>
-│   ├── <span class="tree-file">pg_reactive.control</span>  <span class="tree-note">Extension control file (no schema= directive)</span>
-│   └── <span class="tree-file">Makefile</span>             <span class="tree-note">PGXS build: make / make install / make installcheck</span>
-├── <span class="tree-dir">proxy/</span>                  <span class="tree-note">Rust axum server (~37 files)</span>
-│   └── <span class="tree-dir">src/</span>               <span class="tree-note">main.rs, config.rs, state.rs, error.rs</span>
-│       ├── <span class="tree-dir">auth/</span>          <span class="tree-note">JWT, OAuth PKCE, refresh tokens, rate limiting</span>
-│       ├── <span class="tree-dir">rest/</span>          <span class="tree-note">REST CRUD handlers + RLS transaction</span>
-│       ├── <span class="tree-dir">realtime/</span>      <span class="tree-note">WebSocket fan-out, broadcast channel</span>
-│       ├── <span class="tree-dir">routes/</span>        <span class="tree-note">Router registration</span>
-│       └── <span class="tree-dir">middleware/</span>    <span class="tree-note">Auth, logging, CORS middleware</span>
-├── <span class="tree-dir">proxy-go/</span>               <span class="tree-note">Go rewrite of proxy (~44 files, 3987 lines)</span>
-│   ├── <span class="tree-file">main.go</span>              <span class="tree-note">Server entrypoint, router, graceful shutdown</span>
-│   ├── <span class="tree-file">config.go</span>            <span class="tree-note">Env var config with defaults</span>
-│   ├── <span class="tree-file">state.go</span>             <span class="tree-note">App state: DB pool, catalog, hub, mailer</span>
-│   ├── <span class="tree-file">error.go</span>             <span class="tree-note">Typed API error structs + HTTP status mapping</span>
-│   ├── <span class="tree-file">mailer.go</span>            <span class="tree-note">SMTP email sender (net/smtp)</span>
-│   ├── <span class="tree-dir">rest/</span>              <span class="tree-note">handlers.go, catalog.go, filter.go, embed.go,</span>
-│   │                          <span class="tree-note">query_builder.go, rpc.go, batch.go, template.go</span>
-│   └── <span class="tree-dir">realtime/</span>          <span class="tree-note">hub.go, listener.go, ws.go</span>
-├── <span class="tree-dir">sdk/</span>                    <span class="tree-note">TypeScript SDK (21 files)</span>
-│   └── <span class="tree-dir">src/</span>
-│       ├── <span class="tree-file">index.ts</span>         <span class="tree-note">LiveQuery class, createClient() factory</span>
-│       ├── <span class="tree-file">react.ts</span>         <span class="tree-note">useLiveQuery() React hook</span>
-│       ├── <span class="tree-file">server.ts</span>        <span class="tree-note">PgReactiveAdmin (server-side, uses pg driver)</span>
-│       └── <span class="tree-dir">dbos/</span>          <span class="tree-note">Job queue SDK: queue, scheduler, client, migration.sql</span>
-├── <span class="tree-dir">cli/</span>                    <span class="tree-note">pgstack CLI (18 files)</span>
-│   └── <span class="tree-dir">src/</span>
-│       ├── <span class="tree-dir">commands/</span>      <span class="tree-note">init, dev, migration, db, generate</span>
-│       ├── <span class="tree-dir">lib/</span>           <span class="tree-note">Shared utilities, docker helpers</span>
-│       └── <span class="tree-dir">templates/</span>     <span class="tree-note">Project scaffold templates</span>
-├── <span class="tree-dir">studio/</span>                 <span class="tree-note">React admin SPA (65 files)</span>
-│   └── <span class="tree-dir">src/</span>
-│       ├── <span class="tree-dir">components/</span>    <span class="tree-note">Table browser, query explorer, auth UI</span>
-│       ├── <span class="tree-dir">pages/</span>         <span class="tree-note">Dashboard, tables, queries, settings</span>
-│       ├── <span class="tree-dir">hooks/</span>         <span class="tree-note">useAuth, useTable, useLiveQuery wrappers</span>
-│       └── <span class="tree-dir">api/</span>           <span class="tree-note">REST API client wrappers</span>
-├── <span class="tree-dir">tests/</span>                  <span class="tree-note">E2E + integration (41 files, 4255 lines)</span>
-│   ├── <span class="tree-file">e2e_ws_test.mjs</span>      <span class="tree-note">WebSocket delta delivery</span>
-│   ├── <span class="tree-file">e2e_fanout_test.mjs</span>  <span class="tree-note">Multi-client fan-out (200 clients)</span>
-│   ├── <span class="tree-file">e2e_jwt_test.mjs</span>     <span class="tree-note">JWT auth scenarios</span>
-│   ├── <span class="tree-file">e2e_auth_test.mjs</span>    <span class="tree-note">37 auth E2E scenarios</span>
-│   ├── <span class="tree-file">e2e_rest_test.mjs</span>    <span class="tree-note">34 REST CRUD + filter scenarios</span>
-│   ├── <span class="tree-file">e2e_embed_test.mjs</span>   <span class="tree-note">FK join embed scenarios</span>
-│   ├── <span class="tree-file">e2e_rpc_test.mjs</span>     <span class="tree-note">RPC scalar + set-returning</span>
-│   ├── <span class="tree-file">e2e_sdk_test.mjs</span>     <span class="tree-note">SDK auth flow + query builder</span>
-│   ├── <span class="tree-file">helpers.mjs</span>          <span class="tree-note">psql() + waitForMessage() helpers</span>
-│   ├── <span class="tree-dir">perf/</span>              <span class="tree-note">P1–P6 benchmarks + runner.sh</span>
-│   └── <span class="tree-dir">integration/</span>       <span class="tree-note">test_shmem_pressure.py, test_notify_throughput.py</span>
-├── <span class="tree-dir">examples/</span>               <span class="tree-note">Demo apps (168 files)</span>
-│   ├── <span class="tree-file">01-live-products/</span>   <span class="tree-note">through 12-tutorial/</span>
-│   └── <span class="tree-dir">apps/</span>              <span class="tree-note">todo/, expenses/, shopping-list/, angular/, react/,</span>
-│                              <span class="tree-note">svelte/, vue/</span>
-├── <span class="tree-dir">docs/</span>                   <span class="tree-note">Documentation (~237 files)</span>
-│   ├── <span class="tree-dir">site/</span>              <span class="tree-note">Docusaurus 3 site (33 docs, 9 categories)</span>
-│   ├── <span class="tree-dir">plans/</span>             <span class="tree-note">Implementation plan docs P1–P9</span>
-│   └── <span class="tree-dir">specs/</span>             <span class="tree-note">API specs</span>
-├── <span class="tree-dir">bench/</span>                  <span class="tree-note">k6 + Python benchmarks (51 files)</span>
-├── <span class="tree-dir">.github/workflows/</span>      <span class="tree-note">ci.yml, deploy.yml, release.yml</span>
-├── <span class="tree-file">docker-compose.yml</span>      <span class="tree-note">Dev stack: db (PG + ext) + proxy-go</span>
-├── <span class="tree-file">docker-compose.prod.yml</span> <span class="tree-note">Production stack with TLS + gateway network</span>
-├── <span class="tree-file">Dockerfile.dev</span>          <span class="tree-note">PG image with C extension build (COPY, no bind mounts)</span>
-├── <span class="tree-file">CLAUDE.md</span>               <span class="tree-note">Claude Code project instructions</span>
-└── <span class="tree-file">README.md</span>               <span class="tree-note">Project overview and quick start</span>
-</pre>
-    </div>
-  </div>
-
-  <!-- ── GUC Parameters ── -->
-  <div class="section">
-    <div class="section-title">GUC Parameters (C Extension)</div>
-    <div class="table-wrap">
-      <table class="data-table guc-table">
-        <thead>
-          <tr>
-            <th>Parameter</th>
-            <th>Type</th>
-            <th>Default</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>pg_reactive.max_subscriptions</code></td>
-            <td class="val">PGC_POSTMASTER</td>
-            <td class="val">1024</td>
-            <td>Shared memory slots for subscriptions. Requires server restart. Set via <code>docker-compose command:</code> flag as <code>-c pg_reactive.max_subscriptions=N</code>.</td>
-          </tr>
-          <tr>
-            <td><code>pg_reactive.async_recompute</code></td>
-            <td class="val">PGC_POSTMASTER</td>
-            <td class="val">off</td>
-            <td>Enable background worker for async recompute. Requires restart. When disabled, recompute runs in the trigger context (synchronous). When enabled, a bgworker processes the recompute queue.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ── NOTIFY Wire Format ── -->
-  <div class="section">
-    <div class="section-title">NOTIFY Wire Format</div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr><th>Message Type</th><th>Channel</th><th>Payload Shape</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Delta notification</td>
-            <td class="val">pgr</td>
-            <td><code>{"query_id":"...","inserted":[...],"deleted":[...],"seq":N}</code></td>
-          </tr>
-          <tr>
-            <td>Overflow (payload &gt; 7800 bytes)</td>
-            <td class="val">pgr</td>
-            <td><code>{"type":"overflow","query_id":"...","fetch":true}</code></td>
-          </tr>
-          <tr>
-            <td>Proxy welcome (on WS connect)</td>
-            <td class="val">WS</td>
-            <td><code>{"type":"subscribed","query_id":"..."}</code></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ── Performance Baselines ── -->
-  <div class="section">
-    <div class="section-title">Performance Baselines (Docker on Windows)</div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr><th>Scenario</th><th>Metric</th><th>Value</th><th>Notes</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Write throughput, 1 subscription</td>
-            <td>TPS / p50</td>
-            <td class="val">~222 TPS / 4.4ms</td>
-            <td>8× improvement over pre-temp-table (was 27 TPS)</td>
-          </tr>
-          <tr>
-            <td>Write throughput, 10 subscriptions</td>
-            <td>TPS / p50</td>
-            <td class="val">~99 TPS / 9ms</td>
-            <td>33× improvement over pre-temp-table (was 3 TPS)</td>
-          </tr>
-          <tr>
-            <td>EXCEPT delta, 1K rows</td>
-            <td>p50 latency</td>
-            <td class="val">2.8ms</td>
-            <td>P2 benchmark, inside container</td>
-          </tr>
-          <tr>
-            <td>EXCEPT delta, 10K rows</td>
-            <td>p50 latency</td>
-            <td class="val">18.5ms</td>
-            <td>P2 benchmark, inside container</td>
-          </tr>
-          <tr>
-            <td>EXCEPT delta, 100K rows</td>
-            <td>p50 latency</td>
-            <td class="val">263ms</td>
-            <td>P2 benchmark, inside container</td>
-          </tr>
-          <tr>
-            <td>E2E pipeline latency</td>
-            <td>p50</td>
-            <td class="val">3ms</td>
-            <td>P3 benchmark, idle through high load</td>
-          </tr>
-          <tr>
-            <td>Fan-out, 200 clients</td>
-            <td>Missed messages</td>
-            <td class="val">0</td>
-            <td>Degrades at 500 clients (buffer overflow)</td>
-          </tr>
-          <tr>
-            <td>Soak test (3 minutes)</td>
-            <td>Delivery rate</td>
-            <td class="val">100%</td>
-            <td>~3× drift — table grows 6× over run</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ── Testing Coverage Summary ── -->
-  <div class="section">
-    <div class="section-title">Testing Coverage Summary (210 total tests)</div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr><th>Suite</th><th>Count</th><th>Location</th><th>Coverage</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>pg_regress SQL tests</td>
-            <td class="val">10 files</td>
-            <td><code>ext/sql/</code></td>
-            <td>Subscription lifecycle, recompute, overflow, column tracking, DDL, stats, batch invalidation</td>
-          </tr>
-          <tr>
-            <td>Isolation tests</td>
-            <td class="val">3 specs</td>
-            <td><code>ext/specs/</code></td>
-            <td>concurrent_dml, concurrent_subscribe, concurrent_invalidation</td>
-          </tr>
-          <tr>
-            <td>SDK unit tests (vitest)</td>
-            <td class="val">42</td>
-            <td><code>sdk/</code></td>
-            <td>pgstack client, query builder, auth flows</td>
-          </tr>
-          <tr>
-            <td>CLI unit + integration (vitest)</td>
-            <td class="val">29</td>
-            <td><code>cli/</code></td>
-            <td>12 integration + 17 unit, all CLI commands</td>
-          </tr>
-          <tr>
-            <td>E2E auth</td>
-            <td class="val">37</td>
-            <td><code>tests/e2e_auth_test.mjs</code></td>
-            <td>Signup, login, refresh, reuse detection, logout, rate limiting</td>
-          </tr>
-          <tr>
-            <td>E2E REST</td>
-            <td class="val">34</td>
-            <td><code>tests/e2e_rest_test.mjs</code></td>
-            <td>CRUD, filters, ordering, pagination, error cases</td>
-          </tr>
-          <tr>
-            <td>E2E SDK</td>
-            <td class="val">29</td>
-            <td><code>tests/e2e_sdk_test.mjs</code></td>
-            <td>Auth flow, query builder, embedding, RPC</td>
-          </tr>
-          <tr>
-            <td>E2E embed/RPC</td>
-            <td class="val">40</td>
-            <td><code>tests/e2e_embed_test.mjs</code></td>
-            <td>FK joins, nested embedding, RPC scalar + set functions</td>
-          </tr>
-          <tr>
-            <td>E2E realtime</td>
-            <td class="val">—</td>
-            <td><code>tests/e2e_ws_test.mjs</code>, <code>e2e_fanout_test.mjs</code>, <code>e2e_jwt_test.mjs</code></td>
-            <td>WebSocket delta delivery, fan-out, JWT auth</td>
-          </tr>
-          <tr>
-            <td>Performance (P1–P6)</td>
-            <td class="val">6 suites</td>
-            <td><code>tests/perf/</code></td>
-            <td>Write throughput, snapshot stress, latency, fan-out scale, soak, cascade</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-</div><!-- end container -->
+</div>
 
 <!-- ── Footer ── -->
 <footer>
-  <div class="container">
-    <p>
-      <span>pg_reactive / pgStack</span>
-      <span class="vdiv">|</span>
-      Repository Report
-      <span class="vdiv">|</span>
-      Branch: <span>master</span>
-      <span class="vdiv">|</span>
-      License: <span>PostgreSQL License</span>
-      <span class="vdiv">|</span>
-      Generated: <span>2026-03-07</span>
-    </p>
-  </div>
+  <span>pg_reactive / pgStack · Repository Report</span>
+  <span>49 components · A:25 · B:24 · C:0 · D:0 · 922 total files · Generated 2026-03-07</span>
 </footer>
 
 <script>
-  function switchTab(event, tabId) {
-    // Deactivate all tabs
-    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.remove('active'));
+(function() {
+  var tabs = document.querySelectorAll('.tab');
+  var cards = document.querySelectorAll('.card');
 
-    // Activate selected
-    event.currentTarget.classList.add('active');
-    document.getElementById('tab-' + tabId).classList.add('active');
-  }
+  tabs.forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      tabs.forEach(function(t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      var filter = tab.getAttribute('data-filter');
+      cards.forEach(function(card) {
+        if (filter === 'all' || card.getAttribute('data-d') === filter) {
+          card.classList.remove('hidden');
+        } else {
+          card.classList.add('hidden');
+        }
+      });
+    });
+  });
+})();
 </script>
 </body>
 </html>

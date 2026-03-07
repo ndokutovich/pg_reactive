@@ -49,10 +49,8 @@ type Config struct {
 	PGReconnectMaxBackoff time.Duration
 
 	// Feature flags
-	EnableSQLEndpoint  bool
-	EmbeddedFunctions  bool   // enable goja embedded JS functions
-	EdgeRuntimeURL     string // URL of Supabase edge-runtime (empty = disabled)
-	FunctionsDir       string // directory for Deno function sources
+	EnableSQLEndpoint bool
+	EmbeddedFunctions bool // enable goja embedded JS functions (always true in embedded runtime)
 
 	// CORS
 	AllowedOrigins []string
@@ -111,9 +109,7 @@ func FromEnv() Config {
 	cfg.PGReconnectMaxBackoff = time.Duration(pgBackoff) * time.Second
 
 	cfg.EnableSQLEndpoint = envBoolOrDefault("ENABLE_SQL_ENDPOINT", false)
-	cfg.EmbeddedFunctions = envBoolOrDefault("EMBEDDED_FUNCTIONS", false)
-	cfg.EdgeRuntimeURL = os.Getenv("EDGE_RUNTIME_URL")
-	cfg.FunctionsDir = envOrDefault("FUNCTIONS_DIR", "/functions")
+	cfg.EmbeddedFunctions = envBoolOrDefault("EMBEDDED_FUNCTIONS", true)
 
 	rawOrigins := os.Getenv("ALLOWED_ORIGINS")
 	if rawOrigins != "" {

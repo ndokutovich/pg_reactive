@@ -23,7 +23,8 @@ var fnNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
 // FunctionMeta describes a PostgreSQL function's parameter list and return type.
 type FunctionMeta struct {
 	Params     []FnParam
-	ReturnsSet bool // true for RETURNS TABLE / RETURNS SETOF
+	ReturnsSet bool   // true for RETURNS TABLE / RETURNS SETOF
+	Volatility string // 'i'=IMMUTABLE, 's'=STABLE, 'v'=VOLATILE
 }
 
 // FnParam is one named (or positional) parameter of a PG function.
@@ -134,6 +135,15 @@ func execRPC(w http.ResponseWriter, r *http.Request, d *RestDeps, fnName string,
 		return
 	}
 
+	// Set Cache-Control for STABLE and IMMUTABLE functions so downstream caches
+	// and clients can avoid redundant calls. VOLATILE functions get no cache header.
+	switch meta.Volatility {
+	case "i": // IMMUTABLE — result never changes for same args
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+	case "s": // STABLE — result is stable within a transaction / short window
+		w.Header().Set("Cache-Control", "public, max-age=60")
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result)
@@ -150,7 +160,8 @@ SELECT
         FROM unnest(p.proargtypes) AS type_oid
         JOIN pg_type t ON t.oid = type_oid
     ) AS arg_types,
-    p.proretset
+    p.proretset,
+    p.provolatile
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE p.proname = $1
@@ -168,8 +179,9 @@ LIMIT 1`
 	var argNames []string
 	var argTypes []string
 	var returnsSet bool
+	var volatility string
 
-	if err := row.Scan(&argNames, &argTypes, &returnsSet); err != nil {
+	if err := row.Scan(&argNames, &argTypes, &returnsSet, &volatility); err != nil {
 		return nil, fmt.Errorf("function %q not found: %w", fnName, err)
 	}
 
@@ -182,7 +194,7 @@ LIMIT 1`
 		params[i] = FnParam{Name: name, PGType: SafePGType(typ)}
 	}
 
-	return &FunctionMeta{Params: params, ReturnsSet: returnsSet}, nil
+	return &FunctionMeta{Params: params, ReturnsSet: returnsSet, Volatility: volatility}, nil
 }
 
 // buildRPCCall constructs the SQL and bound parameter slice for a PG RPC call.

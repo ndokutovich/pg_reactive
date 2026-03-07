@@ -78,6 +78,46 @@
     gap: 16px;
   }
 
+  /* ── Filter bar ── */
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filter-bar input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    padding: 6px 10px;
+    outline: none;
+  }
+  .filter-bar input[type="text"] { min-width: 160px; }
+  .filter-bar input[type="number"] { width: 90px; }
+  .filter-bar input:focus { border-color: var(--accent); }
+  .filter-bar button {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+  .filter-bar button:hover { border-color: var(--accent); color: var(--accent); }
+  .filter-badge {
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.3);
+    border-radius: 4px;
+    padding: 2px 8px;
+    white-space: nowrap;
+  }
+
   .product-card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -210,6 +250,13 @@
 
 <div class="grid-container">
   <h2>Electronics (<span id="count">0</span> products)</h2>
+  <div class="filter-bar">
+    <input id="filter-name" type="text" placeholder="Filter by name…" autocomplete="off">
+    <input id="filter-min" type="number" placeholder="Min $" step="0.01" min="0">
+    <input id="filter-max" type="number" placeholder="Max $" step="0.01" min="0">
+    <button id="filter-clear">Clear</button>
+    <span id="filter-badge" class="filter-badge" style="display:none;">Filtered</span>
+  </div>
   <div id="product-grid" class="product-grid"></div>
   <div id="empty-state" class="empty-state" style="display:none;">
     Waiting for data...<br>
@@ -290,6 +337,63 @@ ws.<span class="fn">onmessage</span> = (e) =&gt; {
   var emptyEl = document.getElementById('empty-state');
   var statusDot = document.getElementById('status-dot');
   var banner = document.getElementById('disconnect-banner');
+  var filterNameInput = document.getElementById('filter-name');
+  var filterMinInput = document.getElementById('filter-min');
+  var filterMaxInput = document.getElementById('filter-max');
+  var filterClearBtn = document.getElementById('filter-clear');
+  var filterBadge = document.getElementById('filter-badge');
+
+  // ── Filter state ──
+  var filter = { name: '', min: NaN, max: NaN };
+
+  function rowMatchesFilter(row) {
+    if (filter.name && row.name.toLowerCase().indexOf(filter.name) === -1) return false;
+    var price = parseFloat(row.price);
+    if (!isNaN(filter.min) && price < filter.min) return false;
+    if (!isNaN(filter.max) && price > filter.max) return false;
+    return true;
+  }
+
+  function isFilterActive() {
+    return filter.name !== '' || !isNaN(filter.min) || !isNaN(filter.max);
+  }
+
+  function updateDisplay() {
+    var active = isFilterActive();
+    var visible = active ? rows.filter(rowMatchesFilter) : rows;
+    filterBadge.style.display = active ? 'inline-block' : 'none';
+    countEl.textContent = active ? (visible.length + ' of ' + rows.length) : String(rows.length);
+    grid.textContent = '';
+    if (visible.length === 0) {
+      emptyEl.style.display = 'block';
+      emptyEl.firstChild.textContent = active
+        ? 'No products match the filter.'
+        : 'Waiting for data...';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    visible.forEach(function (row) { grid.appendChild(createCard(row)); });
+  }
+
+  filterNameInput.addEventListener('input', function () {
+    filter.name = filterNameInput.value.trim().toLowerCase();
+    updateDisplay();
+  });
+  filterMinInput.addEventListener('input', function () {
+    filter.min = parseFloat(filterMinInput.value);
+    updateDisplay();
+  });
+  filterMaxInput.addEventListener('input', function () {
+    filter.max = parseFloat(filterMaxInput.value);
+    updateDisplay();
+  });
+  filterClearBtn.addEventListener('click', function () {
+    filterNameInput.value = '';
+    filterMinInput.value = '';
+    filterMaxInput.value = '';
+    filter = { name: '', min: NaN, max: NaN };
+    updateDisplay();
+  });
 
   // ── Rendering (safe DOM construction — no innerHTML with user data) ──
 
@@ -322,19 +426,11 @@ ws.<span class="fn">onmessage</span> = (e) =&gt; {
   }
 
   function renderAll() {
-    countEl.textContent = rows.length;
-    grid.textContent = '';
-    if (rows.length === 0) {
-      emptyEl.style.display = 'block';
-      return;
-    }
-    emptyEl.style.display = 'none';
-    rows.forEach(function (row) {
-      grid.appendChild(createCard(row));
-    });
+    updateDisplay();
   }
 
   function animateInsert(row) {
+    if (isFilterActive() && !rowMatchesFilter(row)) return;
     grid.appendChild(createCard(row));
   }
 
@@ -370,9 +466,13 @@ ws.<span class="fn">onmessage</span> = (e) =&gt; {
 
     // Short delay so removal animation starts before inserts appear
     setTimeout(function () {
-      inserted.forEach(function (r) { animateInsert(r); });
-      countEl.textContent = rows.length;
-      emptyEl.style.display = rows.length === 0 ? 'block' : 'none';
+      if (isFilterActive()) {
+        updateDisplay();
+      } else {
+        inserted.forEach(function (r) { animateInsert(r); });
+        countEl.textContent = rows.length;
+        emptyEl.style.display = rows.length === 0 ? 'block' : 'none';
+      }
     }, 50);
   }
 
