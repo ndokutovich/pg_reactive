@@ -186,7 +186,7 @@ export class DetailScreenComponent implements OnInit, OnDestroy {
               if (msg.type === 'overflow') { this.loadItems(); return; }
 
               let current = [...this.items()];
-              const insertedIds = new Set((msg.inserted || []).map((r: any) => r.id));
+              const insertedIds = new Set((msg.inserted || []).map((r: { id: string }) => r.id));
 
               // Process inserted first (upsert)
               if (msg.inserted && msg.inserted.length > 0) {
@@ -202,7 +202,7 @@ export class DetailScreenComponent implements OnInit, OnDestroy {
               }
               // Process deleted (skip ids also in inserted — those are updates)
               if (msg.deleted && msg.deleted.length > 0) {
-                const delIds = new Set(msg.deleted.filter((d: any) => !insertedIds.has(d.id)).map((d: any) => d.id));
+                const delIds = new Set(msg.deleted.filter((d: { id: string }) => !insertedIds.has(d.id)).map((d: { id: string }) => d.id));
                 if (delIds.size > 0) {
                   current = current.filter(it => !delIds.has(it.id));
                 }
