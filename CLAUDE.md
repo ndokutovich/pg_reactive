@@ -62,7 +62,7 @@ The proxy is built and run via Docker in development. Direct `cargo build` is fo
 ```bash
 node tests/e2e_ws_test.mjs               # WebSocket delta delivery
 node tests/e2e_fanout_test.mjs            # Multi-client fan-out
-JWT_SECRET=test node tests/e2e_jwt_test.mjs  # JWT auth scenarios
+node tests/e2e_jwt_test.mjs              # JWT auth scenarios (uses proxy default secret)
 ```
 
 ### Integration Tests (run inside container)
