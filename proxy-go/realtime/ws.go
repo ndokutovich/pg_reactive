@@ -76,7 +76,7 @@ func WSHandler(
 			// ?apikey= is the primary mechanism for browser-based auth.
 			var isAnon bool
 			if cfg.AnonKey != "" {
-				if authHeader == "Bearer "+cfg.AnonKey || apikeyParam == cfg.AnonKey {
+				if middleware.ConstantTimeEqExported(authHeader, "Bearer "+cfg.AnonKey) || middleware.ConstantTimeEqExported(apikeyParam, cfg.AnonKey) {
 					isAnon = true
 				}
 			}
@@ -191,6 +191,7 @@ func handleWebSocket(
 				wsMessages <- wsMessage{err: err}
 				return
 			}
+			log.Debug().Str("query_id", queryID).Int("type", mt).Int("len", len(data)).Msg("WS read pump: message received")
 			wsMessages <- wsMessage{msgType: mt, data: data}
 		}
 	}()
@@ -216,6 +217,9 @@ func handleWebSocket(
 				return
 			}
 			switch msg.msgType {
+			case websocket.TextMessage:
+				// Relay client message to all other subscribers of the same channel.
+				hub.Broadcast(queryID, string(msg.data))
 			case websocket.CloseMessage:
 				log.Info().Str("query_id", queryID).Msg("WebSocket disconnected (close frame)")
 				return

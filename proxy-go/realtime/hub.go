@@ -1,6 +1,10 @@
 package realtime
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/rs/zerolog/log"
+)
 
 // Hub provides fan-out delivery of NOTIFY payloads to multiple concurrent
 // WebSocket subscribers. Each subscriber gets its own buffered channel so
@@ -58,11 +62,13 @@ func (h *Hub) Broadcast(queryID, payload string) {
 	snap := make([]chan string, len(h.subs[queryID]))
 	copy(snap, h.subs[queryID])
 	h.mu.RUnlock()
+	log.Debug().Str("query_id", queryID).Int("subscribers", len(snap)).Msg("Hub.Broadcast")
 	for _, ch := range snap {
 		select {
 		case ch <- payload:
 		default:
 			// subscriber buffer full — message dropped for this subscriber only
+			log.Warn().Str("query_id", queryID).Msg("Hub.Broadcast: subscriber buffer full, dropping")
 		}
 	}
 }
