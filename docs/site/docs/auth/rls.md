@@ -48,6 +48,9 @@ auth.role()     -- returns TEXT
 
 -- Current user's email
 auth.email()    -- returns TEXT or NULL
+
+-- Full JWT claims as JSONB
+auth.jwt()      -- returns JSONB (empty object if no JWT)
 ```
 
 These are shorthand for reading `request.jwt.claims`:
@@ -55,6 +58,9 @@ These are shorthand for reading `request.jwt.claims`:
 ```sql
 -- Equivalent to auth.uid():
 (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid
+
+-- Access custom claims via auth.jwt():
+(auth.jwt()->>'org_id')::uuid
 ```
 
 ## Policy examples
@@ -136,20 +142,16 @@ CREATE POLICY "Service role bypass"
 
 ### JSON metadata in policies
 
-You can access any JWT claim in your policies:
+You can access any JWT claim in your policies using `auth.jwt()`:
 
 ```sql
 -- Using a custom claim 'org_id' in the JWT
 CREATE POLICY "Org isolation"
   ON documents FOR ALL
-  USING (
-    org_id = (
-      current_setting('request.jwt.claims', true)::jsonb->>'org_id'
-    )::uuid
-  );
+  USING (org_id = (auth.jwt()->>'org_id')::uuid);
 ```
 
-To add custom claims, generate your JWTs with extra fields. Contact your auth configuration if you need to embed org_id or tenant_id in tokens.
+To add custom claims, include extra fields when generating your JWTs.
 
 ## Testing RLS policies
 

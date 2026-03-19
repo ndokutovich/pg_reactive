@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
@@ -140,8 +141,7 @@ func ConstantTimeEqExported(a, b string) bool {
 // validateJWT parses and validates a signed JWT using the HS256 algorithm.
 //
 // Expiry is validated when the exp claim is present (rejected if expired).
-// Tokens without an exp claim are accepted for backwards compatibility —
-// this mirrors the Rust proxy's behaviour exactly.
+// Tokens without an exp claim are accepted only if iat is within 24 hours.
 func validateJWT(tokenStr, secret string) (jwt.MapClaims, error) {
 	// Parse without requiring exp so we can accept tokens that omit it.
 	// jwt/v5 by default validates exp when present, and does NOT require it.
@@ -158,6 +158,17 @@ func validateJWT(tokenStr, secret string) (jwt.MapClaims, error) {
 	}
 	if !token.Valid {
 		return nil, errors.New("JWT validation failed: invalid token")
+	}
+
+	// Enforce max token age for tokens without an exp claim (H1 fix).
+	if _, hasExp := claims["exp"]; !hasExp {
+		iat, _ := claims["iat"].(float64)
+		if iat == 0 {
+			return nil, errors.New("JWT validation failed: token must have exp or iat claim")
+		}
+		if time.Since(time.Unix(int64(iat), 0)) > 24*time.Hour {
+			return nil, errors.New("JWT validation failed: token without exp expired (iat too old)")
+		}
 	}
 
 	return claims, nil

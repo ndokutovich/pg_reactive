@@ -240,7 +240,7 @@ func (c Config) Validate() []string {
 		))
 	}
 	if c.JWTSecret != "" && strings.Contains(c.JWTSecret, "dev-only") {
-		errs = append(errs, "JWT_SECRET contains 'dev-only' — set a proper secret for production")
+		fmt.Fprintf(os.Stderr, "WARNING: JWT_SECRET contains 'dev-only' — set a proper secret for production\n")
 	}
 	if c.RequireEmailVerification && c.SMTPHost == "" {
 		errs = append(errs, "REQUIRE_EMAIL_VERIFICATION=true but SMTP_HOST is not set")

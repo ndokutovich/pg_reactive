@@ -125,7 +125,7 @@ Required for email verification and magic links.
 | `PG_POOL_MIN_CONNS` | `5` | Minimum idle connections kept warm. |
 | `TLS_MODE` | `off` | `off` (reverse proxy), `auto` (Let's Encrypt), `manual` (own certs). |
 
-See [Environment Variables](/docs/deploy/env-vars) for the complete list including TLS certificate settings.
+See [Environment Variables](deploy/env-vars) for the complete list including TLS certificate settings.
 
 ### Advanced PostgreSQL
 

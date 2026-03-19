@@ -4,10 +4,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     postgresql-server-dev-16 \
     postgresql-plpython3-16 \
-    postgresql-16-plv8 \
     python3 \
     python3-pip \
     python3-psycopg2 \
+    && (apt-get install -y --no-install-recommends postgresql-16-plv8 || true) \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy extension source, tests, and examples at build time

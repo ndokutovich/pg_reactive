@@ -22,6 +22,7 @@ RUN npm run build
 # ── Stage 3: Build Go proxy ────────────────────────────────────────────────────
 FROM golang:1.23-bookworm AS builder
 WORKDIR /app
+ENV GOTOOLCHAIN=auto
 
 # Download dependencies first (layer-cached separately from source).
 COPY proxy-go/go.mod proxy-go/go.sum ./

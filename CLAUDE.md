@@ -109,9 +109,9 @@ All SQL functions live in the `pgr` schema (not `pg_reactive` — the `pg_` pref
 - **recompute.c** — EXCEPT-based delta computation. Stores snapshots in UNLOGGED tables (`pgr._snapshot_<query_id>`). Emits JSON via `pg_notify('pgr', ...)`. Overflow at 7800 bytes
 - **bgworker.c** — Optional background worker for async recompute (controlled by `pg_reactive.async_recompute` GUC, PGC_POSTMASTER)
 
-### Rust Proxy (`proxy/src/main.rs`)
+### Go Proxy (`proxy-go/`)
 
-Single-file server using hyper + tokio-tungstenite. Listens on PG `NOTIFY pgr` channel, fans out to WebSocket clients via `broadcast::channel`. JWT auth (HS256) when `JWT_SECRET` env var is set. Semaphore-based connection limiting (default 10K).
+Modular chi-based server. Listens on PG `NOTIFY pgr` channel, fans out to WebSocket clients via Hub broadcast. JWT auth (HS256) when `JWT_SECRET` env var is set. Semaphore-based connection limiting (default 10K). Includes auth endpoints, PostgREST-compatible REST API, RLS middleware, rate limiting, CORS, TLS, gzip, and embedded JS (goja) edge functions.
 
 ### TypeScript SDK (`sdk/src/`)
 

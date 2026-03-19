@@ -101,7 +101,7 @@ async function testWrongSecret() {
 
 async function testValidToken() {
   console.log('Test 4: Valid token -> expect WebSocket connection');
-  const token = createJwt({ sub: 'user1' }, JWT_SECRET);
+  const token = createJwt({ sub: 'user1', iat: Math.floor(Date.now() / 1000) }, JWT_SECRET);
   const ws = new WebSocket(`ws://${PROXY_HOST}:${PROXY_PORT}/ws/test_q?token=${token}`);
 
   // Register message handler BEFORE awaiting open to avoid a race where the

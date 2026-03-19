@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-The codebase demonstrates strong security fundamentals: parameterized SQL queries throughout, identifier quoting via `QuoteIdent`, role whitelisting for `SET LOCAL ROLE`, Argon2id password hashing, refresh token rotation with family-based reuse detection, and non-root Docker containers. However, **4 Critical**, **11 High**, **14 Medium**, and **10 Low** findings were identified across all layers.
+The codebase demonstrates strong security fundamentals: parameterized SQL queries throughout, identifier quoting via `QuoteIdent`, role whitelisting for `SET LOCAL ROLE`, Argon2id password hashing, refresh token rotation with family-based reuse detection, and non-root Docker containers. However, **4 Critical**, **13 High**, **14 Medium**, and **10 Low** findings were identified across all layers.
 
 **Phase 1 and Phase 2 remediations are complete as of commit `98f9667`.** All 4 Critical, all 13 High, and 11 of 14 Medium findings have been resolved. Three Medium findings (M3, M14) and all Low findings remain open.
 

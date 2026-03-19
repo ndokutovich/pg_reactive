@@ -43,7 +43,6 @@ These must be set for production. In development, the compose file provides inse
 |----------|---------|-------------|
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Address and port the proxy listens on. |
 | `PROXY_PORT` | `8080` | Host port mapping (for `docker compose`). |
-| `RUST_LOG` | `pgstack_proxy=info` | Rust log level. Set to `debug` for verbose output. |
 | `ENABLE_SQL_ENDPOINT` | `false` | Enable `/api/sql` endpoint for raw SQL (dev only). **Never enable in production.** |
 | `PUBLIC_DIR` | *(empty — disabled)* | Directory for serving static files at the root path. When set, files in this directory are served with SPA fallback (unknown paths serve `index.html`). |
 
@@ -80,7 +79,7 @@ Required for email verification and password reset emails. If not set, these fea
 | `SMTP_PORT` | `587` | SMTP port. Use `587` for STARTTLS, `465` for SSL, `25` for unencrypted. |
 | `SMTP_USER` | — | SMTP authentication username. |
 | `SMTP_PASS` | — | SMTP authentication password. |
-| `SMTP_FROM` | `noreply@example.com` | From address for all auth emails. |
+| `SMTP_FROM` | `noreply@pgstack.local` | From address for all auth emails. |
 
 ## CORS variables
 
@@ -99,7 +98,7 @@ Required for email verification and password reset emails. If not set, these fea
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EDGE_RUNTIME_URL` | *(empty — disabled)* | URL of Supabase edge-runtime container. Example: `http://edge-runtime:9000`. Empty disables Deno backend. |
-| `EMBEDDED_FUNCTIONS` | `false` | Enable embedded JS runtime (goja) for lightweight functions. |
+| `EMBEDDED_FUNCTIONS` | `true` | Enable embedded JS runtime (goja) for lightweight functions. |
 | `FUNCTIONS_DIR` | `/functions` | Directory where Deno function sources are mounted. |
 
 ## Batch transaction variables

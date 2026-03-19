@@ -8,7 +8,7 @@ A PostgreSQL extension that turns any SQL `SELECT` into a live query with real-t
 +-------------------+       +------------------+       +------------------+
 |  PostgreSQL       |       |  Go Proxy        |       |  TypeScript SDK  |
 |  C Extension      | ----> |  chi Server      | ----> |  LiveQuery       |
-|  (ext/)           | NOTIFY|  (proxy/)        |  WS   |  Client (sdk/)   |
+|  (ext/)           | NOTIFY|  (proxy-go/)     |  WS   |  Client (sdk/)   |
 +-------------------+       +------------------+       +------------------+
                             |  Auth, REST,     |       |  CLI (cli/)      |
                             |  OAuth, RLS      |       |  pgstack init/   |
@@ -268,16 +268,21 @@ cd cli && npx vitest run        # 36 tests
 ### E2E tests (require docker compose)
 
 ```bash
-node tests/e2e_ws_test.mjs          # WebSocket delta delivery
-node tests/e2e_fanout_test.mjs      # Multi-client fan-out
-node tests/e2e_jwt_test.mjs         # JWT auth scenarios
-node tests/e2e_auth_test.mjs        # Auth endpoints (37 tests)
-node tests/e2e_rest_test.mjs        # REST CRUD (34 tests)
-node tests/e2e_rls_test.mjs         # RLS middleware (12 tests)
-node tests/e2e_rpc_test.mjs         # RPC function calls (30 tests)
-node tests/e2e_embed_test.mjs       # Resource embedding (55 tests)
-node tests/e2e_oauth_test.mjs       # OAuth flow (10 tests)
-node tests/e2e_sdk_test.mjs         # SDK integration (29 tests)
+node tests/e2e_ws_test.mjs              # WebSocket delta delivery
+node tests/e2e_fanout_test.mjs          # Multi-client fan-out
+node tests/e2e_jwt_test.mjs             # JWT auth scenarios
+node tests/e2e_auth_test.mjs            # Auth endpoints (37 tests)
+node tests/e2e_rest_test.mjs            # REST CRUD (34 tests)
+node tests/e2e_rls_test.mjs             # RLS middleware (12 tests)
+node tests/e2e_rpc_test.mjs             # RPC function calls (30 tests)
+node tests/e2e_embed_test.mjs           # Resource embedding (55 tests)
+node tests/e2e_embed_rpc_test.mjs       # Embedding + RPC combined
+node tests/e2e_batch_test.mjs           # Transaction batching
+node tests/e2e_oauth_test.mjs           # OAuth flow (10 tests)
+node tests/e2e_sdk_test.mjs             # SDK integration (29 tests)
+node tests/e2e_gzip_test.mjs            # Gzip compression
+node tests/e2e_static_hosting_test.mjs  # Static file hosting
+node tests/e2e_shopping_patch_test.mjs  # Shopping list PATCH ops
 ```
 
 ### Integration + Performance
@@ -330,7 +335,7 @@ sdk/                              TypeScript SDK
     server.ts                     PgReactiveAdmin server helper
 
 tests/                            E2E, integration, and performance tests
-  e2e_*.mjs                       11 E2E test suites (~270 tests)
+  e2e_*.mjs                       15 E2E test suites (~300 tests)
   integration/                    Shared memory + throughput stress tests
   perf/                           6 performance tests + runner
 

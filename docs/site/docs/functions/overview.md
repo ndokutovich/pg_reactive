@@ -72,6 +72,18 @@ Functions receive the caller's identity via auth headers:
 - `x-pgstack-claims` — Full JWT claims JSON
 - `x-pgstack-sub` — User ID (UUID)
 
+## Security
+
+### RLS enforcement
+
+The embedded JS runtime (goja) enforces Row Level Security on all database queries. Each `db.query()` call runs inside a transaction with `SET LOCAL ROLE` matching the caller's JWT claims. This means embedded functions respect the same RLS policies as REST API requests.
+
+Roles are whitelisted (`anon`, `authenticated`); embedded functions cannot escalate to `service_role`. An execution timeout prevents infinite loops from blocking the proxy.
+
+### Body size limit
+
+Edge Function requests are subject to the `MAX_BODY_SIZE` limit (default 1 MB) to prevent resource exhaustion.
+
 ## API reference
 
 | Endpoint | Method | Auth | Description |
