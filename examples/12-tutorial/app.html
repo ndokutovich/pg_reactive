@@ -1039,7 +1039,10 @@ function executeSequential(stmts, idx, afterEl, cls, btn) {
   }
   fetch(PGR.apiBase + '/sql', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + PGR.serviceRoleKey
+    },
     body: JSON.stringify({ sql: stmts[idx] })
   })
   .then(function(r) { return r.json(); })

@@ -477,6 +477,7 @@
   var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
   var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
   var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
+  var SERVICE_ROLE_KEY = 'dev-only-service-role-key-do-not-use-in-production';
   var POLL_INTERVAL = 2000;
   var SESSION_KEY = 'wtb-session';
 
@@ -640,7 +641,7 @@
   function apiSql(sql) {
     return fetch(API_BASE + '/api/sql', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SERVICE_ROLE_KEY },
       body: JSON.stringify({ sql: sql })
     }).then(function(r) { return r.json(); });
   }

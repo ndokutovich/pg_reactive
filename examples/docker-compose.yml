@@ -34,7 +34,7 @@ services:
       LISTEN_ADDR: "0.0.0.0:8080"
       ENABLE_SQL_ENDPOINT: "true"
       JWT_SECRET: dev-only-jwt-secret-do-not-use-in-production
-      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ANON_KEY: ${ANON_KEY:-anon-key-12345}
     ports:
       - "8080:8080"

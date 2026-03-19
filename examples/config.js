@@ -36,12 +36,16 @@
 
   var wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   var anonKey = typeof window.PGR_ANON_KEY === 'string' ? window.PGR_ANON_KEY : 'anon-key-12345';
+  var serviceRoleKey = typeof window.PGR_SERVICE_ROLE_KEY === 'string'
+    ? window.PGR_SERVICE_ROLE_KEY
+    : 'dev-only-service-role-key-do-not-use-in-production';
 
   window.PGR = {
     base:    base,
     wsBase:  wsProto + location.host + base + '/ws',
     apiBase: location.origin + base + '/api',
     anonKey: anonKey,
+    serviceRoleKey: serviceRoleKey,
   };
 
   // Auto-inject ?apikey= into WebSocket connections targeting /ws/.
