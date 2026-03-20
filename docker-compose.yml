@@ -34,6 +34,7 @@ services:
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"
       PUBLIC_DIR: /public
+      # EDGE_RUNTIME_URL: http://edge-runtime:9000  # uncomment to enable Deno functions
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
@@ -43,7 +44,7 @@ services:
         condition: service_healthy
 
   # Optional: Supabase edge-runtime for Deno-based edge functions.
-  # Uncomment to enable. Set EDGE_RUNTIME_URL=http://edge-runtime:9000 on proxy-go.
+  # Uncomment to enable, and also uncomment EDGE_RUNTIME_URL on proxy-go above.
   # edge-runtime:
   #   image: supabase/edge-runtime:v1.62.2
   #   environment:

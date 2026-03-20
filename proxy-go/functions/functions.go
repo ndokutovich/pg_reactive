@@ -1,6 +1,7 @@
 package functions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,10 +24,11 @@ var fnNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]{0,62}$`)
 
 // FunctionsDeps is the dependency bundle passed to all handler constructors.
 type FunctionsDeps struct {
-	Pool          *pgxpool.Pool
-	ResolveClaims func(r *http.Request) (*rest.RequestClaims, error)
-	Catalog       *FunctionsCatalog
-	DatabaseURL   string // passed to functions as PGSTACK_DB_URL env hint
+	Pool           *pgxpool.Pool
+	ResolveClaims  func(r *http.Request) (*rest.RequestClaims, error)
+	Catalog        *FunctionsCatalog
+	DatabaseURL    string // passed to functions as PGSTACK_DB_URL env hint
+	EdgeRuntimeURL string // URL of Deno edge-runtime container (empty = disabled)
 }
 
 // Invoke returns an http.HandlerFunc for POST /functions/v1/{name}.
@@ -88,6 +90,13 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 
 	case "plpython3u":
 		invokePLRuntime(d, w, r.Context(), fnName, bodyBytes, claims, "pgstack")
+
+	case "deno":
+		// Restore the request body that was consumed by io.ReadAll above,
+		// so the reverse proxy can forward it to the Deno edge-runtime.
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		r.ContentLength = int64(len(bodyBytes))
+		proxyToDeno(d, w, r, fnName, claims)
 
 	default:
 		log.Warn().Str("fn", fnName).Str("runtime", fm.Runtime).Msg("functions: unknown runtime")

@@ -4,6 +4,7 @@
 //   - "embedded"   — synchronous JS via goja VM inside the Go proxy (no external deps)
 //   - "plv8"       — JavaScript inside PostgreSQL (full ACID, SPI access)
 //   - "plpython3u" — Python 3 inside PostgreSQL (full ACID, pip packages available)
+//   - "deno"       — Deno edge-runtime container via reverse proxy (EDGE_RUNTIME_URL)
 //
 // The FunctionsCatalog provides a thread-safe, in-memory cache of function
 // metadata loaded from the pgstack.edge_functions table. It auto-refreshes
@@ -23,7 +24,7 @@ import (
 // FunctionMeta describes a single edge function's configuration.
 type FunctionMeta struct {
 	Name      string `json:"name"`
-	Runtime   string `json:"runtime"`    // "embedded", "plv8", "plpython3u"
+	Runtime   string `json:"runtime"`    // "embedded", "plv8", "plpython3u", "deno"
 	VerifyJWT bool   `json:"verify_jwt"`
 	Status    string `json:"status"`     // "active", "inactive"
 	Code      string `json:"code,omitempty"`

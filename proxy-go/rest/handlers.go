@@ -2,11 +2,15 @@ package rest
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -17,6 +21,7 @@ import (
 //   - ?col=op.value                  — PostgREST filters
 //   - ?order=col.asc                 — ordering
 //   - ?limit=N&offset=M              — pagination
+//   - Prefer: count=exact|planned|estimated  — total count via Content-Range
 func Select(d *RestDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tableName := chi.URLParam(r, "table")
@@ -33,6 +38,16 @@ func Select(d *RestDeps) http.HandlerFunc {
 			log.Warn().Err(err).Msg("select: invalid query parameters")
 			writeJSONError(w, http.StatusBadRequest, "invalid query parameters")
 			return
+		}
+
+		// Parse Prefer header for count mode.
+		prefer := r.Header.Get("Prefer")
+		if strings.Contains(prefer, "count=exact") {
+			q.Count = "exact"
+		} else if strings.Contains(prefer, "count=planned") {
+			q.Count = "planned"
+		} else if strings.Contains(prefer, "count=estimated") {
+			q.Count = "estimated"
 		}
 
 		// Parse embed requests out of ?select.
@@ -109,16 +124,112 @@ func Select(d *RestDeps) http.HandlerFunc {
 			}
 		}
 
+		// Count returned rows from the JSON array.
+		returned := countJSONArrayItems(result)
+
+		// Execute count query if requested.
+		var totalCount int64 = -1
+		if q.Count != "" {
+			totalCount, err = executeCount(r, tx, tm, q, plainCols)
+			if err != nil {
+				log.Warn().Err(err).Str("table", tableName).Msg("select: count query failed")
+				// Non-fatal: proceed without count.
+				totalCount = -1
+			}
+		}
+
 		if err := tx.Commit(r.Context()); err != nil {
 			log.Error().Err(err).Msg("select: commit")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")
 			return
 		}
 
+		// Set Content-Range header.
+		offset := 0
+		if q.Offset != nil {
+			offset = *q.Offset
+		}
+		w.Header().Set("Content-Range", formatContentRange(offset, returned, totalCount))
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(result)
 	}
+}
+
+// explainRowsRe matches "rows=N" in EXPLAIN output.
+var explainRowsRe = regexp.MustCompile(`rows=(\d+)`)
+
+// executeCount runs the appropriate count query based on q.Count mode.
+func executeCount(r *http.Request, tx pgx.Tx, tm *TableMeta, q *RestQuery, plainCols []string) (int64, error) {
+	ctx := r.Context()
+
+	switch q.Count {
+	case "exact":
+		cq, err := BuildCount(tm, q, plainCols)
+		if err != nil {
+			return 0, err
+		}
+		var count int64
+		if err := tx.QueryRow(ctx, cq.SQL, cq.Params...).Scan(&count); err != nil {
+			return 0, err
+		}
+		return count, nil
+
+	case "planned", "estimated":
+		eq, err := BuildCountEstimate(tm, q, plainCols)
+		if err != nil {
+			return 0, err
+		}
+		rows, err := tx.Query(ctx, eq.SQL, eq.Params...)
+		if err != nil {
+			return 0, err
+		}
+		defer rows.Close()
+
+		// Parse the first line of EXPLAIN output for rows=N.
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				continue
+			}
+			if m := explainRowsRe.FindStringSubmatch(line); len(m) > 1 {
+				n, _ := strconv.ParseInt(m[1], 10, 64)
+				return n, nil
+			}
+		}
+		return 0, fmt.Errorf("could not parse EXPLAIN output")
+
+	default:
+		return 0, fmt.Errorf("unknown count mode: %s", q.Count)
+	}
+}
+
+// countJSONArrayItems returns the number of top-level items in a JSON array.
+// Returns 0 for empty arrays or non-array input.
+func countJSONArrayItems(data json.RawMessage) int {
+	var items []json.RawMessage
+	if json.Unmarshal(data, &items) != nil {
+		return 0
+	}
+	return len(items)
+}
+
+// formatContentRange produces the Content-Range header value.
+//
+// PostgREST format:
+//   - With count:    "0-4/100"
+//   - Without count: "0-4/*"
+//   - Empty result:  "*/100" or "*/*"
+func formatContentRange(offset, returned int, totalCount int64) string {
+	total := "*"
+	if totalCount >= 0 {
+		total = strconv.FormatInt(totalCount, 10)
+	}
+	if returned == 0 {
+		return "*/" + total
+	}
+	return fmt.Sprintf("%d-%d/%s", offset, offset+returned-1, total)
 }
 
 // Insert handles POST /rest/v1/{table}.

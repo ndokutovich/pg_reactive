@@ -15,8 +15,8 @@ const corsMaxAge = int(time.Hour / time.Second) // 3600
 // is applied (suitable for local development only).
 func CORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowedMethods := "GET, POST, PATCH, DELETE, OPTIONS"
-	allowedHeaders := "Authorization, Content-Type, apikey, prefer"
-	exposedHeaders := "Content-Type"
+	allowedHeaders := "Authorization, Content-Type, apikey, Prefer"
+	exposedHeaders := "Content-Type, Content-Range"
 	maxAge := "3600"
 
 	return func(next http.Handler) http.Handler {

@@ -54,8 +54,8 @@ func BuildSelect(table *TableMeta, q *RestQuery, selectCols []string) (*BuiltQue
 	sb.WriteString(qualifiedTable(table))
 
 	// WHERE clause
-	if len(q.Filters) > 0 {
-		where, wParams, _, err := buildWhereClause(q.Filters, table, 1)
+	if len(q.Filters) > 0 || len(q.LogicalGroups) > 0 {
+		where, wParams, _, err := buildWhereClause(q.Filters, q.LogicalGroups, table, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -234,7 +234,7 @@ func BuildUpdate(table *TableMeta, body map[string]any, q *RestQuery) (*BuiltQue
 		idx++
 	}
 
-	where, wParams, _, err := buildWhereClause(q.Filters, table, idx)
+	where, wParams, _, err := buildWhereClause(q.Filters, q.LogicalGroups, table, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func BuildDelete(table *TableMeta, q *RestQuery) (*BuiltQuery, error) {
 		return nil, fmt.Errorf("delete: at least one filter is required")
 	}
 
-	where, params, _, err := buildWhereClause(q.Filters, table, 1)
+	where, params, _, err := buildWhereClause(q.Filters, q.LogicalGroups, table, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -271,72 +271,108 @@ func BuildDelete(table *TableMeta, q *RestQuery) (*BuiltQuery, error) {
 // buildWhereClause produces the SQL fragment for a WHERE clause and the
 // corresponding parameter slice.  startIdx is the first $N index to use.
 // Returns (sql, params, nextIdx, error).
-func buildWhereClause(filters []Filter, table *TableMeta, startIdx int) (string, []any, int, error) {
+func buildWhereClause(filters []Filter, groups []LogicalGroup, table *TableMeta, startIdx int) (string, []any, int, error) {
 	colSet := table.columnSet()
-	parts := make([]string, 0, len(filters))
+	parts := make([]string, 0, len(filters)+len(groups))
 	params := make([]any, 0, len(filters))
 	idx := startIdx
 
 	for _, f := range filters {
-		// Column injection prevention: validate against known columns.
-		if _, ok := colSet[f.Column]; !ok {
-			return "", nil, idx, fmt.Errorf("unknown column %q", f.Column)
+		cond, condParams, nextIdx, err := buildFilterCondition(f, colSet, table, idx)
+		if err != nil {
+			return "", nil, idx, err
 		}
-		colSQL := QuoteIdent(f.Column)
-		typ := SafePGType(table.columnType(f.Column))
-
-		var cond string
-
-		switch f.Op {
-		case OpIs:
-			// IS NULL / IS TRUE / IS FALSE / IS UNKNOWN — no parameter.
-			val := strings.ToUpper(f.Value)
-			switch val {
-			case "NULL", "TRUE", "FALSE", "UNKNOWN":
-				// safe literal
-			default:
-				return "", nil, idx, fmt.Errorf("invalid IS value %q", f.Value)
-			}
-			cond = fmt.Sprintf("%s IS %s", colSQL, val)
-
-		case OpIn:
-			// Value format: (a,b,c) or a,b,c
-			raw := strings.TrimSpace(f.Value)
-			raw = strings.TrimPrefix(raw, "(")
-			raw = strings.TrimSuffix(raw, ")")
-			items := strings.Split(raw, ",")
-			if len(items) == 0 {
-				return "", nil, idx, fmt.Errorf("empty IN list for column %q", f.Column)
-			}
-			placeholders := make([]string, 0, len(items))
-			for _, item := range items {
-				item = strings.TrimSpace(item)
-				placeholders = append(placeholders, fmt.Sprintf("$%d::%s", idx, typ))
-				params = append(params, item)
-				idx++
-			}
-			cond = fmt.Sprintf("%s IN (%s)", colSQL, strings.Join(placeholders, ", "))
-
-		case OpLike, OpIlike:
-			// Convert PostgREST wildcard (*) to SQL wildcard (%).
-			val := strings.ReplaceAll(f.Value, "*", "%")
-			cond = fmt.Sprintf("%s %s $%d", colSQL, f.Op.SQLOP(), idx)
-			params = append(params, val)
-			idx++
-
-		default:
-			cond = fmt.Sprintf("%s %s $%d::%s", colSQL, f.Op.SQLOP(), idx, typ)
-			params = append(params, f.Value)
-			idx++
-		}
-
 		if f.Negate {
 			cond = "NOT (" + cond + ")"
 		}
 		parts = append(parts, cond)
+		params = append(params, condParams...)
+		idx = nextIdx
+	}
+
+	// Logical groups (or/and combinators).
+	for _, g := range groups {
+		groupParts := make([]string, 0, len(g.Filters))
+		for _, f := range g.Filters {
+			cond, condParams, nextIdx, err := buildFilterCondition(f, colSet, table, idx)
+			if err != nil {
+				return "", nil, idx, err
+			}
+			if f.Negate {
+				cond = "NOT (" + cond + ")"
+			}
+			groupParts = append(groupParts, cond)
+			params = append(params, condParams...)
+			idx = nextIdx
+		}
+
+		joiner := " AND "
+		if strings.ToLower(g.Operator) == "or" {
+			joiner = " OR "
+		}
+		parts = append(parts, "("+strings.Join(groupParts, joiner)+")")
 	}
 
 	return strings.Join(parts, " AND "), params, idx, nil
+}
+
+// buildFilterCondition builds a single SQL condition from a Filter, returning
+// the SQL fragment, parameters, next parameter index, and any error.
+func buildFilterCondition(f Filter, colSet map[string]struct{}, table *TableMeta, idx int) (string, []any, int, error) {
+	// Column injection prevention: validate against known columns.
+	if _, ok := colSet[f.Column]; !ok {
+		return "", nil, idx, fmt.Errorf("unknown column %q", f.Column)
+	}
+	colSQL := QuoteIdent(f.Column)
+	typ := SafePGType(table.columnType(f.Column))
+
+	var cond string
+	var params []any
+
+	switch f.Op {
+	case OpIs:
+		// IS NULL / IS TRUE / IS FALSE / IS UNKNOWN — no parameter.
+		val := strings.ToUpper(f.Value)
+		switch val {
+		case "NULL", "TRUE", "FALSE", "UNKNOWN":
+			// safe literal
+		default:
+			return "", nil, idx, fmt.Errorf("invalid IS value %q", f.Value)
+		}
+		cond = fmt.Sprintf("%s IS %s", colSQL, val)
+
+	case OpIn:
+		// Value format: (a,b,c) or a,b,c
+		raw := strings.TrimSpace(f.Value)
+		raw = strings.TrimPrefix(raw, "(")
+		raw = strings.TrimSuffix(raw, ")")
+		items := strings.Split(raw, ",")
+		if len(items) == 0 {
+			return "", nil, idx, fmt.Errorf("empty IN list for column %q", f.Column)
+		}
+		placeholders := make([]string, 0, len(items))
+		for _, item := range items {
+			item = strings.TrimSpace(item)
+			placeholders = append(placeholders, fmt.Sprintf("$%d::%s", idx, typ))
+			params = append(params, item)
+			idx++
+		}
+		cond = fmt.Sprintf("%s IN (%s)", colSQL, strings.Join(placeholders, ", "))
+
+	case OpLike, OpIlike:
+		// Convert PostgREST wildcard (*) to SQL wildcard (%).
+		val := strings.ReplaceAll(f.Value, "*", "%")
+		cond = fmt.Sprintf("%s %s $%d", colSQL, f.Op.SQLOP(), idx)
+		params = append(params, val)
+		idx++
+
+	default:
+		cond = fmt.Sprintf("%s %s $%d::%s", colSQL, f.Op.SQLOP(), idx, typ)
+		params = append(params, f.Value)
+		idx++
+	}
+
+	return cond, params, idx, nil
 }
 
 // buildSelectList returns the column list for a SELECT.  "*" or an empty
@@ -389,6 +425,63 @@ func buildOrderClause(order []OrderClause, table *TableMeta) (string, error) {
 		parts = append(parts, term)
 	}
 	return strings.Join(parts, ", "), nil
+}
+
+// BuildCount builds a SELECT count(*) query that mirrors the filters from a
+// RestQuery but omits ORDER BY, LIMIT, and OFFSET.  The base query is wrapped
+// as: SELECT count(*) FROM (<base>) _cnt.
+//
+// For "planned" or "estimated" count modes the caller should use BuildCountEstimate
+// instead of running this exact query.
+func BuildCount(table *TableMeta, q *RestQuery, selectCols []string) (*BuiltQuery, error) {
+	var sb strings.Builder
+	var params []any
+
+	colSQL := buildSelectList(table, selectCols)
+	sb.WriteString("SELECT ")
+	sb.WriteString(colSQL)
+	sb.WriteString(" FROM ")
+	sb.WriteString(qualifiedTable(table))
+
+	if len(q.Filters) > 0 || len(q.LogicalGroups) > 0 {
+		where, wParams, _, err := buildWhereClause(q.Filters, q.LogicalGroups, table, 1)
+		if err != nil {
+			return nil, err
+		}
+		sb.WriteString(" WHERE ")
+		sb.WriteString(where)
+		params = append(params, wParams...)
+	}
+
+	countSQL := "SELECT count(*) FROM (" + sb.String() + ") _cnt"
+	return &BuiltQuery{SQL: countSQL, Params: params}, nil
+}
+
+// BuildCountEstimate builds an EXPLAIN query whose output can be parsed to
+// extract the estimated row count.  The base query includes filters but omits
+// ORDER BY, LIMIT, and OFFSET.
+func BuildCountEstimate(table *TableMeta, q *RestQuery, selectCols []string) (*BuiltQuery, error) {
+	var sb strings.Builder
+	var params []any
+
+	colSQL := buildSelectList(table, selectCols)
+	sb.WriteString("SELECT ")
+	sb.WriteString(colSQL)
+	sb.WriteString(" FROM ")
+	sb.WriteString(qualifiedTable(table))
+
+	if len(q.Filters) > 0 || len(q.LogicalGroups) > 0 {
+		where, wParams, _, err := buildWhereClause(q.Filters, q.LogicalGroups, table, 1)
+		if err != nil {
+			return nil, err
+		}
+		sb.WriteString(" WHERE ")
+		sb.WriteString(where)
+		params = append(params, wParams...)
+	}
+
+	explainSQL := "EXPLAIN " + sb.String()
+	return &BuiltQuery{SQL: explainSQL, Params: params}, nil
 }
 
 // sortStrings sorts a string slice in-place (stdlib sort is fine here; we

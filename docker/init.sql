@@ -261,7 +261,7 @@ GRANT EXECUTE ON FUNCTION public.get_post_stats() TO anon, authenticated, servic
 CREATE TABLE IF NOT EXISTS pgstack.edge_functions (
     name TEXT PRIMARY KEY,
     runtime TEXT NOT NULL DEFAULT 'embedded'
-        CHECK (runtime IN ('embedded', 'plv8', 'plpython3u')),
+        CHECK (runtime IN ('embedded', 'plv8', 'plpython3u', 'deno')),
     verify_jwt BOOLEAN NOT NULL DEFAULT true,
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'inactive')),

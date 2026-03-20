@@ -442,8 +442,9 @@ func buildRouter(state *AppState) http.Handler {
 				ClaimsJSON: claims.ClaimsJSON,
 			}, nil
 		},
-		Catalog:     fnCatalog,
-		DatabaseURL: state.Config.DatabaseURL,
+		Catalog:        fnCatalog,
+		DatabaseURL:    state.Config.DatabaseURL,
+		EdgeRuntimeURL: state.Config.EdgeRuntimeURL,
 	}
 
 	// Auto-refresh the functions catalog via NOTIFY whenever a function is
