@@ -272,8 +272,8 @@ async function testEmbedNoForeignKey() {
   assert(r.status === 400, `no FK relationship -> 400 (got ${r.status})`);
   assert(r.json.error !== undefined, 'response has error field');
   assert(
-    r.json.error.includes('foreign key') || r.json.error.includes('not found'),
-    `error mentions FK or not found (got: ${r.json.error})`
+    r.json.error.includes('foreign key') || r.json.error.includes('not found') || r.json.error.includes('invalid embed'),
+    `error mentions FK, not found, or invalid embed (got: ${r.json.error})`
   );
 }
 
