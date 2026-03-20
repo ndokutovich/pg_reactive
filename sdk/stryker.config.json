@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker/master/packages/core/schema/stryker-core.json",
+  "mutate": ["src/query-builder.ts"],
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.config.ts",
+    "related": false
+  },
+  "checkers": ["typescript"],
+  "tsconfigFile": "tsconfig.json",
+  "reporters": ["clear-text", "progress"],
+  "concurrency": 4,
+  "timeoutMS": 30000,
+  "thresholds": {
+    "high": 85,
+    "low": 70,
+    "break": null
+  }
+}
