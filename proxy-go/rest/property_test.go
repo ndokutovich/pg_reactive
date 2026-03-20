@@ -387,6 +387,38 @@ func TestProperty_DeleteRequiresFilters(t *testing.T) {
 	})
 }
 
+// Property 6b: Delete/Update with LogicalGroups but no top-level Filters should SUCCEED.
+func TestProperty_DeleteWithLogicalGroupsSucceeds(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		table := genTableMeta(t)
+		cols := make([]string, len(table.Columns))
+		for i, c := range table.Columns {
+			cols[i] = c.Name
+		}
+		if len(cols) == 0 {
+			return
+		}
+		col := cols[0]
+
+		q := &RestQuery{
+			Filters: nil, // no top-level filters
+			LogicalGroups: []LogicalGroup{
+				{
+					Operator: "or",
+					Filters: []Filter{
+						{Column: col, Op: OpEq, Value: "a"},
+						{Column: col, Op: OpEq, Value: "b"},
+					},
+				},
+			},
+		}
+		_, err := BuildDelete(table, q)
+		if err != nil {
+			t.Fatalf("BuildDelete with LogicalGroups should succeed, got: %v", err)
+		}
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Property 7: SortStringsMatchesStdlib
 // ---------------------------------------------------------------------------

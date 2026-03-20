@@ -206,7 +206,7 @@ func BuildUpdate(table *TableMeta, body map[string]any, q *RestQuery) (*BuiltQue
 	if len(body) == 0 {
 		return nil, fmt.Errorf("update: empty body")
 	}
-	if len(q.Filters) == 0 {
+	if len(q.Filters) == 0 && len(q.LogicalGroups) == 0 {
 		return nil, fmt.Errorf("update: at least one filter is required")
 	}
 
@@ -251,7 +251,7 @@ func BuildUpdate(table *TableMeta, body map[string]any, q *RestQuery) (*BuiltQue
 // BuildDelete builds a parameterised DELETE … WHERE … RETURNING * with
 // json_agg wrapping.  At least one filter is required.
 func BuildDelete(table *TableMeta, q *RestQuery) (*BuiltQuery, error) {
-	if len(q.Filters) == 0 {
+	if len(q.Filters) == 0 && len(q.LogicalGroups) == 0 {
 		return nil, fmt.Errorf("delete: at least one filter is required")
 	}
 
