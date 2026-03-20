@@ -141,19 +141,19 @@ export class PgStackQueryBuilder<T = Record<string, unknown>> {
   }
 
   not(column: string, operator: string, value: unknown): this {
-    this._filters.push(`${enc(column)}=not.${operator}.${enc(String(value))}`);
+    this._filters.push(`${enc(column)}=not.${enc(operator)}.${enc(String(value))}`);
     return this;
   }
 
   filter(column: string, operator: string, value: unknown): this {
-    this._filters.push(`${enc(column)}=${operator}.${enc(String(value))}`);
+    this._filters.push(`${enc(column)}=${enc(operator)}.${enc(String(value))}`);
     return this;
   }
 
   // ---- Ordering & Pagination ----
 
   order(column: string, options?: { ascending?: boolean; nullsFirst?: boolean }): this {
-    let clause = column;
+    let clause = enc(column);
     clause += options?.ascending === false ? '.desc' : '.asc';
     if (options?.nullsFirst === true) clause += '.nullsfirst';
     if (options?.nullsFirst === false) clause += '.nullslast';
@@ -207,8 +207,9 @@ export class PgStackQueryBuilder<T = Record<string, unknown>> {
     const url = `${this.baseUrl}/rest/v1/${enc(this.table)}${qs ? '?' + qs : ''}`;
     const headers = this.headersFn();
 
-    if (this._head) {
-      headers['Prefer'] = 'count=exact';
+    // Send Prefer: count=X for both HEAD and GET when count is requested
+    if (this._head || this._count) {
+      headers['Prefer'] = `count=${this._count || 'exact'}`;
     }
 
     try {
@@ -230,12 +231,20 @@ export class PgStackQueryBuilder<T = Record<string, unknown>> {
 
       const data = this._head ? null : await res.json();
 
+      // Parse Content-Range header for count: "0-9/42" → 42
+      let count: number | null = null;
+      const contentRange = res.headers?.get?.('content-range');
+      if (contentRange) {
+        const match = contentRange.match(/\/(\d+)$/);
+        if (match) count = parseInt(match[1], 10);
+      }
+
       // Handle single mode
       if (this._single && Array.isArray(data)) {
         return {
           data: data[0] ?? null,
           error: null,
-          count: null,
+          count,
           status: res.status,
           statusText: res.statusText,
         };
@@ -244,7 +253,7 @@ export class PgStackQueryBuilder<T = Record<string, unknown>> {
       return {
         data,
         error: null,
-        count: null,
+        count,
         status: res.status,
         statusText: res.statusText,
       };
