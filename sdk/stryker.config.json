@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker/master/packages/core/schema/stryker-core.json",
-  "mutate": ["src/query-builder.ts"],
+  "mutate": ["src/query-builder.ts", "src/index.ts"],
   "testRunner": "vitest",
   "vitest": {
     "configFile": "vitest.config.ts",
