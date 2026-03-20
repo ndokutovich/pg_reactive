@@ -1,7 +1,7 @@
 ---
 title: Filters
 sidebar_position: 2
-description: All REST API filter operators — eq, neq, gt, lt, like, ilike, in, is, and more.
+description: All REST API filter operators — eq, neq, gt, lt, like, ilike, in, is, cs, cd, fts, ov, and logical combinators or/and.
 ---
 
 # Filters
@@ -33,6 +33,13 @@ Multiple filters are combined with AND:
 | `is` | IS NULL / IS TRUE / IS FALSE | `?deleted_at=is.null` |
 | `in` | value in list | `?status=in.(pending,processing)` |
 | `not` | negate operator | `?status=not.eq.deleted` |
+| `cs` | contains (arrays) | `?tags=cs.{go}` |
+| `cd` | contained by (arrays) | `?tags=cd.{go,rust}` |
+| `ov` | overlap (arrays) | `?tags=ov.{go,rust}` |
+| `fts` | full-text search | `?content=fts.hello` |
+| `sl` | strictly left of (ranges) | `?range=sl.[1,5]` |
+| `sr` | strictly right of (ranges) | `?range=sr.[1,5]` |
+| `adj` | adjacent (ranges) | `?range=adj.[1,5]` |
 
 ## Examples
 
@@ -102,6 +109,60 @@ GET /rest/v1/orders?status=not.eq.cancelled
 # Rows where NOT NULL
 GET /rest/v1/tasks?completed_at=not.is.null
 ```
+
+### Array operators
+
+```bash
+# Products tagged with "go" (contains)
+GET /rest/v1/products?tags=cs.{go}
+
+# Products whose tags are all within {go,rust,python} (contained by)
+GET /rest/v1/products?tags=cd.{go,rust,python}
+
+# Products tagged with "go" or "rust" (overlap)
+GET /rest/v1/products?tags=ov.{go,rust}
+```
+
+**SQL equivalents:**
+
+| Filter | SQL |
+|--------|-----|
+| `?tags=cs.{go}` | `tags @> '{go}'` |
+| `?tags=cd.{go,rust}` | `tags <@ '{go,rust}'` |
+| `?tags=ov.{go,rust}` | `tags && '{go,rust}'` |
+
+### Full-text search
+
+```bash
+# Rows where content matches the search term
+GET /rest/v1/articles?content=fts.hello
+
+# Combine with other filters
+GET /rest/v1/articles?content=fts.database&status=eq.published
+```
+
+**SQL equivalent:** `content @@ 'hello'`
+
+### Range operators
+
+```bash
+# Ranges strictly left of [1,5]
+GET /rest/v1/events?range=sl.[1,5]
+
+# Ranges strictly right of [1,5]
+GET /rest/v1/events?range=sr.[1,5]
+
+# Ranges adjacent to [1,5]
+GET /rest/v1/events?range=adj.[1,5]
+```
+
+**SQL equivalents:**
+
+| Filter | SQL |
+|--------|-----|
+| `?range=sl.[1,5]` | `range << '[1,5]'` |
+| `?range=sr.[1,5]` | `range >> '[1,5]'` |
+| `?range=adj.[1,5]` | `range -\|- '[1,5]'` |
 
 ## SDK filter methods
 
@@ -188,6 +249,43 @@ const { data } = await pgstack.from('products')
   .lt('price', 200)
   .ilike('name', '%laptop%')
   .order('price', { ascending: true });
+```
+
+## Logical combinators
+
+Combine multiple conditions with `or()` or `and()`:
+
+```bash
+GET /rest/v1/products?or=(status.eq.active,status.eq.pending)
+GET /rest/v1/products?and=(price.gt.10,price.lt.100)
+```
+
+`or()` and `and()` can be combined with regular filters -- regular filters are always ANDed:
+
+```bash
+GET /rest/v1/products?category=eq.electronics&or=(status.eq.active,status.eq.pending)
+```
+
+This returns electronics products where status is active OR pending.
+
+SDK:
+
+```typescript
+// OR combinator
+const { data } = await pgstack.from('products')
+  .select('*')
+  .or('status.eq.active,status.eq.pending');
+
+// AND combinator (explicit)
+const { data } = await pgstack.from('products')
+  .select('*')
+  .and('price.gt.10,price.lt.100');
+
+// Combined with regular filters
+const { data } = await pgstack.from('products')
+  .select('*')
+  .eq('category', 'electronics')
+  .or('status.eq.active,status.eq.pending');
 ```
 
 ## Wildcard patterns

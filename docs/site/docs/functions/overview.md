@@ -1,22 +1,23 @@
 ---
 title: Overview
 sidebar_position: 1
-description: Run server-side code with pgStack Edge Functions — Deno, PL/v8, or embedded JS.
+description: Run server-side code with pgStack Edge Functions — embedded JS, PL/v8, PL/Python, or Deno.
 ---
 
 # Edge Functions
 
 Edge Functions let you run server-side code triggered by HTTP requests. Unlike RPC (which runs SQL functions inside PostgreSQL), Edge Functions can call external APIs, process webhooks, and run business logic in JavaScript/TypeScript.
 
-## Three runtime backends
+## Four runtime backends
 
-pgStack supports three runtimes, choosable per function:
+pgStack supports four runtimes, choosable per function:
 
 | Runtime | Language | External APIs | Runs in | Best for |
 |---------|----------|--------------|---------|----------|
-| **Deno** | TypeScript/JS | Yes (full `fetch`) | Sidecar container | Full-featured functions, npm packages |
-| **PL/v8** | JavaScript | No | Inside PostgreSQL | ACID transactions, data-heavy logic |
 | **Embedded** | JavaScript | Limited | Go proxy process | Simple transforms, webhooks, lightweight handlers |
+| **PL/v8** | JavaScript | No | Inside PostgreSQL | ACID transactions, data-heavy logic |
+| **PL/Python** | Python 3 | Yes (`requests`, `numpy`) | Inside PostgreSQL | ACID transactions, data science, ML inference |
+| **Deno** | TypeScript/JS | Yes (full `fetch`) | Sidecar container | Full-featured functions, npm packages |
 
 ## Quick start
 
@@ -71,6 +72,47 @@ Functions receive the caller's identity via auth headers:
 - `x-pgstack-role` — `anon`, `authenticated`, or `service_role`
 - `x-pgstack-claims` — Full JWT claims JSON
 - `x-pgstack-sub` — User ID (UUID)
+
+## Runtime details
+
+### Embedded (goja)
+
+JavaScript via the [goja](https://github.com/nicholasgasior/goja) VM, running synchronously inside the Go proxy process. No external dependencies or sidecar containers required. Functions execute in-process with RLS enforcement on all database queries. Best for simple request/response handlers, webhooks, and lightweight transforms.
+
+### PL/v8
+
+JavaScript inside PostgreSQL via the [PL/v8](https://plv8.github.io/) extension. Functions run with full ACID transaction guarantees and direct SQL access. No network `fetch` is available. Function name convention: `pgstack.fn_{name}(body jsonb) RETURNS jsonb`.
+
+```sql
+CREATE OR REPLACE FUNCTION pgstack.fn_hello(body jsonb)
+RETURNS jsonb LANGUAGE plv8 AS $$
+  var name = body.name || 'world';
+  return { message: 'Hello, ' + name + '!' };
+$$;
+```
+
+### PL/Python (plpython3u)
+
+Python 3 inside PostgreSQL via the [PL/Python](https://www.postgresql.org/docs/current/plpython.html) extension. Functions run with full ACID transaction guarantees and have access to Python libraries such as `numpy` and `requests`. Function name convention: `pgstack.fn_{name}(body jsonb) RETURNS jsonb`.
+
+```sql
+CREATE OR REPLACE FUNCTION pgstack.fn_summarize(body jsonb)
+RETURNS jsonb LANGUAGE plpython3u AS $$
+  import json
+  data = json.loads(body)
+  result = {"count": len(data.get("items", []))}
+  return json.dumps(result)
+$$;
+```
+
+### Deno
+
+Supabase-compatible Deno runtime via an external sidecar container. Set the `EDGE_RUNTIME_URL` environment variable to point the proxy at your Deno runtime container. Supports full Node.js-like APIs, `fetch`, npm packages via `import`, and TypeScript out of the box.
+
+```bash
+# In docker-compose.yml or .env
+EDGE_RUNTIME_URL=http://edge-runtime:8000
+```
 
 ## Security
 

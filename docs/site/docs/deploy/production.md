@@ -18,6 +18,7 @@ Before launching pgStack in production, review the following checklist.
 - [ ] `ANON_KEY` is a strong random value
 - [ ] `SERVICE_ROLE_KEY` is a strong random value — treat it like a database root password
 - [ ] `.env` file is in `.gitignore` and never committed to version control
+- [ ] `SITE_URL` is set to your production URL (required for OAuth redirects and email links)
 - [ ] No development defaults (`dev-only-*`) remain in your production environment
 
 ### Network
