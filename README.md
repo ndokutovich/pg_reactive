@@ -83,6 +83,12 @@ PostgREST-compatible query parameters: `?column=op.value`
 | `like`, `ilike` | `?name=ilike.*alice*` | `name ILIKE '%alice%'` |
 | `in` | `?id=in.(1,2,3)` | `id IN (1, 2, 3)` |
 | `is` | `?deleted=is.null` | `deleted IS NULL` |
+| `cs` | `?tags=cs.{go}` | `tags @> '{go}'` |
+| `cd` | `?tags=cd.{go,rust}` | `tags <@ '{go,rust}'` |
+| `fts` | `?name=fts.alice` | `name @@ 'alice'` |
+| `not.` | `?status=not.eq.deleted` | `NOT (status = 'deleted')` |
+| `or()` | `?or=(status.eq.a,status.eq.b)` | `(status='a' OR status='b')` |
+| `and()` | `?and=(price.gt.10,price.lt.100)` | `(price>10 AND price<100)` |
 
 ### Resource Embedding
 
@@ -97,6 +103,15 @@ GET /rest/v1/authors?select=*,posts(id,title)
 
 ```
 GET /rest/v1/products?select=id,name&order=name.asc&limit=10&offset=20
+```
+
+Use `Prefer: count=exact` header to get total row count in the `Content-Range` response header:
+
+```
+GET /rest/v1/products?limit=10
+Prefer: count=exact
+
+→ Content-Range: 0-9/42
 ```
 
 ### RPC
@@ -235,6 +250,8 @@ pgstack generate types     # Generate TypeScript types from schema
 | `PG_POOL_MIN_CONNS` | `5` | Min idle PG connections |
 | `TLS_MODE` | `off` | `off`, `auto` (Let's Encrypt), or `manual` |
 | `TLS_DOMAINS` | (unset) | Domains for auto mode |
+| `EDGE_RUNTIME_URL` | (unset) | Deno edge-runtime URL (e.g. `http://edge-runtime:9000`) |
+| `EMBEDDED_FUNCTIONS` | `true` | Enable embedded JS runtime (goja) |
 
 See [Environment Variables](docs/site/docs/deploy/env-vars.md) for the complete list including TLS, SMTP, and OAuth settings.
 
