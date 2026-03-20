@@ -442,3 +442,211 @@ test.describe('Cross-section Navigation', () => {
     await expect(page.locator('header h1')).toBeVisible();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Table Editor — CRUD Deep Tests
+// ---------------------------------------------------------------------------
+
+test.describe('Table Editor CRUD', () => {
+  test.beforeEach(async ({ page }) => {
+    await loginToStudio(page);
+    await navigateTo(page, 'Table Editor');
+  });
+
+  test('should insert a row via the Insert Row form', async ({ page }) => {
+    // Click the "todos" table (known test table from init.sql)
+    const todosTable = page.locator('main button:has(svg) span.truncate', { hasText: 'todos' });
+    await todosTable.waitFor({ state: 'visible', timeout: 15_000 });
+    await todosTable.click();
+    await page.locator('main table').waitFor({ state: 'visible', timeout: 10_000 });
+
+    // Click "Insert Row" button
+    await page.locator('button', { hasText: 'Insert Row' }).click();
+
+    // Fill in the form — todos has: id (serial), user_id (uuid), title (text), done (bool)
+    // id is auto-increment so should be excluded or optional
+    const titleInput = page.locator('input').filter({ has: page.locator('[placeholder]') }).last();
+    // Find the title field by looking for text inputs in the modal
+    const modal = page.locator('[role="dialog"], .modal, form').first();
+    await modal.waitFor({ state: 'visible', timeout: 5_000 });
+
+    // Fill title field
+    const textInputs = modal.locator('input[type="text"]');
+    const inputCount = await textInputs.count();
+    if (inputCount > 0) {
+      // Fill the first text input (likely title)
+      await textInputs.first().fill('Studio UI test row');
+    }
+
+    // Submit
+    await modal.locator('button', { hasText: 'Insert' }).click();
+
+    // Verify the row appears in the grid
+    await expect(page.locator('td', { hasText: 'Studio UI test row' })).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('should delete a row from the table', async ({ page }) => {
+    // Select todos table
+    const todosTable = page.locator('main button:has(svg) span.truncate', { hasText: 'todos' });
+    await todosTable.waitFor({ state: 'visible', timeout: 15_000 });
+    await todosTable.click();
+    await page.locator('main table').waitFor({ state: 'visible', timeout: 10_000 });
+
+    // Find the row we just inserted
+    const targetRow = page.locator('tr', { hasText: 'Studio UI test row' });
+
+    // If it doesn't exist, insert one first via SQL Editor
+    if (!(await targetRow.isVisible().catch(() => false))) {
+      await navigateTo(page, 'SQL Editor');
+      const cmContent = page.locator('.cm-content');
+      await cmContent.click();
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type("INSERT INTO todos (title) VALUES ('Studio UI test row')");
+      await page.locator('button', { hasText: 'Run' }).click();
+      await page.waitForTimeout(1_000);
+      await navigateTo(page, 'Table Editor');
+      await page.locator('main button:has(svg) span.truncate', { hasText: 'todos' }).click();
+      await page.locator('main table').waitFor({ state: 'visible', timeout: 10_000 });
+    }
+
+    // Accept the confirm dialog before clicking delete
+    page.on('dialog', (dialog) => dialog.accept());
+
+    // Click the delete button (trash icon) in the row's actions column
+    const row = page.locator('tr', { hasText: 'Studio UI test row' }).first();
+    const deleteBtn = row.locator('button').filter({ has: page.locator('svg') }).last();
+    await deleteBtn.click();
+
+    // Row should disappear
+    await expect(page.locator('td', { hasText: 'Studio UI test row' })).toBeHidden({ timeout: 10_000 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Table Editor — Filter Deep Test
+// ---------------------------------------------------------------------------
+
+test.describe('Table Editor Filter', () => {
+  test.beforeEach(async ({ page }) => {
+    await loginToStudio(page);
+    await navigateTo(page, 'Table Editor');
+  });
+
+  test('should apply and clear a filter', async ({ page }) => {
+    // Select the "authors" table (has known seed data: Alice, Bob)
+    const authorsTable = page.locator('main button:has(svg) span.truncate', { hasText: 'authors' });
+    await authorsTable.waitFor({ state: 'visible', timeout: 15_000 });
+    await authorsTable.click();
+    await page.locator('main table').waitFor({ state: 'visible', timeout: 10_000 });
+
+    // Verify we see both authors before filtering
+    await expect(page.locator('td', { hasText: 'Alice' })).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('td', { hasText: 'Bob' })).toBeVisible({ timeout: 5_000 });
+
+    // Click "Filter" to open the filter bar
+    await page.locator('button', { hasText: 'Filter' }).click();
+
+    // Click "+ Add Filter" to add a filter row
+    await page.locator('button', { hasText: /Add Filter/i }).click();
+
+    // Select column "name" from the column dropdown
+    const columnSelect = page.locator('select').first();
+    await columnSelect.selectOption({ label: 'name' });
+
+    // Operator should default to "=" — leave it
+    // Fill in value "Alice"
+    const valueInput = page.locator('input[placeholder*="value" i], input[type="text"]').last();
+    await valueInput.fill('Alice');
+
+    // Click "Apply"
+    await page.locator('button', { hasText: 'Apply' }).click();
+
+    // Alice should be visible, Bob should NOT
+    await expect(page.locator('td', { hasText: 'Alice' })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('td', { hasText: 'Bob' })).toBeHidden({ timeout: 5_000 });
+
+    // Click "Clear" to remove the filter
+    await page.locator('button', { hasText: 'Clear' }).click();
+
+    // Both should be visible again
+    await page.locator('button', { hasText: 'Refresh' }).click();
+    await expect(page.locator('td', { hasText: 'Alice' })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('td', { hasText: 'Bob' })).toBeVisible({ timeout: 10_000 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auth Users — Create User Deep Test
+// ---------------------------------------------------------------------------
+
+test.describe('Auth Users CRUD', () => {
+  test.beforeEach(async ({ page }) => {
+    await loginToStudio(page);
+    await navigateTo(page, 'Auth Users');
+  });
+
+  test('should create a new user via the modal', async ({ page }) => {
+    // Click "New User"
+    await page.locator('button', { hasText: 'New User' }).click();
+
+    // Fill email
+    const emailInput = page.locator('input[type="email"]');
+    await emailInput.waitFor({ state: 'visible', timeout: 5_000 });
+    const testEmail = `studio-test-${Date.now()}@example.com`;
+    await emailInput.fill(testEmail);
+
+    // Fill password
+    const passwordInput = page.locator('input[type="password"]');
+    await passwordInput.fill('TestPassword123!');
+
+    // Submit
+    await page.locator('button', { hasText: 'Create User' }).click();
+
+    // The new user should appear in the users table
+    await expect(page.locator('td', { hasText: testEmail })).toBeVisible({ timeout: 15_000 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Realtime — Verify Live Subscription
+// ---------------------------------------------------------------------------
+
+test.describe('Realtime Live Verification', () => {
+  test('should show a subscription created via SQL Editor', async ({ page }) => {
+    await loginToStudio(page);
+
+    // Create a subscription via SQL Editor
+    await navigateTo(page, 'SQL Editor');
+    const cmContent = page.locator('.cm-content');
+    await cmContent.click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type("SELECT pgr.subscribe('studio_rt_test', 'SELECT id, title FROM todos')");
+    await page.locator('button', { hasText: 'Run' }).click();
+    // Wait for the query to execute
+    await expect(page.locator('text=/\\d+ rows?/')).toBeVisible({ timeout: 10_000 });
+
+    // Navigate to Realtime page
+    await navigateTo(page, 'Realtime');
+
+    // The subscription should appear in the table (refreshes every 5s)
+    await expect(
+      page.locator('td', { hasText: 'studio_rt_test' })
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Cleanup: unsubscribe via SQL Editor
+    await navigateTo(page, 'SQL Editor');
+    await cmContent.click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type("SELECT pgr.unsubscribe('studio_rt_test')");
+    await page.locator('button', { hasText: 'Run' }).click();
+    await expect(page.locator('text=/\\d+ rows?/')).toBeVisible({ timeout: 10_000 });
+
+    // Verify it disappears from Realtime page
+    await navigateTo(page, 'Realtime');
+    // Wait for refresh cycle (5s) then check it's gone
+    await page.waitForTimeout(6_000);
+    await expect(
+      page.locator('td', { hasText: 'studio_rt_test' })
+    ).toBeHidden({ timeout: 10_000 });
+  });
+});
