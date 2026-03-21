@@ -68,12 +68,18 @@ func main() {
 	defer cleanupCancel()
 	go state.RateLimiter.StartCleanup(cleanupCtx)
 
+	// Load webhooks from DB before starting listener.
+	if err := state.WebhookManager.Refresh(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("initial webhook load failed — webhooks will retry on next refresh")
+	}
+
 	// Kick off the dedicated PG LISTEN connection in a background goroutine.
 	go realtime.ListenLoop(
 		cfg.DatabaseURL,
 		state.Hub,
 		&state.PGConnected,
 		cfg.PGReconnectMaxBackoff,
+		state.WebhookManager,
 	)
 
 	// Build and start the HTTP server.
@@ -258,6 +264,15 @@ func buildRouter(state *AppState) http.Handler {
 		GoogleClientSecret:       state.Config.GoogleClientSecret,
 		GitHubClientID:           state.Config.GitHubClientID,
 		GitHubClientSecret:       state.Config.GitHubClientSecret,
+		AppleClientID:            state.Config.AppleClientID,
+		AppleTeamID:              state.Config.AppleTeamID,
+		AppleKeyID:               state.Config.AppleKeyID,
+		ApplePrivateKey:          state.Config.ApplePrivateKey,
+		MicrosoftClientID:        state.Config.MicrosoftClientID,
+		MicrosoftClientSecret:    state.Config.MicrosoftClientSecret,
+		OIDCClientID:             state.Config.OIDCClientID,
+		OIDCClientSecret:         state.Config.OIDCClientSecret,
+		OIDCIssuerURL:            state.Config.OIDCIssuerURL,
 	}
 
 	// Load REST catalog (already allocated in state; refresh from DB here).
@@ -325,6 +340,9 @@ func buildRouter(state *AppState) http.Handler {
 			state.Config.AllowedOrigins,
 		))
 
+		// Presence — HTTP endpoint for current presence state
+		r.Get("/ws/_presence/{channel}", realtime.PresenceHandler(state.Hub))
+
 		// ── Auth routes ───────────────────────────────────────────────────
 		// Rate-limited auth endpoints (brute-force and email-bombing targets).
 		r.Group(func(r chi.Router) {
@@ -351,6 +369,7 @@ func buildRouter(state *AppState) http.Handler {
 		// OAuth
 		r.Get("/auth/v1/authorize", auth.Authorize(authDeps))
 		r.Get("/auth/v1/callback", auth.Callback(authDeps))
+		r.Post("/auth/v1/callback", auth.Callback(authDeps)) // Apple uses form_post
 
 		// ── REST API (PostgREST-compatible CRUD) ──────────────────────────
 		// RPC must be registered before the generic {table} routes to avoid
@@ -367,6 +386,18 @@ func buildRouter(state *AppState) http.Handler {
 
 		// RLS debug
 		r.Get("/rest/v1/rls-debug", routes.RLSDebug(state.Pool, rlsCfg))
+
+		// Webhooks CRUD (must be before {table} wildcard)
+		webhookDeps := &routes.WebhookDeps{
+			Pool: state.Pool,
+			ResolveClaims: func(r *http.Request) (appMiddleware.RequestClaims, error) {
+				return appMiddleware.ResolveClaims(r, rlsCfg)
+			},
+			WebhookManager: state.WebhookManager,
+		}
+		r.Post("/rest/v1/webhooks", routes.CreateWebhook(webhookDeps))
+		r.Get("/rest/v1/webhooks", routes.ListWebhooks(webhookDeps))
+		r.Delete("/rest/v1/webhooks/{id}", routes.DeleteWebhook(webhookDeps))
 
 		// Table CRUD
 		r.Get("/rest/v1/{table}", rest.Select(restDeps))
@@ -408,7 +439,9 @@ func buildRouter(state *AppState) http.Handler {
 			ResolveClaims: func(r *http.Request) (appMiddleware.RequestClaims, error) {
 				return appMiddleware.ResolveClaims(r, rlsCfg)
 			},
-			MaxFileSize: state.Config.MaxFileSize,
+			MaxFileSize:    state.Config.MaxFileSize,
+			StorageBackend: state.Config.StorageBackend,
+			StorageDir:     state.Config.StorageDir,
 		}
 		r.Route("/storage/v1", func(r chi.Router) {
 			r.Post("/bucket", routes.CreateBucket(storageDeps))

@@ -58,7 +58,9 @@ These must be set for production. In development, the compose file provides inse
 
 ## OAuth variables (optional)
 
-Set these to enable social login. If not set, the corresponding provider is disabled.
+Set these to enable social login. Each provider is independent — configure only the ones you need.
+
+### Google and GitHub
 
 | Variable | Where to get it | Description |
 |----------|----------------|-------------|
@@ -66,6 +68,30 @@ Set these to enable social login. If not set, the corresponding provider is disa
 | `GOOGLE_CLIENT_SECRET` | Google Cloud Console | Google OAuth App client secret. |
 | `GITHUB_CLIENT_ID` | [GitHub Settings](https://github.com/settings/developers) | GitHub OAuth App client ID. |
 | `GITHUB_CLIENT_SECRET` | GitHub Settings | GitHub OAuth App client secret. |
+
+### Apple
+
+| Variable | Where to get it | Description |
+|----------|----------------|-------------|
+| `APPLE_CLIENT_ID` | [Apple Developer](https://developer.apple.com/account/resources/identifiers/list/serviceId) | Services ID (reverse-domain, e.g. `com.example.auth`). |
+| `APPLE_TEAM_ID` | Apple Developer account page (top-right) | 10-character Team ID. |
+| `APPLE_KEY_ID` | Apple Developer > Keys | Key ID for the Sign in with Apple private key. |
+| `APPLE_PRIVATE_KEY` | Apple Developer > Keys (download `.p8`) | ES256 private key contents. Used to generate the client secret JWT. |
+
+### Microsoft
+
+| Variable | Where to get it | Description |
+|----------|----------------|-------------|
+| `MICROSOFT_CLIENT_ID` | [Azure Portal](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps) > App registrations | Application (client) ID. |
+| `MICROSOFT_CLIENT_SECRET` | Azure Portal > Certificates & secrets | Client secret value. |
+
+### Generic OIDC
+
+| Variable | Where to get it | Description |
+|----------|----------------|-------------|
+| `OIDC_CLIENT_ID` | Your OIDC provider dashboard | Client ID from any OpenID Connect provider. |
+| `OIDC_CLIENT_SECRET` | Your OIDC provider dashboard | Client secret. |
+| `OIDC_ISSUER_URL` | Your OIDC provider | Issuer URL (e.g. `https://auth.example.com`). Must serve `/.well-known/openid-configuration`. |
 
 Redirect URI to register with OAuth providers: `https://your-app.example.com/auth/v1/callback`
 
@@ -114,6 +140,13 @@ Required for email verification and password reset emails. If not set, these fea
 | `MAX_CONNECTIONS` | `10000` | Maximum concurrent WebSocket connections. Each connection holds a PostgreSQL `LISTEN` session. |
 | `MAX_BODY_SIZE` | `1048576` | Maximum request body size in bytes (default: 1 MB). |
 | `MAX_FILE_SIZE` | `52428800` | Maximum storage upload size in bytes (default: 50 MB). |
+
+## Storage
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STORAGE_BACKEND` | `database` | Storage backend for file uploads: `database` (bytea column) or `disk` (filesystem). |
+| `STORAGE_DIR` | `/data/storage` | Filesystem path for uploaded files when `STORAGE_BACKEND=disk`. Mount as a Docker volume for persistence. |
 
 ## HTTP Server
 

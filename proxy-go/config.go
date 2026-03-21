@@ -29,6 +29,21 @@ type Config struct {
 	GitHubClientSecret string
 	SiteURL            string
 
+	// Apple OAuth
+	AppleClientID   string
+	AppleTeamID     string
+	AppleKeyID      string
+	ApplePrivateKey string
+
+	// Microsoft OAuth
+	MicrosoftClientID     string
+	MicrosoftClientSecret string
+
+	// Generic OIDC
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCIssuerURL    string
+
 	// Rate limiting
 	AuthRateLimit  int
 	AuthRateWindow time.Duration
@@ -89,6 +104,10 @@ type Config struct {
 	// User static files (public/ directory)
 	PublicDir string
 
+	// Storage
+	StorageBackend string // "database" (default) or "disk"
+	StorageDir     string // filesystem path when StorageBackend="disk"
+
 	// Edge Functions
 	EdgeRuntimeURL string // URL of Deno edge-runtime container, e.g. "http://edge-runtime:9000"
 	FunctionsDir   string // Directory where Deno function sources are mounted
@@ -123,6 +142,18 @@ func FromEnv() Config {
 	cfg.GitHubClientID = os.Getenv("GITHUB_CLIENT_ID")
 	cfg.GitHubClientSecret = os.Getenv("GITHUB_CLIENT_SECRET")
 	cfg.SiteURL = os.Getenv("SITE_URL")
+
+	cfg.AppleClientID = os.Getenv("APPLE_CLIENT_ID")
+	cfg.AppleTeamID = os.Getenv("APPLE_TEAM_ID")
+	cfg.AppleKeyID = os.Getenv("APPLE_KEY_ID")
+	cfg.ApplePrivateKey = os.Getenv("APPLE_PRIVATE_KEY")
+
+	cfg.MicrosoftClientID = os.Getenv("MICROSOFT_CLIENT_ID")
+	cfg.MicrosoftClientSecret = os.Getenv("MICROSOFT_CLIENT_SECRET")
+
+	cfg.OIDCClientID = os.Getenv("OIDC_CLIENT_ID")
+	cfg.OIDCClientSecret = os.Getenv("OIDC_CLIENT_SECRET")
+	cfg.OIDCIssuerURL = os.Getenv("OIDC_ISSUER_URL")
 
 	cfg.AuthRateLimit = envIntOrDefault("AUTH_RATE_LIMIT", 30)
 	cfg.AuthRateWindow = time.Duration(envIntOrDefault("AUTH_RATE_WINDOW", 60)) * time.Second
@@ -181,6 +212,9 @@ func FromEnv() Config {
 	cfg.StudioDir = envOrDefault("STUDIO_DIR", "/studio")
 	cfg.DocsDir = envOrDefault("DOCS_DIR", "/docs")
 	cfg.PublicDir = os.Getenv("PUBLIC_DIR")
+
+	cfg.StorageBackend = envOrDefault("STORAGE_BACKEND", "database")
+	cfg.StorageDir = envOrDefault("STORAGE_DIR", "/data/storage")
 
 	cfg.EdgeRuntimeURL = os.Getenv("EDGE_RUNTIME_URL") // empty = disabled
 	cfg.FunctionsDir = envOrDefault("FUNCTIONS_DIR", "/functions")
@@ -274,6 +308,12 @@ func (c Config) Validate() []string {
 		}
 	default:
 		errs = append(errs, fmt.Sprintf("TLS_MODE=%q is invalid (use off, auto, or manual)", c.TLSMode))
+	}
+	switch c.StorageBackend {
+	case "", "database", "disk":
+		// valid
+	default:
+		errs = append(errs, fmt.Sprintf("STORAGE_BACKEND=%q is invalid (use database or disk)", c.StorageBackend))
 	}
 	if c.AccessTokenExpirySecs < 60 {
 		errs = append(errs, fmt.Sprintf(

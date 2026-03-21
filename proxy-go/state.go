@@ -37,18 +37,22 @@ type AppState struct {
 
 	// Catalog caches pg_catalog table metadata for REST handlers.
 	Catalog *rest.Catalog
+
+	// WebhookManager manages webhook delivery from NOTIFY payloads.
+	WebhookManager *realtime.WebhookManager
 }
 
 // NewAppState constructs AppState from a loaded Config and pool.
 func NewAppState(cfg Config, pool *pgxpool.Pool) *AppState {
 	s := &AppState{
-		Config:      cfg,
-		Pool:        pool,
-		Hub:         realtime.NewHub(),
-		RateLimiter: middleware.NewRateLimiterWithProxies(cfg.AuthRateLimit, cfg.AuthRateWindow, cfg.TrustedProxies),
-		WSSemaphore: make(chan struct{}, cfg.MaxConnections),
-		Mailer:      NewMailer(cfg),
-		Catalog:     rest.NewCatalog(),
+		Config:         cfg,
+		Pool:           pool,
+		Hub:            realtime.NewHub(),
+		RateLimiter:    middleware.NewRateLimiterWithProxies(cfg.AuthRateLimit, cfg.AuthRateWindow, cfg.TrustedProxies),
+		WSSemaphore:    make(chan struct{}, cfg.MaxConnections),
+		Mailer:         NewMailer(cfg),
+		Catalog:        rest.NewCatalog(),
+		WebhookManager: realtime.NewWebhookManager(pool),
 	}
 	return s
 }

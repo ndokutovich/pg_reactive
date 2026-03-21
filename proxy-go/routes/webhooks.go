@@ -1,0 +1,176 @@
+package routes
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
+	"pgstack-proxy-go/middleware"
+	"pgstack-proxy-go/realtime"
+)
+
+// WebhookDeps carries dependencies for webhook CRUD handlers.
+type WebhookDeps struct {
+	Pool           *pgxpool.Pool
+	ResolveClaims  func(r *http.Request) (middleware.RequestClaims, error)
+	WebhookManager *realtime.WebhookManager
+}
+
+// CreateWebhook handles POST /rest/v1/webhooks.
+// Restricted to service_role.
+func CreateWebhook(d *WebhookDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, err := d.ResolveClaims(r)
+		if err != nil {
+			writeJSONError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		if claims.Role != "service_role" {
+			writeJSONError(w, http.StatusForbidden, "webhook management requires service_role")
+			return
+		}
+
+		var body struct {
+			URL       string   `json:"url"`
+			Events    []string `json:"events"`
+			TableName string   `json:"table_name"`
+			Secret    string   `json:"secret"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if body.URL == "" {
+			writeJSONError(w, http.StatusBadRequest, "url is required")
+			return
+		}
+		if len(body.Events) == 0 {
+			body.Events = []string{"*"}
+		}
+		if body.TableName == "" {
+			body.TableName = "*"
+		}
+
+		var id string
+		var createdAt time.Time
+		err = d.Pool.QueryRow(r.Context(),
+			`INSERT INTO pgstack.webhooks (url, events, table_name, secret)
+			 VALUES ($1, $2, $3, $4)
+			 RETURNING id::text, created_at`,
+			body.URL, body.Events, body.TableName, body.Secret,
+		).Scan(&id, &createdAt)
+		if err != nil {
+			log.Error().Err(err).Msg("webhooks: create")
+			writeJSONError(w, http.StatusInternalServerError, "internal database error")
+			return
+		}
+
+		// Refresh webhook cache
+		_ = d.WebhookManager.Refresh(r.Context())
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":         id,
+			"url":        body.URL,
+			"events":     body.Events,
+			"table_name": body.TableName,
+			"active":     true,
+			"created_at": createdAt.Format(time.RFC3339),
+		})
+	}
+}
+
+// ListWebhooks handles GET /rest/v1/webhooks.
+// Restricted to service_role.
+func ListWebhooks(d *WebhookDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, err := d.ResolveClaims(r)
+		if err != nil {
+			writeJSONError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		if claims.Role != "service_role" {
+			writeJSONError(w, http.StatusForbidden, "webhook management requires service_role")
+			return
+		}
+
+		rows, err := d.Pool.Query(r.Context(),
+			`SELECT id::text, url, events, table_name, secret, active, created_at
+			 FROM pgstack.webhooks ORDER BY created_at`)
+		if err != nil {
+			log.Error().Err(err).Msg("webhooks: list")
+			writeJSONError(w, http.StatusInternalServerError, "internal database error")
+			return
+		}
+		defer rows.Close()
+
+		type webhookResp struct {
+			ID        string   `json:"id"`
+			URL       string   `json:"url"`
+			Events    []string `json:"events"`
+			TableName string   `json:"table_name"`
+			Secret    string   `json:"secret"`
+			Active    bool     `json:"active"`
+			CreatedAt string   `json:"created_at"`
+		}
+		result := make([]webhookResp, 0)
+		for rows.Next() {
+			var wh webhookResp
+			var createdAt time.Time
+			if err := rows.Scan(&wh.ID, &wh.URL, &wh.Events, &wh.TableName, &wh.Secret, &wh.Active, &createdAt); err != nil {
+				log.Error().Err(err).Msg("webhooks: scan")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+			wh.CreatedAt = createdAt.Format(time.RFC3339)
+			result = append(result, wh)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	}
+}
+
+// DeleteWebhook handles DELETE /rest/v1/webhooks/{id}.
+// Restricted to service_role.
+func DeleteWebhook(d *WebhookDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, err := d.ResolveClaims(r)
+		if err != nil {
+			writeJSONError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		if claims.Role != "service_role" {
+			writeJSONError(w, http.StatusForbidden, "webhook management requires service_role")
+			return
+		}
+
+		webhookID := chi.URLParam(r, "id")
+		if webhookID == "" {
+			writeJSONError(w, http.StatusBadRequest, "webhook id is required")
+			return
+		}
+
+		tag, err := d.Pool.Exec(r.Context(),
+			`DELETE FROM pgstack.webhooks WHERE id = $1::uuid`, webhookID)
+		if err != nil {
+			log.Error().Err(err).Msg("webhooks: delete")
+			writeJSONError(w, http.StatusInternalServerError, "internal database error")
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			writeJSONError(w, http.StatusNotFound, "webhook not found")
+			return
+		}
+
+		// Refresh webhook cache
+		_ = d.WebhookManager.Refresh(r.Context())
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "webhook deleted"})
+	}
+}

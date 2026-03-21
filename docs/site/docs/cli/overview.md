@@ -50,9 +50,15 @@ pgstack migration rollback       # Roll back the last applied migration
 ### Database tools
 
 ```bash
-pgstack db psql        # Open a psql session to the database
-pgstack db reset       # Drop and recreate the database (dev only)
+pgstack db shell                     # Open a psql session to the database
+pgstack db reset                     # Drop and recreate the database (dev only)
+pgstack db seed                      # Run seed.sql
+pgstack db branch <name>             # Create a database branch (clone via TEMPLATE)
+pgstack db branch --delete <name>    # Delete a database branch
+pgstack db checkout <name>           # Switch DATABASE_URL to a branch database
 ```
+
+Database branching creates a full copy of your database using PostgreSQL's `CREATE DATABASE ... TEMPLATE`. Each branch is an independent database — you can test migrations, seed different data, or develop features in isolation without affecting the main database.
 
 ### Type generation
 
@@ -86,3 +92,4 @@ pgstack generate --help
 - [dev](./dev) — managing the development environment
 - [migrations](./migrations) — database migration workflow
 - [generate](./generate) — TypeScript type generation
+- [db branching](./db-branching) — database branching workflow

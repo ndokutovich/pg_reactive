@@ -112,6 +112,27 @@ The proxy sends a confirmation message after connection:
 | `{"type":"overflow","query_id":"...","fetch":true}` | Delta too large, re-fetch needed |
 | `{"type":"invalidated","query_id":"..."}` | Query invalidated (notify mode) |
 | `{"type":"error","message":"..."}` | Auth or connection error |
+| `{"type":"presence_join","channel":"...","client_id":"...","state":{}}` | Client joined channel |
+| `{"type":"presence_leave","channel":"...","client_id":"..."}` | Client left channel |
+| `{"type":"presence_state","channel":"...","client_id":"...","state":{}}` | Client updated presence |
+
+## Presence
+
+Presence tracks which clients are currently connected to a channel and their live state (cursor position, online status, typing indicator, etc.). Presence is **ephemeral** — held in proxy memory and lost on restart.
+
+Clients join automatically when connecting via WebSocket. To update state, send a message:
+
+```json
+{"type": "presence", "state": {"username": "jane", "status": "online"}}
+```
+
+To poll current presence via HTTP:
+
+```bash
+curl http://127.0.0.1:8080/ws/_presence/my_channel
+```
+
+See the [API Reference](../reference/api#presence) for the full presence protocol.
 
 ## Next steps
 

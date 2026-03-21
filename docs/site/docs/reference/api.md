@@ -51,8 +51,9 @@ When both `Authorization` and `apikey` headers are present, the JWT is validated
 | `POST` | `/auth/v1/magiclink` | apikey | Send magic link email |
 | `GET` | `/auth/v1/magiclink/verify` | None | Verify magic link token |
 | `GET` | `/auth/v1/verify` | None | Verify email confirmation token |
-| `GET` | `/auth/v1/authorize?provider={name}` | None | Start OAuth flow (google, github) |
+| `GET` | `/auth/v1/authorize?provider={name}` | None | Start OAuth flow (google, github, apple, microsoft, oidc) |
 | `GET` | `/auth/v1/callback` | None | OAuth callback (internal) |
+| `POST` | `/auth/v1/callback` | None | OAuth callback — form_post (Apple) |
 
 ### Auth Admin
 
@@ -78,6 +79,14 @@ When both `Authorization` and `apikey` headers are present, the JWT is validated
 |--------|------|------|-------------|
 | `POST` | `/rest/v1/rpc/{function}` | apikey/JWT | Call function (JSON params in body) |
 | `GET` | `/rest/v1/rpc/{function}` | apikey/JWT | Call function (query string params) |
+
+### Webhooks
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/rest/v1/webhooks` | service_role | Register a webhook |
+| `GET` | `/rest/v1/webhooks` | service_role | List all webhooks |
+| `DELETE` | `/rest/v1/webhooks/{id}` | service_role | Delete a webhook |
 
 ### Edge Functions
 
@@ -105,6 +114,7 @@ When both `Authorization` and `apikey` headers are present, the JWT is validated
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/ws/{query_id}` | None/JWT | Live query WebSocket connection |
+| `GET` | `/ws/_presence/{channel}` | None | Get current presence state for a channel |
 
 ### Dev-only
 
@@ -869,6 +879,119 @@ DELETE /storage/v1/object/avatars/users/123/photo.png
 
 ---
 
+## Webhooks
+
+Webhooks deliver real-time database change notifications to external HTTP endpoints.
+
+### POST /rest/v1/webhooks
+
+Register a new webhook.
+
+**Headers:** `Authorization: Bearer <SERVICE_ROLE_KEY>`, `Content-Type: application/json`
+
+**Request body:**
+
+```json
+{
+  "url": "https://example.com/hook",
+  "events": ["INSERT", "UPDATE", "DELETE"],
+  "table_name": "orders",
+  "secret": "whsec_your-signing-secret"
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `url` | *(required)* | Endpoint URL to receive webhook POST requests. |
+| `events` | `["*"]` | Array of event types to deliver. `*` matches all. |
+| `table_name` | `*` | Table name to filter on. `*` matches all tables. |
+| `secret` | `""` | Signing secret for HMAC-SHA256 payload verification. |
+
+**Response `201 Created`:**
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "url": "https://example.com/hook",
+  "events": ["INSERT", "UPDATE", "DELETE"],
+  "table_name": "orders",
+  "active": true,
+  "created_at": "2025-01-14T12:00:00Z"
+}
+```
+
+---
+
+### GET /rest/v1/webhooks
+
+List all registered webhooks.
+
+**Headers:** `Authorization: Bearer <SERVICE_ROLE_KEY>`
+
+**Response `200 OK`:** Array of webhook objects.
+
+---
+
+### DELETE /rest/v1/webhooks/&#123;id&#125;
+
+Delete a webhook by ID.
+
+**Headers:** `Authorization: Bearer <SERVICE_ROLE_KEY>`
+
+```bash
+DELETE /rest/v1/webhooks/550e8400-e29b-41d4-a716-446655440000
+```
+
+**Response `200 OK`:**
+
+```json
+{"message": "webhook deleted"}
+```
+
+---
+
+### Webhook delivery format
+
+When a matching database change occurs, pgStack sends a POST request to the webhook URL:
+
+```json
+{
+  "event": "INSERT",
+  "table": "orders",
+  "record": {"id": 42, "status": "pending", "amount": 149.99},
+  "old_record": null
+}
+```
+
+**Headers sent with each delivery:**
+
+| Header | Description |
+|--------|-------------|
+| `Content-Type` | `application/json` |
+| `X-Webhook-Signature` | `sha256=<hex>` — HMAC-SHA256 of the request body, using the webhook secret. Only present when `secret` is set. |
+| `User-Agent` | `pgstack-webhooks/1.0` |
+
+**Retry policy:** 3 attempts with exponential backoff (1s, 4s, 16s). Non-2xx responses trigger a retry.
+
+**Verification example (Node.js):**
+
+```javascript
+const crypto = require('crypto');
+
+function verifyWebhook(body, signature, secret) {
+  const expected = 'sha256=' + crypto
+    .createHmac('sha256', secret)
+    .update(body)
+    .digest('hex');
+  return crypto.timingSafeEqual(
+    Buffer.from(signature),
+    Buffer.from(expected),
+  );
+}
+```
+
+---
+
 ## WebSocket API
 
 ### WS /ws/&#123;query_id&#125;
@@ -917,6 +1040,49 @@ When overflow occurs, clear the local snapshot and re-fetch via the REST API.
 ```json
 {"type": "error", "message": "Unauthorized"}
 ```
+
+---
+
+### Presence
+
+Presence tracks which clients are connected to a channel and their current state. Presence is ephemeral — it is held in memory and lost on proxy restart.
+
+#### Sending presence updates
+
+Clients can update their presence state by sending a JSON message over the WebSocket:
+
+```json
+{"type": "presence", "state": {"username": "jane", "cursor": {"x": 100, "y": 200}}}
+```
+
+#### Presence events (server to client)
+
+| Type | Description |
+|------|-------------|
+| `{"type":"presence_join","channel":"...","client_id":"...","state":{}}` | Client joined |
+| `{"type":"presence_leave","channel":"...","client_id":"..."}` | Client disconnected |
+| `{"type":"presence_state","channel":"...","client_id":"...","state":{}}` | Client updated state |
+
+#### GET /ws/_presence/&#123;channel&#125;
+
+Poll the current presence state for a channel via HTTP.
+
+**No authentication required.**
+
+```bash
+curl http://127.0.0.1:8080/ws/_presence/my_channel
+```
+
+**Response `200 OK`:**
+
+```json
+{
+  "a1b2c3d4e5f6...": {"username": "jane", "cursor": {"x": 100, "y": 200}},
+  "f6e5d4c3b2a1...": {"username": "bob", "status": "idle"}
+}
+```
+
+Keys are auto-generated client IDs. Values are the last state each client sent.
 
 ---
 

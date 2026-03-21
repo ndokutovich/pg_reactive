@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -20,9 +22,11 @@ import (
 
 // StorageDeps carries the dependencies needed by all storage handlers.
 type StorageDeps struct {
-	Pool          *pgxpool.Pool
-	ResolveClaims func(r *http.Request) (middleware.RequestClaims, error)
-	MaxFileSize   int64 // default 50 MB
+	Pool           *pgxpool.Pool
+	ResolveClaims  func(r *http.Request) (middleware.RequestClaims, error)
+	MaxFileSize    int64  // default 50 MB
+	StorageBackend string // "database" (default) or "disk"
+	StorageDir     string // filesystem path for disk backend
 }
 
 // storageResolveClaims is a shorthand used by storage handlers. It returns
@@ -360,18 +364,47 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 		}
 
 		var objectID string
-		err = d.Pool.QueryRow(r.Context(),
-			`INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 ON CONFLICT (bucket_id, name) DO UPDATE
-			   SET size = EXCLUDED.size,
-			       mime_type = EXCLUDED.mime_type,
-			       data = EXCLUDED.data,
-			       owner = EXCLUDED.owner,
-			       updated_at = now()
-			 RETURNING id::text`,
-			bucketID, objName, fileSize, mimeType, fileData, ownerID,
-		).Scan(&objectID)
+
+		if d.StorageBackend == "disk" {
+			// Disk backend: write file to filesystem, store NULL for data column
+			diskPath := filepath.Join(d.StorageDir, bucketID, objName)
+			if err := os.MkdirAll(filepath.Dir(diskPath), 0o755); err != nil {
+				log.Error().Err(err).Str("path", diskPath).Msg("storage: mkdir for disk upload")
+				writeJSONError(w, http.StatusInternalServerError, "failed to create storage directory")
+				return
+			}
+			if err := os.WriteFile(diskPath, fileData, 0o644); err != nil {
+				log.Error().Err(err).Str("path", diskPath).Msg("storage: disk write")
+				writeJSONError(w, http.StatusInternalServerError, "failed to write file to disk")
+				return
+			}
+			err = d.Pool.QueryRow(r.Context(),
+				`INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
+				 VALUES ($1, $2, $3, $4, NULL, $5)
+				 ON CONFLICT (bucket_id, name) DO UPDATE
+				   SET size = EXCLUDED.size,
+				       mime_type = EXCLUDED.mime_type,
+				       data = NULL,
+				       owner = EXCLUDED.owner,
+				       updated_at = now()
+				 RETURNING id::text`,
+				bucketID, objName, fileSize, mimeType, ownerID,
+			).Scan(&objectID)
+		} else {
+			// Database backend: store file data in bytea column
+			err = d.Pool.QueryRow(r.Context(),
+				`INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
+				 VALUES ($1, $2, $3, $4, $5, $6)
+				 ON CONFLICT (bucket_id, name) DO UPDATE
+				   SET size = EXCLUDED.size,
+				       mime_type = EXCLUDED.mime_type,
+				       data = EXCLUDED.data,
+				       owner = EXCLUDED.owner,
+				       updated_at = now()
+				 RETURNING id::text`,
+				bucketID, objName, fileSize, mimeType, fileData, ownerID,
+			).Scan(&objectID)
+		}
 		if err != nil {
 			log.Error().Err(err).Msg("storage: upload object")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")
@@ -407,7 +440,7 @@ func DownloadObject(d *StorageDeps) http.HandlerFunc {
 			return
 		}
 
-		// Query the object
+		// Query the object metadata (and data if database backend)
 		var mimeType, ownerStr string
 		var size int64
 		var data []byte
@@ -438,6 +471,22 @@ func DownloadObject(d *StorageDeps) http.HandlerFunc {
 				writeJSONError(w, http.StatusForbidden, "access denied: not the object owner")
 				return
 			}
+		}
+
+		// If disk backend, read from filesystem
+		if d.StorageBackend == "disk" && data == nil {
+			diskPath := filepath.Join(d.StorageDir, bucketID, objName)
+			diskData, err := os.ReadFile(diskPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					writeJSONError(w, http.StatusNotFound, "file not found on disk")
+				} else {
+					log.Error().Err(err).Str("path", diskPath).Msg("storage: disk read")
+					writeJSONError(w, http.StatusInternalServerError, "failed to read file from disk")
+				}
+				return
+			}
+			data = diskData
 		}
 
 		// Determine filename for Content-Disposition
@@ -516,6 +565,12 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 		if tag == "0" {
 			writeJSONError(w, http.StatusNotFound, "object not found or access denied")
 			return
+		}
+
+		// If disk backend, also remove the file from disk
+		if d.StorageBackend == "disk" {
+			diskPath := filepath.Join(d.StorageDir, bucketID, objName)
+			_ = os.Remove(diskPath) // best-effort; DB record is already gone
 		}
 
 		w.Header().Set("Content-Type", "application/json")

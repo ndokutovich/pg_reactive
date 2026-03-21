@@ -45,13 +45,22 @@ func codeChallenge(verifier string) string {
 // Authorize — GET /auth/v1/authorize
 // ─────────────────────────────────────────────────────────────────────────────
 
+// supportedProviders is the set of OAuth providers we support.
+var supportedProviders = map[string]bool{
+	"google":    true,
+	"github":    true,
+	"apple":     true,
+	"microsoft": true,
+	"oidc":      true,
+}
+
 // Authorize initiates an OAuth flow by redirecting to the provider's auth URL.
-// Query param: ?provider=google|github
+// Query param: ?provider=google|github|apple|microsoft|oidc
 func Authorize(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		provider := strings.ToLower(r.URL.Query().Get("provider"))
-		if provider != "google" && provider != "github" {
-			writeError(w, http.StatusBadRequest, "provider must be 'google' or 'github'")
+		if !supportedProviders[provider] {
+			writeError(w, http.StatusBadRequest, "provider must be one of: google, github, apple, microsoft, oidc")
 			return
 		}
 
@@ -93,6 +102,45 @@ func Authorize(d *Deps) http.HandlerFunc {
 			q.Set("state", state)
 			// GitHub does not support PKCE — state alone is the CSRF protection.
 			authURL = "https://github.com/login/oauth/authorize?" + q.Encode()
+
+		case "apple":
+			q := url.Values{}
+			q.Set("client_id", d.AppleClientID)
+			q.Set("redirect_uri", redirectURI)
+			q.Set("response_type", "code")
+			q.Set("scope", "email name")
+			q.Set("state", state)
+			q.Set("response_mode", "form_post")
+			authURL = "https://appleid.apple.com/auth/authorize?" + q.Encode()
+
+		case "microsoft":
+			q := url.Values{}
+			q.Set("client_id", d.MicrosoftClientID)
+			q.Set("redirect_uri", redirectURI)
+			q.Set("response_type", "code")
+			q.Set("scope", "openid email profile")
+			q.Set("state", state)
+			q.Set("code_challenge", challenge)
+			q.Set("code_challenge_method", "S256")
+			authURL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?" + q.Encode()
+
+		case "oidc":
+			// Generic OIDC: discover authorization endpoint from issuer
+			oidcAuthURL, err := discoverOIDCAuthEndpoint(d.OIDCIssuerURL)
+			if err != nil {
+				log.Error().Err(err).Msg("oidc discovery failed")
+				writeError(w, http.StatusInternalServerError, "OIDC discovery failed")
+				return
+			}
+			q := url.Values{}
+			q.Set("client_id", d.OIDCClientID)
+			q.Set("redirect_uri", redirectURI)
+			q.Set("response_type", "code")
+			q.Set("scope", "openid email profile")
+			q.Set("state", state)
+			q.Set("code_challenge", challenge)
+			q.Set("code_challenge_method", "S256")
+			authURL = oidcAuthURL + "?" + q.Encode()
 		}
 
 		http.Redirect(w, r, authURL, http.StatusFound)
@@ -155,6 +203,16 @@ func Callback(d *Deps) http.HandlerFunc {
 			email, err = exchangeGoogle(d, code, verifier, redirectURI)
 		case "github":
 			email, err = exchangeGitHub(d, code, redirectURI)
+		case "apple":
+			// Apple sends code via form_post; also check POST body
+			if code == "" {
+				code = r.FormValue("code")
+			}
+			email, err = exchangeApple(d, code, redirectURI)
+		case "microsoft":
+			email, err = exchangeMicrosoft(d, code, verifier, redirectURI)
+		case "oidc":
+			email, err = exchangeOIDC(d, code, verifier, redirectURI)
 		default:
 			writeError(w, http.StatusBadRequest, "unknown provider")
 			return
@@ -288,6 +346,221 @@ func exchangeGitHub(d *Deps, code, redirectURI string) (string, error) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Apple OAuth exchange
+// ─────────────────────────────────────────────────────────────────────────────
+
+// exchangeApple exchanges an authorization code for an Apple id_token JWT,
+// then extracts the email from the JWT claims (Apple uses id_token, not userinfo).
+func exchangeApple(d *Deps, code, redirectURI string) (string, error) {
+	tokenResp, err := httpPostForm("https://appleid.apple.com/auth/token", url.Values{
+		"code":          {code},
+		"client_id":     {d.AppleClientID},
+		"client_secret": {generateAppleClientSecret(d)},
+		"redirect_uri":  {redirectURI},
+		"grant_type":    {"authorization_code"},
+	})
+	if err != nil {
+		return "", fmt.Errorf("apple token exchange: %w", err)
+	}
+
+	idToken, ok := tokenResp["id_token"].(string)
+	if !ok || idToken == "" {
+		return "", fmt.Errorf("apple token exchange: no id_token in response")
+	}
+
+	// Decode the id_token JWT payload (Apple tokens are signed but we trust
+	// them here because we got them directly from Apple's token endpoint over TLS).
+	email, err := extractEmailFromJWT(idToken)
+	if err != nil {
+		return "", fmt.Errorf("apple id_token: %w", err)
+	}
+
+	return strings.ToLower(strings.TrimSpace(email)), nil
+}
+
+// generateAppleClientSecret creates a short-lived JWT signed with the Apple private key.
+// Apple requires a client_secret JWT instead of a static secret.
+func generateAppleClientSecret(d *Deps) string {
+	// For a full implementation, this would generate a JWT signed with ES256
+	// using the team_id, key_id, and private key. For now, return the private
+	// key directly (works if the caller pre-generates the client_secret JWT).
+	return d.ApplePrivateKey
+}
+
+// extractEmailFromJWT decodes a JWT without verification and extracts the email claim.
+// This is safe when the token was received directly from the provider over TLS.
+func extractEmailFromJWT(token string) (string, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid JWT format")
+	}
+
+	// Decode the payload (part 1)
+	payload := parts[1]
+	// Add padding if needed
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		// Try without padding (base64url)
+		decoded, err = base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return "", fmt.Errorf("decode JWT payload: %w", err)
+		}
+	}
+
+	var claims map[string]any
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return "", fmt.Errorf("parse JWT claims: %w", err)
+	}
+
+	email, ok := claims["email"].(string)
+	if !ok || email == "" {
+		return "", fmt.Errorf("email not present in JWT claims")
+	}
+	return email, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Microsoft OAuth exchange
+// ─────────────────────────────────────────────────────────────────────────────
+
+// exchangeMicrosoft exchanges an authorization code for a Microsoft access token,
+// then fetches the user's email via the Microsoft Graph API.
+func exchangeMicrosoft(d *Deps, code, verifier, redirectURI string) (string, error) {
+	tokenResp, err := httpPostForm("https://login.microsoftonline.com/common/oauth2/v2.0/token", url.Values{
+		"code":          {code},
+		"client_id":     {d.MicrosoftClientID},
+		"client_secret": {d.MicrosoftClientSecret},
+		"redirect_uri":  {redirectURI},
+		"grant_type":    {"authorization_code"},
+		"code_verifier": {verifier},
+	})
+	if err != nil {
+		return "", fmt.Errorf("microsoft token exchange: %w", err)
+	}
+
+	// Microsoft returns an id_token with email — try that first
+	if idToken, ok := tokenResp["id_token"].(string); ok && idToken != "" {
+		if email, err := extractEmailFromJWT(idToken); err == nil && email != "" {
+			return strings.ToLower(strings.TrimSpace(email)), nil
+		}
+	}
+
+	// Fallback to access_token + Graph API
+	accessToken, ok := tokenResp["access_token"].(string)
+	if !ok || accessToken == "" {
+		return "", fmt.Errorf("microsoft token exchange: no access_token in response")
+	}
+
+	var userInfo map[string]any
+	if err := httpGetJSON("https://graph.microsoft.com/v1.0/me", accessToken, &userInfo); err != nil {
+		return "", fmt.Errorf("microsoft graph /me: %w", err)
+	}
+
+	email, _ := userInfo["mail"].(string)
+	if email == "" {
+		email, _ = userInfo["userPrincipalName"].(string)
+	}
+	if email == "" {
+		return "", fmt.Errorf("microsoft graph: email not found in user profile")
+	}
+
+	return strings.ToLower(strings.TrimSpace(email)), nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generic OIDC exchange
+// ─────────────────────────────────────────────────────────────────────────────
+
+// oidcConfig caches the discovered OpenID Configuration for the session.
+type oidcConfig struct {
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	UserinfoEndpoint      string `json:"userinfo_endpoint"`
+}
+
+// discoverOIDCAuthEndpoint fetches the OIDC discovery document and returns
+// the authorization_endpoint.
+func discoverOIDCAuthEndpoint(issuerURL string) (string, error) {
+	cfg, err := discoverOIDC(issuerURL)
+	if err != nil {
+		return "", err
+	}
+	return cfg.AuthorizationEndpoint, nil
+}
+
+// discoverOIDC fetches the OpenID Configuration from the issuer's well-known endpoint.
+func discoverOIDC(issuerURL string) (*oidcConfig, error) {
+	if issuerURL == "" {
+		return nil, fmt.Errorf("OIDC_ISSUER_URL is not configured")
+	}
+
+	wellKnown := strings.TrimRight(issuerURL, "/") + "/.well-known/openid-configuration"
+	var cfg oidcConfig
+	if err := httpGetJSON(wellKnown, "", &cfg); err != nil {
+		return nil, fmt.Errorf("OIDC discovery from %s: %w", wellKnown, err)
+	}
+
+	if cfg.AuthorizationEndpoint == "" || cfg.TokenEndpoint == "" {
+		return nil, fmt.Errorf("OIDC discovery: missing required endpoints")
+	}
+	return &cfg, nil
+}
+
+// exchangeOIDC exchanges an authorization code using the OIDC discovery document.
+func exchangeOIDC(d *Deps, code, verifier, redirectURI string) (string, error) {
+	cfg, err := discoverOIDC(d.OIDCIssuerURL)
+	if err != nil {
+		return "", err
+	}
+
+	tokenResp, err := httpPostForm(cfg.TokenEndpoint, url.Values{
+		"code":          {code},
+		"client_id":     {d.OIDCClientID},
+		"client_secret": {d.OIDCClientSecret},
+		"redirect_uri":  {redirectURI},
+		"grant_type":    {"authorization_code"},
+		"code_verifier": {verifier},
+	})
+	if err != nil {
+		return "", fmt.Errorf("oidc token exchange: %w", err)
+	}
+
+	// Try id_token first
+	if idToken, ok := tokenResp["id_token"].(string); ok && idToken != "" {
+		if email, err := extractEmailFromJWT(idToken); err == nil && email != "" {
+			return strings.ToLower(strings.TrimSpace(email)), nil
+		}
+	}
+
+	// Fallback to userinfo endpoint
+	accessToken, ok := tokenResp["access_token"].(string)
+	if !ok || accessToken == "" {
+		return "", fmt.Errorf("oidc token exchange: no access_token in response")
+	}
+
+	if cfg.UserinfoEndpoint != "" {
+		var userInfo map[string]any
+		if err := httpGetJSON(cfg.UserinfoEndpoint, accessToken, &userInfo); err != nil {
+			return "", fmt.Errorf("oidc userinfo: %w", err)
+		}
+
+		email, _ := userInfo["email"].(string)
+		if email != "" {
+			return strings.ToLower(strings.TrimSpace(email)), nil
+		}
+	}
+
+	return "", fmt.Errorf("oidc: email not found in id_token or userinfo")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HTTP utility helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -331,7 +604,9 @@ func httpGetJSON(endpoint, accessToken string, target any) error {
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "pgstack-proxy-go/1.0")
 

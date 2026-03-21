@@ -1,17 +1,17 @@
 ---
 title: OAuth
 sidebar_position: 3
-description: Configure Google and GitHub OAuth login with pgStack.
+description: Configure OAuth login with Google, GitHub, Apple, Microsoft, and custom OIDC providers.
 ---
 
 # OAuth
 
-pgStack supports OAuth login with Google and GitHub. The proxy handles the OAuth authorization code flow — your application redirects to the provider, the provider redirects back to pgStack, and pgStack issues a JWT session.
+pgStack supports OAuth login with Google, GitHub, Apple, Microsoft, and any OpenID Connect provider. The proxy handles the OAuth authorization code flow — your application redirects to the provider, the provider redirects back to pgStack, and pgStack issues a JWT session.
 
 ## How it works
 
 ```
-Browser                pgStack Proxy         OAuth Provider (Google/GitHub)
+Browser                pgStack Proxy         OAuth Provider (Google/GitHub/Apple/Microsoft/OIDC)
    │                        │                         │
    ├─ GET /auth/v1/authorize?provider=google ─►│       │
    │                        ├─ 302 redirect ──────────►│
@@ -65,6 +65,58 @@ Restart the proxy after changing environment variables:
 ```bash
 docker compose up -d proxy
 ```
+
+### Apple
+
+Apple Sign in uses `id_token` (JWT) instead of a userinfo endpoint. Setup requires an Apple Developer account.
+
+1. Go to [Apple Developer](https://developer.apple.com/account/resources/identifiers/list/serviceId) and create a Services ID.
+2. Enable "Sign in with Apple" and add `https://your-domain.com/auth/v1/callback` to **Return URLs**.
+3. Go to Keys, create a new key with "Sign in with Apple" enabled, and download the `.p8` file.
+4. Add to your `.env`:
+
+```env
+APPLE_CLIENT_ID=com.example.auth
+APPLE_TEAM_ID=ABCDE12345
+APPLE_KEY_ID=FGHIJ67890
+APPLE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nMIGT...your-key...Ag==\n-----END PRIVATE KEY-----
+SITE_URL=https://your-app.example.com
+```
+
+Apple uses `response_mode=form_post` — the callback is a POST, not a GET. pgStack handles both automatically.
+
+### Microsoft
+
+1. Go to [Azure Portal > App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps) and register a new application.
+2. Under **Authentication**, add `https://your-domain.com/auth/v1/callback` as a **Web** redirect URI.
+3. Under **Certificates & secrets**, create a new client secret.
+4. Add to your `.env`:
+
+```env
+MICROSOFT_CLIENT_ID=your-application-id
+MICROSOFT_CLIENT_SECRET=your-client-secret
+SITE_URL=https://your-app.example.com
+```
+
+The Microsoft provider uses the `/common` tenant endpoint, supporting both personal Microsoft accounts and Azure AD work/school accounts.
+
+### Generic OIDC
+
+Connect any OpenID Connect provider (Keycloak, Auth0, Okta, Authentik, etc.) using auto-discovery.
+
+1. Register a new application in your OIDC provider.
+2. Set the redirect URI to `https://your-domain.com/auth/v1/callback`.
+3. Note the issuer URL — it must serve `/.well-known/openid-configuration`.
+4. Add to your `.env`:
+
+```env
+OIDC_CLIENT_ID=your-client-id
+OIDC_CLIENT_SECRET=your-client-secret
+OIDC_ISSUER_URL=https://auth.example.com/realms/myrealm
+SITE_URL=https://your-app.example.com
+```
+
+pgStack discovers the authorization, token, and userinfo endpoints automatically from the OIDC discovery document.
 
 ## SDK usage
 
@@ -176,6 +228,9 @@ Initiate the OAuth flow by redirecting the user to:
 ```
 GET /auth/v1/authorize?provider=google&redirect_to=https://your-app.com/callback
 GET /auth/v1/authorize?provider=github&redirect_to=https://your-app.com/callback
+GET /auth/v1/authorize?provider=apple&redirect_to=https://your-app.com/callback
+GET /auth/v1/authorize?provider=microsoft&redirect_to=https://your-app.com/callback
+GET /auth/v1/authorize?provider=oidc&redirect_to=https://your-app.com/callback
 ```
 
 The proxy handles the callback at `/auth/v1/callback` — do not set this as your application's redirect URL. Set your `SITE_URL` instead.

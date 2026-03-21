@@ -2,6 +2,8 @@ package realtime
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -138,15 +140,22 @@ func handleWebSocket(
 	broadcastCapacity int,
 	semaphore chan struct{},
 ) {
+	// Generate a unique client ID for presence tracking.
+	clientID := generateClientID()
+
 	// Subscribe first so the channel is registered before the defer runs.
 	ch := hub.Subscribe(queryID, broadcastCapacity)
 	defer func() {
+		hub.PresenceLeave(queryID, clientID)
 		conn.Close()
 		<-semaphore // release connection slot
 		hub.Unsubscribe(queryID, ch)
 	}()
 
-	log.Info().Str("query_id", queryID).Msg("WebSocket connected")
+	// Register presence (empty initial state).
+	hub.PresenceJoin(queryID, clientID, []byte("{}"))
+
+	log.Info().Str("query_id", queryID).Str("client_id", clientID).Msg("WebSocket connected")
 
 	// write mutex: gorilla/websocket requires serialised writes.
 	var wmu sync.Mutex
@@ -218,8 +227,22 @@ func handleWebSocket(
 			}
 			switch msg.msgType {
 			case websocket.TextMessage:
-				// Relay client message to all other subscribers of the same channel.
-				hub.Broadcast(queryID, string(msg.data))
+				// Check if this is a presence message
+				var typed struct {
+					Type     string          `json:"type"`
+					State    json.RawMessage `json:"state"`
+					ClientID string          `json:"client_id"`
+				}
+				if err := json.Unmarshal(msg.data, &typed); err == nil && typed.Type == "presence" {
+					cid := typed.ClientID
+					if cid == "" {
+						cid = clientID
+					}
+					hub.PresenceUpdate(queryID, cid, typed.State)
+				} else {
+					// Relay client message to all other subscribers of the same channel.
+					hub.Broadcast(queryID, string(msg.data))
+				}
 			case websocket.CloseMessage:
 				log.Info().Str("query_id", queryID).Msg("WebSocket disconnected (close frame)")
 				return
@@ -265,6 +288,33 @@ func fetchSnapshot(pool *pgxpool.Pool, queryID string) ([]json.RawMessage, error
 		result = append(result, raw)
 	}
 	return result, rows.Err()
+}
+
+// generateClientID returns 16 random bytes hex-encoded as a unique client identifier.
+func generateClientID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// PresenceHandler returns the current presence list for a channel.
+// GET /ws/_presence/{channel}
+func PresenceHandler(hub *Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		channel := chi.URLParam(r, "channel")
+		if channel == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"channel is required"}`))
+			return
+		}
+
+		presenceMap := hub.PresenceList(channel)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(presenceMap)
+	}
 }
 
 // writeWSError writes a plain HTTP error before WebSocket upgrade. Once the

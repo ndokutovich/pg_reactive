@@ -19,11 +19,11 @@ import (
 //
 // The loop applies exponential back-off on failures: 1s → 2s → 4s → … up to
 // maxBackoff. On clean exit (context cancelled) it returns immediately.
-func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.Duration) {
+func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.Duration, webhookMgr *WebhookManager) {
 	backoff := time.Second
 	for {
 		connected.Store(false)
-		if err := listenOnce(context.Background(), dbURL, hub, connected); err != nil {
+		if err := listenOnce(context.Background(), dbURL, hub, connected, webhookMgr); err != nil {
 			log.Error().Err(err).Dur("retry_in", backoff).Msg("PG listener error, reconnecting")
 		} else {
 			log.Info().Msg("PG listener exited normally, reconnecting")
@@ -40,7 +40,7 @@ func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.
 
 // listenOnce opens a dedicated PG connection, executes LISTEN pgr and pumps
 // notifications until an error occurs or the context is cancelled.
-func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.Bool) error {
+func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.Bool, webhookMgr *WebhookManager) error {
 	conn, err := pgx.Connect(ctx, dbURL)
 	if err != nil {
 		return err
@@ -74,5 +74,10 @@ func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.B
 		}
 
 		hub.Broadcast(msg.QueryID, payload)
+
+		// Deliver to webhooks (if any registered)
+		if webhookMgr != nil {
+			webhookMgr.DeliverFromNotify(payload)
+		}
 	}
 }

@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS pgstack.storage_objects (
   name text NOT NULL,
   size bigint NOT NULL,
   mime_type text,
-  data bytea NOT NULL,
+  data bytea,  -- NULL when STORAGE_BACKEND=disk (file stored on filesystem)
   metadata jsonb DEFAULT '{}',
   owner uuid REFERENCES pgstack.users(id) ON DELETE SET NULL,
   created_at timestamptz DEFAULT now(),
@@ -166,6 +166,20 @@ CREATE POLICY storage_objects_update ON pgstack.storage_objects
 CREATE POLICY storage_objects_delete ON pgstack.storage_objects
   FOR DELETE TO authenticated
   USING (owner = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
+
+-- Webhooks table
+CREATE TABLE IF NOT EXISTS pgstack.webhooks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  url text NOT NULL,
+  events text[] NOT NULL DEFAULT '{*}',
+  table_name text NOT NULL DEFAULT '*',
+  secret text NOT NULL DEFAULT '',
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE pgstack.webhooks ENABLE ROW LEVEL SECURITY;
+
+GRANT SELECT, INSERT, DELETE ON pgstack.webhooks TO service_role;
 
 -- Table grants for pgstack schema objects
 GRANT SELECT ON pgstack.storage_buckets TO anon, authenticated;

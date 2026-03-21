@@ -41,6 +41,21 @@ type Deps struct {
 	GoogleClientSecret string
 	GitHubClientID     string
 	GitHubClientSecret string
+
+	// Apple OAuth
+	AppleClientID  string
+	AppleTeamID    string
+	AppleKeyID     string
+	ApplePrivateKey string
+
+	// Microsoft OAuth
+	MicrosoftClientID     string
+	MicrosoftClientSecret string
+
+	// Generic OIDC
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCIssuerURL    string
 }
 
 // AuthResponse is returned by endpoints that issue a session (signup, token grant,
