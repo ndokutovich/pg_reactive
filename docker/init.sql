@@ -272,17 +272,27 @@ GRANT EXECUTE ON FUNCTION public.get_post_stats() TO anon, authenticated, servic
 --   embedded    = synchronous JS via goja VM inside the Go proxy (no DB access by default)
 --   plv8        = JavaScript inside PostgreSQL (full ACID, no fetch)
 --   plpython3u  = Python 3 inside PostgreSQL (full ACID, numpy/requests available via pip)
+--   deno        = the single global Deno edge-runtime container (EDGE_RUNTIME_URL)
+--   http        = a per-function container in ANY language; upstream_url points
+--                 at it, and the proxy forwards POST /functions/v1/{name} with
+--                 the caller's identity in X-Pgstack-* headers
 CREATE TABLE IF NOT EXISTS pgstack.edge_functions (
     name TEXT PRIMARY KEY,
     runtime TEXT NOT NULL DEFAULT 'embedded'
-        CHECK (runtime IN ('embedded', 'plv8', 'plpython3u', 'deno')),
+        CHECK (runtime IN ('embedded', 'plv8', 'plpython3u', 'deno', 'http')),
     verify_jwt BOOLEAN NOT NULL DEFAULT true,
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'inactive')),
     code TEXT,
+    -- Per-function HTTP upstream — required for runtime='http', NULL otherwise.
+    upstream_url TEXT,
     env_vars JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT edge_functions_http_needs_upstream
+        CHECK (runtime <> 'http' OR upstream_url IS NOT NULL),
+    CONSTRAINT edge_functions_upstream_url_scheme
+        CHECK (upstream_url IS NULL OR upstream_url ~ '^https?://')
 );
 
 GRANT SELECT ON pgstack.edge_functions TO service_role;

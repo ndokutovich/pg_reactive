@@ -4,7 +4,11 @@
 //   - "embedded"   — synchronous JS via goja VM inside the Go proxy (no external deps)
 //   - "plv8"       — JavaScript inside PostgreSQL (full ACID, SPI access)
 //   - "plpython3u" — Python 3 inside PostgreSQL (full ACID, pip packages available)
-//   - "deno"       — Deno edge-runtime container via reverse proxy (EDGE_RUNTIME_URL)
+//   - "deno"       — the single global Deno edge-runtime container, via reverse
+//     proxy to EDGE_RUNTIME_URL
+//   - "http"       — a per-function container in ANY language: the function's
+//     own upstream_url is reverse-proxied to, with caller identity injected as
+//     X-Pgstack-* headers (see http.go)
 //
 // The FunctionsCatalog provides a thread-safe, in-memory cache of function
 // metadata loaded from the pgstack.edge_functions table. It auto-refreshes
@@ -24,10 +28,13 @@ import (
 // FunctionMeta describes a single edge function's configuration.
 type FunctionMeta struct {
 	Name      string `json:"name"`
-	Runtime   string `json:"runtime"`    // "embedded", "plv8", "plpython3u", "deno"
+	Runtime   string `json:"runtime"` // "embedded", "plv8", "plpython3u", "deno", "http"
 	VerifyJWT bool   `json:"verify_jwt"`
-	Status    string `json:"status"`     // "active", "inactive"
+	Status    string `json:"status"` // "active", "inactive"
 	Code      string `json:"code,omitempty"`
+	// UpstreamURL is the per-function HTTP target for runtime="http". Empty
+	// for every other runtime.
+	UpstreamURL string `json:"upstream_url,omitempty"`
 }
 
 // FunctionsCatalog is a thread-safe, in-memory cache of edge function metadata.
@@ -54,7 +61,9 @@ func (c *FunctionsCatalog) Refresh(ctx context.Context, pool *pgxpool.Pool) erro
 	defer conn.Release()
 
 	const q = `
-SELECT name, runtime, verify_jwt, status, COALESCE(code, '') AS code
+SELECT name, runtime, verify_jwt, status,
+       COALESCE(code, '')         AS code,
+       COALESCE(upstream_url, '') AS upstream_url
 FROM pgstack.edge_functions
 WHERE status = 'active'`
 
@@ -67,8 +76,18 @@ WHERE status = 'active'`
 	funcs := make(map[string]*FunctionMeta)
 	for rows.Next() {
 		var fm FunctionMeta
-		if err := rows.Scan(&fm.Name, &fm.Runtime, &fm.VerifyJWT, &fm.Status, &fm.Code); err != nil {
+		if err := rows.Scan(&fm.Name, &fm.Runtime, &fm.VerifyJWT, &fm.Status, &fm.Code, &fm.UpstreamURL); err != nil {
 			return fmt.Errorf("functions catalog refresh: scan: %w", err)
+		}
+		// An http-runtime function with an unsafe or missing upstream_url is
+		// dropped from the catalog here — it becomes a clean 404 rather than
+		// ever reaching request handling as a live SSRF vector.
+		if fm.Runtime == "http" {
+			if _, verr := validateUpstreamURL(fm.UpstreamURL); verr != nil {
+				log.Warn().Err(verr).Str("fn", fm.Name).Str("upstream", fm.UpstreamURL).
+					Msg("functions: dropping http function with invalid upstream_url")
+				continue
+			}
 		}
 		funcs[fm.Name] = &fm
 	}
@@ -79,6 +98,10 @@ WHERE status = 'active'`
 	c.mu.Lock()
 	c.funcs = funcs
 	c.mu.Unlock()
+
+	// Keep the per-function reverse-proxy cache coherent with the catalog —
+	// builds proxies for active http upstreams, drops everything else.
+	rebuildHTTPProxies(funcs)
 
 	log.Info().Int("count", len(funcs)).Msg("edge functions catalog refreshed")
 	return nil
@@ -166,4 +189,3 @@ func (c *FunctionsCatalog) List() []*FunctionMeta {
 	}
 	return out
 }
-

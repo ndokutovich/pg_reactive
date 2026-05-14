@@ -98,6 +98,13 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 		r.ContentLength = int64(len(bodyBytes))
 		proxyToDeno(d, w, r, fnName, claims)
 
+	case "http":
+		// Polyglot runtime — reverse-proxy to the function's own per-function
+		// upstream container (see http.go). Body restored as for "deno".
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		r.ContentLength = int64(len(bodyBytes))
+		proxyToUpstream(w, r, fm, claims)
+
 	default:
 		log.Warn().Str("fn", fnName).Str("runtime", fm.Runtime).Msg("functions: unknown runtime")
 		writeJSONError(w, http.StatusBadRequest, "unsupported function runtime")

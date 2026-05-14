@@ -109,8 +109,10 @@ type Config struct {
 	StorageDir     string // filesystem path when StorageBackend="disk"
 
 	// Edge Functions
-	EdgeRuntimeURL string // URL of Deno edge-runtime container, e.g. "http://edge-runtime:9000"
-	FunctionsDir   string // Directory where Deno function sources are mounted
+	// EdgeRuntimeURL is the single global Deno edge-runtime container used by
+	// runtime="deno" functions; empty = disabled. The newer runtime="http"
+	// carries a per-function upstream_url instead and needs no global config.
+	EdgeRuntimeURL string
 
 	// TLS
 	TLSMode      string // "off" | "auto" | "manual"
@@ -217,7 +219,6 @@ func FromEnv() Config {
 	cfg.StorageDir = envOrDefault("STORAGE_DIR", "/data/storage")
 
 	cfg.EdgeRuntimeURL = os.Getenv("EDGE_RUNTIME_URL") // empty = disabled
-	cfg.FunctionsDir = envOrDefault("FUNCTIONS_DIR", "/functions")
 
 	cfg.TLSMode = envOrDefault("TLS_MODE", "off")
 	rawDomains := os.Getenv("TLS_DOMAINS")

@@ -111,7 +111,7 @@ All SQL functions live in the `pgr` schema (not `pg_reactive` — the `pg_` pref
 
 ### Go Proxy (`proxy-go/`)
 
-Modular chi-based server. Listens on PG `NOTIFY pgr` channel, fans out to WebSocket clients via Hub broadcast. JWT auth (HS256) when `JWT_SECRET` env var is set. Semaphore-based connection limiting (default 10K). Includes auth endpoints, PostgREST-compatible REST API, RLS middleware, rate limiting, CORS, TLS, gzip, and embedded JS (goja) edge functions.
+Modular chi-based server. Listens on PG `NOTIFY pgr` channel, fans out to WebSocket clients via Hub broadcast. JWT auth (HS256) when `JWT_SECRET` env var is set. Semaphore-based connection limiting (default 10K). Includes auth endpoints, PostgREST-compatible REST API, RLS middleware, rate limiting, CORS, TLS, gzip, and edge functions across five runtimes (embedded goja JS, PL/v8, PL/Python, the global Deno sidecar, and `http` — per-function containers in any language; see `proxy-go/functions/http.go`).
 
 ### TypeScript SDK (`sdk/src/`)
 

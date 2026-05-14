@@ -30,7 +30,7 @@ pgStack Proxy (Go / chi)  ← port 8080
   ├── /auth/v1/*        Auth (signup, login, refresh, OAuth)
   ├── /rest/v1/*        REST API (PostgREST-compatible CRUD)
   ├── /rest/v1/batch    Transaction batching (multi-op transactions)
-  ├── /functions/v1/*   Edge Functions (Deno, PL/v8, embedded)
+  ├── /functions/v1/*   Edge Functions (HTTP/any-language, Deno, PL/v8, PL/Python, embedded)
   ├── /ws/:query_id     WebSocket live query subscriptions
   ├── /storage/v1/*     File storage
   └── /studio/          Admin UI

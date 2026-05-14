@@ -8,6 +8,10 @@ description: Full-featured TypeScript/JavaScript functions using the Supabase ed
 
 The Deno backend runs functions in the [Supabase edge-runtime](https://github.com/supabase/edge-runtime) — a Deno-based container that supports TypeScript, npm packages, `fetch()`, WebAssembly, and more.
 
+:::tip
+`deno` is effectively a special case of the [HTTP runtime](./http.md) with a single, global upstream (`EDGE_RUNTIME_URL`). For a new polyglot function — or when you want each function in its own container — prefer `runtime='http'`.
+:::
+
 ## Setup
 
 Add the edge-runtime service to your `docker-compose.yml`:

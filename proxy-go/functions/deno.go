@@ -45,16 +45,9 @@ func proxyToDeno(d *FunctionsDeps, w http.ResponseWriter, r *http.Request, fnNam
 	r.Host = target.Host
 
 	// Inject auth context headers so the Deno function can read the caller's
-	// identity without re-validating the JWT.
-	r.Header.Set("X-Pgstack-Role", claims.Role)
-	r.Header.Set("X-Pgstack-Sub", claims.Sub)
-	if claims.ClaimsJSON != "" {
-		r.Header.Set("X-Pgstack-Claims", claims.ClaimsJSON)
-	}
+	// identity without re-validating the JWT. Shared with the "http" runtime.
+	injectAuthHeaders(r, claims)
 
-	// Strip any existing query string params that could collide with
-	// edge-runtime internals — the original query string is preserved for
-	// user-facing parameters.
 	log.Debug().
 		Str("fn", fnName).
 		Str("target", target.String()).

@@ -1,23 +1,24 @@
 ---
 title: Overview
 sidebar_position: 1
-description: Run server-side code with pgStack Edge Functions — embedded JS, PL/v8, PL/Python, or Deno.
+description: Run server-side code with pgStack Edge Functions — embedded JS, PL/v8, PL/Python, Deno, or any-language HTTP containers.
 ---
 
 # Edge Functions
 
-Edge Functions let you run server-side code triggered by HTTP requests. Unlike RPC (which runs SQL functions inside PostgreSQL), Edge Functions can call external APIs, process webhooks, and run business logic in JavaScript/TypeScript.
+Edge Functions let you run server-side code triggered by HTTP requests. Unlike RPC (which runs SQL functions inside PostgreSQL), Edge Functions can call external APIs, process webhooks, and run business logic in any language.
 
-## Four runtime backends
+## Five runtime backends
 
-pgStack supports four runtimes, choosable per function:
+pgStack supports five runtimes, choosable per function:
 
 | Runtime | Language | External APIs | Runs in | Best for |
 |---------|----------|--------------|---------|----------|
 | **Embedded** | JavaScript | Limited | Go proxy process | Simple transforms, webhooks, lightweight handlers |
 | **PL/v8** | JavaScript | No | Inside PostgreSQL | ACID transactions, data-heavy logic |
 | **PL/Python** | Python 3 | Yes (`requests`, `numpy`) | Inside PostgreSQL | ACID transactions, data science, ML inference |
-| **Deno** | TypeScript/JS | Yes (full `fetch`) | Sidecar container | Full-featured functions, npm packages |
+| **Deno** | TypeScript/JS | Yes (full `fetch`) | The single global sidecar container | Full-featured functions, npm packages |
+| **HTTP** | **Any** | Yes | A per-function container | Polyglot functions — Go, Rust, Python, Bun, anything that serves HTTP |
 
 ## Quick start
 
@@ -113,6 +114,17 @@ Supabase-compatible Deno runtime via an external sidecar container. Set the `EDG
 # In docker-compose.yml or .env
 EDGE_RUNTIME_URL=http://edge-runtime:8000
 ```
+
+### HTTP
+
+A polyglot runtime: the function is a container in **any** language, and the proxy reverse-proxies to its **per-function** `upstream_url`. It is the same wire contract as Deno (`POST /functions/v1/{name}`, identity via `X-Pgstack-*` headers) but without the single-global-`EDGE_RUNTIME_URL` limitation — each function is its own container.
+
+```sql
+INSERT INTO pgstack.edge_functions (name, runtime, verify_jwt, upstream_url)
+VALUES ('my-fn', 'http', true, 'http://my-fn:8000');
+```
+
+See the [HTTP Runtime](./http.md) page and `examples/functions/` for a worked reference (`hello-go`).
 
 ## Security
 

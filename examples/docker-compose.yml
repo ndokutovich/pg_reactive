@@ -57,6 +57,22 @@ services:
 #      db:
 #        condition: service_healthy
 
+  # Reference polyglot edge function (runtime="http"). A separate container
+  # in any language — registered in pgstack.edge_functions by setup.sql and
+  # reverse-proxied to by the Go proxy. See examples/functions/README.md.
+  hello-go:
+    build:
+      context: ./functions/hello-go
+    environment:
+      LISTEN_ADDR: ":9100"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9100/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    # Shares the default network with db + proxy — reachable as
+    # http://hello-go:9100, which is the upstream_url in functions/setup.sql.
+
   setup:
     build:
       context: ..
@@ -67,6 +83,10 @@ services:
       PGDATABASE: pg_reactive_test
     depends_on:
       db:
+        condition: service_healthy
+      # Register the http function only once its container is up, so the
+      # first call doesn't 502 while hello-go is still starting.
+      hello-go:
         condition: service_healthy
     entrypoint: ["bash", "-c"]
     command:
