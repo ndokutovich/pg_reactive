@@ -1,0 +1,47 @@
+# Canonical all-in-one pgStack image: PostgreSQL + pg_reactive C extension +
+# pgstack Go proxy + the bootstrap schema, in a single container.
+#
+# Build context = the pg_reactive repo root:
+#   docker build -f docker/Dockerfile.all-in-one -t pgstack-all-in-one .
+#
+# Directly usable for a deployment that needs no extra bundled content.
+# Deployments that bundle a frontend / docs / studio (e.g. the umbrella's
+# apps/pg-reactive and apps/longtask-template, or roblox-clone-app) write
+# their own Dockerfile but should MIRROR this runtime stage and COPY the
+# canonical docker/all-in-one-entrypoint.sh rather than duplicating it.
+#
+# GUC flags: pass via the compose `command:` — forwarded to postgres.
+# Deployment setup: ship an executable /app/post-init.sh (see the entrypoint).
+
+# ── Stage 1: pgstack Go proxy ────────────────────────────────────────────────
+FROM golang:1.23-bookworm AS proxy-builder
+WORKDIR /app
+ENV GOTOOLCHAIN=auto
+COPY proxy-go/go.mod proxy-go/go.sum ./
+RUN go mod download
+COPY proxy-go/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o pgstack-proxy .
+
+# ── Stage 2: all-in-one runtime ──────────────────────────────────────────────
+FROM postgres:16-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential postgresql-server-dev-16 ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Compile + install the pg_reactive C extension.
+COPY ext/ /tmp/ext/
+RUN make -C /tmp/ext clean && make -C /tmp/ext && make -C /tmp/ext install \
+    && rm -rf /tmp/ext
+
+# The stock postgres entrypoint regenerates postgresql.conf from the sample on
+# first init — patch the sample so PostgreSQL listens on TCP for the
+# in-container proxy (and any sibling worker containers). It is never
+# host-exposed unless the deployment maps a port.
+RUN echo "listen_addresses = '*'" >> /usr/share/postgresql/postgresql.conf.sample
+
+COPY --from=proxy-builder /app/pgstack-proxy /usr/local/bin/pgstack-proxy
+COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
+COPY --chmod=0755 docker/all-in-one-entrypoint.sh /usr/local/bin/entrypoint.sh
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
