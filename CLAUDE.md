@@ -17,6 +17,17 @@ docker compose build --no-cache db  # Force full rebuild (after Docker prune)
 
 Host access: PG at `127.0.0.1:15432`, WebSocket proxy at `127.0.0.1:8080`.
 
+### All-in-one deployments
+
+`docker/Dockerfile.all-in-one` + `docker/all-in-one-entrypoint.sh` are the
+canonical "PostgreSQL + extension + proxy in one container" build. The
+entrypoint is background-and-wait (proxy is lifecycle leader), forwards its
+args to `postgres` (GUC flags via the compose `command:`), and runs an
+optional `/app/post-init.sh` hook for deployment-specific setup. Downstream
+all-in-one deployments (e.g. `roblox-clone-app`, the pgstack umbrella's
+`apps/pg-reactive` and `apps/longtask-template`) `COPY` this entrypoint
+rather than duplicating it — do not fork the boot logic into those repos.
+
 ## Build & Test Commands
 
 ### C Extension (runs inside container)
