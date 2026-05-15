@@ -103,6 +103,10 @@ type Config struct {
 
 	// User static files (public/ directory)
 	PublicDir string
+	// PublicAllowInlineScripts adds 'unsafe-inline' to the PublicSPA CSP
+	// script-src. Default false (strict). Needed for static apps that rely
+	// on inline <script> blocks — e.g. the pg_reactive examples.
+	PublicAllowInlineScripts bool
 
 	// Storage
 	StorageBackend string // "database" (default) or "disk"
@@ -214,6 +218,7 @@ func FromEnv() Config {
 	cfg.StudioDir = envOrDefault("STUDIO_DIR", "/studio")
 	cfg.DocsDir = envOrDefault("DOCS_DIR", "/docs")
 	cfg.PublicDir = os.Getenv("PUBLIC_DIR")
+	cfg.PublicAllowInlineScripts = envBoolOrDefault("PUBLIC_ALLOW_INLINE_SCRIPTS", false)
 
 	cfg.StorageBackend = envOrDefault("STORAGE_BACKEND", "database")
 	cfg.StorageDir = envOrDefault("STORAGE_DIR", "/data/storage")

@@ -495,7 +495,7 @@ func buildRouter(state *AppState) http.Handler {
 	// ── User SPA / static files (lowest priority, catch-all) ─────────
 	if state.Config.PublicDir != "" {
 		if info, err := os.Stat(state.Config.PublicDir); err == nil && info.IsDir() {
-			publicHandler := appMiddleware.PublicSecurityHeaders(
+			publicHandler := appMiddleware.PublicSecurityHeaders(state.Config.PublicAllowInlineScripts)(
 				routes.PublicSPA(state.Config.PublicDir),
 			)
 			r.NotFound(publicHandler.ServeHTTP)
@@ -513,4 +513,3 @@ func notImplemented(name string) http.HandlerFunc {
 		writeError(w, http.StatusNotImplemented, name+" not yet implemented")
 	}
 }
-
