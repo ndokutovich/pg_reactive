@@ -907,6 +907,13 @@ Register a new webhook.
 | `table_name` | `*` | Table name to filter on. `*` matches all tables. |
 | `secret` | `""` | Signing secret for HMAC-SHA256 payload verification. |
 
+Registering a webhook with a specific `table_name` installs an `AFTER INSERT OR
+UPDATE OR DELETE` row trigger on that table; deleting the last webhook for a
+table removes it. A `table_name` of `*` is a **wildcard matcher only** — it
+receives every webhook event but cannot install a trigger itself (PostgreSQL
+has no all-tables row trigger), so it relies on the triggers installed by
+table-specific webhooks.
+
 **Response `201 Created`:**
 
 ```json

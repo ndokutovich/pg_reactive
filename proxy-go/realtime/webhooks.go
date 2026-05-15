@@ -22,7 +22,7 @@ import (
 type Webhook struct {
 	ID        string   `json:"id"`
 	URL       string   `json:"url"`
-	Events    []string `json:"events"`    // e.g. ["INSERT", "UPDATE", "DELETE"]
+	Events    []string `json:"events"`     // e.g. ["INSERT", "UPDATE", "DELETE"]
 	TableName string   `json:"table_name"` // e.g. "orders" or "*" for all
 	Secret    string   `json:"secret"`
 	Active    bool     `json:"active"`
@@ -84,31 +84,32 @@ type WebhookPayload struct {
 	OldRecord json.RawMessage `json:"old_record,omitempty"`
 }
 
-// DeliverFromNotify parses a NOTIFY payload and delivers to matching webhooks.
-// Called after hub.Broadcast in the listener loop.
-func (wm *WebhookManager) DeliverFromNotify(payload string) {
-	// Parse the delta payload to extract table and event info
-	var delta struct {
-		QueryID  string            `json:"query_id"`
-		Inserted []json.RawMessage `json:"inserted"`
-		Deleted  []json.RawMessage `json:"deleted"`
-		Type     string            `json:"type"`
-		Table    string            `json:"table"`
+// DeliverFromWebhookNotify parses a 'pgstack_webhooks' NOTIFY payload — emitted
+// by the pgstack.webhook_notify() trigger — and delivers it to every matching
+// registered webhook. Called from the listener loop for that channel.
+//
+// This replaces the earlier attempt to derive webhooks from the 'pgr'
+// live-query delta stream: those deltas carry no table name and only fire when
+// a live query happens to be subscribed, so they could never drive webhooks
+// correctly. The dedicated trigger emits {table, event, record, old_record}.
+func (wm *WebhookManager) DeliverFromWebhookNotify(payload string) {
+	var ev struct {
+		Table     string          `json:"table"`
+		Event     string          `json:"event"`
+		Record    json.RawMessage `json:"record"`
+		OldRecord json.RawMessage `json:"old_record"`
+		Oversized bool            `json:"oversized"`
 	}
-	if err := json.Unmarshal([]byte(payload), &delta); err != nil {
-		return // not a valid delta payload
-	}
-
-	// Skip overflow/subscribed messages
-	if delta.Type == "overflow" || delta.Type == "subscribed" {
+	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+		log.Warn().Str("payload", payload).Err(err).Msg("webhooks: invalid NOTIFY payload")
 		return
 	}
-
-	// Determine event type and table from the delta content
-	tableName := delta.Table
-	if tableName == "" {
-		// Try to extract table from query_id (common pattern: table_hash)
-		return // Can't determine table — skip webhook delivery
+	if ev.Table == "" || ev.Event == "" {
+		return
+	}
+	if ev.Oversized {
+		log.Warn().Str("table", ev.Table).Str("event", ev.Event).
+			Msg("webhooks: row exceeded NOTIFY size limit — delivered without record body")
 	}
 
 	wm.mu.RLock()
@@ -116,48 +117,35 @@ func (wm *WebhookManager) DeliverFromNotify(payload string) {
 	copy(hooks, wm.webhooks)
 	wm.mu.RUnlock()
 
-	if len(hooks) == 0 {
-		return
-	}
-
-	// Determine events
-	var events []string
-	if len(delta.Inserted) > 0 && len(delta.Deleted) > 0 {
-		events = append(events, "UPDATE")
-	} else if len(delta.Inserted) > 0 {
-		events = append(events, "INSERT")
-	} else if len(delta.Deleted) > 0 {
-		events = append(events, "DELETE")
-	}
-
-	for _, event := range events {
-		for _, wh := range hooks {
-			if !wh.Active {
-				continue
-			}
-			if !matchesEvent(wh.Events, event) {
-				continue
-			}
-			if wh.TableName != "*" && !strings.EqualFold(wh.TableName, tableName) {
-				continue
-			}
-
-			// Build payload
-			wp := WebhookPayload{
-				Event: event,
-				Table: tableName,
-			}
-			if len(delta.Inserted) > 0 {
-				wp.Record = delta.Inserted[0]
-			}
-			if len(delta.Deleted) > 0 {
-				wp.OldRecord = delta.Deleted[0]
-			}
-
-			// Deliver async with retry
-			go wm.deliverWithRetry(wh, wp)
+	for _, wh := range hooks {
+		if !wh.Active {
+			continue
 		}
+		if !matchesEvent(wh.Events, ev.Event) {
+			continue
+		}
+		if wh.TableName != "*" && !strings.EqualFold(wh.TableName, ev.Table) {
+			continue
+		}
+		wp := WebhookPayload{
+			Event:     ev.Event,
+			Table:     ev.Table,
+			Record:    nilIfJSONNull(ev.Record),
+			OldRecord: nilIfJSONNull(ev.OldRecord),
+		}
+		// Deliver async with retry.
+		go wm.deliverWithRetry(wh, wp)
 	}
+}
+
+// nilIfJSONNull returns nil for an absent or literal-null json.RawMessage so
+// that WebhookPayload's omitempty tags drop the field instead of emitting
+// "record":null.
+func nilIfJSONNull(r json.RawMessage) json.RawMessage {
+	if len(r) == 0 || string(r) == "null" {
+		return nil
+	}
+	return r
 }
 
 func matchesEvent(events []string, event string) bool {

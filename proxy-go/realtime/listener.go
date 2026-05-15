@@ -50,8 +50,13 @@ func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.B
 	if _, err = conn.Exec(ctx, "LISTEN pgr"); err != nil {
 		return err
 	}
+	// Webhooks ride a dedicated channel fed by the pgstack.webhook_notify()
+	// trigger — separate from the 'pgr' live-query delta stream.
+	if _, err = conn.Exec(ctx, "LISTEN pgstack_webhooks"); err != nil {
+		return err
+	}
 	connected.Store(true)
-	log.Info().Msg("connected to PG, listening on channel 'pgr'")
+	log.Info().Msg("connected to PG, listening on channels 'pgr' and 'pgstack_webhooks'")
 
 	for {
 		notification, err := conn.WaitForNotification(ctx)
@@ -61,6 +66,15 @@ func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.B
 
 		payload := notification.Payload
 
+		// Webhook trigger events: {table, event, record, old_record}.
+		if notification.Channel == "pgstack_webhooks" {
+			if webhookMgr != nil {
+				webhookMgr.DeliverFromWebhookNotify(payload)
+			}
+			continue
+		}
+
+		// 'pgr' channel: live-query delta — fan out to WebSocket subscribers.
 		var msg struct {
 			QueryID string `json:"query_id"`
 		}
@@ -74,10 +88,5 @@ func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.B
 		}
 
 		hub.Broadcast(msg.QueryID, payload)
-
-		// Deliver to webhooks (if any registered)
-		if webhookMgr != nil {
-			webhookMgr.DeliverFromNotify(payload)
-		}
 	}
 }

@@ -2,18 +2,24 @@ package auth
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -378,13 +384,90 @@ func exchangeApple(d *Deps, code, redirectURI string) (string, error) {
 	return strings.ToLower(strings.TrimSpace(email)), nil
 }
 
-// generateAppleClientSecret creates a short-lived JWT signed with the Apple private key.
-// Apple requires a client_secret JWT instead of a static secret.
+// appleSecretCache memoises the generated Apple client-secret JWT. Apple permits
+// a lifetime of up to 6 months; we use 1 hour and regenerate shortly before
+// expiry so a long-lived process never presents a stale secret.
+var (
+	appleSecretMu      sync.Mutex
+	appleSecretValue   string
+	appleSecretExpires time.Time
+)
+
+// generateAppleClientSecret returns the ES256-signed JWT that Apple requires in
+// place of a static client_secret. Claims: iss=team_id, sub=client_id,
+// aud=https://appleid.apple.com; the signing key's key_id goes in the header.
+// d.ApplePrivateKey is the PEM-encoded PKCS#8 EC private key (the .p8 file).
+//
+// Back-compat: if d.ApplePrivateKey is already a pre-generated client_secret
+// JWT (not PEM), it is returned verbatim. Returns "" on misconfiguration — the
+// token exchange then fails cleanly with Apple's own error.
 func generateAppleClientSecret(d *Deps) string {
-	// For a full implementation, this would generate a JWT signed with ES256
-	// using the team_id, key_id, and private key. For now, return the private
-	// key directly (works if the caller pre-generates the client_secret JWT).
-	return d.ApplePrivateKey
+	if looksLikeJWT(d.ApplePrivateKey) {
+		return strings.TrimSpace(d.ApplePrivateKey)
+	}
+
+	appleSecretMu.Lock()
+	defer appleSecretMu.Unlock()
+
+	if appleSecretValue != "" && time.Now().Before(appleSecretExpires.Add(-5*time.Minute)) {
+		return appleSecretValue
+	}
+
+	key, err := parseApplePrivateKey(d.ApplePrivateKey)
+	if err != nil {
+		log.Error().Err(err).Msg("apple: cannot parse private key for client_secret")
+		return ""
+	}
+
+	now := time.Now()
+	exp := now.Add(1 * time.Hour)
+	tok := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
+		"iss": d.AppleTeamID,
+		"iat": now.Unix(),
+		"exp": exp.Unix(),
+		"aud": "https://appleid.apple.com",
+		"sub": d.AppleClientID,
+	})
+	tok.Header["kid"] = d.AppleKeyID
+
+	signed, err := tok.SignedString(key)
+	if err != nil {
+		log.Error().Err(err).Msg("apple: cannot sign client_secret JWT")
+		return ""
+	}
+
+	appleSecretValue = signed
+	appleSecretExpires = exp
+	return signed
+}
+
+// looksLikeJWT reports whether s is a compact-serialised JWT (three dot-separated
+// segments, no PEM armour) rather than a PEM private key.
+func looksLikeJWT(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.Count(s, ".") == 2 && !strings.Contains(s, "BEGIN")
+}
+
+// parseApplePrivateKey decodes a PEM-encoded PKCS#8 EC private key (the contents
+// of the Apple .p8 file) into an *ecdsa.PrivateKey.
+func parseApplePrivateKey(pemKey string) (*ecdsa.PrivateKey, error) {
+	pemKey = strings.TrimSpace(pemKey)
+	if pemKey == "" {
+		return nil, errors.New("APPLE_PRIVATE_KEY is not configured")
+	}
+	block, _ := pem.Decode([]byte(pemKey))
+	if block == nil {
+		return nil, errors.New("APPLE_PRIVATE_KEY is not valid PEM")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse PKCS#8 key: %w", err)
+	}
+	ecKey, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("APPLE_PRIVATE_KEY is not an EC private key")
+	}
+	return ecKey, nil
 }
 
 // extractEmailFromJWT decodes a JWT without verification and extracts the email claim.

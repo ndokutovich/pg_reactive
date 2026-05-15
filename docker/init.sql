@@ -181,6 +181,52 @@ ALTER TABLE pgstack.webhooks ENABLE ROW LEVEL SECURITY;
 
 GRANT SELECT, INSERT, DELETE ON pgstack.webhooks TO service_role;
 
+-- Webhook delivery is driven by a per-table AFTER ROW trigger that emits a
+-- table-aware event on the dedicated 'pgstack_webhooks' NOTIFY channel. The
+-- proxy LISTENs on that channel and fans events out to matching webhooks.
+CREATE OR REPLACE FUNCTION pgstack.webhook_notify() RETURNS trigger AS $$
+DECLARE
+  payload text;
+BEGIN
+  payload := json_build_object(
+    'table',      TG_TABLE_NAME,
+    'event',      TG_OP,
+    'record',     CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE row_to_json(NEW) END,
+    'old_record', CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE row_to_json(OLD) END
+  )::text;
+  -- pg_notify has an 8000-byte payload limit. Rather than abort the DML, emit
+  -- a body-less event so the webhook still fires (the consumer can re-fetch).
+  IF octet_length(payload) <= 7900 THEN
+    PERFORM pg_notify('pgstack_webhooks', payload);
+  ELSE
+    PERFORM pg_notify('pgstack_webhooks', json_build_object(
+      'table', TG_TABLE_NAME, 'event', TG_OP, 'oversized', true
+    )::text);
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- enable/disable the per-table trigger. Called by the proxy when a webhook is
+-- created for / removed from a specific table. Idempotent.
+CREATE OR REPLACE FUNCTION pgstack.enable_webhook_trigger(tbl regclass) RETURNS void AS $$
+BEGIN
+  EXECUTE format('DROP TRIGGER IF EXISTS pgstack_webhook_trg ON %s', tbl);
+  EXECUTE format(
+    'CREATE TRIGGER pgstack_webhook_trg AFTER INSERT OR UPDATE OR DELETE ON %s '
+    'FOR EACH ROW EXECUTE FUNCTION pgstack.webhook_notify()', tbl);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION pgstack.disable_webhook_trigger(tbl regclass) RETURNS void AS $$
+BEGIN
+  EXECUTE format('DROP TRIGGER IF EXISTS pgstack_webhook_trg ON %s', tbl);
+END;
+$$ LANGUAGE plpgsql;
+
+GRANT EXECUTE ON FUNCTION pgstack.enable_webhook_trigger(regclass)  TO service_role;
+GRANT EXECUTE ON FUNCTION pgstack.disable_webhook_trigger(regclass) TO service_role;
+
 -- Table grants for pgstack schema objects
 GRANT SELECT ON pgstack.storage_buckets TO anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON pgstack.storage_objects TO authenticated;

@@ -2,10 +2,12 @@ package routes
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"pgstack-proxy-go/middleware"
@@ -66,6 +68,22 @@ func CreateWebhook(d *WebhookDeps) http.HandlerFunc {
 			log.Error().Err(err).Msg("webhooks: create")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")
 			return
+		}
+
+		// Install the AFTER ROW trigger that feeds the 'pgstack_webhooks'
+		// channel. A table_name of "*" is a wildcard matcher only — it cannot
+		// install a trigger (PG has no "all tables" row trigger), so it relies
+		// on the triggers installed by table-specific webhooks.
+		if body.TableName != "*" {
+			if _, err := d.Pool.Exec(r.Context(),
+				`SELECT pgstack.enable_webhook_trigger($1::regclass)`, body.TableName); err != nil {
+				log.Error().Err(err).Str("table", body.TableName).Msg("webhooks: enable trigger")
+				// Roll back the orphan webhook row so we never have a webhook
+				// with no trigger feeding it.
+				_, _ = d.Pool.Exec(r.Context(), `DELETE FROM pgstack.webhooks WHERE id = $1::uuid`, id)
+				writeJSONError(w, http.StatusBadRequest, "failed to install webhook trigger on table: "+body.TableName)
+				return
+			}
 		}
 
 		// Refresh webhook cache
@@ -155,16 +173,34 @@ func DeleteWebhook(d *WebhookDeps) http.HandlerFunc {
 			return
 		}
 
-		tag, err := d.Pool.Exec(r.Context(),
-			`DELETE FROM pgstack.webhooks WHERE id = $1::uuid`, webhookID)
+		var deletedTable string
+		err = d.Pool.QueryRow(r.Context(),
+			`DELETE FROM pgstack.webhooks WHERE id = $1::uuid RETURNING table_name`,
+			webhookID).Scan(&deletedTable)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSONError(w, http.StatusNotFound, "webhook not found")
+			return
+		}
 		if err != nil {
 			log.Error().Err(err).Msg("webhooks: delete")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")
 			return
 		}
-		if tag.RowsAffected() == 0 {
-			writeJSONError(w, http.StatusNotFound, "webhook not found")
-			return
+
+		// Drop the per-table trigger once no active webhook references the
+		// table anymore — otherwise it keeps emitting NOTIFY nobody consumes.
+		if deletedTable != "*" {
+			var remaining int
+			if err := d.Pool.QueryRow(r.Context(),
+				`SELECT count(*) FROM pgstack.webhooks WHERE table_name = $1 AND active = true`,
+				deletedTable).Scan(&remaining); err != nil {
+				log.Warn().Err(err).Str("table", deletedTable).Msg("webhooks: count remaining")
+			} else if remaining == 0 {
+				if _, err := d.Pool.Exec(r.Context(),
+					`SELECT pgstack.disable_webhook_trigger($1::regclass)`, deletedTable); err != nil {
+					log.Warn().Err(err).Str("table", deletedTable).Msg("webhooks: disable trigger")
+				}
+			}
 		}
 
 		// Refresh webhook cache
