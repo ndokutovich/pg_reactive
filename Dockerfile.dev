@@ -16,9 +16,12 @@ COPY --chown=postgres:postgres ext/ /ext/ext/
 COPY --chown=postgres:postgres tests/ /ext/tests/
 COPY --chown=postgres:postgres examples/ /examples/
 
-# Init SQL runs on every fresh start (tmpfs wipes state)
+# Init SQL runs on every fresh start (tmpfs wipes state). Per-example
+# tables and policies live in their own examples/*/setup.sql files,
+# applied by the examples/docker-compose.yml `setup` service — they
+# are NOT part of the base image so the base PG can be reused by
+# stacks that don't want the demo schema.
 COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
-COPY examples/apps/shopping-list/migration.sql /docker-entrypoint-initdb.d/02-wtb.sql
 
 COPY docker/entrypoint-dev.sh /usr/local/bin/entrypoint-dev.sh
 RUN chmod +x /usr/local/bin/entrypoint-dev.sh
