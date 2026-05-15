@@ -119,7 +119,7 @@ Other clients (with `sub=99`) attempting the same URL get `403 Forbidden` before
 - JSON object = strict AND-match: every key must be present in claims with byte-equal value.
 - `{"sub":"42"}` matches `{"sub":"42",...}` but **not** `{"sub":42,...}` — pick a consistent JWT encoding.
 - Max 512 bytes serialised.
-- Combine with [REQUIRE_AUTHENTICATED_WS](/docs/deploy/env-vars) for defence in depth: even public subscriptions then require a JWT.
+- Combine with [REQUIRE_AUTHENTICATED_WS](../deploy/env-vars.md) for defence in depth: even public subscriptions then require a JWT.
 
 ### Capability vs audience
 

@@ -1,118 +1,108 @@
-# pg_reactive Examples
+# pgStack Examples
 
-Twelve progressive examples demonstrating pg_reactive's live query capabilities,
-from simple single-table filters to a full CRM dashboard with CTEs, window
-functions, notify mode, and an interactive step-by-step tutorial.
+Seven concentrated lessons + two full apps. Each is the canonical
+"do it right" shape — no demo-only shortcuts, no patterns to un-learn.
 
-## Quick Start (One Command)
+## Quick start
 
 ```bash
 cd examples
-docker compose up --build
-```
-
-This starts PostgreSQL + pg_reactive extension, the WebSocket proxy, runs all
-setup SQL, and serves the examples at **http://127.0.0.1:3000**.
-
-Each example includes a toolbar with demo buttons (Insert, Update, Delete
-actions) powered by the proxy's `POST /api/demo` endpoint. No psql session
-needed for basic interaction.
-
-For advanced usage, open a psql session and run demo commands directly:
-
-```bash
-docker compose exec db psql -U postgres -d pg_reactive_test
-```
-
-## Manual Setup (Alternative)
-
-If you prefer using the root docker-compose:
-
-```bash
-# From the project root
 docker compose up -d --build
-
-# Run all setup scripts (glob handles all 12 examples automatically)
-for f in /examples/*/setup.sql; do
-  docker compose exec -T db psql -U postgres -d pg_reactive_test -f "$f"
-done
 ```
 
-Then open any `app.html` in your browser and run the demo SQL commands from
-a psql session.
+Brings up: PostgreSQL with `pg_reactive`, the Go proxy, the polyglot
+`hello-go` edge function, the `setup` container that runs every
+`*/setup.sql`, and an nginx serving this directory.
 
-## The Examples
+Open <http://127.0.0.1:3000> and click through.
 
-| # | Name | SQL Constructs | What It Proves |
-|---|------|---------------|----------------|
-| 1 | **Live Product Catalog** | `WHERE` | Basic setup, simplest possible live query |
-| 2 | **Order Feed** | `JOIN x3` | Multi-table tracking -- CDC tools can't do this |
-| 3 | **Revenue Dashboard** | `LEFT JOIN + GROUP BY + SUM` | Live aggregates -- neither CDC nor Hasura can express this |
-| 4 | **Category Leaderboard** | `HAVING + RANK() OVER` | Advanced SQL -- pg_ivm also fails on these |
-| 5 | **Real-Time CRM** | `CTE + LIMIT + Multi-Query` | Full dashboard with 3 simultaneous subscriptions |
-| 6 | **Inventory Monitor** | `CASE + JOIN` | Computed status columns, conditional logic in live queries |
-| 7 | **Multi-Filter Dashboard** | `3x WHERE` | Multiple subscriptions on same table with different filters |
-| 8 | **Order Analytics** | `date_trunc + GROUP BY` | Time-bucketed aggregates, temporal analysis |
-| 9 | **Price Comparison** | `RANK, NTILE, ratio` | Window functions: ranking, quartiles, ratios to avg/max |
-| 10 | **Executive Scorecard** | `COUNT DISTINCT, SUM, AVG, NULLIF` | Single-row aggregate KPIs, dashboard metrics |
-| 11 | **Notify Mode vs Delta** | `subscribe(..., 'notify')` | Lightweight invalidation (~50B) vs full diffs side-by-side |
-| 12 | **Tutorial Console** | All of the above | 15-step interactive walkthrough of every feature |
+| Service         | Port              | What                         |
+| --------------- | ----------------- | ---------------------------- |
+| `web`           | `3000` (host)     | static examples + nginx      |
+| `proxy`         | `8080`            | pgStack proxy (REST/WS/auth) |
+| `db`            | `15432`           | PostgreSQL + pg_reactive     |
+| `hello-go`      | (internal :9100)  | reference edge function      |
 
-## How It Works
-
-Each example connects directly to the pg_reactive WebSocket proxy:
+## Layout
 
 ```
-Browser  --ws://127.0.0.1:8080/ws/{query_id}-->  Rust Proxy  --LISTEN pgr-->  PostgreSQL
+examples/
+├── _lib/pgstack.js          shared browser SDK helper (PgStack class)
+├── 01-live-public/          public live query
+├── 02-joins-aggregates/     joins, GROUP BY, window functions
+├── 03-per-user-inventory/   audience-bound subscription (flagship)
+├── 04-rls-shopping-list/    RLS + audience for multi-tenant data
+├── 05-notify-mode/          notify vs delta side-by-side
+├── 06-presence-broadcast/   peer-to-peer chat + presence
+├── 07-edge-function/        runtime='http' invocation
+├── apps/
+│   ├── todo/                per-user task tracker
+│   └── expenses/            per-user expenses with live totals
+├── functions/
+│   └── hello-go/            reference http-runtime function
+├── docker-compose.yml       full stack
+├── nginx.conf               static + reverse proxy
+├── config.js                runtime config (auto-detects base path)
+└── index.html               landing
 ```
 
-When you run DML (INSERT/UPDATE/DELETE) in psql, the pg_reactive extension:
-1. Detects which subscriptions are affected (via AFTER STATEMENT triggers)
-2. **Delta mode** (default): Recomputes the query using EXCEPT to find exact delta (inserted/deleted rows)
-   **Notify mode**: Sends a lightweight `{"type":"invalidated"}` signal (~50 bytes) without re-executing the query
-3. Sends the result as JSON via pg_notify
-4. The proxy fans it out to all connected WebSocket clients
+## Best-practice principles each example follows
 
-## Architecture
+1. **RLS first.** Tables for per-user data enable Row-Level Security and
+   policies use `auth.uid()`. Even a bug in the proxy or a leaked anon
+   key can't escape RLS.
 
+2. **Audience-bound subscriptions.** For user-scoped live data,
+   `pgr.subscribe(...)` includes an `audience` predicate (e.g.
+   `{"sub":"<uuid>"}`). The proxy enforces it at WebSocket connect
+   time — leaking a `query_id` does not leak data.
+
+3. **Server-derived query_ids.** A `SECURITY DEFINER` function reads
+   `auth.uid()` and derives both the `query_id` AND the audience. The
+   client never invents either; it just calls the helper and uses
+   whatever id comes back.
+
+4. **Explicit grants.** Each table grants `SELECT/INSERT/UPDATE/DELETE`
+   to the specific roles its policies expect. No blanket
+   `GRANT ALL ON ALL TABLES IN SCHEMA public` (closed in the 2026-05
+   audit).
+
+5. **Typed broadcast envelope.** Peer messages on channels are wrapped
+   server-side as `{"type":"broadcast","from":<peer>,"payload":<orig>}`
+   — receivers cannot be tricked into accepting a peer-forged delta.
+
+## Shared SDK (`_lib/pgstack.js`)
+
+A vanilla JS class wrapping the four pgStack capabilities — Auth,
+LiveQuery, RealtimeChannel, Edge-function invocation — used by every
+example and app. No build step, no bundler. Read the file: it's the
+shortest path to understanding the wire shape.
+
+```js
+const pg = new PgStack();
+await pg.autoAuth();                          // signup / re-login from localStorage
+
+const qid = await pg.rest('/rpc/subscribe_my_inventory', { method: 'POST', body: '{}' });
+pg.liveQuery(qid, {
+  onSnapshot(rows) { /* initial */ },
+  onDelta(ins, del) { /* row-level updates */ }
+});
 ```
-+-------------------------+     +--------------+     +-------------+
-|     PostgreSQL 16       |     |  Rust Proxy  |     |   Browser   |
-|  +-------------------+  |     |  (WebSocket) |     |  (app.html) |
-|  |    pg_reactive     |  |     |              |     |             |
-|  |  EXCEPT-based delta|-->--->-|  LISTEN pgr  |-->--|  ws://...   |
-|  |  pg_notify('pgr')  |  |     |  broadcast   |     |  live UI    |
-|  +-------------------+  |     +--------------+     +-------------+
-+-------------------------+
-```
 
-## Cleanup
+## Editing
+
+After changing a `*/setup.sql`:
 
 ```bash
-# Stop all services
-cd examples
-docker compose down
+docker compose -f examples/docker-compose.yml up -d --build setup
 ```
 
-To unsubscribe individual queries (without stopping):
+After changing the C extension (`ext/`):
 
-```sql
-SELECT pgr.unsubscribe('electronics');
-SELECT pgr.unsubscribe('order_feed');
-SELECT pgr.unsubscribe('revenue_by_customer');
-SELECT pgr.unsubscribe('premium_categories');
-SELECT pgr.unsubscribe('product_rankings');
-SELECT pgr.unsubscribe('top_customers');
-SELECT pgr.unsubscribe('recent_orders');
-SELECT pgr.unsubscribe('revenue_by_region');
-SELECT pgr.unsubscribe('inventory_status');
-SELECT pgr.unsubscribe('budget_products');
-SELECT pgr.unsubscribe('midrange_products');
-SELECT pgr.unsubscribe('premium_products');
-SELECT pgr.unsubscribe('hourly_orders');
-SELECT pgr.unsubscribe('price_matrix');
-SELECT pgr.unsubscribe('exec_kpis');
-SELECT pgr.unsubscribe('sensor_notify');
-SELECT pgr.unsubscribe('sensor_delta');
--- Tutorial (12) subs are created/cleaned interactively
+```bash
+docker compose -f examples/docker-compose.yml build db
+docker compose -f examples/docker-compose.yml up -d --force-recreate db
+docker compose -f examples/docker-compose.yml up -d setup
 ```
+
+(The proxy doesn't need rebuilding for SQL/example changes.)

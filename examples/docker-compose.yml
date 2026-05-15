@@ -92,9 +92,10 @@ services:
     command:
       - |
         echo "Initializing examples..."
-        for f in /examples/*/setup.sql; do
+        for f in /examples/*/setup.sql /examples/apps/*/setup.sql; do
+          [ -f "$$f" ] || continue
           echo "  Running $$f"
-          psql -f "$$f"
+          psql -v ON_ERROR_STOP=1 -f "$$f"
         done
         echo "All examples initialized!"
 

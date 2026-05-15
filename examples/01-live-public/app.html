@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>01 — Live Public Data</title>
+<link rel="icon" href="../favicon.svg">
+<script src="../config.js"></script>
+<script src="../_lib/pgstack.js"></script>
+<style>
+  body { font: 14px -apple-system, BlinkMacSystemFont, sans-serif; background:#0d1117; color:#c9d1d9; margin:0; padding:24px; max-width:720px; margin-inline:auto; }
+  h1 { margin:0 0 4px; color:#58a6ff; }
+  .sub { color:#8b949e; margin-bottom:24px; }
+  .panel { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; margin-bottom:16px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:8px 12px; text-align:left; border-bottom:1px solid #30363d; }
+  th { color:#8b949e; font-weight:600; font-size:12px; text-transform:uppercase; }
+  button { background:#238636; color:#fff; border:0; border-radius:6px; padding:8px 16px; font:inherit; cursor:pointer; margin-right:8px; }
+  button:hover { background:#2ea043; }
+  code { background:#21262d; padding:2px 6px; border-radius:4px; font-family:ui-monospace,Consolas,monospace; }
+</style>
+</head>
+<body>
+<h1>01 — Live Public Data</h1>
+<p class="sub">Public live query (<code>products</code>, in-stock electronics). No auth needed — open in two tabs and mutate from one to see the other update in real time.</p>
+
+<div class="panel">
+  <button id="add">Add random product</button>
+  <button id="toggle">Toggle random stock</button>
+</div>
+
+<div class="panel">
+  <table>
+    <thead><tr><th>ID</th><th>Name</th><th>Price</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<script>
+const pg = new PgStack();
+const rows = new Map();
+const tbody = document.getElementById('rows');
+
+function appendCell(tr, text) {
+  const td = document.createElement('td');
+  td.textContent = text;
+  tr.appendChild(td);
+}
+
+function render() {
+  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+  const sorted = [...rows.values()].sort((a, b) => a.price - b.price);
+  for (const r of sorted) {
+    const tr = document.createElement('tr');
+    tr.id = 'r' + r.id;
+    appendCell(tr, r.id);
+    appendCell(tr, r.name);
+    appendCell(tr, '$' + Number(r.price).toFixed(2));
+    tbody.appendChild(tr);
+  }
+}
+
+pg.liveQuery('electronics_in_stock', {
+  onSnapshot(initial) {
+    rows.clear();
+    for (const r of initial) rows.set(r.id, r);
+    render();
+  },
+  onDelta(inserted, deleted) {
+    for (const r of deleted)  rows.delete(r.id);
+    for (const r of inserted) rows.set(r.id, r);
+    render();
+  },
+  onError(e) { console.error('live-query error', e); }
+}, { anon: true });
+
+document.getElementById('add').onclick = async () => {
+  const idx = Math.floor(Math.random() * 1000);
+  await pg.rest('/products', {
+    method: 'POST',
+    headers: { 'Prefer': 'return=representation' },
+    body: JSON.stringify({
+      name: 'Gadget #' + idx,
+      price: (Math.random() * 200 + 10).toFixed(2),
+      category: 'electronics',
+      in_stock: true
+    })
+  });
+};
+
+document.getElementById('toggle').onclick = async () => {
+  const all = await pg.rest('/products?category=eq.electronics&select=id,in_stock');
+  if (!all.length) return;
+  const pick = all[Math.floor(Math.random() * all.length)];
+  await pg.rest('/products?id=eq.' + pick.id, {
+    method: 'PATCH',
+    body: JSON.stringify({ in_stock: !pick.in_stock })
+  });
+};
+</script>
+</body>
+</html>

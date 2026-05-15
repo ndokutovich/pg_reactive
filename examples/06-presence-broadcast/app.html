@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>06 — Presence + Broadcast</title>
+<link rel="icon" href="../favicon.svg">
+<script src="../config.js"></script>
+<script src="../_lib/pgstack.js"></script>
+<style>
+  body { font: 14px -apple-system, BlinkMacSystemFont, sans-serif; background:#0d1117; color:#c9d1d9; margin:0; padding:24px; max-width:800px; margin-inline:auto; }
+  h1 { margin:0 0 4px; color:#58a6ff; }
+  .sub { color:#8b949e; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 280px; gap:16px; }
+  .panel { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; }
+  h2 { margin:0 0 12px; font-size:13px; color:#8b949e; text-transform:uppercase; letter-spacing:0.05em; }
+  .me { color:#3fb950; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  .chat { height:300px; overflow-y:auto; border:1px solid #21262d; border-radius:6px; padding:8px; font-size:13px; }
+  .msg { padding:4px 0; }
+  .msg .from { color:#8b949e; font-family:ui-monospace,Consolas,monospace; font-size:11px; }
+  .msg .self { color:#58a6ff; }
+  .peer { padding:4px 0; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  .peer .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#3fb950; margin-right:6px; }
+  .row { display:flex; gap:8px; margin-top:12px; }
+  input { font:inherit; padding:8px 12px; border-radius:6px; border:1px solid #30363d; background:#0d1117; color:inherit; flex:1; }
+  button { background:#238636; color:#fff; border:0; border-radius:6px; padding:8px 16px; font:inherit; cursor:pointer; }
+  code { background:#21262d; padding:2px 6px; border-radius:4px; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>06 — Presence + Broadcast</h1>
+<p class="sub">
+  Open this page in multiple tabs. Each gets a random ID, joins the
+  <code>_channel_lobby</code> channel, and shows other peers + their chat.
+  Messages are server-wrapped as <code>{type:"broadcast",from,payload}</code>
+  — a peer cannot forge a "server delta".
+</p>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Chat</h2>
+    <div id="chat" class="chat"></div>
+    <div class="row">
+      <input id="msg" placeholder="say something…" />
+      <button id="send">Send</button>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Online <span id="count" class="me"></span></h2>
+    <div id="peers"></div>
+    <p class="me" style="margin-top:12px">you: <span id="me"></span></p>
+  </div>
+</div>
+
+<script>
+const pg = new PgStack();
+const peers = new Map();   // client_id -> { state, lastSeen }
+const myId = crypto.randomUUID().slice(0, 8);
+let chan = null;
+
+document.getElementById('me').textContent = myId;
+
+function appendChat(from, text, self) {
+  const el = document.createElement('div');
+  el.className = 'msg';
+  const f = document.createElement('span');
+  f.className = 'from' + (self ? ' self' : '');
+  f.textContent = from + ': ';
+  const t = document.createTextNode(text);
+  el.appendChild(f);
+  el.appendChild(t);
+  const chat = document.getElementById('chat');
+  chat.appendChild(el);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function renderPeers() {
+  const peersEl = document.getElementById('peers');
+  while (peersEl.firstChild) peersEl.removeChild(peersEl.firstChild);
+  for (const [id, p] of peers) {
+    const row = document.createElement('div');
+    row.className = 'peer';
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    row.appendChild(dot);
+    const txt = document.createTextNode(id + (p.state?.name ? ' (' + p.state.name + ')' : ''));
+    row.appendChild(txt);
+    peersEl.appendChild(row);
+  }
+  document.getElementById('count').textContent = peers.size;
+}
+
+chan = pg.channel('_channel_lobby', {
+  onPresence(msg) {
+    // presence_state: full map. presence_join/leave/update: single client.
+    if (msg.type === 'presence_state' && msg.clients) {
+      peers.clear();
+      for (const [cid, st] of Object.entries(msg.clients)) {
+        if (cid === myId) continue;
+        peers.set(cid, { state: st });
+      }
+    } else if (msg.client_id && msg.client_id !== myId) {
+      if (msg.type === 'presence_leave') peers.delete(msg.client_id);
+      else peers.set(msg.client_id, { state: msg.state || {} });
+    }
+    renderPeers();
+  },
+  onBroadcast(payload, from) {
+    if (from === myId) return;
+    if (payload && typeof payload === 'object' && payload.kind === 'chat') {
+      appendChat(payload.name || from.slice(0, 6), payload.text, false);
+    }
+  },
+  onOpen() {
+    chan.presence({ name: 'guest-' + myId });
+  }
+}, { anon: true });
+
+document.getElementById('send').onclick = send;
+document.getElementById('msg').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+function send() {
+  const text = document.getElementById('msg').value.trim();
+  if (!text || !chan) return;
+  chan.send({ kind: 'chat', name: 'guest-' + myId, text });
+  appendChat('you', text, true);
+  document.getElementById('msg').value = '';
+}
+</script>
+</body>
+</html>

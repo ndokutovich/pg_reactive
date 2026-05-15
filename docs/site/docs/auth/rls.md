@@ -49,7 +49,7 @@ SELECT pgr.subscribe(
   jsonb_build_object('sub', player_id::text));
 ```
 
-Now even if another client learns the channel name `inv_42`, their JWT (`sub=99`) cannot satisfy the audience `{"sub":"42"}` — the proxy returns `403` at WS-connect. This is the "deep fix" for capability leakage on live queries; combine with RLS on the underlying tables for defence in depth (the snapshot is filtered by WHERE at subscribe time, but RLS still applies if `service_role` is not in use). See [Subscribing to Queries](/docs/realtime/subscribe#audience-bound-subscriptions-since-012) for full semantics.
+Now even if another client learns the channel name `inv_42`, their JWT (`sub=99`) cannot satisfy the audience `{"sub":"42"}` — the proxy returns `403` at WS-connect. This is the "deep fix" for capability leakage on live queries; combine with RLS on the underlying tables for defence in depth (the snapshot is filtered by WHERE at subscribe time, but RLS still applies if `service_role` is not in use). See [Subscribing to Queries](../realtime/subscribe.md) for full semantics.
 
 ## Granting access to your tables
 
