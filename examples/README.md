@@ -16,12 +16,40 @@ Brings up: PostgreSQL with `pg_reactive`, the Go proxy, the polyglot
 
 Open <http://127.0.0.1:3000> and click through.
 
-| Service         | Port              | What                         |
-| --------------- | ----------------- | ---------------------------- |
-| `web`           | `3000` (host)     | static examples + nginx      |
-| `proxy`         | `8080`            | pgStack proxy (REST/WS/auth) |
-| `db`            | `15432`           | PostgreSQL + pg_reactive     |
-| `hello-go`      | (internal :9100)  | reference edge function      |
+| Service         | Default port      | Override env  | What                         |
+| --------------- | ----------------- | ------------- | ---------------------------- |
+| `web`           | `3000`            | `WEB_PORT`    | static examples + nginx      |
+| `proxy`         | `8080`            | `PROXY_PORT`  | pgStack proxy (REST/WS/auth) |
+| `db`            | `15432`           | `PG_PORT`     | PostgreSQL + pg_reactive     |
+| `hello-go`      | (internal :9100)  | —             | reference edge function      |
+
+## Running multiple projects on one machine
+
+Set the env vars in `.env` (next to `docker-compose.yml`) to dodge port
+collisions with other projects:
+
+```env
+PG_PORT=25432
+PROXY_PORT=18080
+WEB_PORT=13000
+```
+
+Then bring up normally — Docker compose picks the .env up automatically.
+
+## Production deploy
+
+`docker-compose.prod.yml` is the umbrella override: it resets `ports` so
+nothing binds the host, and exposes the proxy + web as gateway-network
+aliases (`pgr-proxy`, `pgr-web`) for an umbrella nginx to reverse-proxy
+to. Used by `.github/workflows/deploy.yml` against
+`/opt/apps/pg-reactive-src` on the VPS.
+
+```bash
+docker compose \
+  -f examples/docker-compose.yml \
+  -f examples/docker-compose.prod.yml \
+  up -d --build
+```
 
 ## Layout
 

@@ -1,4 +1,4 @@
-name: Deploy Examples to VPS
+name: Deploy to VPS
 
 on:
   push:
@@ -9,13 +9,15 @@ on:
       - 'public/**'
       - 'ext/**'
       - 'docker/**'
+      - 'docs/site/**'
+      - 'studio/**'
       - 'docker-compose.yml'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
@@ -28,10 +30,17 @@ jobs:
           envs: GH_TOKEN
           script_stop: true
           script: |
-            cd ~/pg_reactive/examples
-            git -C .. remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git
-            git -C .. pull origin master
+            cd /opt/apps/pg-reactive-src
+            git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git
+            git fetch origin master
+            git reset --hard origin/master
             docker network create gateway 2>/dev/null || true
-            docker compose build --parallel
-            docker compose up -d
+            docker compose \
+              -f examples/docker-compose.yml \
+              -f examples/docker-compose.prod.yml \
+              build --parallel
+            docker compose \
+              -f examples/docker-compose.yml \
+              -f examples/docker-compose.prod.yml \
+              up -d
             docker image prune -f

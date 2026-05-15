@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      - "127.0.0.1:15432:5432"
+      - "127.0.0.1:${PG_PORT:-15432}:5432"
     command: >
       postgres
         -c shared_preload_libraries=pg_reactive
@@ -36,7 +36,7 @@ services:
       PUBLIC_DIR: /public
       # EDGE_RUNTIME_URL: http://edge-runtime:9000  # uncomment to enable Deno functions
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${PROXY_PORT:-8080}:8080"
     volumes:
       - ./public:/public:ro
     depends_on:
@@ -68,7 +68,7 @@ services:
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"
     ports:
-      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:${PROXY_RUST_PORT:-8081}:8080"
     depends_on:
       db:
         condition: service_healthy

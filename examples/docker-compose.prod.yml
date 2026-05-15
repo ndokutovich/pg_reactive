@@ -1,0 +1,41 @@
+# Production override for the examples stack.
+#
+# Layered on top of examples/docker-compose.yml:
+#
+#   docker compose \
+#     -f examples/docker-compose.yml \
+#     -f examples/docker-compose.prod.yml \
+#     up -d --build
+#
+# Differences from dev base:
+#   * No host ports exposed — traffic enters only through the umbrella
+#     nginx over the shared `gateway` network. Sibling projects on the
+#     same VPS therefore cannot collide on host ports.
+#   * `restart: unless-stopped` for everything that should auto-resume
+#     after VPS reboots.
+#   * `web` is reachable as `pgr-web` over the gateway network — this is
+#     the upstream the umbrella nginx proxy_passes to.
+
+services:
+  db:
+    restart: unless-stopped
+    ports: !reset []
+
+  proxy:
+    restart: unless-stopped
+    ports: !reset []
+    networks:
+      default:
+      gateway:
+        aliases:
+          - pgr-proxy
+
+  hello-go:
+    restart: unless-stopped
+
+  web:
+    restart: unless-stopped
+    ports: !reset []
+    # The default block in docker-compose.yml already declares the
+    # gateway alias `pgr-web`; the override just keeps it without
+    # re-exposing :3000 on the host.
