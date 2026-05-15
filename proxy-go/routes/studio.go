@@ -18,21 +18,21 @@ func StudioRedirect(w http.ResponseWriter, r *http.Request) {
 // routing support).
 //
 // If dir does not exist (e.g. studio was not built), a 404 is returned for
-// all requests so the server starts successfully regardless.
+// all requests so the server starts successfully regardless. Path traversal
+// is blocked by safeStaticPath() — see static.go.
 func StudioSPA(dir string) http.Handler {
+	absDir, _ := filepath.Abs(dir)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Strip the /studio/ prefix so the file server resolves from dir root.
 		path := strings.TrimPrefix(r.URL.Path, "/studio/")
-		if path == "" {
-			path = "index.html"
+		fullPath := safeStaticPath(absDir, path)
+		if fullPath == "" {
+			http.NotFound(w, r)
+			return
 		}
 
-		fullPath := filepath.Join(dir, filepath.FromSlash(path))
-
-		// Check if the file exists; if not, fall back to index.html for SPA routing.
 		if _, err := os.Stat(fullPath); err != nil {
-			// Serve index.html for SPA client-side routes.
-			indexPath := filepath.Join(dir, "index.html")
+			// SPA fallback: serve index.html for any unresolved path.
+			indexPath := filepath.Join(absDir, "index.html")
 			if _, err2 := os.Stat(indexPath); err2 != nil {
 				http.NotFound(w, r)
 				return

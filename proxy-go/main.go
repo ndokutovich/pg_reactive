@@ -49,8 +49,18 @@ func main() {
 	if cfg.EnableSQLEndpoint {
 		log.Warn().Msg("ENABLE_SQL_ENDPOINT=true — /api/sql accepts unauthenticated requests (disable in production!)")
 	}
-	if len(cfg.AllowedOrigins) == 0 {
-		log.Warn().Msg("ALLOWED_ORIGINS not set — CORS is permissive (set to restrict in production)")
+	if cfg.RequireAuthenticatedWS {
+		log.Info().Msg("REQUIRE_AUTHENTICATED_WS=true — anon-key WS subscriptions rejected; JWT required")
+	} else if cfg.JWTSecret != "" && cfg.AnonKey != "" {
+		log.Warn().Msg("REQUIRE_AUTHENTICATED_WS=false — anon key can open live-query WS for any query_id; set true to require JWT")
+	}
+	switch {
+	case len(cfg.AllowedOrigins) > 0:
+		log.Info().Strs("origins", cfg.AllowedOrigins).Msg("CORS / WS origin: restricted")
+	case cfg.AllowPermissiveCORS:
+		log.Warn().Msg("ALLOW_PERMISSIVE_CORS=true with empty ALLOWED_ORIGINS — any origin can connect (DEV ONLY; set ALLOWED_ORIGINS in production)")
+	default:
+		log.Info().Msg("ALLOWED_ORIGINS empty and ALLOW_PERMISSIVE_CORS=false — CORS strict (same-origin only); set one of them to allow cross-origin clients")
 	}
 
 	// Build PG connection pool.
@@ -306,7 +316,7 @@ func buildRouter(state *AppState) http.Handler {
 	if state.Config.GzipLevel > 0 {
 		r.Use(chiMiddleware.Compress(state.Config.GzipLevel))
 	}
-	r.Use(appMiddleware.CORSMiddleware(state.Config.AllowedOrigins))
+	r.Use(appMiddleware.CORSMiddleware(state.Config.AllowedOrigins, state.Config.AllowPermissiveCORS))
 	if state.Config.TLSMode != "off" {
 		r.Use(appMiddleware.HSTSHeaders)
 	}
@@ -338,6 +348,8 @@ func buildRouter(state *AppState) http.Handler {
 			state.WSSemaphore,
 			state.Config.BroadcastCapacity,
 			state.Config.AllowedOrigins,
+			state.Config.AllowPermissiveCORS,
+			state.Config.RequireAuthenticatedWS,
 		))
 
 		// Presence — HTTP endpoint for current presence state
@@ -415,11 +427,16 @@ func buildRouter(state *AppState) http.Handler {
 			},
 		}))
 
-		r.Post("/api/demo", routes.Demo(
-			state.Pool,
-			state.Config.EnableSQLEndpoint,
-			state.Config.ServiceRoleKey,
-		))
+		// /api/demo mutates demo tables — only mount when explicitly enabled
+		// or a service_role key is configured (in which case the handler still
+		// requires that key on every request).
+		if state.Config.EnableDemoEndpoint || state.Config.ServiceRoleKey != "" {
+			r.Post("/api/demo", routes.Demo(
+				state.Pool,
+				state.Config.EnableDemoEndpoint,
+				state.Config.ServiceRoleKey,
+			))
+		}
 
 		r.Post("/api/catalog/refresh", routes.CatalogRefresh(
 			state.Pool,

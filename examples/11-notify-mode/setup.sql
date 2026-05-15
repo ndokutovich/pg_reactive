@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Clean slate (idempotent re-runs in the umbrella every-boot scenario)
+TRUNCATE sensor_readings RESTART IDENTITY CASCADE;
+
 -- Seed some initial readings
 INSERT INTO sensor_readings (sensor_id, temperature, humidity) VALUES
   ('sensor-A', 22.5, 45.0),

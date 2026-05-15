@@ -31,19 +31,17 @@ func PublicSPA(dir string) http.Handler {
 			return
 		}
 
-		// Resolve requested path relative to dir.
+		// Resolve requested path. safeStaticPath enforces the traversal guard
+		// using filepath.Rel rather than HasPrefix (HasPrefix can falsely accept
+		// e.g. /tmp/store-other when absDir is /tmp/store).
 		urlPath := strings.TrimPrefix(r.URL.Path, "/")
-		if urlPath == "" {
-			urlPath = "index.html"
-		}
-
-		fullPath := filepath.Join(absDir, filepath.FromSlash(urlPath))
-
-		// Directory traversal prevention: resolved path must stay within dir.
-		cleanPath := filepath.Clean(fullPath)
-		if !strings.HasPrefix(cleanPath, absDir) {
+		cleanPath := safeStaticPath(absDir, urlPath)
+		if cleanPath == "" {
 			http.NotFound(w, r)
 			return
+		}
+		if urlPath == "" {
+			urlPath = "index.html"
 		}
 
 		// Check if file exists.

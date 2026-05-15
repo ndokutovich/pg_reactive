@@ -214,6 +214,60 @@ func objectPath(r *http.Request) string {
 	return strings.TrimLeft(p, "/")
 }
 
+// safeStoragePath joins root + bucketID + objName and guarantees the resolved
+// absolute path stays inside root. Rejects:
+//   - empty bucketID/objName
+//   - absolute objName (POSIX leading slash, Windows drive letter, UNC)
+//   - any traversal that resolves outside root (.., URL-encoded variants land
+//     here too because chi already URL-decodes the wildcard)
+//
+// Returns the cleaned absolute path, or "" + error suitable for a 400 response.
+func safeStoragePath(root, bucketID, objName string) (string, error) {
+	if root == "" {
+		return "", fmt.Errorf("storage root not configured")
+	}
+	if bucketID == "" || objName == "" {
+		return "", fmt.Errorf("bucket and object are required")
+	}
+	// Reject obvious shapes before letting filepath touch them.
+	if filepath.IsAbs(objName) || strings.HasPrefix(objName, "/") ||
+		strings.HasPrefix(objName, `\`) || strings.Contains(objName, `\\`) {
+		return "", fmt.Errorf("object path must be relative")
+	}
+	// Defence-in-depth: forbid drive letters and NUL even on POSIX builds.
+	if len(objName) >= 2 && objName[1] == ':' {
+		return "", fmt.Errorf("object path must be relative")
+	}
+	if strings.ContainsRune(objName, 0) {
+		return "", fmt.Errorf("object path contains NUL")
+	}
+	// Same rules for bucketID — it is DB-validated today, but treat user input
+	// as user input.
+	if strings.ContainsAny(bucketID, `/\`) || strings.Contains(bucketID, "..") {
+		return "", fmt.Errorf("invalid bucket id")
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("storage root unresolvable: %w", err)
+	}
+	bucketRoot := filepath.Join(absRoot, bucketID)
+	cleaned := filepath.Clean(filepath.Join(bucketRoot, objName))
+
+	// Require cleaned path to live under the bucket's own subtree — escaping
+	// into a sibling bucket is just as bad as escaping the root entirely.
+	rel, err := filepath.Rel(bucketRoot, cleaned)
+	if err != nil {
+		return "", fmt.Errorf("invalid object path")
+	}
+	if rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(rel) {
+		return "", fmt.Errorf("object path escapes bucket")
+	}
+	return cleaned, nil
+}
+
 // objectListItem is a single object in a list response (no data field).
 type objectListItem struct {
 	ID        string `json:"id"`
@@ -367,7 +421,11 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 
 		if d.StorageBackend == "disk" {
 			// Disk backend: write file to filesystem, store NULL for data column
-			diskPath := filepath.Join(d.StorageDir, bucketID, objName)
+			diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName)
+			if perr != nil {
+				writeJSONError(w, http.StatusBadRequest, perr.Error())
+				return
+			}
 			if err := os.MkdirAll(filepath.Dir(diskPath), 0o755); err != nil {
 				log.Error().Err(err).Str("path", diskPath).Msg("storage: mkdir for disk upload")
 				writeJSONError(w, http.StatusInternalServerError, "failed to create storage directory")
@@ -475,7 +533,11 @@ func DownloadObject(d *StorageDeps) http.HandlerFunc {
 
 		// If disk backend, read from filesystem
 		if d.StorageBackend == "disk" && data == nil {
-			diskPath := filepath.Join(d.StorageDir, bucketID, objName)
+			diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName)
+			if perr != nil {
+				writeJSONError(w, http.StatusBadRequest, perr.Error())
+				return
+			}
 			diskData, err := os.ReadFile(diskPath)
 			if err != nil {
 				if os.IsNotExist(err) {
@@ -569,8 +631,9 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 
 		// If disk backend, also remove the file from disk
 		if d.StorageBackend == "disk" {
-			diskPath := filepath.Join(d.StorageDir, bucketID, objName)
-			_ = os.Remove(diskPath) // best-effort; DB record is already gone
+			if diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName); perr == nil {
+				_ = os.Remove(diskPath) // best-effort; DB record is already gone
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")

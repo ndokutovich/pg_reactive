@@ -78,8 +78,11 @@ type Config struct {
 	PGReconnectMaxBackoff time.Duration
 
 	// Feature flags
-	EnableSQLEndpoint bool
-	EmbeddedFunctions bool // enable goja embedded JS functions (always true in embedded runtime)
+	EnableSQLEndpoint   bool
+	EnableDemoEndpoint  bool // mount POST /api/demo (mutates demo tables; off by default)
+	EmbeddedFunctions   bool // enable goja embedded JS functions (always true in embedded runtime)
+	AllowPermissiveCORS  bool // when AllowedOrigins is empty, reflect any Origin (DEV ONLY)
+	RequireAuthenticatedWS bool // when true, anon-key WS subscriptions are rejected (JWT required)
 
 	// CORS
 	AllowedOrigins []string
@@ -188,7 +191,10 @@ func FromEnv() Config {
 	cfg.PGReconnectMaxBackoff = time.Duration(pgBackoff) * time.Second
 
 	cfg.EnableSQLEndpoint = envBoolOrDefault("ENABLE_SQL_ENDPOINT", false)
+	cfg.EnableDemoEndpoint = envBoolOrDefault("ENABLE_DEMO_ENDPOINT", false)
 	cfg.EmbeddedFunctions = envBoolOrDefault("EMBEDDED_FUNCTIONS", true)
+	cfg.AllowPermissiveCORS = envBoolOrDefault("ALLOW_PERMISSIVE_CORS", false)
+	cfg.RequireAuthenticatedWS = envBoolOrDefault("REQUIRE_AUTHENTICATED_WS", false)
 
 	rawOrigins := os.Getenv("ALLOWED_ORIGINS")
 	if rawOrigins != "" {

@@ -27,16 +27,19 @@ Before launching pgStack in production, review the following checklist.
 - [ ] pgStack proxy port `8080` is behind a reverse proxy (Caddy, nginx, Traefik)
 - [ ] HTTPS is enforced — HTTP redirects to HTTPS
 - [ ] `ALLOWED_ORIGINS` is set to your specific domain(s), not empty
+- [ ] `ALLOW_PERMISSIVE_CORS` is `false` or unset (strict CORS by default since 2026-05)
 - [ ] Studio (`/studio/`) is restricted to trusted IPs or protected with additional auth
 - [ ] Configure `TLS_MODE=auto` for automatic HTTPS, or use a reverse proxy with `TLS_MODE=off` (default)
 - [ ] `TRUSTED_PROXIES` is set to the IP(s) of your reverse proxy — prevents rate limit bypass via `X-Forwarded-For` spoofing
 - [ ] HSTS is automatically added when TLS is active (via `TLS_MODE=auto` or `TLS_MODE=manual`)
 - [ ] WebSocket connections validate Origin header against `ALLOWED_ORIGINS`
+- [ ] `REQUIRE_AUTHENTICATED_WS=true` whenever realtime queries return user-scoped data (rejects anon-key WS subscriptions; requires JWT)
 
 ### Database
 
 - [ ] `POSTGRES_HOST_AUTH_METHOD` is `scram-sha-256` (not `trust`)
 - [ ] `ENABLE_SQL_ENDPOINT` is `false`
+- [ ] `ENABLE_DEMO_ENDPOINT` is `false` or unset
 - [ ] RLS is enabled on all user-facing tables
 - [ ] `anon` and `authenticated` roles have only the minimum necessary permissions
 - [ ] Internal auth tables (`pgstack.refresh_tokens`, `pgstack.oauth_sessions`, `pgstack.email_tokens`) have RLS enabled

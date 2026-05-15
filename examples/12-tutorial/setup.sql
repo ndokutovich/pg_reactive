@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS tut_orders (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Clean slate (idempotent: TRUNCATE tut_products CASCADE wipes tut_orders too;
+-- a separate TRUNCATE customers is needed because no FK links it to products)
+TRUNCATE tut_products RESTART IDENTITY CASCADE;
+TRUNCATE tut_customers RESTART IDENTITY CASCADE;
+
 -- Seed data
 INSERT INTO tut_products (name, category, price) VALUES
   ('Laptop',    'electronics', 999.99),

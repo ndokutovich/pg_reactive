@@ -44,6 +44,7 @@ These must be set for production. In development, the compose file provides inse
 | `LISTEN_ADDR` | `0.0.0.0:8080` | Address and port the proxy listens on. |
 | `PROXY_PORT` | `8080` | Host port mapping (for `docker compose`). |
 | `ENABLE_SQL_ENDPOINT` | `false` | Enable `/api/sql` endpoint for raw SQL (dev only). **Never enable in production.** |
+| `ENABLE_DEMO_ENDPOINT` | `false` | Mount `POST /api/demo` (mutates demo tables). Off by default; even when off the route is still mounted if a service_role key is configured (and then requires that key). **Never enable on a public host.** |
 | `PUBLIC_DIR` | *(empty — disabled)* | Directory for serving static files at the root path. When set, files in this directory are served with SPA fallback (unknown paths serve `index.html`). |
 
 ## Auth variables
@@ -107,11 +108,14 @@ Required for email verification and password reset emails. If not set, these fea
 | `SMTP_PASS` | — | SMTP authentication password. |
 | `SMTP_FROM` | `noreply@pgstack.local` | From address for all auth emails. |
 
-## CORS variables
+## CORS / Origin variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALLOWED_ORIGINS` | *(empty — permissive)* | Comma-separated list of allowed CORS origins. Empty allows all origins (development). For production, set explicitly: `https://app.example.com,https://admin.example.com` |
+| `ALLOWED_ORIGINS` | *(empty)* | Comma-separated list of allowed CORS / WebSocket origins. For production set explicitly: `https://app.example.com,https://admin.example.com`. |
+| `ALLOW_PERMISSIVE_CORS` | `false` | When `ALLOWED_ORIGINS` is empty AND this is `true`, the proxy reflects any `Origin` with `Access-Control-Allow-Credentials: true` (the old dev behavior). Default is **strict**: no `Allow-Origin` header is emitted, cross-origin browsers are blocked, same-origin and non-browser clients still work. The proxy logs a loud WARN when this is enabled. **Never enable on a public host.** |
+
+The strict default (since the 2026-05 security audit) prevents a CSRF/exfiltration footgun where any site could call your API with the user's credentials. Pre-audit deployments that relied on the permissive default must either set `ALLOWED_ORIGINS` or `ALLOW_PERMISSIVE_CORS=true` for dev.
 
 ## Reverse proxy variables
 
@@ -133,11 +137,17 @@ Required for email verification and password reset emails. If not set, these fea
 |----------|---------|-------------|
 | `MAX_BATCH_OPERATIONS` | `20` | Maximum operations per `POST /rest/v1/batch` request. |
 
-## Connection limits
+## Realtime / WebSocket variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAX_CONNECTIONS` | `10000` | Maximum concurrent WebSocket connections. Each connection holds a PostgreSQL `LISTEN` session. |
+| `REQUIRE_AUTHENTICATED_WS` | `false` | When `true`, anon-key WS subscriptions are rejected — only real JWTs (`authenticated` or `service_role`) can open `/ws/{query_id}`. Closes the "public anon key + guessable query_id" read vector. Recommended for any production deployment whose live queries return user-scoped data. |
+
+## Connection / body size limits
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `MAX_BODY_SIZE` | `1048576` | Maximum request body size in bytes (default: 1 MB). |
 | `MAX_FILE_SIZE` | `52428800` | Maximum storage upload size in bytes (default: 50 MB). |
 
@@ -225,7 +235,9 @@ Before going to production:
 - [ ] `ANON_KEY` is a strong random value
 - [ ] `SERVICE_ROLE_KEY` is a strong random value, treated like a database password
 - [ ] `ENABLE_SQL_ENDPOINT` is `false` or unset
-- [ ] `ALLOWED_ORIGINS` is set to your specific domain(s)
+- [ ] `ENABLE_DEMO_ENDPOINT` is `false` or unset
+- [ ] `ALLOWED_ORIGINS` is set to your specific domain(s); `ALLOW_PERMISSIVE_CORS` is `false` or unset
+- [ ] `REQUIRE_AUTHENTICATED_WS` is `true` whenever realtime queries return user-scoped data
 - [ ] `SITE_URL` is set to your production URL
 - [ ] `.env` is in `.gitignore` (never committed)
 - [ ] PostgreSQL port (`5432`) is not exposed to the internet

@@ -109,18 +109,23 @@ When both `Authorization` and `apikey` headers are present, the JWT is validated
 | `GET` | `/storage/v1/object/{bucket}/*` | apikey/JWT | Download file |
 | `DELETE` | `/storage/v1/object/{bucket}/*` | apikey/JWT | Delete file |
 
+The object path (`*` wildcard) is validated server-side: requests that traverse out of the bucket (`..`, absolute paths, drive letters, UNC paths, NUL bytes) are rejected with `400 Bad Request` before any filesystem access. This applies to both `STORAGE_BACKEND=database` and `STORAGE_BACKEND=disk`.
+
 ### WebSocket
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/ws/{query_id}` | None/JWT | Live query WebSocket connection |
-| `GET` | `/ws/_presence/{channel}` | None | Get current presence state for a channel |
+| `GET` | `/ws/{query_id}` | anon/JWT (see note) | Live query WebSocket connection |
+| `GET` | `/ws/_presence/{channel}` | anon/JWT | Get current presence state for a channel |
+
+By default the anon key is accepted for live-query subscriptions. Set `REQUIRE_AUTHENTICATED_WS=true` to reject anon-key WS connections and require a real JWT (`authenticated` or `service_role`) — recommended whenever live queries return user-scoped data. The Origin header is validated against `ALLOWED_ORIGINS`; with an empty allow-list, only same-origin and non-browser clients are accepted (strict default) unless `ALLOW_PERMISSIVE_CORS=true` is set for dev.
 
 ### Dev-only
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/api/sql` | service_role | Execute raw SQL (requires `ENABLE_SQL_ENDPOINT=true`) |
+| `POST` | `/api/demo` | service_role / disabled | Mutates demo tables. Only mounted when `ENABLE_DEMO_ENDPOINT=true` OR a `SERVICE_ROLE_KEY` is configured (which it then requires). Off by default. |
 
 ---
 

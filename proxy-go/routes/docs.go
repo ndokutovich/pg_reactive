@@ -14,15 +14,17 @@ func DocsRedirect(w http.ResponseWriter, r *http.Request) {
 }
 
 // DocsSite returns an http.Handler that serves the Docusaurus build output
-// from dir, falling back to index.html for unmatched paths.
+// from dir, falling back to index.html for unmatched paths. Path traversal
+// is blocked by safeStaticPath() — see static.go.
 func DocsSite(dir string) http.Handler {
+	absDir, _ := filepath.Abs(dir)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/docs/")
-		if path == "" {
-			path = "index.html"
+		fullPath := safeStaticPath(absDir, path)
+		if fullPath == "" {
+			http.NotFound(w, r)
+			return
 		}
-
-		fullPath := filepath.Join(dir, filepath.FromSlash(path))
 
 		if _, err := os.Stat(fullPath); err != nil {
 			// Docusaurus generates per-page HTML files. Try appending index.html
@@ -32,8 +34,7 @@ func DocsSite(dir string) http.Handler {
 				http.ServeFile(w, r, dirIndex)
 				return
 			}
-			// Final fallback: root index.html.
-			indexPath := filepath.Join(dir, "index.html")
+			indexPath := filepath.Join(absDir, "index.html")
 			if _, err3 := os.Stat(indexPath); err3 != nil {
 				http.NotFound(w, r)
 				return

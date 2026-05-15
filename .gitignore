@@ -53,3 +53,9 @@ Thumbs.db
 .env.local
 studio/node_modules/
 studio/dist/
+
+# Test tooling (machine-generated, per-run)
+proxy-go/testdata/
+cli/.stryker-tmp/
+.serena/
+.review-last10.diff

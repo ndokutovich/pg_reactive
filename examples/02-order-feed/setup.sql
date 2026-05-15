@@ -19,9 +19,12 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at timestamp DEFAULT now()
 );
 
--- Clean slate (orders first due to FK)
-TRUNCATE orders CASCADE;
-DELETE FROM customers;
+-- Clean slate. TRUNCATE customers RESTART IDENTITY CASCADE wipes both
+-- customers AND orders (via FK cascade) and resets the SERIALs so the
+-- (customer_id, product_id) literals below resolve to the right rows on
+-- every re-run. DELETE alone left a growing sequence and caused FK
+-- violations on the second run.
+TRUNCATE customers RESTART IDENTITY CASCADE;
 
 INSERT INTO customers (name, region) VALUES
   ('Alice Johnson', 'us-east'),

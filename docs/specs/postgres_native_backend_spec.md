@@ -533,6 +533,17 @@ The proxy sets the PostgreSQL role before each request:
 - Query IDs: alphanumeric, underscores, hyphens only (max 64 chars). Validated at C extension level.
 - SQL injection: All REST parameters are bound with explicit `::type` casts from pg_catalog column types.
 - Role whitelist: `SET LOCAL ROLE` only allows known roles (anon, authenticated, service_role) to prevent injection.
+- Storage object paths: rejected before any filesystem access if they contain `..`, an absolute prefix, a Windows drive letter, a UNC path, or a NUL byte — both for `database` and `disk` backends. Each upload/download/delete must resolve under `STORAGE_DIR/{bucketId}/`; sibling-bucket escape is blocked.
+- Static asset paths (`/studio/*`, `/docs/*`, `PublicSPA`): same traversal guard (`safeStaticPath`) — request rejected with 404 before `http.ServeFile` is called.
+
+### 8.6 Realtime Authorization (since 2026-05)
+
+WebSocket subscriptions (`GET /ws/{query_id}`) are authenticated against the `JWT_SECRET` like every other endpoint. Two knobs control how strict that gate is:
+
+- **`REQUIRE_AUTHENTICATED_WS`** (env) — when `true`, anon-key holders are rejected. Only real JWTs (`authenticated` or `service_role`) may open a subscription. Set this whenever live queries return user-scoped data; otherwise a publicly-known anon key plus a guessed `query_id` becomes a read capability on someone else's live data.
+- **Origin validation** — `ALLOWED_ORIGINS` (allow-list) and `ALLOW_PERMISSIVE_CORS` (dev override). With both empty, strict mode is in effect: only same-origin browsers and non-browser clients (no Origin header) can upgrade.
+
+A planned follow-up adds a fourth `audience` parameter to `pgr.subscribe` so the C extension can enforce per-subscription JWT-claim constraints (e.g. a query that returns rows for user X is only deliverable to a JWT with `sub=X`). That work is tracked in the security audit follow-up plan, not yet implemented.
 
 ---
 
@@ -565,8 +576,11 @@ All configuration is via environment variables:
 | `SMTP_PASS` | (none) | SMTP password |
 | `SMTP_FROM` | `noreply@pgstack.local` | Sender email address |
 | `REQUIRE_EMAIL_VERIFICATION` | false | Require email verification before login |
-| `ALLOWED_ORIGINS` | (permissive) | CORS allowed origins (comma-separated) |
+| `ALLOWED_ORIGINS` | (empty) | CORS / WS origin allow-list. Empty = strict (see `ALLOW_PERMISSIVE_CORS`). |
+| `ALLOW_PERMISSIVE_CORS` | false | When `ALLOWED_ORIGINS` is empty and this is true, reflect any Origin with credentials (DEV ONLY). |
+| `REQUIRE_AUTHENTICATED_WS` | false | Reject anon-key WS subscriptions; require JWT for `/ws/{query_id}`. |
 | `ENABLE_SQL_ENDPOINT` | false | Enable `/api/sql` endpoint (dev only) |
+| `ENABLE_DEMO_ENDPOINT` | false | Mount `POST /api/demo` (demo-table mutator). Off by default. |
 | `STUDIO_DIR` | `/studio` | Path to Studio SPA files |
 | `PUBLIC_DIR` | (none) | Path to user static files |
 | `LOG_PRETTY` | 0 | Pretty-print logs (1 = human-readable) |

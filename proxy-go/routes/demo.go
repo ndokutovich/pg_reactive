@@ -11,15 +11,17 @@ import (
 
 // Demo returns an http.HandlerFunc for POST /api/demo.
 //
-// Requires service_role key OR EnableSQLEndpoint=true. Executes one of the
-// predefined demo actions against the demo tables (products, orders, customers,
-// inventory, sensor_readings). Matches the Rust proxy action set exactly.
-func Demo(pool *pgxpool.Pool, enableSQLEndpoint bool, serviceRoleKey string) http.HandlerFunc {
+// Authentication: service_role key required unless EnableDemoEndpoint=true.
+// The route is mounted in main.go only when EnableDemoEndpoint is true OR a
+// service_role key is configured — see main.go for the wiring. Setting
+// ENABLE_DEMO_ENDPOINT=true on a public host is a footgun: it lets any caller
+// mutate the demo tables.
+func Demo(pool *pgxpool.Pool, enableDemoEndpoint bool, serviceRoleKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hasServiceRole := isServiceRole(r, serviceRoleKey)
-		if !enableSQLEndpoint && !hasServiceRole {
+		if !enableDemoEndpoint && !hasServiceRole {
 			writeJSONError(w, http.StatusUnauthorized,
-				"service_role key required for /api/demo (or set ENABLE_SQL_ENDPOINT=true)")
+				"service_role key required for /api/demo (or set ENABLE_DEMO_ENDPOINT=true on dev hosts)")
 			return
 		}
 

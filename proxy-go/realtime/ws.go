@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,9 +26,12 @@ var safeQueryIDRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // WSHandler returns an http.HandlerFunc that upgrades HTTP to WebSocket and
 // manages the live-query connection lifecycle.
 //
-// allowedOrigins controls WebSocket Origin header validation. When empty, all
-// origins are permitted (development mode). When set, only requests whose
-// Origin header matches one of the listed origins are accepted.
+// allowedOrigins controls WebSocket Origin header validation. When set, only
+// requests whose Origin header matches one of the listed origins are accepted.
+// When empty, behavior depends on allowPermissive:
+//   - allowPermissive=true → all origins accepted (DEV ONLY)
+//   - allowPermissive=false → cross-origin upgrades rejected; same-origin and
+//     non-browser clients (no Origin header) accepted.
 //
 // Lifecycle:
 //  1. Resolve auth claims (honours JWT, service_role key, anon key).
@@ -43,14 +47,24 @@ func WSHandler(
 	semaphore chan struct{},
 	broadcastCapacity int,
 	allowedOrigins []string,
+	allowPermissive bool,
+	requireAuthenticated bool,
 ) http.HandlerFunc {
 	upgrader := websocket.Upgrader{
 		HandshakeTimeout: 10 * time.Second,
 		CheckOrigin: func(r *http.Request) bool {
-			if len(allowedOrigins) == 0 {
-				return true // dev mode: allow all origins
-			}
 			origin := r.Header.Get("Origin")
+			if len(allowedOrigins) == 0 {
+				if allowPermissive {
+					return true // explicit dev override
+				}
+				// Strict default: accept only requests with no Origin (CLI / SSR /
+				// server-to-server) or whose Origin matches the Host header (same-origin).
+				if origin == "" {
+					return true
+				}
+				return originMatchesHost(origin, r.Host)
+			}
 			for _, ao := range allowedOrigins {
 				if origin == ao {
 					return true
@@ -81,6 +95,14 @@ func WSHandler(
 				if middleware.ConstantTimeEqExported(authHeader, "Bearer "+cfg.AnonKey) || middleware.ConstantTimeEqExported(apikeyParam, cfg.AnonKey) {
 					isAnon = true
 				}
+			}
+
+			// REQUIRE_AUTHENTICATED_WS: anon-key holders cannot subscribe — only
+			// real JWTs (authenticated or service_role). Closes the "anon key +
+			// guessable query_id = read-anyone's-live-query" vector.
+			if isAnon && requireAuthenticated {
+				writeWSError(w, http.StatusUnauthorized, "authenticated subscription required")
+				return
 			}
 
 			if !isAnon {
@@ -176,18 +198,23 @@ func handleWebSocket(
 		return
 	}
 
-	// Send initial snapshot.
-	if rows, err := fetchSnapshot(pool, queryID); err == nil && len(rows) > 0 {
-		snap, _ := json.Marshal(map[string]any{
-			"query_id": queryID,
-			"inserted": rows,
-			"deleted":  []any{},
-		})
-		if err := safeSend(websocket.TextMessage, snap); err != nil {
-			log.Error().Err(err).Msg("failed to send snapshot")
-			return
+	// Send initial snapshot — skip for notify-mode subscriptions (no _snap_ table exists by design).
+	mode := subscriptionMode(pool, queryID)
+	if mode != "notify" {
+		if rows, err := fetchSnapshot(pool, queryID); err == nil && len(rows) > 0 {
+			snap, _ := json.Marshal(map[string]any{
+				"query_id": queryID,
+				"inserted": rows,
+				"deleted":  []any{},
+			})
+			if err := safeSend(websocket.TextMessage, snap); err != nil {
+				log.Error().Err(err).Msg("failed to send snapshot")
+				return
+			}
+			log.Info().Str("query_id", queryID).Int("rows", len(rows)).Msg("sent initial snapshot")
 		}
-		log.Info().Str("query_id", queryID).Int("rows", len(rows)).Msg("sent initial snapshot")
+	} else {
+		log.Info().Str("query_id", queryID).Msg("notify-mode subscription: skipping snapshot fetch")
 	}
 
 	// Incoming WS message pump (in a goroutine so we can select on it).
@@ -261,6 +288,32 @@ type wsMessage struct {
 	err     error
 }
 
+
+// originMatchesHost returns true when the request's Origin header points at
+// the same host:port as the Host header — i.e. a same-origin WS upgrade. Used
+// as the strict-mode fallback when ALLOWED_ORIGINS is empty.
+func originMatchesHost(origin, host string) bool {
+	// Origin = "scheme://host[:port]"; strip the scheme then compare host parts.
+	i := strings.Index(origin, "://")
+	if i < 0 {
+		return false
+	}
+	return origin[i+3:] == host
+}
+
+// subscriptionMode returns the registered mode ("delta" or "notify") for a query_id.
+// Returns "delta" on any error (safe default — delta-mode fetchSnapshot already swallows
+// missing-table errors gracefully, so a wrong guess only costs one extra query).
+func subscriptionMode(pool *pgxpool.Pool, queryID string) string {
+	var mode string
+	err := pool.QueryRow(context.Background(),
+		`SELECT mode FROM pgr.get_subscriptions() WHERE query_id = $1`, queryID).Scan(&mode)
+	if err != nil {
+		log.Debug().Str("query_id", queryID).Err(err).Msg("subscription mode lookup failed; defaulting to delta")
+		return "delta"
+	}
+	return mode
+}
 
 // fetchSnapshot queries pgr._snap_<queryID> and returns rows as JSON objects.
 func fetchSnapshot(pool *pgxpool.Pool, queryID string) ([]json.RawMessage, error) {

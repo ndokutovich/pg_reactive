@@ -10,8 +10,9 @@ CREATE TABLE IF NOT EXISTS products (
   category text NOT NULL
 );
 
--- Clean slate
-TRUNCATE products CASCADE;
+-- Clean slate (idempotent: RESTART IDENTITY keeps product ids stable across re-runs;
+-- CASCADE wipes dependent FK rows in orders/inventory if those tables already exist)
+TRUNCATE products RESTART IDENTITY CASCADE;
 
 INSERT INTO products (name, price, category) VALUES
   ('Mechanical Keyboard', 79.99, 'electronics'),
