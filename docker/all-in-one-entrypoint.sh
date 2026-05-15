@@ -11,9 +11,9 @@
 #
 # Deployment-specific setup goes in an OPTIONAL post-init hook: if an
 # executable /app/post-init.sh exists, it runs after PostgreSQL is ready and
-# before the proxy starts, with PGHOST/PGUSER/PGPASSWORD/PGDATABASE exported
-# (unix socket, superuser). Use it to apply migrations, run seed/setup SQL,
-# register edge functions, etc.
+# before the proxy starts, with PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE
+# exported (loopback TCP, superuser). Use it to apply migrations, run
+# seed/setup SQL, register edge functions, etc.
 #
 # The SIGTERM/SIGINT trap is registered BEFORE PostgreSQL starts, so initdb
 # and the post-init hook are covered too.
@@ -40,23 +40,31 @@ echo "==> Starting PostgreSQL..."
 docker-entrypoint.sh postgres "$@" 2>&1 | tee "$LOG_DIR/postgres.log" &
 PG_PID=$!
 
-# Wait for the Unix socket first — TCP is not up during initdb.
-echo "==> Waiting for PostgreSQL socket..."
-until pg_isready -h /var/run/postgresql -U "${POSTGRES_USER:-postgres}" -q 2>/dev/null; do
+# Export connection env UP FRONT — both the readiness probe below and the
+# post-init hook need it to authenticate. With --auth-local/host=scram-sha-256
+# psql requires a password; exporting PGPASSWORD only after the probe would
+# deadlock the probe loop forever (the bug this replaces).
+export PGHOST=127.0.0.1
+export PGPORT=5432
+export PGUSER="${POSTGRES_USER:-postgres}"
+export PGPASSWORD="${POSTGRES_PASSWORD:-postgres}"
+export PGDATABASE="${POSTGRES_DB:-postgres}"
+
+# Probe TCP, NOT the unix socket. The stock entrypoint runs a TEMP server on
+# the socket only (listen_addresses='') while it runs initdb +
+# /docker-entrypoint-initdb.d/*. The REAL server has listen_addresses='*', so
+# probing TCP waits for the real server and never races ahead of initdb —
+# which matters when docker/init.sql is large.
+echo "==> Waiting for PostgreSQL (TCP ${PGHOST}:${PGPORT})..."
+until pg_isready -q 2>/dev/null; do
   sleep 0.5
 done
-# Wait for the database itself — docker-entrypoint creates it asynchronously.
-until psql -h /var/run/postgresql -U "${POSTGRES_USER:-postgres}" \
-           -d "${POSTGRES_DB:-postgres}" -c "SELECT 1" &>/dev/null; do
+until psql -c "SELECT 1" &>/dev/null; do
   sleep 0.5
 done
 echo "==> PostgreSQL ready."
 
 # ── Deployment-specific post-init hook (optional) ───────────────────────────
-export PGHOST=/var/run/postgresql
-export PGUSER="${POSTGRES_USER:-postgres}"
-export PGPASSWORD="${POSTGRES_PASSWORD:-postgres}"
-export PGDATABASE="${POSTGRES_DB:-postgres}"
 if [ -x /app/post-init.sh ]; then
   echo "==> Running post-init hook..."
   /app/post-init.sh 2>&1 | tee "$LOG_DIR/post-init.log"
