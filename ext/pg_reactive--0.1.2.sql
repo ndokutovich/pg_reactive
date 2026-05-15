@@ -67,10 +67,15 @@ LANGUAGE C STRICT;
 -- and for trigger_func SPI calls which run SECURITY DEFINER).
 GRANT USAGE ON SCHEMA pgr TO PUBLIC;
 
--- Restrict subscribe/unsubscribe to database owner by default.
--- Grant to specific roles as needed (e.g., the proxy connection role).
+-- Restrict all pgr functions to the database owner by default. Get_subscriptions
+-- and stats are introspection helpers — without REVOKE, anyone with the default
+-- PUBLIC EXECUTE grant could enumerate every subscription's query_id, query_text,
+-- and audience predicate. Grant to specific roles as needed (e.g. the proxy
+-- connection role, or a maintenance / observability role).
 REVOKE EXECUTE ON FUNCTION pgr.subscribe(text, text, text, jsonb) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pgr.unsubscribe(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.unsubscribe(text)                  FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.get_subscriptions()                FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.stats()                            FROM PUBLIC;
 
 -- Function documentation
 COMMENT ON FUNCTION pgr.subscribe(text, text, text, jsonb) IS

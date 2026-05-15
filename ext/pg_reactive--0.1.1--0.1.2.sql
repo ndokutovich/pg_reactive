@@ -40,6 +40,8 @@ CREATE VIEW pgr.subscriptions AS
     SELECT * FROM pgr.get_subscriptions();
 
 REVOKE EXECUTE ON FUNCTION pgr.subscribe(text, text, text, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.get_subscriptions() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.stats()             FROM PUBLIC;
 
 COMMENT ON FUNCTION pgr.subscribe(text, text, text, jsonb) IS
     'Register a live query. Mode: delta (default) = full diff with snapshots, notify = lightweight invalidation. '

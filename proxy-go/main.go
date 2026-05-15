@@ -48,7 +48,7 @@ func main() {
 		log.Warn().Msg("JWT_SECRET not set — authentication disabled")
 	}
 	if cfg.EnableSQLEndpoint {
-		log.Warn().Msg("ENABLE_SQL_ENDPOINT=true — /api/sql accepts unauthenticated requests (disable in production!)")
+		log.Warn().Msg("ENABLE_SQL_ENDPOINT=true — /api/sql endpoint mounted (still requires service_role; never enable on a public host without strict network/auth controls)")
 	}
 	if cfg.RequireAuthenticatedWS {
 		log.Info().Msg("REQUIRE_AUTHENTICATED_WS=true — anon-key WS subscriptions rejected; JWT required")

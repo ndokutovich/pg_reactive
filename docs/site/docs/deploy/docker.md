@@ -185,18 +185,24 @@ proxy:
 
 ## Running migrations in production
 
-Copy your migration files to the server and run them:
+Use the `pgstack` CLI — it understands the `-- migrate:up` / `-- migrate:down` markers in our migration files and runs only the `up` section. **Do NOT** invoke `psql -f migration.sql` directly: psql ignores those markers and would run both sections back-to-back, leaving the database in a roll-forward-then-roll-back state.
+
+From your local machine, pointed at the production database:
 
 ```bash
-scp -r migrations/ user@your-server:~/pgstack/
-docker compose -f docker-compose.prod.yml exec db psql -U postgres -d app -f /migrations/00001_init.sql
+DATABASE_URL=postgres://postgres:password@your-server:5432/app \
+  pgstack migration up
 ```
 
-Or use the CLI from your local machine:
+Or shell into the server first and run the CLI there:
 
 ```bash
-DATABASE_URL=postgres://postgres:password@your-server:5432/app pgstack migration up
+ssh user@your-server
+cd ~/pgstack
+DATABASE_URL=postgres://postgres:password@db:5432/app pgstack migration up
 ```
+
+`pgstack migration` is idempotent: it tracks applied migrations in a metadata table and skips ones that have already run. `pgstack migration down` runs the matching `-- migrate:down` section of the most recent migration; useful for the rare rollback.
 
 ## Updating pgStack
 

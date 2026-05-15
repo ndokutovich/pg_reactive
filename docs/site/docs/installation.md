@@ -116,7 +116,9 @@ Required for email verification and magic links.
 | `ACCESS_TOKEN_EXPIRY_SECS` | `3600` | Access token lifetime in seconds (1 hour). |
 | `REFRESH_TOKEN_EXPIRY_DAYS` | `30` | Refresh token lifetime in days. |
 | `MAX_BODY_SIZE` | `1048576` | Maximum request body size in bytes (1 MB). |
-| `ALLOWED_ORIGINS` | `` (permissive) | CORS allowed origins, comma-separated. Example: `https://app.example.com`. Empty = all origins allowed (dev only). |
+| `ALLOWED_ORIGINS` | `` (strict) | CORS / WebSocket origin allow-list, comma-separated. Example: `https://app.example.com,https://admin.example.com`. Empty = strict: no `Access-Control-Allow-Origin` header is emitted; cross-origin browsers are blocked; same-origin and non-browser clients still work. |
+| `ALLOW_PERMISSIVE_CORS` | `false` | When `ALLOWED_ORIGINS` is empty AND this is `true`, the proxy reflects any Origin with `Access-Control-Allow-Credentials: true` (the old dev behavior). **Never enable on a public host.** |
+| `REQUIRE_AUTHENTICATED_WS` | `false` | When `true`, anon-key WebSocket subscriptions are rejected — only real JWTs (`authenticated` / `service_role`) may open `/ws/{query_id}`. Recommended whenever live queries return user-scoped data. |
 | `READ_TIMEOUT` | `30` | HTTP read timeout in seconds. |
 | `WRITE_TIMEOUT` | `60` | HTTP write timeout in seconds. |
 | `IDLE_TIMEOUT` | `120` | HTTP keep-alive idle timeout in seconds. |

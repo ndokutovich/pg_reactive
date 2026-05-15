@@ -24,6 +24,12 @@ services:
   proxy:
     restart: unless-stopped
     ports: !reset []
+    environment:
+      # Production hardening: anon-key holders cannot open live-query
+      # WebSockets — only real JWTs (authenticated or service_role). The
+      # dev base keeps this off so public live queries in tutorials work
+      # without auth; in prod we want defence-in-depth.
+      REQUIRE_AUTHENTICATED_WS: "true"
     networks:
       default:
       gateway:
