@@ -18,11 +18,14 @@ package functions
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
+
+	"pgstack-proxy-go/secrets"
 )
 
 // FunctionMeta describes a single edge function's configuration.
@@ -35,19 +38,33 @@ type FunctionMeta struct {
 	// UpstreamURL is the per-function HTTP target for runtime="http". Empty
 	// for every other runtime.
 	UpstreamURL string `json:"upstream_url,omitempty"`
+	// Env carries decrypted environment variables to pass to the runtime at
+	// invocation time. Loaded from pgstack.edge_functions.env_vars_encrypted
+	// (AES-256-GCM ciphertext) on Refresh; never serialised back. Nil/empty
+	// when the function has no env vars or SECRETS_ENCRYPTION_KEY is unset.
+	Env map[string]string `json:"-"`
 }
 
 // FunctionsCatalog is a thread-safe, in-memory cache of edge function metadata.
 // Call Refresh to (re)load from the database. Get and List are safe for
 // concurrent read access at any time.
 type FunctionsCatalog struct {
-	mu    sync.RWMutex
-	funcs map[string]*FunctionMeta
+	mu       sync.RWMutex
+	funcs    map[string]*FunctionMeta
+	secrets  *secrets.Box // optional; nil when SECRETS_ENCRYPTION_KEY is unset
 }
 
 // NewFunctionsCatalog returns an empty, ready-to-use catalog.
-func NewFunctionsCatalog() *FunctionsCatalog {
-	return &FunctionsCatalog{funcs: make(map[string]*FunctionMeta)}
+//
+// secretBox is used to decrypt env_vars_encrypted from pgstack.edge_functions.
+// Pass nil when SECRETS_ENCRYPTION_KEY is not configured — functions whose row
+// has a non-NULL env_vars_encrypted will be loaded WITHOUT Env (with a WARN
+// log), so misconfiguration is loud but not fatal.
+func NewFunctionsCatalog(secretBox *secrets.Box) *FunctionsCatalog {
+	return &FunctionsCatalog{
+		funcs:   make(map[string]*FunctionMeta),
+		secrets: secretBox,
+	}
 }
 
 // Refresh loads (or reloads) active edge function metadata from the
@@ -63,7 +80,8 @@ func (c *FunctionsCatalog) Refresh(ctx context.Context, pool *pgxpool.Pool) erro
 	const q = `
 SELECT name, runtime, verify_jwt, status,
        COALESCE(code, '')         AS code,
-       COALESCE(upstream_url, '') AS upstream_url
+       COALESCE(upstream_url, '') AS upstream_url,
+       env_vars_encrypted
 FROM pgstack.edge_functions
 WHERE status = 'active'`
 
@@ -76,8 +94,26 @@ WHERE status = 'active'`
 	funcs := make(map[string]*FunctionMeta)
 	for rows.Next() {
 		var fm FunctionMeta
-		if err := rows.Scan(&fm.Name, &fm.Runtime, &fm.VerifyJWT, &fm.Status, &fm.Code, &fm.UpstreamURL); err != nil {
+		var envEncrypted []byte
+		if err := rows.Scan(&fm.Name, &fm.Runtime, &fm.VerifyJWT, &fm.Status, &fm.Code, &fm.UpstreamURL, &envEncrypted); err != nil {
 			return fmt.Errorf("functions catalog refresh: scan: %w", err)
+		}
+		// Decrypt env vars when present. A nil secrets.Box (no key configured)
+		// causes ErrNoKey on non-empty input — we surface this loudly so the
+		// operator sees the misconfiguration but the function still loads
+		// without its env (preferable to silently failing all invocations).
+		if len(envEncrypted) > 0 {
+			plain, derr := c.secrets.Decrypt(envEncrypted)
+			if derr != nil {
+				log.Warn().Err(derr).Str("fn", fm.Name).
+					Msg("functions: env_vars_encrypted present but cannot be decrypted; function loaded without env")
+			} else if len(plain) > 0 {
+				if uerr := json.Unmarshal(plain, &fm.Env); uerr != nil {
+					log.Warn().Err(uerr).Str("fn", fm.Name).
+						Msg("functions: env_vars decrypted but not valid JSON object; ignored")
+					fm.Env = nil
+				}
+			}
 		}
 		// An http-runtime function with an unsafe or missing upstream_url is
 		// dropped from the catalog here — it becomes a clean 404 rather than

@@ -254,22 +254,7 @@ func handleWebSocket(
 			}
 			switch msg.msgType {
 			case websocket.TextMessage:
-				// Check if this is a presence message
-				var typed struct {
-					Type     string          `json:"type"`
-					State    json.RawMessage `json:"state"`
-					ClientID string          `json:"client_id"`
-				}
-				if err := json.Unmarshal(msg.data, &typed); err == nil && typed.Type == "presence" {
-					cid := typed.ClientID
-					if cid == "" {
-						cid = clientID
-					}
-					hub.PresenceUpdate(queryID, cid, typed.State)
-				} else {
-					// Relay client message to all other subscribers of the same channel.
-					hub.Broadcast(queryID, string(msg.data))
-				}
+				dispatchClientMessage(hub, queryID, clientID, msg.data)
 			case websocket.CloseMessage:
 				log.Info().Str("query_id", queryID).Msg("WebSocket disconnected (close frame)")
 				return
@@ -288,6 +273,53 @@ type wsMessage struct {
 	err     error
 }
 
+
+// dispatchClientMessage routes a text frame received from a WS client.
+//
+// Server-deltas flow from the PG NOTIFY listener via Hub.Broadcast — clients
+// must not be able to forge those events. We accept exactly two client
+// message types:
+//
+//   - {"type":"presence","state":{...}}     → presence update (peer-state sync)
+//   - {"type":"broadcast","payload":<any>}  → peer-to-peer broadcast, wrapped
+//     server-side as {"type":"broadcast","from":<clientID>,"payload":<orig>}
+//     so receivers cannot confuse it with a server delta.
+//
+// Anything else (unparseable, missing/unknown type, raw "{inserted:[...]}"
+// shapes) is dropped at debug level. Extracted so the policy is testable
+// without spinning up a real WebSocket.
+func dispatchClientMessage(hub *Hub, queryID, clientID string, data []byte) {
+	var typed struct {
+		Type     string          `json:"type"`
+		State    json.RawMessage `json:"state"`
+		Payload  json.RawMessage `json:"payload"`
+		ClientID string          `json:"client_id"`
+	}
+	if err := json.Unmarshal(data, &typed); err != nil {
+		log.Debug().Str("query_id", queryID).Str("client_id", clientID).
+			Int("bytes", len(data)).Msg("dropped client message: malformed JSON")
+		return
+	}
+	switch typed.Type {
+	case "presence":
+		cid := typed.ClientID
+		if cid == "" {
+			cid = clientID
+		}
+		hub.PresenceUpdate(queryID, cid, typed.State)
+	case "broadcast":
+		envelope, _ := json.Marshal(map[string]any{
+			"type":    "broadcast",
+			"from":    clientID,
+			"payload": typed.Payload,
+		})
+		hub.Broadcast(queryID, string(envelope))
+	default:
+		log.Debug().Str("query_id", queryID).Str("client_id", clientID).
+			Str("type", typed.Type).Int("bytes", len(data)).
+			Msg("dropped client message: unknown type")
+	}
+}
 
 // originMatchesHost returns true when the request's Origin header points at
 // the same host:port as the Host header — i.e. a same-origin WS upgrade. Used

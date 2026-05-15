@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+GRANT SELECT, INSERT, UPDATE, DELETE ON sensor_readings TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE sensor_readings_id_seq TO anon, authenticated;
+
 -- Clean slate (idempotent re-runs in the umbrella every-boot scenario)
 TRUNCATE sensor_readings RESTART IDENTITY CASCADE;
 

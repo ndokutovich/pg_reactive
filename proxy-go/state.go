@@ -8,6 +8,7 @@ import (
 	"pgstack-proxy-go/middleware"
 	"pgstack-proxy-go/realtime"
 	"pgstack-proxy-go/rest"
+	"pgstack-proxy-go/secrets"
 )
 
 // AppState is the shared application state injected into all HTTP handlers.
@@ -40,10 +41,16 @@ type AppState struct {
 
 	// WebhookManager manages webhook delivery from NOTIFY payloads.
 	WebhookManager *realtime.WebhookManager
+
+	// SecretBox decrypts at-rest secrets (edge function env vars).
+	// Nil when SECRETS_ENCRYPTION_KEY is unset — features that need it log
+	// loudly and degrade gracefully rather than crashing the proxy.
+	SecretBox *secrets.Box
 }
 
-// NewAppState constructs AppState from a loaded Config and pool.
-func NewAppState(cfg Config, pool *pgxpool.Pool) *AppState {
+// NewAppState constructs AppState from a loaded Config and pool. secretBox
+// may be nil when SECRETS_ENCRYPTION_KEY is unset.
+func NewAppState(cfg Config, pool *pgxpool.Pool, secretBox *secrets.Box) *AppState {
 	s := &AppState{
 		Config:         cfg,
 		Pool:           pool,
@@ -53,6 +60,7 @@ func NewAppState(cfg Config, pool *pgxpool.Pool) *AppState {
 		Mailer:         NewMailer(cfg),
 		Catalog:        rest.NewCatalog(),
 		WebhookManager: realtime.NewWebhookManager(pool),
+		SecretBox:      secretBox,
 	}
 	return s
 }

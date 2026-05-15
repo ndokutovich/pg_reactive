@@ -277,10 +277,20 @@ export class RealtimeChannel {
     return this;
   }
 
-  /** Send a payload to the channel. No-op if the socket is not yet open. */
+  /**
+   * Broadcast a payload to all peers subscribed to this channel.
+   *
+   * Wire format: `{type:"broadcast", payload}`. The server re-wraps with
+   * `from: <peer-id>` before fanning out, so receivers can distinguish a
+   * peer broadcast (`type:"broadcast"`) from a server-side live-query delta
+   * (`{inserted,deleted}`) or a presence event (`type:"presence_*"`) and
+   * cannot be tricked into accepting a forged delta from a hostile peer.
+   *
+   * No-op if the socket is not yet open.
+   */
   send(payload: unknown): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ channel: this.channelName, payload }));
+      this.ws.send(JSON.stringify({ type: 'broadcast', payload }));
     }
   }
 

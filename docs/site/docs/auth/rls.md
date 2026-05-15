@@ -35,6 +35,37 @@ Always enable RLS before writing policies. A table with RLS enabled but no polic
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ```
 
+## Granting access to your tables
+
+Since the 2026-05 security audit, pgStack does NOT grant `anon` or `authenticated` blanket access to new tables in `public`. Every application table must declare its grants explicitly — preferably alongside enabling RLS:
+
+```sql
+-- Create the table
+CREATE TABLE orders (
+  id serial PRIMARY KEY,
+  customer_id uuid NOT NULL,
+  total numeric(10,2) NOT NULL
+);
+
+-- Grant the role privileges your RLS policies will further restrict.
+-- Without these GRANTs, RLS policies never get a chance to run — anon and
+-- authenticated hit "permission denied for table orders" first.
+GRANT SELECT, INSERT, UPDATE, DELETE ON orders TO authenticated;
+GRANT USAGE, SELECT ON SEQUENCE orders_id_seq TO authenticated;
+
+-- Now enable RLS and write policies.
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY own_orders ON orders
+  FOR ALL TO authenticated
+  USING (customer_id = auth.uid())
+  WITH CHECK (customer_id = auth.uid());
+```
+
+`service_role` is unaffected — proxy internals (catalog refresh, batch operations, migrations) keep blanket access. If you want anon read access, grant `SELECT` explicitly and write a permissive policy.
+
+The strict default replaces the old `GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon` + `GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated` plus `ALTER DEFAULT PRIVILEGES` chain. That was a footgun: every `CREATE TABLE` in a migration silently exposed the table through REST until RLS was added. Upgrading installs run `migrations/20260515200000_revoke_blanket_grants.sql` once to drop the legacy grants.
+
 ## Helper functions
 
 pgStack installs these helper functions for use in RLS policies:

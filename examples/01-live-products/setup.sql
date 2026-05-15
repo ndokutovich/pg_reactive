@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS products (
   category text NOT NULL
 );
 
+-- Explicit, per-table grants (since 2026-05 audit: no blanket public-schema grants).
+-- Real apps should enable RLS and grant per policy; this is a demo fixture.
+GRANT SELECT, INSERT, UPDATE, DELETE ON products TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE products_id_seq TO anon, authenticated;
+
 -- Clean slate (idempotent: RESTART IDENTITY keeps product ids stable across re-runs;
 -- CASCADE wipes dependent FK rows in orders/inventory if those tables already exist)
 TRUNCATE products RESTART IDENTITY CASCADE;

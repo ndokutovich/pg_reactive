@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS inventory (
   UNIQUE(product_id)
 );
 
+GRANT SELECT, INSERT, UPDATE, DELETE ON inventory TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE inventory_id_seq TO anon, authenticated;
+
 -- Seed inventory for all products (skip if already populated)
 INSERT INTO inventory (product_id, stock_qty, reorder_point, warehouse)
 SELECT p.id,

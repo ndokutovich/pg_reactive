@@ -196,7 +196,9 @@ A general-purpose WebSocket channel for pub/sub messaging:
 const ch = client.channel('presence');
 
 ch.subscribe((event, data) => {
-  console.log(event, data);
+  if (event === 'message' && data?.type === 'broadcast') {
+    console.log('from peer', data.from, data.payload);
+  }
 });
 
 ch.send({ user: 'alice', status: 'online' });
@@ -205,12 +207,16 @@ ch.send({ user: 'alice', status: 'online' });
 ch.unsubscribe();
 ```
 
+### Wire format
+
+`channel.send(payload)` emits `{"type":"broadcast","payload":<your data>}` on the wire. The server wraps it as `{"type":"broadcast","from":"<peer-id>","payload":<your data>}` before fanning out to other subscribers — so receivers can always distinguish a peer broadcast from a server-side live-query delta (`{inserted,deleted}`) or presence event (`type:"presence_*"`). Any other client-originated message type (including unstructured payloads) is dropped server-side, which closes the "hostile peer forges a delta" injection vector.
+
 ### Methods
 
 | Method | Description |
 |--------|-------------|
 | `.subscribe(callback)` | Register a callback and open the connection |
-| `.send(payload)` | Send a JSON payload to the channel |
+| `.send(payload)` | Broadcast a JSON payload to channel peers (server wraps with `from`) |
 | `.unsubscribe()` | Close the connection and remove all callbacks |
 
 ### Channel events
@@ -219,7 +225,7 @@ ch.unsubscribe();
 |-------|-------------|
 | `connected` | WebSocket opened |
 | `disconnected` | WebSocket closed |
-| `message` | Message received from the channel |
+| `message` | Frame received. Inspect `data.type` to classify: `broadcast` (peer), `presence_*` (presence), or absence of `type` + `inserted`/`deleted` (server delta). |
 | `error` | Connection error |
 
 ## Full example

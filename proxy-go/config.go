@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"pgstack-proxy-go/secrets"
 )
 
 // Config holds all proxy configuration loaded from environment variables.
@@ -81,8 +83,14 @@ type Config struct {
 	EnableSQLEndpoint   bool
 	EnableDemoEndpoint  bool // mount POST /api/demo (mutates demo tables; off by default)
 	EmbeddedFunctions   bool // enable goja embedded JS functions (always true in embedded runtime)
-	AllowPermissiveCORS  bool // when AllowedOrigins is empty, reflect any Origin (DEV ONLY)
+	AllowPermissiveCORS    bool // when AllowedOrigins is empty, reflect any Origin (DEV ONLY)
 	RequireAuthenticatedWS bool // when true, anon-key WS subscriptions are rejected (JWT required)
+
+	// SecretsEncryptionKey is the raw 32-byte AES-256 key used to encrypt
+	// at-rest credentials (edge function env vars). Nil/empty when
+	// SECRETS_ENCRYPTION_KEY env is unset. Sourced via secrets.DecodeKey from
+	// the base64 env value.
+	SecretsEncryptionKey []byte
 
 	// CORS
 	AllowedOrigins []string
@@ -195,6 +203,17 @@ func FromEnv() Config {
 	cfg.EmbeddedFunctions = envBoolOrDefault("EMBEDDED_FUNCTIONS", true)
 	cfg.AllowPermissiveCORS = envBoolOrDefault("ALLOW_PERMISSIVE_CORS", false)
 	cfg.RequireAuthenticatedWS = envBoolOrDefault("REQUIRE_AUTHENTICATED_WS", false)
+
+	if rawKey := os.Getenv("SECRETS_ENCRYPTION_KEY"); rawKey != "" {
+		key, err := secrets.DecodeKey(rawKey)
+		if err != nil {
+			// Misconfigured key is fatal — silently dropping it would mean
+			// at-rest secrets degrade to "unencrypted" without anyone noticing.
+			fmt.Fprintf(os.Stderr, "FATAL: SECRETS_ENCRYPTION_KEY invalid: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.SecretsEncryptionKey = key
+	}
 
 	rawOrigins := os.Getenv("ALLOWED_ORIGINS")
 	if rawOrigins != "" {

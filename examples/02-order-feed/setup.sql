@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at timestamp DEFAULT now()
 );
 
+-- Explicit per-table grants. Real apps should layer RLS on top.
+GRANT SELECT, INSERT, UPDATE, DELETE ON customers, orders TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE customers_id_seq, orders_id_seq TO anon, authenticated;
+
 -- Clean slate. TRUNCATE customers RESTART IDENTITY CASCADE wipes both
 -- customers AND orders (via FK cascade) and resets the SERIALs so the
 -- (customer_id, product_id) literals below resolve to the right rows on

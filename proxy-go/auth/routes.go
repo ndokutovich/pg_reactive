@@ -53,9 +53,9 @@ func generateTokenPair(ctx context.Context, d *Deps, userID, email, role string)
 	expiresAt := time.Now().UTC().Add(time.Duration(d.RefreshTokenExpiryDays) * 24 * time.Hour)
 
 	_, err = d.Pool.Exec(ctx, `
-		INSERT INTO pgstack.refresh_tokens (user_id, token, family_id, expires_at)
+		INSERT INTO pgstack.refresh_tokens (user_id, token_hash, family_id, expires_at)
 		VALUES ($1, $2, $3, $4)
-	`, userID, refresh, familyID, expiresAt)
+	`, userID, HashToken(refresh), familyID, expiresAt)
 	if err != nil {
 		return "", "", fmt.Errorf("persist refresh token: %w", err)
 	}
@@ -131,9 +131,9 @@ func Signup(d *Deps) http.HandlerFunc {
 			tok := generateHexToken()
 			exp := time.Now().UTC().Add(24 * time.Hour)
 			_, err = d.Pool.Exec(ctx, `
-				INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+				INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
 				VALUES ($1, $2, 'email_verification', $3)
-			`, userID, tok, exp)
+			`, userID, HashToken(tok), exp)
 			if err != nil {
 				log.Error().Err(err).Msg("create email verification token")
 			}
@@ -303,8 +303,8 @@ func handleRefreshGrant(w http.ResponseWriter, r *http.Request, ctx context.Cont
 	err := d.Pool.QueryRow(ctx, `
 		SELECT id, user_id, family_id, revoked, expires_at
 		FROM pgstack.refresh_tokens
-		WHERE token = $1
-	`, refreshToken).Scan(&tokenID, &userID, &familyID, &revoked, &expiresAt)
+		WHERE token_hash = $1
+	`, HashToken(refreshToken)).Scan(&tokenID, &userID, &familyID, &revoked, &expiresAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusUnauthorized, "invalid refresh token")
@@ -352,9 +352,9 @@ func handleRefreshGrant(w http.ResponseWriter, r *http.Request, ctx context.Cont
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO pgstack.refresh_tokens (user_id, token, family_id, expires_at)
+		INSERT INTO pgstack.refresh_tokens (user_id, token_hash, family_id, expires_at)
 		VALUES ($1, $2, $3, $4)
-	`, userID, newRefresh, familyID, newExpiry)
+	`, userID, HashToken(newRefresh), familyID, newExpiry)
 	if err != nil {
 		log.Error().Err(err).Msg("insert rotated refresh token")
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -564,9 +564,9 @@ func Recover(d *Deps) http.HandlerFunc {
 		tok := generateHexToken()
 		exp := time.Now().UTC().Add(1 * time.Hour)
 		_, err = d.Pool.Exec(ctx, `
-			INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+			INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
 			VALUES ($1, $2, 'recovery', $3)
-		`, userID, tok, exp)
+		`, userID, HashToken(tok), exp)
 		if err != nil {
 			log.Error().Err(err).Msg("create recovery token")
 			writeJSON(w, http.StatusOK, map[string]string{"message": safeMsg})
@@ -619,8 +619,8 @@ func RecoverConfirm(d *Deps) http.HandlerFunc {
 		err := d.Pool.QueryRow(ctx, `
 			SELECT id, user_id, used_at, expires_at
 			FROM pgstack.email_tokens
-			WHERE token = $1 AND token_type = 'recovery'
-		`, body.Token).Scan(&tokenID, &userID, &usedAt, &expiresAt)
+			WHERE token_hash = $1 AND token_type = 'recovery'
+		`, HashToken(body.Token)).Scan(&tokenID, &userID, &usedAt, &expiresAt)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				writeError(w, http.StatusBadRequest, "invalid or expired token")
@@ -720,9 +720,9 @@ func Magiclink(d *Deps) http.HandlerFunc {
 		tok := generateHexToken()
 		exp := time.Now().UTC().Add(1 * time.Hour)
 		_, err = d.Pool.Exec(ctx, `
-			INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+			INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
 			VALUES ($1, $2, 'magiclink', $3)
-		`, userID, tok, exp)
+		`, userID, HashToken(tok), exp)
 		if err != nil {
 			log.Error().Err(err).Msg("create magiclink token")
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -760,8 +760,8 @@ func MagiclinkVerify(d *Deps) http.HandlerFunc {
 		err := d.Pool.QueryRow(ctx, `
 			SELECT id, user_id, used_at, expires_at
 			FROM pgstack.email_tokens
-			WHERE token = $1 AND token_type = 'magiclink'
-		`, tok).Scan(&tokenID, &userID, &usedAt, &expiresAt)
+			WHERE token_hash = $1 AND token_type = 'magiclink'
+		`, HashToken(tok)).Scan(&tokenID, &userID, &usedAt, &expiresAt)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				writeError(w, http.StatusBadRequest, "invalid or expired token")
@@ -855,8 +855,8 @@ func VerifyEmail(d *Deps) http.HandlerFunc {
 		err := d.Pool.QueryRow(ctx, `
 			SELECT id, user_id, used_at, expires_at
 			FROM pgstack.email_tokens
-			WHERE token = $1 AND token_type = 'email_verification'
-		`, tok).Scan(&tokenID, &userID, &usedAt, &expiresAt)
+			WHERE token_hash = $1 AND token_type = 'email_verification'
+		`, HashToken(tok)).Scan(&tokenID, &userID, &usedAt, &expiresAt)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				writeError(w, http.StatusBadRequest, "invalid or expired token")

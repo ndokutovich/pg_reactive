@@ -23,6 +23,7 @@ import (
 	"pgstack-proxy-go/realtime"
 	"pgstack-proxy-go/rest"
 	"pgstack-proxy-go/routes"
+	"pgstack-proxy-go/secrets"
 )
 
 func main() {
@@ -71,7 +72,20 @@ func main() {
 	defer pool.Close()
 	log.Info().Msg("PG connection pool ready")
 
-	state := NewAppState(cfg, pool)
+	// Initialize secret box from SECRETS_ENCRYPTION_KEY env. Nil when unset —
+	// features that need encryption (edge function env vars) degrade with a
+	// loud WARN at use-time rather than refusing to boot.
+	secretBox, err := secrets.New(cfg.SecretsEncryptionKey)
+	if err != nil {
+		log.Fatal().Err(err).Msg("SECRETS_ENCRYPTION_KEY invalid")
+	}
+	if secretBox == nil {
+		log.Info().Msg("SECRETS_ENCRYPTION_KEY unset — edge function env vars cannot be decrypted; features that need at-rest secret encryption will degrade")
+	} else {
+		log.Info().Msg("SECRETS_ENCRYPTION_KEY loaded — at-rest secret encryption enabled")
+	}
+
+	state := NewAppState(cfg, pool, secretBox)
 
 	// Start rate limiter cleanup goroutine (H5: prevent unbounded memory growth).
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
@@ -472,7 +486,7 @@ func buildRouter(state *AppState) http.Handler {
 	})
 
 	// ── Edge Functions routes (/functions/v1/) ───────────────────────────
-	fnCatalog := functions.NewFunctionsCatalog()
+	fnCatalog := functions.NewFunctionsCatalog(state.SecretBox)
 	if err := fnCatalog.Refresh(context.Background(), state.Pool); err != nil {
 		log.Warn().Err(err).Msg("initial edge functions catalog load failed — functions may return 404 until refreshed")
 	} else {

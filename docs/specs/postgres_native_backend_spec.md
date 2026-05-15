@@ -535,6 +535,20 @@ The proxy sets the PostgreSQL role before each request:
 - Role whitelist: `SET LOCAL ROLE` only allows known roles (anon, authenticated, service_role) to prevent injection.
 - Storage object paths: rejected before any filesystem access if they contain `..`, an absolute prefix, a Windows drive letter, a UNC path, or a NUL byte — both for `database` and `disk` backends. Each upload/download/delete must resolve under `STORAGE_DIR/{bucketId}/`; sibling-bucket escape is blocked.
 - Static asset paths (`/studio/*`, `/docs/*`, `PublicSPA`): same traversal guard (`safeStaticPath`) — request rejected with 404 before `http.ServeFile` is called.
+- Default grants on `public` are scoped (since 2026-05): `anon` and `authenticated` get NO blanket `ALL TABLES IN SCHEMA public` access and NO future-table inheritance via `ALTER DEFAULT PRIVILEGES`. Each application table must declare its own grants (and should enable RLS). The shipped demo / e2e fixtures declare their grants explicitly. `service_role` retains blanket access for proxy internals. Existing deployments upgrade via `migrations/20260515200000_revoke_blanket_grants.sql`.
+- At-rest credentials are not stored as plaintext (since 2026-05, finding F6):
+    - `pgstack.refresh_tokens.token_hash` and `pgstack.email_tokens.token_hash` hold SHA-256 hex digests of the original tokens. The plaintext is returned to the client (or emailed) exactly once and never persisted. A stolen DB dump no longer yields valid session credentials.
+    - `pgstack.edge_functions.env_vars_encrypted` is AES-256-GCM ciphertext under `SECRETS_ENCRYPTION_KEY` (32 random bytes, base64). The wire format is `[version=0x01][12-byte nonce][ciphertext+GCM tag]`. The old plaintext `env_vars JSONB` column has been removed.
+    - Existing installs upgrade via `migrations/20260515210000_hash_tokens_encrypt_envvars.sql`; the migration cannot reverse-derive plaintext from missing data, so it force-rotates all refresh tokens (every user re-authenticates) and clears unused email tokens.
+
+### 8.7 WebSocket message scope (since 2026-05)
+
+Client-to-server WS frames are restricted to a typed whitelist:
+
+- `{"type":"presence","state":{...}}` → presence-state update for the channel.
+- `{"type":"broadcast","payload":<any>}` → peer-to-peer broadcast. The server rewraps as `{"type":"broadcast","from":<peer-id>,"payload":<original>}` before fanning out, so receivers cannot confuse a peer message with a server-generated live-query delta.
+
+Everything else is dropped at debug level. Server-side live-query deltas flow exclusively from the PG `NOTIFY` listener; no client frame can inject events into that stream.
 
 ### 8.6 Realtime Authorization (since 2026-05)
 
