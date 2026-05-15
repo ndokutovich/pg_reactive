@@ -293,8 +293,10 @@ When a WebSocket client connects, the proxy sends:
 ### 9.1 Functions
 
 ```sql
--- Subscribe to a live query (delta or notify mode)
-pgr.subscribe(query_id text, query text, mode text DEFAULT 'delta')
+-- Subscribe to a live query (delta or notify mode, optional audience)
+pgr.subscribe(query_id text, query text,
+              mode text DEFAULT 'delta',
+              audience jsonb DEFAULT NULL)
   RETURNS jsonb
 
 -- Unsubscribe from a live query
@@ -303,12 +305,38 @@ pgr.unsubscribe(query_id text)
 
 -- List all active subscriptions
 pgr.get_subscriptions()
-  RETURNS SETOF record(query_id, query_text, num_tables, subscribed_at, invalidation_count, mode)
+  RETURNS SETOF record(query_id, query_text, num_tables, subscribed_at,
+                       invalidation_count, mode, audience)
 
 -- Extension-wide statistics
 pgr.stats()
   RETURNS SETOF record(metric, value)
 ```
+
+#### audience (since 0.1.2)
+
+The optional `audience` argument is a JSON object enforced by the proxy at WebSocket connect time. Every key in the audience must match the corresponding JWT claim; otherwise the connection is rejected with `403 Forbidden`. `service_role` JWTs always bypass.
+
+```sql
+-- Public (legacy behaviour): any authenticated client can read.
+SELECT pgr.subscribe('online_count', 'SELECT count(*) FROM presence');
+
+-- Bound to a specific user — only the JWT with sub=42 can subscribe.
+SELECT pgr.subscribe(
+  'inv_42',
+  'SELECT name, count FROM player_inventory WHERE player_id = ''42''',
+  'delta',
+  '{"sub":"42"}'::jsonb);
+
+-- Multi-key: must satisfy ALL keys.
+SELECT pgr.subscribe(
+  'admin_audit',
+  'SELECT * FROM audit_log',
+  'delta',
+  '{"role":"admin","org":"acme"}'::jsonb);
+```
+
+Audience is stored in shared memory (max 512 bytes serialised). The proxy reads the matching row from `pgr.get_subscriptions()` on every WS connect; mismatched claims surface as `403`. NULL audience preserves pre-0.1.2 public behaviour.
 
 ### 9.2 Views
 
@@ -332,7 +360,7 @@ The trigger function runs as `SECURITY DEFINER` so that recompute and snapshot S
 By default, `pgr.subscribe` and `pgr.unsubscribe` are revoked from `PUBLIC`. Grant them to specific roles as needed:
 
 ```sql
-GRANT EXECUTE ON FUNCTION pgr.subscribe(text, text, text) TO myapp_role;
+GRANT EXECUTE ON FUNCTION pgr.subscribe(text, text, text, jsonb) TO myapp_role;
 GRANT EXECUTE ON FUNCTION pgr.unsubscribe(text) TO myapp_role;
 ```
 

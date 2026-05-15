@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -81,6 +82,12 @@ func WSHandler(
 			return
 		}
 
+		// Claims captured from auth so the audience check below can match
+		// against the JWT payload. Defaults to anon when no JWT secret is set
+		// (auth disabled in dev).
+		var claims middleware.RequestClaims
+		var isAnon bool
+
 		// Auth: mirror the Rust ws_handler logic — check JWT/service_role when
 		// a JWT secret is configured.
 		if cfg.JWTSecret != "" {
@@ -90,7 +97,6 @@ func WSHandler(
 			// Check anon key — via Authorization header or ?apikey= query param.
 			// WebSocket connections from browsers cannot set custom headers, so
 			// ?apikey= is the primary mechanism for browser-based auth.
-			var isAnon bool
 			if cfg.AnonKey != "" {
 				if middleware.ConstantTimeEqExported(authHeader, "Bearer "+cfg.AnonKey) || middleware.ConstantTimeEqExported(apikeyParam, cfg.AnonKey) {
 					isAnon = true
@@ -105,7 +111,9 @@ func WSHandler(
 				return
 			}
 
-			if !isAnon {
+			if isAnon {
+				claims = middleware.RequestClaims{Role: "anon"}
+			} else {
 				// Try to extract a JWT from Bearer header or ?token= query param.
 				// Browsers cannot set custom headers on WebSocket upgrades, so
 				// ?token= is the primary mechanism for authenticated WS connections.
@@ -123,11 +131,29 @@ func WSHandler(
 
 				// Inject token into Authorization header so ResolveClaims can find it
 				r.Header.Set("Authorization", "Bearer "+token)
-				claims, err := middleware.ResolveClaims(r, cfg)
-				if err != nil || claims.Role == "" {
+				resolved, err := middleware.ResolveClaims(r, cfg)
+				if err != nil || resolved.Role == "" {
 					writeWSError(w, http.StatusUnauthorized, "authentication required")
 					return
 				}
+				claims = resolved
+			}
+		}
+
+		// Audience enforcement (since 2026-05, finding F1): a subscription
+		// registered with a non-NULL audience JSON is only deliverable to a
+		// JWT whose claims satisfy that predicate. service_role bypasses;
+		// anon is always rejected when audience is set (even if
+		// REQUIRE_AUTHENTICATED_WS=false).
+		mode, audience := subscriptionMeta(pool, queryID)
+		if audience != "" && claims.Role != "service_role" {
+			if isAnon {
+				writeWSError(w, http.StatusForbidden, "subscription requires an authenticated JWT")
+				return
+			}
+			if !claimsSatisfyAudience(audience, claims.ClaimsJSON) {
+				writeWSError(w, http.StatusForbidden, "JWT claims do not satisfy subscription audience")
+				return
 			}
 		}
 
@@ -148,15 +174,18 @@ func WSHandler(
 			return
 		}
 
-		go handleWebSocket(conn, queryID, hub, pool, broadcastCapacity, semaphore)
+		go handleWebSocket(conn, queryID, mode, hub, pool, broadcastCapacity, semaphore)
 	}
 }
 
 // handleWebSocket manages an established WebSocket connection. It runs in its
-// own goroutine and releases the semaphore slot when it exits.
+// own goroutine and releases the semaphore slot when it exits. `mode` is the
+// subscription mode ("delta" or "notify") resolved in the handshake phase;
+// passed through so we don't re-query the catalog.
 func handleWebSocket(
 	conn *websocket.Conn,
 	queryID string,
+	mode string,
 	hub *Hub,
 	pool *pgxpool.Pool,
 	broadcastCapacity int,
@@ -199,7 +228,6 @@ func handleWebSocket(
 	}
 
 	// Send initial snapshot — skip for notify-mode subscriptions (no _snap_ table exists by design).
-	mode := subscriptionMode(pool, queryID)
 	if mode != "notify" {
 		if rows, err := fetchSnapshot(pool, queryID); err == nil && len(rows) > 0 {
 			snap, _ := json.Marshal(map[string]any{
@@ -333,18 +361,73 @@ func originMatchesHost(origin, host string) bool {
 	return origin[i+3:] == host
 }
 
-// subscriptionMode returns the registered mode ("delta" or "notify") for a query_id.
-// Returns "delta" on any error (safe default — delta-mode fetchSnapshot already swallows
-// missing-table errors gracefully, so a wrong guess only costs one extra query).
-func subscriptionMode(pool *pgxpool.Pool, queryID string) string {
-	var mode string
+// subscriptionMeta returns the registered mode and audience for a query_id.
+//
+//   - mode is "delta" or "notify".
+//   - audience is the raw JSON string of the audience constraint, or "" when
+//     the subscription is public (NULL audience) or not found.
+//
+// Errors fall back to ("delta", "") so the rest of the handler still works
+// for unknown query_ids (fetchSnapshot already swallows missing snap-table
+// errors gracefully). A wrong-mode guess only costs one extra query; a
+// missing audience would only matter if the subscription was created with
+// one — in which case the row exists and the lookup will succeed.
+func subscriptionMeta(pool *pgxpool.Pool, queryID string) (mode, audience string) {
+	var aud *string
 	err := pool.QueryRow(context.Background(),
-		`SELECT mode FROM pgr.get_subscriptions() WHERE query_id = $1`, queryID).Scan(&mode)
+		`SELECT mode, audience::text FROM pgr.get_subscriptions() WHERE query_id = $1`,
+		queryID).Scan(&mode, &aud)
 	if err != nil {
-		log.Debug().Str("query_id", queryID).Err(err).Msg("subscription mode lookup failed; defaulting to delta")
-		return "delta"
+		log.Debug().Str("query_id", queryID).Err(err).Msg("subscription meta lookup failed; defaulting to (delta, public)")
+		return "delta", ""
 	}
-	return mode
+	if aud != nil {
+		audience = *aud
+	}
+	return mode, audience
+}
+
+// claimsSatisfyAudience returns true when every key in the audience JSON
+// matches the corresponding claim in claimsJSON.
+//
+// Semantics:
+//   - audience is a flat JSON object: {"sub":"42","role":"authenticated"}
+//   - For each key in audience, the same key must exist in claimsJSON and
+//     stringified values must compare equal. Numbers / bools / strings are
+//     coerced via JSON marshalling so {"sub":42} matches {"sub":42} and
+//     {"sub":"42"} matches {"sub":"42"} but {"sub":42} does NOT match
+//     {"sub":"42"}. Pick a consistent encoding when issuing JWTs.
+//   - Empty audience ("") is treated as no constraint and returns true.
+//   - Malformed JSON on either side fails closed: returns false.
+func claimsSatisfyAudience(audience, claimsJSON string) bool {
+	if audience == "" {
+		return true
+	}
+	var aud map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(audience), &aud); err != nil {
+		log.Warn().Err(err).Str("audience", audience).Msg("audience JSON unparseable; failing closed")
+		return false
+	}
+	var claims map[string]json.RawMessage
+	if claimsJSON == "" {
+		return false
+	}
+	if err := json.Unmarshal([]byte(claimsJSON), &claims); err != nil {
+		log.Warn().Err(err).Msg("claims JSON unparseable; failing closed")
+		return false
+	}
+	for k, wantRaw := range aud {
+		gotRaw, ok := claims[k]
+		if !ok {
+			return false
+		}
+		// Byte-compare normalised forms — json.RawMessage preserves the
+		// original token text, so {"sub":"42"} != {"sub":42}.
+		if string(bytes.TrimSpace(gotRaw)) != string(bytes.TrimSpace(wantRaw)) {
+			return false
+		}
+	}
+	return true
 }
 
 // fetchSnapshot queries pgr._snap_<queryID> and returns rows as JSON objects.

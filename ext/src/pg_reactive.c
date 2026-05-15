@@ -11,6 +11,7 @@
 #include "parser/parser.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/jsonb.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
@@ -433,6 +434,7 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	char	   *query_str = text_to_cstring(query_text);
 	char	   *mode_str;
 	char		mode_char;
+	char	   *audience_str = NULL;	/* serialised JSON, or NULL = no constraint */
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
 	uint64		col_masks[PGR_MAX_DEPS_PER_QUERY];
 	int			num_tables;
@@ -444,6 +446,29 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 		mode_str = text_to_cstring(PG_GETARG_TEXT_PP(2));
 	else
 		mode_str = "delta";
+
+	/*
+	 * Parse audience parameter (jsonb, optional, default NULL).
+	 * The proxy enforces this at WS-connect time: every key in audience must
+	 * match the corresponding JWT claim. service_role JWTs always bypass.
+	 * Stored as serialised JSON text to keep the shmem entry POD.
+	 */
+	if (PG_NARGS() >= 4 && !PG_ARGISNULL(3))
+	{
+		Jsonb	   *audience_jsonb = PG_GETARG_JSONB_P(3);
+		Datum		audience_text;
+
+		audience_text = DirectFunctionCall1(jsonb_out,
+											JsonbPGetDatum(audience_jsonb));
+		audience_str = DatumGetCString(audience_text);
+
+		if (strlen(audience_str) >= PGR_AUDIENCE_LEN)
+			ereport(ERROR,
+					(errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
+					 errmsg("audience too long (%zu bytes, max %d)",
+							strlen(audience_str), PGR_AUDIENCE_LEN - 1),
+					 errhint("audience must be a small JSON object of claim predicates.")));
+	}
 
 	if (strcmp(mode_str, "delta") == 0)
 		mode_char = 'd';
@@ -496,7 +521,7 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	/* Register in shared memory (only after snapshot succeeds).
 	 * If shmem is full, pgr_dep_add evicts the oldest entry. */
 	pgr_dep_add(query_id, query_str, table_oids, col_masks, num_tables,
-				mode_char, &evicted);
+				mode_char, audience_str, &evicted);
 
 	/* Clean up evicted subscription if one was evicted */
 	if (evicted.evicted)
@@ -735,7 +760,7 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-		tupdesc = CreateTemplateTupleDesc(6);
+		tupdesc = CreateTemplateTupleDesc(7);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "query_id",
 						   TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "query_text",
@@ -748,6 +773,8 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 						   INT8OID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 6, "mode",
 						   TEXTOID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 7, "audience",
+						   JSONBOID, -1, 0);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
@@ -767,8 +794,8 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 
 	if (entry != NULL)
 	{
-		Datum		values[6];
-		bool		nulls[6];
+		Datum		values[7];
+		bool		nulls[7];
 		HeapTuple	tuple;
 
 		memset(nulls, 0, sizeof(nulls));
@@ -778,6 +805,12 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 		values[3] = TimestampTzGetDatum(entry->subscribed_at);
 		values[4] = Int64GetDatum(entry->invalidation_count);
 		values[5] = CStringGetTextDatum(entry->mode == 'n' ? "notify" : "delta");
+
+		if (entry->audience[0] == '\0')
+			nulls[6] = true;
+		else
+			values[6] = DirectFunctionCall1(jsonb_in,
+										   CStringGetDatum(entry->audience));
 
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));

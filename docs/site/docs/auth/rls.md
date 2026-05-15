@@ -35,6 +35,22 @@ Always enable RLS before writing policies. A table with RLS enabled but no polic
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ```
 
+## Realtime: audience-bound subscriptions
+
+RLS handles row-level security for REST queries. For **live queries** (WebSocket subscriptions), pgStack adds a parallel mechanism — the `audience` parameter on `pgr.subscribe`. Where RLS scopes a query's *rows* to the caller, audience scopes the entire *subscription* to a JWT claim predicate.
+
+```sql
+-- Server-side, at player login:
+SELECT pgr.subscribe(
+  'inv_' || player_id::text,
+  format('SELECT name, count FROM player_inventory WHERE player_id = %L',
+         player_id),
+  'delta',
+  jsonb_build_object('sub', player_id::text));
+```
+
+Now even if another client learns the channel name `inv_42`, their JWT (`sub=99`) cannot satisfy the audience `{"sub":"42"}` — the proxy returns `403` at WS-connect. This is the "deep fix" for capability leakage on live queries; combine with RLS on the underlying tables for defence in depth (the snapshot is filtered by WHERE at subscribe time, but RLS still applies if `service_role` is not in use). See [Subscribing to Queries](/docs/realtime/subscribe#audience-bound-subscriptions-since-012) for full semantics.
+
 ## Granting access to your tables
 
 Since the 2026-05 security audit, pgStack does NOT grant `anon` or `authenticated` blanket access to new tables in `public`. Every application table must declare its grants explicitly — preferably alongside enabling RLS:

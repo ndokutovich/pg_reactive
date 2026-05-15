@@ -87,6 +87,47 @@ SELECT pgr.unsubscribe('active_orders');
 
 This removes the subscription, drops the snapshot table, and removes the trigger from watched tables.
 
+## Audience-bound subscriptions (since 0.1.2)
+
+`pgr.subscribe` takes an optional fourth `audience` argument — a JSON object the proxy enforces against the JWT claims at WS-connect time. Every key in the audience must match the corresponding claim, or the connection is rejected with `403 Forbidden`. `service_role` JWTs always bypass.
+
+This is the right pattern for **per-user live queries** (player inventory, private notifications, account-scoped views): even if a malicious client learns or guesses another user's `query_id`, their JWT will not satisfy that subscription's audience.
+
+```sql
+-- Server registers per-player subscription at login.
+-- The audience binds the subscription to the player's JWT sub claim.
+SELECT pgr.subscribe(
+  'inv_' || player_id::text,
+  format(
+    'SELECT name, count FROM player_inventory WHERE player_id = %L',
+    player_id),
+  'delta',
+  jsonb_build_object('sub', player_id::text));
+```
+
+Client (with JWT where `sub=42`):
+
+```ts
+const live = client.subscribe('inv_42');  // OK — JWT.sub matches audience.sub
+```
+
+Other clients (with `sub=99`) attempting the same URL get `403 Forbidden` before any data is delivered.
+
+### Audience semantics
+
+- `NULL` audience (default) = public; any authenticated WS client can read.
+- JSON object = strict AND-match: every key must be present in claims with byte-equal value.
+- `{"sub":"42"}` matches `{"sub":"42",...}` but **not** `{"sub":42,...}` — pick a consistent JWT encoding.
+- Max 512 bytes serialised.
+- Combine with [REQUIRE_AUTHENTICATED_WS](/docs/deploy/env-vars) for defence in depth: even public subscriptions then require a JWT.
+
+### Capability vs audience
+
+The older capability-via-unguessable-id pattern (server-side broker hands out random `channel_id`) still works and is appropriate for short-lived or rotating channels. Audience is the right choice when:
+- The subscription is long-lived and tied to a stable user identity.
+- You want a leaked channel name to be useless without the matching JWT.
+- You want server-side audit of "who is bound to what" in terms of claims, not opaque ids.
+
 ## Subscription limits
 
 The maximum number of simultaneous subscriptions is controlled by:

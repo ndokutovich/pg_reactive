@@ -8,12 +8,13 @@
 #include "utils/timestamp.h"
 
 /* Version */
-#define PG_REACTIVE_VERSION "0.1"
+#define PG_REACTIVE_VERSION "0.1.2"
 
 /* Limits */
 #define PGR_QUERY_ID_LEN        64
 #define PGR_MAX_DEPS_PER_QUERY  16
 #define PGR_QUERY_TEXT_LEN      2048
+#define PGR_AUDIENCE_LEN        512	/* serialised JSON audience predicate */
 
 /* GUC variables */
 extern int pgr_max_subscriptions;
@@ -43,6 +44,14 @@ typedef struct PgrDepEntry
 	int64		invalidation_count;
 	char		mode;			/* 'd' = delta, 'n' = notify */
 	int64		notify_seq;		/* per-query sequence number for gap detection */
+	/*
+	 * audience: optional JSON object enforced by the proxy at WS-connect time.
+	 * Empty string means "no audience constraint" (public; the legacy
+	 * behaviour). When non-empty, the proxy parses this JSON and requires
+	 * every key to match the corresponding JWT claim. service_role JWTs
+	 * always bypass. Stored as serialised JSON text to keep the entry POD.
+	 */
+	char		audience[PGR_AUDIENCE_LEN];
 } PgrDepEntry;
 
 /*
@@ -105,6 +114,7 @@ extern void pgr_shmem_startup(void);
 extern bool pgr_dep_add(const char *query_id, const char *query_text,
 						Oid *table_oids, uint64 *col_masks,
 						int num_tables, char mode,
+						const char *audience,
 						PgrEvictedInfo *evicted);
 extern bool pgr_dep_remove(const char *query_id);
 extern bool pgr_dep_find(const char *query_id, PgrDepEntry *out);

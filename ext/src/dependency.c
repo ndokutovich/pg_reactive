@@ -99,7 +99,7 @@ pgr_shmem_startup(void)
 bool
 pgr_dep_add(const char *query_id, const char *query_text,
 			Oid *table_oids, uint64 *col_masks, int num_tables,
-			char mode, PgrEvictedInfo *evicted)
+			char mode, const char *audience, PgrEvictedInfo *evicted)
 {
 	PgrDepEntry *entry;
 	bool		found;
@@ -188,6 +188,11 @@ pgr_dep_add(const char *query_id, const char *query_text,
 	memcpy(entry->col_masks, col_masks, num_tables * sizeof(uint64));
 
 	entry->mode = mode;
+
+	/* audience: empty string = no constraint, NULL passed = no constraint. */
+	memset(entry->audience, 0, PGR_AUDIENCE_LEN);
+	if (audience != NULL)
+		strlcpy(entry->audience, audience, PGR_AUDIENCE_LEN);
 
 	if (!found)
 	{

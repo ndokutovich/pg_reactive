@@ -557,7 +557,15 @@ WebSocket subscriptions (`GET /ws/{query_id}`) are authenticated against the `JW
 - **`REQUIRE_AUTHENTICATED_WS`** (env) — when `true`, anon-key holders are rejected. Only real JWTs (`authenticated` or `service_role`) may open a subscription. Set this whenever live queries return user-scoped data; otherwise a publicly-known anon key plus a guessed `query_id` becomes a read capability on someone else's live data.
 - **Origin validation** — `ALLOWED_ORIGINS` (allow-list) and `ALLOW_PERMISSIVE_CORS` (dev override). With both empty, strict mode is in effect: only same-origin browsers and non-browser clients (no Origin header) can upgrade.
 
-A planned follow-up adds a fourth `audience` parameter to `pgr.subscribe` so the C extension can enforce per-subscription JWT-claim constraints (e.g. a query that returns rows for user X is only deliverable to a JWT with `sub=X`). That work is tracked in the security audit follow-up plan, not yet implemented.
+**audience-bound subscriptions (since pg_reactive 0.1.2):** `pgr.subscribe` accepts a fourth `audience jsonb` argument. When set, the proxy verifies at WS-connect time that every key in the audience matches the corresponding JWT claim. `service_role` JWTs always bypass; anon-key WS connections are rejected outright when audience is non-NULL. This closes the "authenticated JWT + guessable query_id reads anyone's live data" vector: even if a player A learns player B's channel name, A's JWT (`sub=A`) cannot satisfy B's subscription audience (`{"sub":"B"}`). Capability-via-unguessable-id remains the right pattern for short-lived or rotating channels; audience is the right pattern for long-lived user-scoped queries.
+
+```sql
+SELECT pgr.subscribe(
+  'inv_' || player_id::text,
+  format('SELECT name, count FROM player_inventory WHERE player_id = %L', player_id),
+  'delta',
+  jsonb_build_object('sub', player_id::text));
+```
 
 ---
 

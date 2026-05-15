@@ -2,9 +2,9 @@ MODULE_big = pg_reactive
 OBJS = src/pg_reactive.o src/dependency.o src/invalidation.o src/recompute.o src/bgworker.o
 
 EXTENSION = pg_reactive
-DATA = pg_reactive--0.1.1.sql
+DATA = pg_reactive--0.1.2.sql pg_reactive--0.1.1--0.1.2.sql
 
-REGRESS = 00_setup 01_subscribe 02_invalidation 03_recompute 04_overflow 05_coverage 06_column_tracking 07_notify_mode 08_advanced_queries 09_batch_invalidation
+REGRESS = 00_setup 01_subscribe 02_invalidation 03_recompute 04_overflow 05_coverage 06_column_tracking 07_notify_mode 08_advanced_queries 09_batch_invalidation 10_audience
 REGRESS_OPTS = --dbname=pg_reactive_test
 
 ISOLATION = concurrent_dml concurrent_subscribe concurrent_invalidation
