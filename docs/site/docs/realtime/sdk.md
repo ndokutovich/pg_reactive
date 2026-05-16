@@ -235,7 +235,10 @@ import { createClient } from 'pg-reactive-sdk';
 
 const client = createClient({
   url: 'ws://127.0.0.1:8080',
-  token: localStorage.getItem('access_token') ?? undefined,
+  // sessionStorage is tab-scoped — closing the browser logs the user
+  // out; XSS cannot survive a browser restart. The React `useAuth` hook
+  // writes there by default.
+  token: sessionStorage.getItem('access_token') ?? undefined,
 });
 
 // Subscribe to active orders

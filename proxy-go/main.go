@@ -424,6 +424,7 @@ func buildRouter(state *AppState) http.Handler {
 				return appMiddleware.ResolveClaims(r, rlsCfg)
 			},
 			WebhookManager: state.WebhookManager,
+			SecretBox:      state.SecretBox,
 		}
 		r.Post("/rest/v1/webhooks", routes.CreateWebhook(webhookDeps))
 		r.Get("/rest/v1/webhooks", routes.ListWebhooks(webhookDeps))

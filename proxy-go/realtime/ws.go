@@ -443,6 +443,15 @@ func isAdHocChannel(queryID string) bool {
 //     → err surfaced as-is. Caller responds 503; we DO NOT silently
 //     treat as public.
 func subscriptionMeta(pool *pgxpool.Pool, queryID string) (mode, audience string, err error) {
+	if pool == nil {
+		// Nil pool only happens in tests. Treat like "not found" so the
+		// ad-hoc channel prefix bypass still works in test harnesses
+		// that don't spin up Postgres; production code never gets here.
+		if isAdHocChannel(queryID) {
+			return "delta", "", nil
+		}
+		return "", "", ErrSubscriptionNotFound
+	}
 	var aud *string
 	err = pool.QueryRow(context.Background(),
 		`SELECT mode, audience::text FROM pgr.get_subscriptions() WHERE query_id = $1`,
@@ -621,15 +630,9 @@ func PresenceHandler(cfg middleware.RLSConfig, pool *pgxpool.Pool, hub *Hub, req
 			}
 			return
 		}
-		if audience != "" && claims.Role != "service_role" {
-			if isAnon {
-				writeJSONStatus(w, http.StatusForbidden, "channel requires an authenticated JWT")
-				return
-			}
-			if !claimsSatisfyAudience(audience, claims.ClaimsJSON) {
-				writeJSONStatus(w, http.StatusForbidden, "JWT claims do not satisfy channel audience")
-				return
-			}
+		if status, msg := gatePresenceAccess(audience, isAnon, claims); status != 0 {
+			writeJSONStatus(w, status, msg)
+			return
 		}
 
 		presenceMap := hub.PresenceList(channel)
@@ -645,6 +648,32 @@ func writeJSONStatus(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+}
+
+// gatePresenceAccess is the pure decision function shared by PresenceHandler
+// and (potentially) future presence endpoints. Returns (0, "") to allow,
+// or (status, msg) to refuse. Extracted so the policy matrix is unit-
+// testable without spinning up a real DB or HTTP server.
+//
+//	audience == ""        → public; allow whether anon or authed.
+//	claims.Role == "service_role" → always allow (admin bypass).
+//	audience non-empty + isAnon → 403 (anon never satisfies an audience).
+//	audience non-empty + JWT match → allow.
+//	audience non-empty + JWT mismatch → 403.
+func gatePresenceAccess(audience string, isAnon bool, claims middleware.RequestClaims) (int, string) {
+	if audience == "" {
+		return 0, ""
+	}
+	if claims.Role == "service_role" {
+		return 0, ""
+	}
+	if isAnon {
+		return http.StatusForbidden, "channel requires an authenticated JWT"
+	}
+	if !claimsSatisfyAudience(audience, claims.ClaimsJSON) {
+		return http.StatusForbidden, "JWT claims do not satisfy channel audience"
+	}
+	return 0, ""
 }
 
 // writeWSError writes a plain HTTP error before WebSocket upgrade. Once the

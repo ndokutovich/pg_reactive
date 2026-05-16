@@ -172,13 +172,16 @@ CREATE POLICY storage_objects_delete ON pgstack.storage_objects
   FOR DELETE TO authenticated
   USING (owner = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
 
--- Webhooks table
+-- Webhooks table. The signing secret is stored as AES-256-GCM ciphertext
+-- under SECRETS_ENCRYPTION_KEY (since 2026-05 audit F1, round 7) — a
+-- DB dump no longer leaks values that can forge X-Webhook-Signature.
+-- Plaintext is held only in proxy memory after Refresh decrypts.
 CREATE TABLE IF NOT EXISTS pgstack.webhooks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   url text NOT NULL,
   events text[] NOT NULL DEFAULT '{*}',
   table_name text NOT NULL DEFAULT '*',
-  secret text NOT NULL DEFAULT '',
+  secret_encrypted bytea,
   active boolean NOT NULL DEFAULT true,
   created_at timestamptz DEFAULT now()
 );

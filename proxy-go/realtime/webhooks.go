@@ -16,6 +16,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
+
+	"pgstack-proxy-go/secrets"
 )
 
 // Webhook represents a registered webhook from pgstack.webhooks.
@@ -32,6 +34,7 @@ type Webhook struct {
 // WebhookManager loads webhooks from DB and delivers payloads.
 type WebhookManager struct {
 	pool     *pgxpool.Pool
+	secrets  *secrets.Box // decrypts pgstack.webhooks.secret_encrypted at refresh
 	mu       sync.RWMutex
 	webhooks []Webhook
 	client   *http.Client
@@ -40,17 +43,23 @@ type WebhookManager struct {
 // NewWebhookManager creates a WebhookManager with a hardened HTTP client
 // (see newWebhookHTTPClient — refuses redirects, refuses TCP connections
 // to non-public IPs, has request/response timeouts).
-func NewWebhookManager(pool *pgxpool.Pool) *WebhookManager {
+//
+// secretBox decrypts the at-rest webhook signing secret. nil is allowed
+// (matches the pattern in functions.NewFunctionsCatalog) — rows with a
+// non-nil secret_encrypted will load with empty Secret and a WARN log,
+// so misconfiguration is loud but not fatal.
+func NewWebhookManager(pool *pgxpool.Pool, secretBox *secrets.Box) *WebhookManager {
 	return &WebhookManager{
-		pool:   pool,
-		client: newWebhookHTTPClient(),
+		pool:    pool,
+		secrets: secretBox,
+		client:  newWebhookHTTPClient(),
 	}
 }
 
 // Refresh reloads all active webhooks from the database.
 func (wm *WebhookManager) Refresh(ctx context.Context) error {
 	rows, err := wm.pool.Query(ctx,
-		`SELECT id::text, url, events, table_name, secret, active, created_at
+		`SELECT id::text, url, events, table_name, secret_encrypted, active, created_at
 		 FROM pgstack.webhooks WHERE active = true`)
 	if err != nil {
 		return fmt.Errorf("webhooks refresh: %w", err)
@@ -62,10 +71,25 @@ func (wm *WebhookManager) Refresh(ctx context.Context) error {
 	for rows.Next() {
 		var wh Webhook
 		var createdAt time.Time
-		if err := rows.Scan(&wh.ID, &wh.URL, &wh.Events, &wh.TableName, &wh.Secret, &wh.Active, &createdAt); err != nil {
+		var secretEnc []byte
+		if err := rows.Scan(&wh.ID, &wh.URL, &wh.Events, &wh.TableName, &secretEnc, &wh.Active, &createdAt); err != nil {
 			return fmt.Errorf("webhooks scan: %w", err)
 		}
 		wh.CreatedAt = createdAt.Format(time.RFC3339)
+
+		// Decrypt the at-rest secret into in-memory plaintext for HMAC
+		// signing. Nil SecretBox + non-empty ciphertext = misconfiguration;
+		// load the webhook with empty Secret (deliveries go out unsigned)
+		// and log a WARN. Better than failing all delivery silently.
+		if len(secretEnc) > 0 {
+			plain, derr := wm.secrets.Decrypt(secretEnc)
+			if derr != nil {
+				log.Warn().Err(derr).Str("id", wh.ID).
+					Msg("webhooks refresh: secret_encrypted present but cannot be decrypted; delivering unsigned")
+			} else {
+				wh.Secret = string(plain)
+			}
+		}
 
 		// Refresh-time SSRF guard. CreateWebhook already validates URLs,
 		// but rows inserted directly via SQL, restored from a backup, or

@@ -108,7 +108,7 @@ shortest path to understanding the wire shape.
 
 ```js
 const pg = new PgStack();
-await pg.autoAuth();                          // signup / re-login from localStorage
+await pg.autoAuth();                          // signup / re-login from sessionStorage
 
 const qid = await pg.rest('/rpc/subscribe_my_inventory', { method: 'POST', body: '{}' });
 pg.liveQuery(qid, {

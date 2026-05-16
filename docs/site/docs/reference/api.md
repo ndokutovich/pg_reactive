@@ -1079,10 +1079,14 @@ Clients can update their presence state by sending a JSON message over the WebSo
 
 Poll the current presence state for a channel via HTTP.
 
-**No authentication required.**
+**Same auth + audience gate as the WebSocket upgrade path.** Pass either the anon key (when `REQUIRE_AUTHENTICATED_WS=false` and the channel has no audience), a JWT (`Authorization: Bearer …` or `?token=…`), or the `service_role` key. An audience-bound channel rejects anon and any JWT whose claims do not satisfy the audience predicate.
 
 ```bash
-curl http://127.0.0.1:8080/ws/_presence/my_channel
+# Public ad-hoc channel (no pgr.subscribe row registered)
+curl "http://127.0.0.1:8080/ws/_presence/_channel_lobby?apikey=$ANON_KEY"
+
+# JWT-bound private channel
+curl -H "Authorization: Bearer $JWT" http://127.0.0.1:8080/ws/_presence/room_42
 ```
 
 **Response `200 OK`:**

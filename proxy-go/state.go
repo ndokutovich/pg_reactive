@@ -59,7 +59,7 @@ func NewAppState(cfg Config, pool *pgxpool.Pool, secretBox *secrets.Box) *AppSta
 		WSSemaphore:    make(chan struct{}, cfg.MaxConnections),
 		Mailer:         NewMailer(cfg),
 		Catalog:        rest.NewCatalog(),
-		WebhookManager: realtime.NewWebhookManager(pool),
+		WebhookManager: realtime.NewWebhookManager(pool, secretBox),
 		SecretBox:      secretBox,
 	}
 	return s
