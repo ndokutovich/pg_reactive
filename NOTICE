@@ -1,0 +1,35 @@
+pg_reactive / pgStack
+Copyright 2025 pg_reactive contributors
+
+This product includes software developed by the pg_reactive contributors.
+
+================================================================================
+Dual licensing
+================================================================================
+
+The PostgreSQL extension under `ext/` is licensed under the PostgreSQL License
+(see `ext/LICENSE`). All other components — Go proxy (`proxy-go/`), TypeScript
+SDK (`sdk/`), Studio UI (`studio/`), CLI (`cli/`), documentation and
+infrastructure — are licensed under the Apache License, Version 2.0 (see
+`LICENSE`).
+
+================================================================================
+Third-party components
+================================================================================
+
+This product redistributes or links against third-party software under their
+own permissive licenses. Notable runtime dependencies include:
+
+  - PostgreSQL — PostgreSQL License (https://www.postgresql.org/about/licence/)
+  - chi router (github.com/go-chi/chi) — MIT
+  - pgx (github.com/jackc/pgx) — MIT
+  - zerolog (github.com/rs/zerolog) — MIT
+  - goja JS runtime (github.com/dop251/goja) — MIT
+  - jose (github.com/go-jose/go-jose) — Apache 2.0
+  - Argon2 (golang.org/x/crypto/argon2) — BSD-3-Clause
+  - autocert (golang.org/x/crypto/acme/autocert) — BSD-3-Clause
+  - vitest — MIT
+  - fast-check — MIT
+  - Docusaurus — MIT
+
+Full license texts are available with each dependency's distribution.

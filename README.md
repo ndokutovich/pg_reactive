@@ -373,4 +373,22 @@ Dockerfile.dev                    PostgreSQL 16 with build tools
 
 ## License
 
-PostgreSQL License. See [LICENSE](LICENSE) file.
+This repository is dual-licensed to fit two different audiences:
+
+- **PostgreSQL extension** (`ext/`) — licensed under the **PostgreSQL License**
+  (the same license PostgreSQL itself uses). See [`ext/LICENSE`](ext/LICENSE).
+  This is the right license for an extension distributed via PGXN or installed
+  into a vanilla PostgreSQL cluster.
+- **Everything else** — the Go proxy (`proxy-go/`), TypeScript SDK (`sdk/`),
+  Studio UI (`studio/`), CLI (`cli/`), examples, infrastructure, and docs —
+  is licensed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) and
+  [`NOTICE`](NOTICE).
+
+Both licenses are permissive and mutually compatible. If you redistribute a
+bundled product (e.g. a single Docker image containing both components), you
+must comply with both.
+
+Contributing: by submitting a pull request you agree to license your
+contribution under the license of the directory it lands in — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Security reports: see
+[`SECURITY.md`](SECURITY.md).
