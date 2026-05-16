@@ -30,10 +30,22 @@ jobs:
           envs: GH_TOKEN
           script_stop: true
           script: |
-            cd /opt/apps/pg-reactive-src
-            git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git
+            set -euo pipefail
+            REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+            APP_DIR=/opt/apps/pg-reactive-src
+
+            # First-run bootstrap: clone fresh if the directory is missing.
+            if [ ! -d "$APP_DIR/.git" ]; then
+              sudo mkdir -p /opt/apps
+              sudo chown "$USER":"$USER" /opt/apps
+              git clone "$REPO_URL" "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            git remote set-url origin "$REPO_URL"
             git fetch origin master
             git reset --hard origin/master
+
             docker network create gateway 2>/dev/null || true
             docker compose \
               -f examples/docker-compose.yml \
