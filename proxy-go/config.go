@@ -16,6 +16,13 @@ type Config struct {
 	DatabaseURL string
 	ListenAddr  string
 
+	// PgstackEnv flips the strict-production validator. When equal to
+	// "production", any of the following becomes a fatal startup error
+	// instead of a warning: empty JWT_SECRET, dev-only-* secrets,
+	// ENABLE_SQL_ENDPOINT=true, ALLOW_PERMISSIVE_CORS=true,
+	// REQUIRE_AUTHENTICATED_WS=false combined with anon key.
+	PgstackEnv string
+
 	// Auth
 	JWTSecret      string
 	AnonKey        string
@@ -146,6 +153,7 @@ func FromEnv() Config {
 
 	cfg.DatabaseURL = envOrDefault("DATABASE_URL", "postgres://postgres:postgres@db:5432/app")
 	cfg.ListenAddr = envOrDefault("LISTEN_ADDR", "0.0.0.0:8080")
+	cfg.PgstackEnv = strings.ToLower(os.Getenv("PGSTACK_ENV"))
 
 	cfg.JWTSecret = os.Getenv("JWT_SECRET")
 
@@ -313,6 +321,36 @@ func (c Config) Validate() []string {
 	}
 	if c.JWTSecret != "" && strings.Contains(c.JWTSecret, "dev-only") {
 		fmt.Fprintf(os.Stderr, "WARNING: JWT_SECRET contains 'dev-only' — set a proper secret for production\n")
+	}
+
+	// Strict-production validator. Promote warnings to fatal when the
+	// operator explicitly tagged this boot as production. Closes the
+	// "deploy ran with publicly known dev secrets" footgun.
+	if c.PgstackEnv == "production" {
+		if c.JWTSecret == "" {
+			errs = append(errs, "PGSTACK_ENV=production: JWT_SECRET is required (random 32+ bytes)")
+		}
+		if strings.Contains(c.JWTSecret, "dev-only") {
+			errs = append(errs, "PGSTACK_ENV=production: JWT_SECRET still contains 'dev-only' — generate a real key with `openssl rand -base64 32`")
+		}
+		if strings.Contains(c.AnonKey, "dev-only") || c.AnonKey == "anon-key-12345" {
+			errs = append(errs, "PGSTACK_ENV=production: ANON_KEY is a publicly-known dev value — generate a real key")
+		}
+		if strings.Contains(c.ServiceRoleKey, "dev-only") {
+			errs = append(errs, "PGSTACK_ENV=production: SERVICE_ROLE_KEY is a publicly-known dev value — generate a real key")
+		}
+		if c.EnableSQLEndpoint {
+			errs = append(errs, "PGSTACK_ENV=production: ENABLE_SQL_ENDPOINT=true is unsafe — raw SQL execution must not be reachable from the network")
+		}
+		if c.AllowPermissiveCORS {
+			errs = append(errs, "PGSTACK_ENV=production: ALLOW_PERMISSIVE_CORS=true reflects any Origin with credentials — set ALLOWED_ORIGINS instead")
+		}
+		if !c.RequireAuthenticatedWS && c.JWTSecret != "" && c.AnonKey != "" {
+			errs = append(errs, "PGSTACK_ENV=production: REQUIRE_AUTHENTICATED_WS=false lets anon-key holders open any live-query WS — set REQUIRE_AUTHENTICATED_WS=true")
+		}
+		if len(c.SecretsEncryptionKey) == 0 {
+			errs = append(errs, "PGSTACK_ENV=production: SECRETS_ENCRYPTION_KEY is required (at-rest encryption for edge function env vars)")
+		}
 	}
 	if c.RequireEmailVerification && c.SMTPHost == "" {
 		errs = append(errs, "REQUIRE_EMAIL_VERIFICATION=true but SMTP_HOST is not set")

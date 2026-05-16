@@ -211,6 +211,18 @@ func handleWebSocket(
 	// Generate a unique client ID for presence tracking.
 	clientID := generateClientID()
 
+	// Hard cap incoming frame size. Without this, a hostile client can
+	// send arbitrarily large frames; gorilla/websocket would buffer them
+	// in memory before our switch ever sees them. 64 KiB covers the
+	// largest legitimate presence/broadcast payloads we expect.
+	// (Audit finding F4, 2026-05.)
+	conn.SetReadLimit(maxWSMessageBytes)
+
+	// Per-connection token-bucket rate limit. 100 messages / sec sustained,
+	// short burst of 20. Caught misbehaving clients are disconnected; the
+	// semaphore slot is released by the defer below.
+	bucket := newRateBucket(wsMsgRate, wsMsgBurst)
+
 	// Subscribe first so the channel is registered before the defer runs.
 	ch := hub.Subscribe(queryID, broadcastCapacity)
 	defer func() {
@@ -299,6 +311,11 @@ func handleWebSocket(
 			}
 			switch msg.msgType {
 			case websocket.TextMessage:
+				if !bucket.allow() {
+					log.Warn().Str("query_id", queryID).Str("client_id", clientID).
+						Msg("WS client exceeded message rate limit — disconnecting")
+					return
+				}
 				dispatchClientMessage(hub, queryID, clientID, msg.data)
 			case websocket.CloseMessage:
 				log.Info().Str("query_id", queryID).Msg("WebSocket disconnected (close frame)")
@@ -334,6 +351,12 @@ type wsMessage struct {
 // shapes) is dropped at debug level. Extracted so the policy is testable
 // without spinning up a real WebSocket.
 func dispatchClientMessage(hub *Hub, queryID, clientID string, data []byte) {
+	// In-package safety net for direct test calls bypassing SetReadLimit.
+	if len(data) > maxWSMessageBytes {
+		log.Warn().Str("query_id", queryID).Str("client_id", clientID).
+			Int("bytes", len(data)).Msg("dropped client message: oversize")
+		return
+	}
 	var typed struct {
 		Type     string          `json:"type"`
 		State    json.RawMessage `json:"state"`

@@ -7,29 +7,52 @@
 #     -f examples/docker-compose.prod.yml \
 #     up -d --build
 #
-# Differences from dev base:
-#   * No host ports exposed — traffic enters only through the umbrella
-#     nginx over the shared `gateway` network. Sibling projects on the
-#     same VPS therefore cannot collide on host ports.
-#   * `restart: unless-stopped` for everything that should auto-resume
-#     after VPS reboots.
-#   * `web` is reachable as `pgr-web` over the gateway network — this is
-#     the upstream the umbrella nginx proxy_passes to.
+# Hardening (since the 2026-05 audit):
+#   * NO host ports — traffic enters only through the umbrella nginx over
+#     the shared `gateway` network. Siblings on the same VPS can't collide.
+#   * `restart: unless-stopped` on everything that should auto-resume.
+#   * `web` reachable as `pgr-web`, proxy as `pgr-proxy` over `gateway`.
+#   * `ENABLE_SQL_ENDPOINT=false` — the dev base turns it on; prod must not
+#     expose raw-SQL even behind service_role.
+#   * `POSTGRES_HOST_AUTH_METHOD=scram-sha-256` — overrides the dev `trust`.
+#   * `REQUIRE_AUTHENTICATED_WS=true` — no anon-key WS subscriptions.
+#   * Secrets are FAIL-FAST: ${VAR:?…} aborts `docker compose up` when a
+#     value is missing rather than silently falling back to the publicly
+#     known dev defaults. Set in /opt/apps/pg-reactive-src/.env or via the
+#     deploy environment.
 
 services:
   db:
     restart: unless-stopped
     ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in production}
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
 
   proxy:
     restart: unless-stopped
     ports: !reset []
     environment:
-      # Production hardening: anon-key holders cannot open live-query
-      # WebSockets — only real JWTs (authenticated or service_role). The
-      # dev base keeps this off so public live queries in tutorials work
-      # without auth; in prod we want defence-in-depth.
+      # Hardening: anon-key holders cannot open live-query WebSockets —
+      # only real JWTs. The dev base keeps this off so public live queries
+      # in tutorials work without auth.
       REQUIRE_AUTHENTICATED_WS: "true"
+      # /api/sql is mounted only when this is true. Off in prod — even a
+      # leaked SERVICE_ROLE_KEY cannot reach SQL execution.
+      ENABLE_SQL_ENDPOINT: "false"
+      # Production marker: when set, the proxy fail-fasts on empty / dev
+      # JWT secrets, permissive CORS, and other "demo-only" combinations.
+      PGSTACK_ENV: production
+      # Fail-fast secrets — `:?` aborts startup if the env var is unset.
+      # Generate with `openssl rand -base64 32` (32+ bytes each).
+      JWT_SECRET:        ${JWT_SECRET:?JWT_SECRET required (32+ chars, not dev-only)}
+      ANON_KEY:          ${ANON_KEY:?ANON_KEY required (random 32+ bytes)}
+      SERVICE_ROLE_KEY:  ${SERVICE_ROLE_KEY:?SERVICE_ROLE_KEY required (random 32+ bytes)}
+      # At-rest encryption for edge-function env vars.
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?SECRETS_ENCRYPTION_KEY required for at-rest secrets}
+      # Lock CORS to whatever fronts you. Empty + permissive=false = strict
+      # (cross-origin browsers blocked; same-origin still works).
+      ALLOWED_ORIGINS:   ${ALLOWED_ORIGINS:-}
     networks:
       default:
       gateway:

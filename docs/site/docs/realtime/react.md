@@ -150,7 +150,7 @@ function ActiveOrders() {
 
 ## `useAuth()`
 
-Manage authentication state with session persistence in `localStorage`:
+Manage authentication state with session persistence in `sessionStorage` (scoped to the browser tab — closing the tab logs the user out, and XSS payloads cannot survive a browser restart):
 
 ```tsx
 import { useAuth } from '@pgstack/sdk/react';

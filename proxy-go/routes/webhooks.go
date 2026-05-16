@@ -49,6 +49,13 @@ func CreateWebhook(d *WebhookDeps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "url is required")
 			return
 		}
+		// SSRF guard. Even a privileged caller (compromised service_role
+		// key / Studio with stolen storage) cannot point the webhook at
+		// internal nodes, the cloud metadata server, or loopback.
+		if _, verr := validateWebhookURL(body.URL); verr != nil {
+			writeJSONError(w, http.StatusBadRequest, verr.Error())
+			return
+		}
 		if len(body.Events) == 0 {
 			body.Events = []string{"*"}
 		}
@@ -89,6 +96,10 @@ func CreateWebhook(d *WebhookDeps) http.HandlerFunc {
 		// Refresh webhook cache
 		_ = d.WebhookManager.Refresh(r.Context())
 
+		// Secret is returned in the create response ONCE — the only point
+		// at which the caller can see it. ListWebhooks and any future
+		// GetWebhook return the placeholder "(hidden)" so the secret never
+		// flows back through the API or into Studio screenshots / logs.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -96,6 +107,7 @@ func CreateWebhook(d *WebhookDeps) http.HandlerFunc {
 			"url":        body.URL,
 			"events":     body.Events,
 			"table_name": body.TableName,
+			"secret":     body.Secret,
 			"active":     true,
 			"created_at": createdAt.Format(time.RFC3339),
 		})
@@ -116,8 +128,13 @@ func ListWebhooks(d *WebhookDeps) http.HandlerFunc {
 			return
 		}
 
+		// The `secret` column is intentionally NOT selected — see
+		// CreateWebhook for the contract: secrets are returned plaintext
+		// exactly once at create, never on subsequent reads. The
+		// "secret_set" flag tells callers whether the row has a
+		// non-empty secret without revealing the value.
 		rows, err := d.Pool.Query(r.Context(),
-			`SELECT id::text, url, events, table_name, secret, active, created_at
+			`SELECT id::text, url, events, table_name, (secret <> '') AS secret_set, active, created_at
 			 FROM pgstack.webhooks ORDER BY created_at`)
 		if err != nil {
 			log.Error().Err(err).Msg("webhooks: list")
@@ -131,7 +148,7 @@ func ListWebhooks(d *WebhookDeps) http.HandlerFunc {
 			URL       string   `json:"url"`
 			Events    []string `json:"events"`
 			TableName string   `json:"table_name"`
-			Secret    string   `json:"secret"`
+			SecretSet bool     `json:"secret_set"`
 			Active    bool     `json:"active"`
 			CreatedAt string   `json:"created_at"`
 		}
@@ -139,7 +156,7 @@ func ListWebhooks(d *WebhookDeps) http.HandlerFunc {
 		for rows.Next() {
 			var wh webhookResp
 			var createdAt time.Time
-			if err := rows.Scan(&wh.ID, &wh.URL, &wh.Events, &wh.TableName, &wh.Secret, &wh.Active, &createdAt); err != nil {
+			if err := rows.Scan(&wh.ID, &wh.URL, &wh.Events, &wh.TableName, &wh.SecretSet, &wh.Active, &createdAt); err != nil {
 				log.Error().Err(err).Msg("webhooks: scan")
 				writeJSONError(w, http.StatusInternalServerError, "internal database error")
 				return

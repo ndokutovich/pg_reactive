@@ -193,7 +193,7 @@ function App() {
 }
 ```
 
-The `useAuth` hook persists the session in `localStorage` and auto-refreshes tokens before expiry.
+The `useAuth` hook persists the session in `sessionStorage` and auto-refreshes tokens before expiry. Session storage is scoped to the tab, so closing the browser logs the user out; a stolen XSS payload cannot survive across browser restarts. For a "remember me" UX, layer a long-lived refresh token over a regular login flow instead of moving tokens into `localStorage`.
 
 ## HTTP API
 
