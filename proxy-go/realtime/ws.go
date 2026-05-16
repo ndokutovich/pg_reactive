@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"pgstack-proxy-go/middleware"
@@ -140,12 +143,26 @@ func WSHandler(
 			}
 		}
 
-		// Audience enforcement (since 2026-05, finding F1): a subscription
-		// registered with a non-NULL audience JSON is only deliverable to a
-		// JWT whose claims satisfy that predicate. service_role bypasses;
-		// anon is always rejected when audience is set (even if
+		// Audience enforcement (since 2026-05, finding F1; hardened to
+		// fail-closed after the F2 review). A subscription registered with
+		// a non-NULL audience JSON is only deliverable to a JWT whose
+		// claims satisfy that predicate. service_role bypasses; anon is
+		// always rejected when audience is set (even if
 		// REQUIRE_AUTHENTICATED_WS=false).
-		mode, audience := subscriptionMeta(pool, queryID)
+		//
+		// Metadata lookup is fail-closed: an unknown subscription returns
+		// 404, and any DB error (permission denied, connection failure)
+		// returns 503. Earlier code defaulted to ("delta", "") on error,
+		// which silently disabled audience enforcement.
+		mode, audience, metaErr := subscriptionMeta(pool, queryID)
+		if metaErr != nil {
+			if errors.Is(metaErr, ErrSubscriptionNotFound) {
+				writeWSError(w, http.StatusNotFound, "subscription not found")
+			} else {
+				writeWSError(w, http.StatusServiceUnavailable, "subscription metadata unavailable")
+			}
+			return
+		}
 		if audience != "" && claims.Role != "service_role" {
 			if isAnon {
 				writeWSError(w, http.StatusForbidden, "subscription requires an authenticated JWT")
@@ -361,30 +378,68 @@ func originMatchesHost(origin, host string) bool {
 	return origin[i+3:] == host
 }
 
+// ErrSubscriptionNotFound is returned by subscriptionMeta when no row exists
+// in pgr.get_subscriptions() for the given query_id and the id does not match
+// the ad-hoc public-channel prefix convention.
+var ErrSubscriptionNotFound = errors.New("subscription not found")
+
+// channelPrefixes lists query_id prefixes that are treated as ad-hoc public
+// broadcast / presence channels — they don't need a pre-registered row in
+// pgr.get_subscriptions(). Use audience binding (server-registered) for any
+// channel that should be private.
+var channelPrefixes = []string{"_channel_", "_presence_"}
+
+// isAdHocChannel reports whether a query_id is allowed to connect without
+// a pre-registered pgr subscription. Pulled out for unit testing.
+func isAdHocChannel(queryID string) bool {
+	for _, p := range channelPrefixes {
+		if strings.HasPrefix(queryID, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // subscriptionMeta returns the registered mode and audience for a query_id.
 //
 //   - mode is "delta" or "notify".
 //   - audience is the raw JSON string of the audience constraint, or "" when
-//     the subscription is public (NULL audience) or not found.
+//     the subscription is public (NULL audience).
 //
-// Errors fall back to ("delta", "") so the rest of the handler still works
-// for unknown query_ids (fetchSnapshot already swallows missing snap-table
-// errors gracefully). A wrong-mode guess only costs one extra query; a
-// missing audience would only matter if the subscription was created with
-// one — in which case the row exists and the lookup will succeed.
-func subscriptionMeta(pool *pgxpool.Pool, queryID string) (mode, audience string) {
+// Failure modes (since the 2026-05 audit closed the previous fail-open
+// vector — silently returning ("delta", "") on any DB error meant an
+// audience-bound subscription could become unprotected if the proxy's
+// EXECUTE grant on pgr.get_subscriptions was revoked or the DB blipped):
+//
+//   - pgx.ErrNoRows + query_id matches an ad-hoc channel prefix
+//     → mode="delta", audience="", err=nil. Public ad-hoc channel.
+//   - pgx.ErrNoRows otherwise → err = ErrSubscriptionNotFound.
+//     Caller responds 404; we DO NOT silently treat as public.
+//   - Any other error (permission denied, connection failure, timeout)
+//     → err surfaced as-is. Caller responds 503; we DO NOT silently
+//     treat as public.
+func subscriptionMeta(pool *pgxpool.Pool, queryID string) (mode, audience string, err error) {
 	var aud *string
-	err := pool.QueryRow(context.Background(),
+	err = pool.QueryRow(context.Background(),
 		`SELECT mode, audience::text FROM pgr.get_subscriptions() WHERE query_id = $1`,
 		queryID).Scan(&mode, &aud)
-	if err != nil {
-		log.Debug().Str("query_id", queryID).Err(err).Msg("subscription meta lookup failed; defaulting to (delta, public)")
-		return "delta", ""
+	if err == nil {
+		if aud != nil {
+			audience = *aud
+		}
+		return mode, audience, nil
 	}
-	if aud != nil {
-		audience = *aud
+	if errors.Is(err, pgx.ErrNoRows) {
+		if isAdHocChannel(queryID) {
+			return "delta", "", nil
+		}
+		return "", "", ErrSubscriptionNotFound
 	}
-	return mode, audience
+	// Permission denied, connection failure, etc — surface to caller so it
+	// returns 503 instead of accepting the WS upgrade unprotected.
+	log.Warn().Str("query_id", queryID).Err(err).
+		Msg("subscription metadata lookup failed; rejecting WS to fail closed")
+	return "", "", fmt.Errorf("subscription metadata lookup: %w", err)
 }
 
 // claimsSatisfyAudience returns true when every key in the audience JSON

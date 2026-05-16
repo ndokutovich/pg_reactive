@@ -432,14 +432,20 @@ func buildRouter(state *AppState) http.Handler {
 		r.Delete("/rest/v1/{table}", rest.Delete(restDeps))
 
 		// ── Dev / demo routes ─────────────────────────────────────────────
-		r.Post("/api/sql", routes.SQL(state.Pool, routes.SQLConfig{
-			EnableSQLEndpoint: state.Config.EnableSQLEndpoint,
-			ServiceRoleKey:    state.Config.ServiceRoleKey,
-			RLS:               rlsCfg,
-			CatalogRefreshFn: func() error {
-				return state.Catalog.Refresh(context.Background(), state.Pool)
-			},
-		}))
+		// /api/sql is mounted only when ENABLE_SQL_ENDPOINT=true. The
+		// handler also requires service_role, so the flag is two-layer
+		// defence: even a leaked SERVICE_ROLE_KEY cannot reach SQL
+		// execution unless the operator explicitly opted in at boot.
+		if state.Config.EnableSQLEndpoint {
+			r.Post("/api/sql", routes.SQL(state.Pool, routes.SQLConfig{
+				EnableSQLEndpoint: state.Config.EnableSQLEndpoint,
+				ServiceRoleKey:    state.Config.ServiceRoleKey,
+				RLS:               rlsCfg,
+				CatalogRefreshFn: func() error {
+					return state.Catalog.Refresh(context.Background(), state.Pool)
+				},
+			}))
+		}
 
 		// /api/demo mutates demo tables — only mount when explicitly enabled
 		// or a service_role key is configured (in which case the handler still
