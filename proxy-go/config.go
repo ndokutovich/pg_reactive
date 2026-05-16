@@ -352,6 +352,9 @@ func (c Config) Validate() []string {
 		if c.EnableSQLEndpoint {
 			errs = append(errs, "PGSTACK_ENV=production: ENABLE_SQL_ENDPOINT=true is unsafe — raw SQL execution must not be reachable from the network")
 		}
+		if c.EnableDemoEndpoint {
+			errs = append(errs, "PGSTACK_ENV=production: ENABLE_DEMO_ENDPOINT=true exposes a public demo-table mutator — disable it")
+		}
 		if c.AllowPermissiveCORS {
 			errs = append(errs, "PGSTACK_ENV=production: ALLOW_PERMISSIVE_CORS=true reflects any Origin with credentials — set ALLOWED_ORIGINS instead")
 		}

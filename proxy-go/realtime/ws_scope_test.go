@@ -128,16 +128,23 @@ func TestDispatchClientMessage_PresenceStillWorks(t *testing.T) {
 	}
 }
 
-func TestDispatchClientMessage_PresenceDefaultsClientID(t *testing.T) {
+func TestDispatchClientMessage_PresenceAlwaysUsesServerClientID(t *testing.T) {
+	// Regression for the 5th-pass review: even when the client embeds a
+	// custom client_id, the server MUST identify the presence row by its
+	// own handshake-generated id. Otherwise peer A could overwrite peer
+	// B's presence state by sending {"client_id":"B", ...}.
 	hub := NewHub()
 	const qid = "q5"
 
-	dispatchClientMessage(hub, qid, "fallback-id",
-		[]byte(`{"type":"presence","state":{"x":1}}`))
+	dispatchClientMessage(hub, qid, "real-peer-A",
+		[]byte(`{"type":"presence","client_id":"victim-B","state":{"impersonated":true}}`))
 
 	list := hub.PresenceList(qid)
-	if _, ok := list["fallback-id"]; !ok {
-		t.Fatalf("presence without client_id should fall back to connection id, got keys: %v", keys(list))
+	if _, ok := list["victim-B"]; ok {
+		t.Fatal("client_id from the frame must NOT be honoured — that's the spoof we are blocking")
+	}
+	if _, ok := list["real-peer-A"]; !ok {
+		t.Fatalf("presence must be recorded under the server client_id, got keys: %v", keys(list))
 	}
 }
 

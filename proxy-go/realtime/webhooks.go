@@ -37,13 +37,13 @@ type WebhookManager struct {
 	client   *http.Client
 }
 
-// NewWebhookManager creates a WebhookManager with reasonable HTTP timeouts.
+// NewWebhookManager creates a WebhookManager with a hardened HTTP client
+// (see newWebhookHTTPClient — refuses redirects, refuses TCP connections
+// to non-public IPs, has request/response timeouts).
 func NewWebhookManager(pool *pgxpool.Pool) *WebhookManager {
 	return &WebhookManager{
-		pool: pool,
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		pool:   pool,
+		client: newWebhookHTTPClient(),
 	}
 }
 

@@ -358,10 +358,12 @@ func dispatchClientMessage(hub *Hub, queryID, clientID string, data []byte) {
 		return
 	}
 	var typed struct {
-		Type     string          `json:"type"`
-		State    json.RawMessage `json:"state"`
-		Payload  json.RawMessage `json:"payload"`
-		ClientID string          `json:"client_id"`
+		Type    string          `json:"type"`
+		State   json.RawMessage `json:"state"`
+		Payload json.RawMessage `json:"payload"`
+		// Note: client_id from the frame is INTENTIONALLY unused — the
+		// server uses its handshake-generated id to prevent presence
+		// spoofing across peers.
 	}
 	if err := json.Unmarshal(data, &typed); err != nil {
 		log.Debug().Str("query_id", queryID).Str("client_id", clientID).
@@ -370,11 +372,10 @@ func dispatchClientMessage(hub *Hub, queryID, clientID string, data []byte) {
 	}
 	switch typed.Type {
 	case "presence":
-		cid := typed.ClientID
-		if cid == "" {
-			cid = clientID
-		}
-		hub.PresenceUpdate(queryID, cid, typed.State)
+		// Always identify presence by the server-generated clientID. The
+		// client cannot overwrite another peer's state by sending a
+		// custom client_id in the frame (5th-pass review, 2026-05).
+		hub.PresenceUpdate(queryID, clientID, typed.State)
 	case "broadcast":
 		envelope, _ := json.Marshal(map[string]any{
 			"type":    "broadcast",
