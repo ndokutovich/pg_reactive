@@ -33,25 +33,29 @@ jobs:
             set -euo pipefail
             APP_DIR=/opt/apps/pg-reactive-src
             TOKENLESS_URL="https://github.com/${{ github.repository }}.git"
-            # http.extraheader carries the bearer token ONLY for this single
-            # git invocation. The remote URL persisted in .git/config stays
-            # tokenless, so a VPS attacker who reads the checkout cannot
-            # exfiltrate a fresh-and-valid GitHub credential (audit F6).
-            AUTH_HDR="Authorization: Bearer ${GH_TOKEN}"
+            # The fetch URL carries the token inline but is passed on the
+            # command line — git never writes it into .git/config because
+            # we never `set-url origin` to it. The persisted remote stays
+            # tokenless, so a VPS attacker reading the checkout cannot
+            # exfiltrate a fresh GitHub credential. (Audit F6, 2026-05.)
+            AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
             # First-run bootstrap: clone fresh if the directory is missing.
             if [ ! -d "$APP_DIR/.git" ]; then
               sudo mkdir -p /opt/apps
               sudo chown "$USER":"$USER" /opt/apps
-              git -c "http.extraheader=$AUTH_HDR" clone "$TOKENLESS_URL" "$APP_DIR"
+              git clone "$AUTH_URL" "$APP_DIR"
+              git -C "$APP_DIR" remote set-url origin "$TOKENLESS_URL"
             fi
 
             cd "$APP_DIR"
-            # Make sure the persisted remote URL is tokenless even if a
-            # previous deploy of this workflow had embedded credentials.
+            # Force the persisted remote URL to be tokenless even if a
+            # previous deploy embedded credentials in it.
             git remote set-url origin "$TOKENLESS_URL"
-            git -c "http.extraheader=$AUTH_HDR" fetch origin master
-            git reset --hard origin/master
+            # Fetch via the authenticated URL (one-shot, not persisted)
+            # and reset the local branch to the fetched ref.
+            git fetch "$AUTH_URL" master
+            git reset --hard FETCH_HEAD
 
             # Idempotent secret bootstrap: first run generates .env with
             # cryptographically random values for every required secret;
