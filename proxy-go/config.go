@@ -94,9 +94,11 @@ type Config struct {
 	RequireAuthenticatedWS bool // when true, anon-key WS subscriptions are rejected (JWT required)
 
 	// SecretsEncryptionKey is the raw 32-byte AES-256 key used to encrypt
-	// at-rest credentials (edge function env vars). Nil/empty when
-	// SECRETS_ENCRYPTION_KEY env is unset. Sourced via secrets.DecodeKey from
-	// the base64 env value.
+	// every at-rest credential the proxy holds: edge function env vars
+	// (pgstack.edge_functions.env_vars_encrypted) AND webhook signing
+	// secrets (pgstack.webhooks.secret_encrypted). Nil/empty when
+	// SECRETS_ENCRYPTION_KEY env is unset. Sourced via secrets.DecodeKey
+	// from the base64 env value.
 	SecretsEncryptionKey []byte
 
 	// CORS
@@ -362,7 +364,7 @@ func (c Config) Validate() []string {
 			errs = append(errs, "PGSTACK_ENV=production: REQUIRE_AUTHENTICATED_WS=false lets anon-key holders open any live-query WS — set REQUIRE_AUTHENTICATED_WS=true")
 		}
 		if len(c.SecretsEncryptionKey) == 0 {
-			errs = append(errs, "PGSTACK_ENV=production: SECRETS_ENCRYPTION_KEY is required (at-rest encryption for edge function env vars)")
+			errs = append(errs, "PGSTACK_ENV=production: SECRETS_ENCRYPTION_KEY is required (at-rest encryption for edge function env vars AND webhook signing secrets)")
 		}
 	}
 	if c.RequireEmailVerification && c.SMTPHost == "" {

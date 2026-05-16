@@ -1,6 +1,7 @@
 // Package secrets provides authenticated symmetric encryption for at-rest
-// credentials persisted in the database (currently: edge function env vars;
-// audit finding F6).
+// credentials persisted in the database — currently:
+//   * pgstack.edge_functions.env_vars_encrypted (audit finding F6, round 2)
+//   * pgstack.webhooks.secret_encrypted          (audit finding F1, round 7)
 //
 // Algorithm: AES-256-GCM. The key is loaded from the SECRETS_ENCRYPTION_KEY
 // env var as 32 raw bytes, base64-encoded. Nonces are random 12 bytes and

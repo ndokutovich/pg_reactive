@@ -73,16 +73,16 @@ func main() {
 	log.Info().Msg("PG connection pool ready")
 
 	// Initialize secret box from SECRETS_ENCRYPTION_KEY env. Nil when unset —
-	// features that need encryption (edge function env vars) degrade with a
-	// loud WARN at use-time rather than refusing to boot.
+	// features that need encryption (edge function env vars, webhook signing
+	// secrets) degrade fail-closed at use-time rather than refusing to boot.
 	secretBox, err := secrets.New(cfg.SecretsEncryptionKey)
 	if err != nil {
 		log.Fatal().Err(err).Msg("SECRETS_ENCRYPTION_KEY invalid")
 	}
 	if secretBox == nil {
-		log.Info().Msg("SECRETS_ENCRYPTION_KEY unset — edge function env vars cannot be decrypted; features that need at-rest secret encryption will degrade")
+		log.Info().Msg("SECRETS_ENCRYPTION_KEY unset — edge function env vars and webhook signing secrets cannot be decrypted; CreateWebhook will refuse non-empty secrets and Refresh will drop encrypted-secret webhooks")
 	} else {
-		log.Info().Msg("SECRETS_ENCRYPTION_KEY loaded — at-rest secret encryption enabled")
+		log.Info().Msg("SECRETS_ENCRYPTION_KEY loaded — at-rest secret encryption enabled (edge function env vars, webhook signing secrets)")
 	}
 
 	state := NewAppState(cfg, pool, secretBox)

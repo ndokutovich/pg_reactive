@@ -42,9 +42,11 @@ type AppState struct {
 	// WebhookManager manages webhook delivery from NOTIFY payloads.
 	WebhookManager *realtime.WebhookManager
 
-	// SecretBox decrypts at-rest secrets (edge function env vars).
-	// Nil when SECRETS_ENCRYPTION_KEY is unset — features that need it log
-	// loudly and degrade gracefully rather than crashing the proxy.
+	// SecretBox decrypts every at-rest secret the proxy holds: edge
+	// function env vars (env_vars_encrypted) AND webhook signing secrets
+	// (webhooks.secret_encrypted). Nil when SECRETS_ENCRYPTION_KEY is
+	// unset — CreateWebhook then refuses non-empty secrets, and Refresh
+	// drops any encrypted-secret webhook from the in-memory cache.
 	SecretBox *secrets.Box
 }
 
