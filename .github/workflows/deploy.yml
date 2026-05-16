@@ -53,12 +53,21 @@ jobs:
             git -c "http.extraheader=$AUTH_HDR" fetch origin master
             git reset --hard origin/master
 
+            # Idempotent secret bootstrap: first run generates .env with
+            # cryptographically random values for every required secret;
+            # subsequent runs leave existing values alone so live keys
+            # are never rotated out from under the running services.
+            bash scripts/bootstrap-env.sh
+
             docker network create gateway 2>/dev/null || true
-            docker compose \
+            # --env-file pins the .env path to the repo root regardless of
+            # which compose file is `-f` first. Without it, compose v2
+            # would look for .env next to examples/docker-compose.yml.
+            docker compose --env-file .env \
               -f examples/docker-compose.yml \
               -f examples/docker-compose.prod.yml \
               build --parallel
-            docker compose \
+            docker compose --env-file .env \
               -f examples/docker-compose.yml \
               -f examples/docker-compose.prod.yml \
               up -d
