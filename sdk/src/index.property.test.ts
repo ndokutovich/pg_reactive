@@ -37,6 +37,9 @@ class MockWebSocket {
 }
 
 beforeEach(() => {
+  // Belt-and-braces: ensure no fake-timer state leaked in from a sibling file
+  // before this file's property tests start awaiting real setTimeouts.
+  vi.useRealTimers();
   MockWebSocket.instances = [];
   vi.stubGlobal('WebSocket', MockWebSocket);
 });
@@ -47,6 +50,7 @@ afterEach(() => {
   // files when vitest reuses workers.
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers(); // defensive: incoming worker may have left fake timers active
 });
 
 // ---- Arbitraries ----
@@ -220,8 +224,10 @@ describe('LiveQuery property-based tests', () => {
         const lq = new LiveQuery(queryId, { url: 'ws://127.0.0.1:8080' });
         lq.on((event) => events.push(event));
 
-        // Wait for onopen
-        await new Promise((r) => setTimeout(r, 5));
+        // onmessage is wired synchronously by LiveQuery's constructor right
+        // after `new WebSocket()` — no need to await onopen before driving
+        // simulated messages. Avoiding real timers keeps numRuns:200 well
+        // under the default 5s test timeout.
         const ws = MockWebSocket.instances[0];
         events.length = 0; // clear "connected" event
 
@@ -264,7 +270,6 @@ describe('LiveQuery property-based tests', () => {
           MockWebSocket.instances = [];
           const lq = new LiveQuery(queryId, { url: 'ws://127.0.0.1:8080' });
 
-          await new Promise((r) => setTimeout(r, 5));
           const ws = MockWebSocket.instances[0];
 
           // Seed initial rows
@@ -320,7 +325,6 @@ describe('LiveQuery property-based tests', () => {
           MockWebSocket.instances = [];
           const lq = new LiveQuery(queryId, { url: 'ws://127.0.0.1:8080' });
 
-          await new Promise((r) => setTimeout(r, 5));
           const ws = MockWebSocket.instances[0];
 
           // Insert with one key order
@@ -360,7 +364,6 @@ describe('LiveQuery property-based tests', () => {
           MockWebSocket.instances = [];
           const lq = new LiveQuery(queryId, { url: 'ws://127.0.0.1:8080' });
 
-          await new Promise((r) => setTimeout(r, 5));
           const ws = MockWebSocket.instances[0];
 
           // Send delta for a different query_id
@@ -390,7 +393,6 @@ describe('LiveQuery property-based tests', () => {
           MockWebSocket.instances = [];
           const lq = new LiveQuery(queryId, { url: 'ws://127.0.0.1:8080' });
 
-          await new Promise((r) => setTimeout(r, 5));
           const ws = MockWebSocket.instances[0];
 
           // Seed rows
@@ -428,7 +430,6 @@ describe('LiveQuery property-based tests', () => {
           const lq = new LiveQuery(queryId, { url: 'ws://127.0.0.1:8080' });
 
           const unsub = lq.on((event) => events.push(event));
-          await new Promise((r) => setTimeout(r, 5));
 
           // Unsubscribe
           unsub();
@@ -508,8 +509,6 @@ describe('createClient property-based tests', () => {
           MockWebSocket.instances = [];
           const client = createClient({ url: 'ws://127.0.0.1:8080' });
           uniqueIds.forEach((id) => client.subscribe(id));
-
-          await new Promise((r) => setTimeout(r, 5));
 
           client.close();
 
@@ -637,7 +636,6 @@ describe('HubSubscription optimistic update properties', () => {
           const hub = new LiveQueryHub({ url: 'ws://127.0.0.1:8080' });
           const sub = hub.subscribe(queryId);
 
-          await new Promise((r) => setTimeout(r, 5));
           const ws = MockWebSocket.instances[0];
 
           // Seed initial rows
@@ -680,7 +678,6 @@ describe('HubSubscription optimistic update properties', () => {
           const hub = new LiveQueryHub({ url: 'ws://127.0.0.1:8080' });
           const sub = hub.subscribe(queryId);
 
-          await new Promise((r) => setTimeout(r, 5));
           const ws = MockWebSocket.instances[0];
 
           // Seed initial rows

@@ -55,6 +55,12 @@ afterEach(() => {
   // turning property tests into intermittent timeouts.
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  // useFakeTimers leaks across files too — the reconnect tests above call
+  // useFakeTimers() and rely on the per-test useRealTimers() to clean up.
+  // When one of those tests fails (or any future test forgets the cleanup),
+  // fake timers stay active and the next file's setTimeout-based property
+  // tests never resolve. Force-reset here so the worker is always clean.
+  vi.useRealTimers();
 });
 
 describe("LiveQuery", () => {
