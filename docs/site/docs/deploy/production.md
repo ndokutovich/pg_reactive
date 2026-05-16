@@ -40,8 +40,8 @@ Before launching pgStack in production, review the following checklist.
 - [ ] `POSTGRES_HOST_AUTH_METHOD` is `scram-sha-256` (not `trust`)
 - [ ] `ENABLE_SQL_ENDPOINT` is `false`
 - [ ] `ENABLE_DEMO_ENDPOINT` is `false` or unset
-- [ ] `SECRETS_ENCRYPTION_KEY` is set to a strong random 32-byte value if any edge function uses env vars
-- [ ] Existing deployments have run `migrations/20260515210000_hash_tokens_encrypt_envvars.sql` (refresh + email tokens are stored as SHA-256 hashes; env vars are AES-256-GCM encrypted)
+- [ ] `SECRETS_ENCRYPTION_KEY` is set to a strong random 32-byte value if any of these are in use: edge function env vars, webhook signing secrets. Without it, `CreateWebhook` refuses non-empty secrets and existing encrypted rows are dropped from the delivery cache (fail-closed).
+- [ ] Existing deployments have run `migrations/20260515210000_hash_tokens_encrypt_envvars.sql` (refresh + email tokens are stored as SHA-256 hashes; env vars are AES-256-GCM encrypted) and `migrations/20260516120000_encrypt_webhook_secrets.sql` (webhook signing secrets moved from plaintext to `secret_encrypted` — webhooks must be re-created with new secrets after the migration)
 - [ ] RLS is enabled on all user-facing tables
 - [ ] `anon` and `authenticated` roles have only the minimum necessary permissions
 - [ ] Internal auth tables (`pgstack.refresh_tokens`, `pgstack.oauth_sessions`, `pgstack.email_tokens`) have RLS enabled

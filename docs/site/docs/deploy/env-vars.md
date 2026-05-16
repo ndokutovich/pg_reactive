@@ -28,7 +28,7 @@ These must be set for production. In development, the compose file provides inse
 | `ANON_KEY` | `Nz6xB4cJ8p...` | API key for anonymous (unauthenticated) requests. |
 | `SERVICE_ROLE_KEY` | `Qr1eD7hF3a...` | Admin API key. Bypasses RLS. Keep secret. |
 | `SITE_URL` | `https://app.example.com` | Public URL of your app. Required for OAuth redirects. |
-| `SECRETS_ENCRYPTION_KEY` | `Tn4vC9eB2k...` | 32 bytes base64. Encrypts at-rest credentials (edge function env vars) with AES-256-GCM. Required whenever functions use env vars. |
+| `SECRETS_ENCRYPTION_KEY` | `Tn4vC9eB2k...` | 32 bytes base64. AES-256-GCM key for every at-rest secret the proxy holds. Required whenever you use: (a) edge function env vars; (b) webhook signing secrets (`pgstack.webhooks.secret_encrypted`). With the key missing, `CreateWebhook` with a non-empty secret returns 400, and existing encrypted-secret rows are dropped from the in-memory delivery cache at refresh (fail-closed). |
 
 ## Database variables
 

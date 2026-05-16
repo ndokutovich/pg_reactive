@@ -78,17 +78,22 @@ func (wm *WebhookManager) Refresh(ctx context.Context) error {
 		wh.CreatedAt = createdAt.Format(time.RFC3339)
 
 		// Decrypt the at-rest secret into in-memory plaintext for HMAC
-		// signing. Nil SecretBox + non-empty ciphertext = misconfiguration;
-		// load the webhook with empty Secret (deliveries go out unsigned)
-		// and log a WARN. Better than failing all delivery silently.
+		// signing. Symmetric with CreateWebhook's fail-closed posture
+		// (audit follow-up to F1, round 8): rather than degrade to
+		// unsigned delivery when SECRETS_ENCRYPTION_KEY is missing,
+		// rotated, or the ciphertext is tampered, drop the row from
+		// the in-memory cache. Receivers that require a signature would
+		// have rejected an unsigned POST anyway; loud refusal beats
+		// silent integrity loss.
 		if len(secretEnc) > 0 {
 			plain, derr := wm.secrets.Decrypt(secretEnc)
 			if derr != nil {
 				log.Warn().Err(derr).Str("id", wh.ID).
-					Msg("webhooks refresh: secret_encrypted present but cannot be decrypted; delivering unsigned")
-			} else {
-				wh.Secret = string(plain)
+					Msg("webhooks refresh: secret_encrypted present but cannot be decrypted; dropping (set SECRETS_ENCRYPTION_KEY or re-create the webhook)")
+				dropped++
+				continue
 			}
+			wh.Secret = string(plain)
 		}
 
 		// Refresh-time SSRF guard. CreateWebhook already validates URLs,
