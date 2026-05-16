@@ -52,7 +52,7 @@ func CreateWebhook(d *WebhookDeps) http.HandlerFunc {
 		// SSRF guard. Even a privileged caller (compromised service_role
 		// key / Studio with stolen storage) cannot point the webhook at
 		// internal nodes, the cloud metadata server, or loopback.
-		if _, verr := validateWebhookURL(body.URL); verr != nil {
+		if _, verr := realtime.ValidateWebhookURL(body.URL); verr != nil {
 			writeJSONError(w, http.StatusBadRequest, verr.Error())
 			return
 		}

@@ -1,4 +1,4 @@
-package routes
+package realtime
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// validateWebhookURL enforces an SSRF-resistant policy on webhook target
+// ValidateWebhookURL enforces an SSRF-resistant policy on webhook target
 // URLs (audit finding F5, 2026-05).
 //
 // Webhooks DO target external public endpoints (Slack, Discord, customer
@@ -28,7 +28,7 @@ import (
 // list. That race-windows with DNS rebinding and won't catch hostnames
 // that resolve to private ranges later. A delivery-time hardening pass
 // is a worthwhile follow-up.
-func validateWebhookURL(raw string) (*url.URL, error) {
+func ValidateWebhookURL(raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("url is empty")
 	}

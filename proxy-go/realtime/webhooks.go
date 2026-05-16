@@ -58,6 +58,7 @@ func (wm *WebhookManager) Refresh(ctx context.Context) error {
 	defer rows.Close()
 
 	var hooks []Webhook
+	var dropped int
 	for rows.Next() {
 		var wh Webhook
 		var createdAt time.Time
@@ -65,6 +66,19 @@ func (wm *WebhookManager) Refresh(ctx context.Context) error {
 			return fmt.Errorf("webhooks scan: %w", err)
 		}
 		wh.CreatedAt = createdAt.Format(time.RFC3339)
+
+		// Refresh-time SSRF guard. CreateWebhook already validates URLs,
+		// but rows inserted directly via SQL, restored from a backup, or
+		// imported via migration would bypass that check. Drop unsafe
+		// URLs from the in-memory cache so deliverWithRetry never sees
+		// them. (Audit follow-up to F5, 2026-05.)
+		if _, verr := ValidateWebhookURL(wh.URL); verr != nil {
+			log.Warn().Str("id", wh.ID).Str("url", wh.URL).Err(verr).
+				Msg("webhooks refresh: dropping row with unsafe URL")
+			dropped++
+			continue
+		}
+
 		hooks = append(hooks, wh)
 	}
 
@@ -72,7 +86,7 @@ func (wm *WebhookManager) Refresh(ctx context.Context) error {
 	wm.webhooks = hooks
 	wm.mu.Unlock()
 
-	log.Info().Int("count", len(hooks)).Msg("webhooks refreshed")
+	log.Info().Int("count", len(hooks)).Int("dropped", dropped).Msg("webhooks refreshed")
 	return nil
 }
 

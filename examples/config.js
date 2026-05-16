@@ -36,16 +36,17 @@
 
   var wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   var anonKey = typeof window.PGR_ANON_KEY === 'string' ? window.PGR_ANON_KEY : 'anon-key-12345';
-  var serviceRoleKey = typeof window.PGR_SERVICE_ROLE_KEY === 'string'
-    ? window.PGR_SERVICE_ROLE_KEY
-    : 'dev-only-service-role-key-do-not-use-in-production';
 
+  // NOTE: we DELIBERATELY do not surface service_role here. A browser
+  // page must never need the service-role key — it bypasses RLS and
+  // grants admin access. Examples that look like they need it (e.g.
+  // catalog refresh) should call an authenticated endpoint server-side
+  // instead, or use Studio (which prompts for the key once per session).
   window.PGR = {
     base:    base,
     wsBase:  wsProto + location.host + base + '/ws',
     apiBase: location.origin + base + '/api',
     anonKey: anonKey,
-    serviceRoleKey: serviceRoleKey,
   };
 
   // Auto-inject ?apikey= into WebSocket connections targeting /ws/.

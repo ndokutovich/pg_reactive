@@ -10,9 +10,13 @@ import type { SqlResult } from '../api/sql';
 const HISTORY_KEY = 'pgstack-studio-sql-history';
 const MAX_HISTORY = 50;
 
+// Admin SQL frequently contains secret literals (token hashes, password
+// digests, internal IDs). sessionStorage keeps that history scoped to
+// the tab — closing the browser wipes it, and XSS payloads cannot
+// exfiltrate a long-lived audit trail.
 function loadHistory(): string[] {
   try {
-    const raw = localStorage.getItem(HISTORY_KEY);
+    const raw = sessionStorage.getItem(HISTORY_KEY);
     return raw ? (JSON.parse(raw) as string[]) : [];
   } catch {
     return [];
@@ -20,7 +24,8 @@ function loadHistory(): string[] {
 }
 
 function saveHistory(history: string[]): void {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  try { sessionStorage.setItem(HISTORY_KEY, JSON.stringify(history)); }
+  catch { /* sessionStorage quota / disabled — silently drop */ }
 }
 
 export function SqlEditorPage(): React.ReactElement {

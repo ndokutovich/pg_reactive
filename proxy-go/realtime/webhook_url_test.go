@@ -1,4 +1,4 @@
-package routes
+package realtime
 
 import "testing"
 
@@ -10,7 +10,7 @@ func TestValidateWebhookURL_AcceptsPublicFQDNs(t *testing.T) {
 		"https://my-app.example.com:8443/inbound",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			if _, err := validateWebhookURL(raw); err != nil {
+			if _, err := ValidateWebhookURL(raw); err != nil {
 				t.Fatalf("expected valid, got: %v", err)
 			}
 		})
@@ -26,7 +26,7 @@ func TestValidateWebhookURL_RejectsIPLiterals(t *testing.T) {
 		"http://[::1]:8080/",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			if _, err := validateWebhookURL(raw); err == nil {
+			if _, err := ValidateWebhookURL(raw); err == nil {
 				t.Fatalf("expected reject for %s, got nil", raw)
 			}
 		})
@@ -43,7 +43,7 @@ func TestValidateWebhookURL_RejectsInternalNames(t *testing.T) {
 		"http://hello-go",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			if _, err := validateWebhookURL(raw); err == nil {
+			if _, err := ValidateWebhookURL(raw); err == nil {
 				t.Fatalf("expected reject for %s, got nil", raw)
 			}
 		})
@@ -58,7 +58,7 @@ func TestValidateWebhookURL_RejectsBadSchemes(t *testing.T) {
 		"javascript:alert(1)",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			if _, err := validateWebhookURL(raw); err == nil {
+			if _, err := ValidateWebhookURL(raw); err == nil {
 				t.Fatalf("expected reject for %s, got nil", raw)
 			}
 		})
@@ -66,10 +66,10 @@ func TestValidateWebhookURL_RejectsBadSchemes(t *testing.T) {
 }
 
 func TestValidateWebhookURL_RejectsMalformed(t *testing.T) {
-	if _, err := validateWebhookURL(""); err == nil {
+	if _, err := ValidateWebhookURL(""); err == nil {
 		t.Fatal("empty must be rejected")
 	}
-	if _, err := validateWebhookURL("not a url"); err == nil {
+	if _, err := ValidateWebhookURL("not a url"); err == nil {
 		t.Fatal("malformed must be rejected")
 	}
 }

@@ -333,8 +333,18 @@ func (c Config) Validate() []string {
 		if strings.Contains(c.JWTSecret, "dev-only") {
 			errs = append(errs, "PGSTACK_ENV=production: JWT_SECRET still contains 'dev-only' — generate a real key with `openssl rand -base64 32`")
 		}
+		// ANON_KEY: required non-empty in production. Even when the proxy
+		// rejects anon-key WS subscriptions (REQUIRE_AUTHENTICATED_WS), a
+		// REST request without an apikey would fall into the public-anon
+		// path, so a non-empty value is still a meaningful gate.
+		if c.AnonKey == "" {
+			errs = append(errs, "PGSTACK_ENV=production: ANON_KEY is required (random 32+ bytes)")
+		}
 		if strings.Contains(c.AnonKey, "dev-only") || c.AnonKey == "anon-key-12345" {
 			errs = append(errs, "PGSTACK_ENV=production: ANON_KEY is a publicly-known dev value — generate a real key")
+		}
+		if c.ServiceRoleKey == "" {
+			errs = append(errs, "PGSTACK_ENV=production: SERVICE_ROLE_KEY is required (random 32+ bytes)")
 		}
 		if strings.Contains(c.ServiceRoleKey, "dev-only") {
 			errs = append(errs, "PGSTACK_ENV=production: SERVICE_ROLE_KEY is a publicly-known dev value — generate a real key")

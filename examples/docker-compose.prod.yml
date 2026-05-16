@@ -33,6 +33,10 @@ services:
     restart: unless-stopped
     ports: !reset []
     environment:
+      # Override the dev DATABASE_URL (which hard-codes postgres:postgres).
+      # Without this, scram-sha-256 + a random POSTGRES_PASSWORD would
+      # leave the proxy unable to connect to its own DB.
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?required}@db:5432/pg_reactive_test
       # Hardening: anon-key holders cannot open live-query WebSockets —
       # only real JWTs. The dev base keeps this off so public live queries
       # in tutorials work without auth.
@@ -61,6 +65,13 @@ services:
 
   hello-go:
     restart: unless-stopped
+
+  # The `setup` container connects as `postgres`; the dev base relies on
+  # trust auth, but prod uses scram-sha-256 with a random password.
+  # PGPASSWORD is the libpq env var that psql picks up automatically.
+  setup:
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?required}
 
   web:
     restart: unless-stopped
