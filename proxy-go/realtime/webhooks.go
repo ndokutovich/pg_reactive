@@ -45,9 +45,11 @@ type WebhookManager struct {
 // to non-public IPs, has request/response timeouts).
 //
 // secretBox decrypts the at-rest webhook signing secret. nil is allowed
-// (matches the pattern in functions.NewFunctionsCatalog) — rows with a
-// non-nil secret_encrypted will load with empty Secret and a WARN log,
-// so misconfiguration is loud but not fatal.
+// for deployments that never set a webhook secret (CreateWebhook then
+// refuses any non-empty secret). When secretBox is nil or cannot
+// decrypt a row's secret_encrypted, Refresh treats the webhook as
+// fail-closed — the row is dropped from the in-memory cache rather
+// than delivered unsigned. Audit round-8 hardening.
 func NewWebhookManager(pool *pgxpool.Pool, secretBox *secrets.Box) *WebhookManager {
 	return &WebhookManager{
 		pool:    pool,
