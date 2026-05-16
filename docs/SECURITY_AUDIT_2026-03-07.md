@@ -10,7 +10,7 @@
 
 The codebase demonstrates strong security fundamentals: parameterized SQL queries throughout, identifier quoting via `QuoteIdent`, role whitelisting for `SET LOCAL ROLE`, Argon2id password hashing, refresh token rotation with family-based reuse detection, and non-root Docker containers. However, **4 Critical**, **13 High**, **14 Medium**, and **10 Low** findings were identified across all layers.
 
-**Phase 1 and Phase 2 remediations are complete as of commit `98f9667`.** All 4 Critical, all 13 High, and 11 of 14 Medium findings have been resolved. Three Medium findings (M3, M14) and all Low findings remain open.
+**Phase 1, Phase 2, and Phase 3 secret-at-rest remediations are complete.** All 4 Critical, all 13 High, and all 14 Medium findings have been resolved as of the round-7/round-8 hardening pass (see `migrations/20260516120000_encrypt_webhook_secrets.sql` and the per-finding notes in the Remediation Status section below). M3 (refresh tokens) is now stored as SHA-256 via `HashToken()` in `pgstack.refresh_tokens.token_hash`. M14 (edge function env vars) and the new webhook signing secrets are now stored as AES-256-GCM ciphertext (`env_vars_encrypted BYTEA`, `secret_encrypted BYTEA`) under `SECRETS_ENCRYPTION_KEY`. The Low findings remain tracked separately.
 
 **Top 3 urgent fixes (at time of original audit):**
 1. Embedded JS (goja) `db.query()` bypasses all RLS — any edge function runs SQL as superuser
@@ -142,7 +142,7 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 |----|---------|--------|-------|
 | M1 | WebSocket `CheckOrigin` always returns true | FIXED | `CheckOrigin` now validates against `AllowedOrigins` |
 | M2 | No HSTS header | FIXED | HSTS header added when TLS is active |
-| M3 | Refresh tokens stored as plaintext | OPEN | Not yet addressed |
+| M3 | Refresh tokens stored as plaintext | FIXED | `pgstack.refresh_tokens.token_hash` stores `HashToken(refresh)` (SHA-256); plaintext never persisted. See `proxy-go/auth/routes.go:56,307,357` |
 | M4 | `unsafe-inline` in script-src CSP | FIXED | `'unsafe-inline'` removed from script-src |
 | M5 | Dev default secrets pass validation | FIXED | Config validation warns on dev-only JWT secrets |
 | M6 | Password grant skips `email_confirmed_at` | FIXED | Password grant checks `email_confirmed_at` when verification required |
@@ -153,7 +153,7 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 | M11 | Production port binds to all interfaces | FIXED | Production port binds to `127.0.0.1` |
 | M12 | Buffer overread in `pgr_dep_find_by_table` | FIXED | `Min(count, 256)` bounds check applied on all loops |
 | M13 | `refresh_tokens`, `email_tokens`, `oauth_sessions` lack RLS | FIXED | RLS enabled on all three tables |
-| M14 | `edge_functions.env_vars` stores secrets as plaintext JSONB | OPEN | Not yet addressed |
+| M14 | `edge_functions.env_vars` stores secrets as plaintext JSONB | FIXED | Column replaced by `env_vars_encrypted BYTEA` (AES-256-GCM under `SECRETS_ENCRYPTION_KEY`, `proxy-go/secrets/secretbox.go`). Same posture extended to `pgstack.webhooks.secret_encrypted`. See `docker/init.sql:184,369` |
 
 ### Low Findings
 
@@ -194,12 +194,12 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 13. ✅ **H8**: URL-encode template-resolved values in batch query strings
 14. ✅ **M1**: Validate WebSocket `Origin` against `AllowedOrigins`
 15. ✅ **M2**: Add HSTS header when TLS is active
-16. ❌ **M3**: Store SHA-256 hash of refresh tokens instead of plaintext — OPEN
+16. ✅ **M3**: Store SHA-256 hash of refresh tokens instead of plaintext
 17. ✅ **M6**: Check `email_confirmed_at` in password grant when verification required
 18. ✅ **M13**: Enable RLS on `refresh_tokens`, `email_tokens`, `oauth_sessions`
 
 ### Phase 3 — Hardening
 
-19. Remaining Medium findings (M3, M14) and all Low findings (L1–L10)
-20. Dependency updates (gomail replacement, Docker image pinning)
-21. Security regression test suite for all fixed findings
+19. ✅ **M3** + ✅ **M14** complete. Secret-at-rest also extended to `pgstack.webhooks.secret_encrypted` (out-of-scope for the original audit, added during round-7/round-8 hardening). Remaining: all Low findings (L1–L10).
+20. Dependency updates (gomail replacement, Docker image pinning) — pending
+21. Security regression test suite for all fixed findings — in place for the major Critical/High/Medium fixes; gaps tracked in CI

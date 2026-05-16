@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_reactive — Live Queries Inside PostgreSQL</title>
+<meta name="description" content="Subscribe to any SELECT query in PostgreSQL and get JSON deltas when results change. GROUP BY, window functions, aggregates. No Kafka, no Materialize. MIT licensed.">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#0f172a;
+  --navy-deep:#0a0f1e;
+  --navy-mid:#1e293b;
+  --amber:#f59e0b;
+  --amber-light:#fbbf24;
+  --amber-dim:rgba(245,158,11,0.15);
+  --text:#e2e8f0;
+  --text-dim:#94a3b8;
+  --text-muted:#64748b;
+  --serif:Georgia,'Times New Roman',serif;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --mono:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;
+}
+html{scroll-behavior:smooth}
+body{
+  background:var(--navy);
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:18px;
+  line-height:1.9;
+  overflow-x:hidden;
+}
+::selection{background:var(--amber);color:var(--navy)}
+
+/* ---- Typography ---- */
+h1,h2,h3{font-family:var(--serif);font-weight:400;letter-spacing:-0.01em}
+h1{font-size:clamp(2.8rem,6vw,5rem);line-height:1.1}
+h2{font-size:clamp(1.8rem,3.5vw,2.8rem);line-height:1.25;margin-bottom:1.5rem}
+h3{font-size:clamp(1.3rem,2vw,1.6rem);line-height:1.35;margin-bottom:1rem}
+p{max-width:42em}
+a{color:var(--amber);text-decoration:none;border-bottom:1px solid transparent;transition:border-color 0.2s}
+a:hover{border-bottom-color:var(--amber)}
+
+/* ---- Sections ---- */
+section{padding:clamp(80px,12vw,160px) clamp(24px,5vw,48px)}
+section:nth-child(odd){background:var(--navy)}
+section:nth-child(even){background:var(--navy-deep)}
+.inner{max-width:760px;margin:0 auto}
+.inner-wide{max-width:960px;margin:0 auto}
+
+/* ---- Parallax bands ---- */
+.parallax-band{
+  height:clamp(200px,30vw,360px);
+  background-attachment:fixed;
+  background-size:cover;
+  background-position:center;
+  position:relative;
+}
+.parallax-band::after{
+  content:'';
+  position:absolute;inset:0;
+  background:linear-gradient(180deg,var(--navy) 0%,transparent 30%,transparent 70%,var(--navy-deep) 100%);
+}
+/* CSS-only parallax pattern backgrounds */
+.parallax-1{
+  background-image:
+    radial-gradient(ellipse 600px 400px at 30% 50%, rgba(245,158,11,0.06) 0%, transparent 70%),
+    radial-gradient(ellipse 400px 300px at 70% 40%, rgba(245,158,11,0.04) 0%, transparent 70%),
+    repeating-linear-gradient(0deg, transparent, transparent 40px, rgba(255,255,255,0.015) 40px, rgba(255,255,255,0.015) 41px);
+  background-color:var(--navy-deep);
+  background-attachment:fixed;
+}
+.parallax-2{
+  background-image:
+    radial-gradient(ellipse 500px 500px at 60% 50%, rgba(245,158,11,0.05) 0%, transparent 70%),
+    repeating-linear-gradient(90deg, transparent, transparent 60px, rgba(255,255,255,0.01) 60px, rgba(255,255,255,0.01) 61px);
+  background-color:var(--navy);
+  background-attachment:fixed;
+}
+
+/* ---- Hero ---- */
+.hero{
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  padding:clamp(60px,10vw,120px) 24px;
+  position:relative;
+  background:
+    radial-gradient(ellipse 800px 600px at 50% 40%, rgba(245,158,11,0.07) 0%, transparent 70%),
+    var(--navy);
+}
+.hero-content{max-width:840px}
+.hero h1{margin-bottom:2rem;color:var(--text)}
+.hero h1 em{font-style:normal;color:var(--amber)}
+.hero .lead{
+  font-size:clamp(1.15rem,2vw,1.4rem);
+  color:var(--text-dim);
+  line-height:1.8;
+  max-width:600px;
+  margin:0 auto;
+}
+
+/* ---- Epigraph / pull quote ---- */
+.epigraph{
+  text-align:center;
+  padding:clamp(80px,12vw,140px) 24px;
+}
+.epigraph p{
+  font-family:var(--serif);
+  font-size:clamp(1.6rem,3.5vw,2.6rem);
+  line-height:1.45;
+  color:var(--amber);
+  max-width:720px;
+  margin:0 auto;
+  font-style:italic;
+}
+.epigraph .attr{
+  display:block;
+  margin-top:1.5rem;
+  font-family:var(--sans);
+  font-size:0.9rem;
+  font-style:normal;
+  color:var(--text-muted);
+  letter-spacing:0.03em;
+}
+
+/* ---- Prose ---- */
+.prose p{margin-bottom:1.6em;color:var(--text-dim)}
+.prose p:last-child{margin-bottom:0}
+.prose strong{color:var(--text);font-weight:600}
+.prose em{color:var(--amber-light);font-style:italic}
+
+/* ---- Code blocks ---- */
+.code-block{
+  background:var(--navy-deep);
+  border:1px solid var(--navy-mid);
+  border-radius:8px;
+  padding:1.5em 2em;
+  margin:2em 0;
+  overflow-x:auto;
+  font-family:var(--mono);
+  font-size:0.88rem;
+  line-height:1.7;
+  color:var(--text-dim);
+}
+.code-block .kw{color:var(--amber)}
+.code-block .fn{color:#7dd3fc}
+.code-block .str{color:#86efac}
+.code-block .cm{color:var(--text-muted);font-style:italic}
+.code-block .op{color:var(--text)}
+
+/* ---- Comparison card ---- */
+.compare{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:2px;
+  margin:2.5em 0;
+  border-radius:12px;
+  overflow:hidden;
+}
+.compare-col{
+  padding:clamp(1.5em,3vw,2.5em);
+  background:var(--navy-deep);
+}
+.compare-col:first-child{background:rgba(255,255,255,0.02)}
+.compare-col h3{font-family:var(--sans);font-size:0.85rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:1.2em}
+.compare-col.highlight h3{color:var(--amber)}
+.compare-item{margin-bottom:1em;font-size:0.95rem;color:var(--text-dim);line-height:1.6}
+.compare-item strong{color:var(--text);display:block;font-size:1rem;margin-bottom:0.15em}
+@media(max-width:600px){.compare{grid-template-columns:1fr}}
+
+/* ---- Sentence highlight ---- */
+.sentence{
+  font-family:var(--serif);
+  font-size:clamp(1.3rem,2.5vw,1.8rem);
+  line-height:1.55;
+  color:var(--text);
+  margin:2em 0;
+  padding-left:1.5em;
+  border-left:3px solid var(--amber);
+}
+
+/* ---- CTA section ---- */
+.cta{text-align:center;padding:clamp(100px,15vw,180px) 24px}
+.cta h2{color:var(--text);margin-bottom:0.5em}
+.cta p{color:var(--text-dim);margin:0 auto 2.5em auto;max-width:480px;font-size:1.05rem}
+.cta-buttons{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.btn{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:14px 32px;
+  border-radius:8px;
+  font-size:1rem;font-weight:600;
+  font-family:var(--sans);
+  border:none;cursor:pointer;
+  transition:transform 0.15s,box-shadow 0.15s;
+}
+.btn:hover{transform:translateY(-1px)}
+.btn-primary{
+  background:var(--amber);
+  color:var(--navy);
+  border-bottom:none;
+  box-shadow:0 4px 24px rgba(245,158,11,0.25);
+}
+.btn-primary:hover{
+  background:var(--amber-light);
+  box-shadow:0 6px 32px rgba(245,158,11,0.35);
+  border-bottom:none;
+}
+.btn-secondary{
+  background:transparent;
+  color:var(--text);
+  border:1px solid var(--navy-mid);
+  border-bottom:1px solid var(--navy-mid);
+}
+.btn-secondary:hover{border-color:var(--text-muted);border-bottom-color:var(--text-muted)}
+.btn svg{width:20px;height:20px;fill:currentColor}
+
+/* ---- Install snippet ---- */
+.install-row{
+  display:flex;gap:12px;
+  justify-content:center;
+  flex-wrap:wrap;
+  margin-top:2em;
+}
+.install-cmd{
+  background:var(--navy-deep);
+  border:1px solid var(--navy-mid);
+  border-radius:8px;
+  padding:12px 20px;
+  font-family:var(--mono);
+  font-size:0.88rem;
+  color:var(--text-dim);
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  cursor:pointer;
+  transition:border-color 0.2s;
+  position:relative;
+}
+.install-cmd:hover{border-color:var(--amber)}
+.install-cmd .label{
+  font-family:var(--sans);
+  font-size:0.7rem;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  color:var(--text-muted);
+  margin-right:4px;
+}
+.install-cmd .copied{
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--navy-deep);
+  border-radius:7px;
+  color:var(--amber);
+  font-family:var(--sans);
+  font-size:0.85rem;
+  font-weight:600;
+  opacity:0;
+  transition:opacity 0.15s;
+  pointer-events:none;
+}
+.install-cmd .copied.show{opacity:1}
+
+/* ---- Footer ---- */
+footer{
+  text-align:center;
+  padding:48px 24px;
+  font-size:0.85rem;
+  color:var(--text-muted);
+  border-top:1px solid rgba(255,255,255,0.05);
+}
+footer a{color:var(--text-dim);border-bottom-color:transparent}
+footer a:hover{color:var(--amber)}
+
+/* ---- Fade-in on scroll ---- */
+.fade-in{opacity:0;transform:translateY(24px);transition:opacity 0.7s ease,transform 0.7s ease}
+.fade-in.visible{opacity:1;transform:translateY(0)}
+
+/* ---- Responsive ---- */
+@media(max-width:600px){
+  body{font-size:16px;line-height:1.8}
+  section{padding:clamp(60px,10vw,100px) 20px}
+  .code-block{padding:1em 1.2em;font-size:0.82rem}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <div class="hero-content fade-in">
+    <h1>In 2021, pgvector added vector search&nbsp;to&nbsp;PostgreSQL</h1>
+    <p class="lead">Overnight, every database needed an embedding column. A single C extension changed what people expected from Postgres.</p>
+  </div>
+</section>
+
+<!-- ============ THE THESIS ============ -->
+<section class="epigraph">
+  <div class="fade-in">
+    <p>The same thing is about to happen to&nbsp;realtime.</p>
+  </div>
+</section>
+
+<!-- ============ THE PROBLEM ============ -->
+<section>
+  <div class="inner prose fade-in">
+    <h2>The polling tax</h2>
+    <p>
+      Every production codebase has the same dirty secret. Somewhere in the stack,
+      a <strong>setInterval</strong> fires every five seconds. A cron job wakes up to
+      re-run a query. A websocket handler polls the database, diffs the result in
+      application code, and pushes the difference to the client. The pattern is so
+      universal that nobody questions it anymore.
+    </p>
+    <p>
+      The cost is invisible until it isn't. A dashboard with 200 concurrent users
+      means 200 identical queries hitting Postgres every few seconds. A leaderboard
+      with a million rows gets re-sorted on every poll. An analytics panel runs the
+      same <strong>GROUP BY</strong> over and over, hoping to catch the moment
+      something changes. Most of the time, nothing has.
+    </p>
+    <p>
+      We accepted this because we had no alternative. PostgreSQL could store the data.
+      It could query the data. But it could not <em>watch</em> the data.
+    </p>
+  </div>
+</section>
+
+<!-- ============ PARALLAX BREAK ============ -->
+<div class="parallax-band parallax-1"></div>
+
+<!-- ============ THE INSIGHT ============ -->
+<section class="epigraph">
+  <div class="fade-in">
+    <p>What if SELECT could notify you when its result&nbsp;changes?</p>
+  </div>
+</section>
+
+<!-- ============ HOW IT WORKS ============ -->
+<section>
+  <div class="inner prose fade-in">
+    <h2>How pg_reactive works</h2>
+    <p>
+      pg_reactive is a PostgreSQL C extension. You install it with
+      <strong>CREATE EXTENSION</strong>. No sidecar, no extra process, no external
+      service. It runs inside the database engine itself.
+    </p>
+    <p>
+      You give it any SELECT query&mdash;joins, aggregates, window functions,
+      CTEs, subqueries. pg_reactive registers the query as a <em>live subscription</em>.
+      Under the hood, it tracks which columns in which tables the query reads from,
+      and installs lightweight triggers on those columns. When a row changes, the
+      triggers fire. pg_reactive re-evaluates only the affected portion of the query,
+      computes an <strong>EXCEPT</strong>-based diff against the previous result set,
+      and emits the delta as a JSON payload over PostgreSQL's native LISTEN/NOTIFY channel.
+    </p>
+    <p>
+      The diff is precise. If a single row enters the result set, you get that row.
+      If an aggregate changes because one underlying value shifted, you get the new
+      aggregate value and the old one. The client never re-fetches the full result.
+      It applies the delta to its local copy and moves on.
+    </p>
+
+    <div class="code-block">
+<span class="kw">SELECT</span> reactive.subscribe(<br>
+&nbsp;&nbsp;<span class="str">'channel_leaderboard'</span>,<br>
+&nbsp;&nbsp;<span class="str">$$<br>
+&nbsp;&nbsp;&nbsp;&nbsp;SELECT user_id, username, SUM(score) AS total<br>
+&nbsp;&nbsp;&nbsp;&nbsp;FROM game_scores<br>
+&nbsp;&nbsp;&nbsp;&nbsp;JOIN users USING (user_id)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;GROUP BY user_id, username<br>
+&nbsp;&nbsp;&nbsp;&nbsp;ORDER BY total DESC<br>
+&nbsp;&nbsp;&nbsp;&nbsp;LIMIT 100<br>
+&nbsp;&nbsp;$$</span><br>
+);
+    </div>
+
+    <p>
+      That's it. Any client listening on <strong>channel_leaderboard</strong> now
+      receives JSON deltas whenever any score changes. The GROUP BY re-aggregates.
+      The ORDER BY re-sorts. The LIMIT re-applies. And only the difference arrives.
+    </p>
+  </div>
+</section>
+
+<!-- ============ pg_ivm COMPARISON ============ -->
+<section>
+  <div class="inner fade-in">
+    <p class="sentence">
+      pg_ivm gave us incremental view maintenance&mdash;refresh a materialized view
+      without recomputing from scratch. pg_reactive gives us <em>push</em>.
+    </p>
+
+    <div class="prose" style="margin-top:2em">
+      <p>
+        With pg_ivm, you still have to ask. You call <strong>REFRESH</strong>,
+        and it updates the view efficiently. But you decide when to ask. You're
+        still polling, just with a smarter refresh.
+      </p>
+      <p>
+        pg_reactive inverts the model. You don't ask. The database tells you.
+        The moment a relevant row changes, the delta arrives. No refresh call,
+        no timer, no coordination. The query watches itself.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PARALLAX BREAK ============ -->
+<div class="parallax-band parallax-2"></div>
+
+<!-- ============ MATERIALIZE COMPARISON ============ -->
+<section>
+  <div class="inner fade-in">
+    <div class="inner-wide">
+      <h2>The Materialize question</h2>
+    </div>
+    <div class="prose">
+      <p>
+        Materialize does this. It does it well. You write SQL, you get incremental
+        results. But Materialize is a separate database. It requires its own cluster,
+        its own operational burden, its own billing line. The starting price is
+        <strong>$820 per month</strong>. For a startup with a single Postgres instance,
+        that's not a tool&mdash;it's a commitment.
+      </p>
+    </div>
+
+    <div class="compare">
+      <div class="compare-col">
+        <h3>Materialize</h3>
+        <div class="compare-item"><strong>Separate cluster</strong>Own compute, own storage, own ops</div>
+        <div class="compare-item"><strong>Data replication</strong>CDC pipeline from Postgres to Materialize</div>
+        <div class="compare-item"><strong>Starts at $820/mo</strong>Plus egress, plus storage, plus replicas</div>
+        <div class="compare-item"><strong>New query language nuances</strong>Materialize SQL, not PostgreSQL</div>
+      </div>
+      <div class="compare-col highlight">
+        <h3>pg_reactive</h3>
+        <div class="compare-item"><strong>CREATE EXTENSION</strong>Runs inside your existing Postgres</div>
+        <div class="compare-item"><strong>Zero data movement</strong>Queries your actual tables, in place</div>
+        <div class="compare-item"><strong>Free and MIT licensed</strong>No SaaS, no metered billing</div>
+        <div class="compare-item"><strong>Standard PostgreSQL SQL</strong>Every query you already know how to write</div>
+      </div>
+    </div>
+
+    <div class="prose">
+      <p>
+        pg_reactive is not a replacement for Materialize at scale. If you need
+        thousands of concurrent materializations across terabytes, Materialize
+        earns its price. But for the vast majority of applications&mdash;dashboards,
+        leaderboards, notification feeds, collaborative documents, admin panels&mdash;
+        <em>you don't need a second database</em>. You need your existing one to
+        be a little smarter.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ THE PARALLEL ============ -->
+<section class="epigraph">
+  <div class="fade-in">
+    <p>
+      pgvector: vector search inside the PostgreSQL you already&nbsp;run.<br>
+      <span style="opacity:0.5;font-size:0.85em">pg_reactive: live queries inside the PostgreSQL you already&nbsp;run.</span>
+    </p>
+  </div>
+</section>
+
+<!-- ============ WHAT YOU CAN BUILD ============ -->
+<section>
+  <div class="inner prose fade-in">
+    <h2>What becomes possible</h2>
+    <p>
+      A collaborative spreadsheet where cell formulas update across clients the
+      instant the underlying data changes. A stock trading dashboard where portfolio
+      aggregates recompute without a single poll. A SaaS admin panel where every
+      metric is live by default, not because you built a websocket layer, but because
+      the database pushes diffs natively.
+    </p>
+    <p>
+      A multi-tenant analytics page where each customer sees their own live
+      <strong>GROUP BY</strong>. A monitoring system where alert thresholds are
+      just SQL predicates on a subscribed query. A notification service that doesn't
+      wake up on a timer&mdash;it wakes up when the data says so.
+    </p>
+    <p>
+      None of this requires Kafka. None of it requires a streaming platform.
+      None of it requires anything beyond the PostgreSQL you already operate.
+    </p>
+  </div>
+</section>
+
+<!-- ============ TECHNICAL DETAILS ============ -->
+<section>
+  <div class="inner prose fade-in">
+    <h2>Under the hood</h2>
+    <p>
+      pg_reactive is written in C against the PostgreSQL extension API. It hooks
+      into the query planner to extract column-level dependencies, then installs
+      per-column triggers that fire only when watched values change. The diff engine
+      uses PostgreSQL's own EXCEPT operator internally, applied to the minimal subset
+      of the result set that could have been affected.
+    </p>
+    <p>
+      Deltas are serialized as JSON with three arrays: <strong>added</strong> rows,
+      <strong>removed</strong> rows, and <strong>changed</strong> rows (with both old
+      and new values). The payload is delivered via LISTEN/NOTIFY, which means any
+      PostgreSQL client library that supports notifications can receive live updates
+      with zero additional infrastructure.
+    </p>
+
+    <div class="code-block">
+<span class="cm">-- Delta payload structure</span><br>
+{<br>
+&nbsp;&nbsp;<span class="str">"added"</span>:   [{ <span class="str">"user_id"</span>: 42, <span class="str">"total"</span>: 1580 }],<br>
+&nbsp;&nbsp;<span class="str">"removed"</span>: [{ <span class="str">"user_id"</span>: 17, <span class="str">"total"</span>: 990 }],<br>
+&nbsp;&nbsp;<span class="str">"changed"</span>: [{ <span class="str">"user_id"</span>: 8, <span class="str">"old"</span>: { <span class="str">"total"</span>: 1200 }, <span class="str">"new"</span>: { <span class="str">"total"</span>: 1340 }}]<br>
+}
+    </div>
+
+    <p>
+      Subscriptions are transactional. If the INSERT that triggered a change
+      rolls back, no delta is emitted. What the client sees is always consistent
+      with committed database state.
+    </p>
+  </div>
+</section>
+
+<!-- ============ CTA ============ -->
+<section class="cta">
+  <div class="fade-in">
+    <h2>Try pg_reactive</h2>
+    <p>
+      One extension. Your existing PostgreSQL. Live queries in five&nbsp;minutes.
+    </p>
+    <div class="cta-buttons">
+      <a href="https://github.com/pg-reactive/pg_reactive" class="btn btn-primary">
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a href="https://github.com/pg-reactive/pg_reactive#quick-start" class="btn btn-secondary">
+        Documentation
+      </a>
+    </div>
+    <div class="install-row">
+      <div class="install-cmd" onclick="copyCmd(this,'pgxn install pg_reactive')">
+        <span class="label">pgxn</span> pgxn install pg_reactive
+        <span class="copied">Copied</span>
+      </div>
+      <div class="install-cmd" onclick="copyCmd(this,'apt install postgresql-17-pg-reactive')">
+        <span class="label">apt</span> apt install postgresql-17-pg-reactive
+        <span class="copied">Copied</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <p>pg_reactive is MIT licensed open source software.</p>
+</footer>
+
+<script>
+// Fade in on scroll
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.classList.add('visible');
+      observer.unobserve(e.target);
+    }
+  });
+}, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
+document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+// Copy to clipboard
+function copyCmd(el, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const badge = el.querySelector('.copied');
+    badge.classList.add('show');
+    setTimeout(() => badge.classList.remove('show'), 1200);
+  });
+}
+</script>
+</body>
+</html>
