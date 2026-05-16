@@ -1,45 +1,44 @@
-# pg_reactive / pgStack
+# pgStack
 
-A PostgreSQL extension that turns any SQL `SELECT` into a live query with real-time delta notifications. Built on top: **pgStack** — an open-source Supabase alternative providing auth, REST API, and CLI tooling.
+**An open-source Supabase alternative you can run on any VPS with one `docker compose up`.**
 
-## Architecture
+Auth (email + OAuth), PostgREST-compatible REST API, realtime subscriptions,
+edge functions, file storage, a Studio admin UI — all backed by stock
+PostgreSQL and shipped as a small set of containers. No managed-cloud
+lock-in, no per-row pricing, no proprietary protocol on top of PG.
 
-```
-+-------------------+       +------------------+       +------------------+
-|  PostgreSQL       |       |  Go Proxy        |       |  TypeScript SDK  |
-|  C Extension      | ----> |  chi Server      | ----> |  LiveQuery       |
-|  (ext/)           | NOTIFY|  (proxy-go/)     |  WS   |  Client (sdk/)   |
-+-------------------+       +------------------+       +------------------+
-                            |  Auth, REST,     |       |  CLI (cli/)      |
-                            |  OAuth, RLS      |       |  pgstack init/   |
-                            +------------------+       |  dev/migrate/gen |
-                                                       +------------------+
-```
+> **Looking for the PostgreSQL extension on its own?** pgStack's realtime
+> layer is powered by [`pg_reactive`](ext/README.md) — a standalone PG
+> extension that turns any `SELECT` into a live query. Use it without
+> pgStack if all you need is reactive SQL.
 
-### Layers
+## What's in the box
 
-1. **C Extension** — Manages subscriptions in shared memory, installs DML triggers and DDL event hooks, computes deltas using EXCEPT-based snapshot comparison, sends `NOTIFY` on channel `pgr`.
+| Component | What it does | Where |
+|-----------|--------------|-------|
+| **Go proxy** (`proxy-go/`) | chi-based server: REST, Auth, Realtime, Edge Functions, Storage, RLS middleware, rate limiting, TLS via Let's Encrypt | One binary, one container |
+| **Studio** (`studio/`) | React SPA: table editor, SQL editor, auth users, realtime channels, logs | Served at `/studio/` |
+| **TypeScript SDK** (`sdk/`) | `PgStackClient` (REST + auth + realtime + functions), React hooks, server-side admin, generic query builder, DBOS-style job queue | `pgstack-sdk` on npm |
+| **CLI** (`cli/`) | `pgstack init`, `pgstack dev`, migration management, type generation, project scaffolding | `pgstack` on npm |
+| **pg_reactive** (`ext/`) | PostgreSQL extension: live `SELECT` subscriptions with delta `NOTIFY`s. One of the realtime backends pgStack can use | Standalone — see [`ext/README.md`](ext/README.md) |
 
-2. **Go Proxy (chi)** — Modular server providing:
-   - WebSocket fan-out (pg_reactive live queries)
-   - Auth endpoints (signup, login, refresh, logout, OAuth)
-   - PostgREST-compatible REST API (CRUD, resource embedding, RPC)
-   - RLS middleware (per-request `SET LOCAL role` + JWT claims)
-   - Rate limiting, CORS, CSP security headers
-
-3. **TypeScript SDK** — `LiveQuery` client, React `useLiveQuery()` hook, server-side `PgReactiveAdmin`.
-
-4. **CLI** — `pgstack` command for project scaffolding, dev server, migrations, and type generation.
-
-## Quick Start
+## Quick start
 
 ```bash
-docker compose up -d
-# Proxy: http://127.0.0.1:8080
-# PostgreSQL: 127.0.0.1:15432
+git clone https://github.com/ndokutovich/pg_reactive.git
+cd pg_reactive
+docker compose up -d --build
 ```
 
-Or with the CLI:
+Then:
+
+- REST: `http://127.0.0.1:8080/rest/v1/{table}`
+- Auth: `http://127.0.0.1:8080/auth/v1/...`
+- Realtime (WebSocket): `ws://127.0.0.1:8080/ws/{query_id}`
+- Studio: `http://127.0.0.1:8080/studio/`
+- Postgres: `127.0.0.1:15432`
+
+Or scaffold a fresh project with the CLI:
 
 ```bash
 npx pgstack init my-app
@@ -47,321 +46,176 @@ cd my-app
 npx pgstack dev
 ```
 
-## Auth Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/auth/v1/signup` | Create account (email + password) |
-| `POST` | `/auth/v1/token` | Login (`grant_type=password` or `refresh_token`) |
-| `GET` | `/auth/v1/user` | Get current user (JWT required) |
-| `PATCH` | `/auth/v1/user` | Update user metadata |
-| `POST` | `/auth/v1/logout` | Logout (invalidates refresh token) |
-| `GET` | `/auth/v1/authorize` | OAuth redirect (Google, GitHub) |
-| `GET` | `/auth/v1/callback` | OAuth callback |
-
-Authentication: `Authorization: Bearer <token>` header or `apikey: <key>` header.
-
-## REST API (PostgREST-compatible)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/rest/v1/{table}` | Select rows with filters |
-| `POST` | `/rest/v1/{table}` | Insert rows (returns created) |
-| `PATCH` | `/rest/v1/{table}` | Update rows matching filters |
-| `DELETE` | `/rest/v1/{table}` | Delete rows matching filters |
-| `GET/POST` | `/rest/v1/rpc/{function}` | Call PostgreSQL function |
-
-### Filters
-
-PostgREST-compatible query parameters: `?column=op.value`
-
-| Operator | Example | SQL |
-|----------|---------|-----|
-| `eq` | `?status=eq.active` | `status = 'active'` |
-| `neq` | `?status=neq.deleted` | `status != 'deleted'` |
-| `gt`, `gte`, `lt`, `lte` | `?price=gt.100` | `price > 100` |
-| `like`, `ilike` | `?name=ilike.*alice*` | `name ILIKE '%alice%'` |
-| `in` | `?id=in.(1,2,3)` | `id IN (1, 2, 3)` |
-| `is` | `?deleted=is.null` | `deleted IS NULL` |
-| `cs` | `?tags=cs.{go}` | `tags @> '{go}'` |
-| `cd` | `?tags=cd.{go,rust}` | `tags <@ '{go,rust}'` |
-| `fts` | `?name=fts.alice` | `name @@ 'alice'` |
-| `not.` | `?status=not.eq.deleted` | `NOT (status = 'deleted')` |
-| `or()` | `?or=(status.eq.a,status.eq.b)` | `(status='a' OR status='b')` |
-| `and()` | `?and=(price.gt.10,price.lt.100)` | `(price>10 AND price<100)` |
-
-### Resource Embedding
-
-FK-based joins via `select` parameter:
-
-```
-GET /rest/v1/posts?select=id,title,authors(name)
-GET /rest/v1/authors?select=*,posts(id,title)
-```
-
-### Ordering, Pagination, Column Selection
-
-```
-GET /rest/v1/products?select=id,name&order=name.asc&limit=10&offset=20
-```
-
-Use `Prefer: count=exact` header to get total row count in the `Content-Range` response header:
-
-```
-GET /rest/v1/products?limit=10
-Prefer: count=exact
-
-→ Content-Range: 0-9/42
-```
-
-### RPC
-
-```
-POST /rest/v1/rpc/my_function
-Content-Type: application/json
-{"arg1": "value1", "arg2": 42}
-```
-
-## Live Queries (pg_reactive)
-
-Register a live query in PostgreSQL:
-
-```sql
-SELECT pgr.subscribe('orders_q', 'SELECT id, total, status FROM orders');
-```
-
-Connect from the SDK:
+## Use it from your app
 
 ```typescript
-import { createClient } from "pg-reactive-sdk";
+import { createPgStackClient } from "pgstack-sdk";
 
-const client = createClient({ url: "ws://127.0.0.1:8080", token: "jwt..." });
-const orders = client.subscribe("orders_q");
-
-orders.on((event, data) => {
-  if (event === "delta") console.log("Changes:", data);
-  if (event === "overflow") console.log("Re-fetch needed");
+const client = createPgStackClient({
+  url: "http://127.0.0.1:8080",
+  anonKey: process.env.PGSTACK_ANON_KEY!,
 });
 
-console.log(orders.snapshot); // current rows
-client.close();
+// Auth
+await client.auth.signUp({ email, password });
+const { session } = await client.auth.signIn({ email, password });
+
+// REST (PostgREST-compatible)
+const { data: orders } = await client.from("orders")
+  .select("id, total, status, customer:customers(name)")
+  .eq("status", "open")
+  .order("total", { ascending: false })
+  .limit(20);
+
+// Realtime — same wire format as pg_reactive
+const live = client.subscribe("orders_q");
+live.on((event, data) => { /* delta / overflow / invalidated */ });
+
+// Edge functions
+const { data } = await client.functions.invoke("process-order", {
+  body: { orderId: 123 },
+});
 ```
 
-### SQL API
+## Production deployment
 
-All functions in the `pgr` schema (created by `CREATE EXTENSION pg_reactive`):
+`examples/docker-compose.prod.yml` is the canonical production overlay:
+fail-fast on missing secrets, `PGSTACK_ENV=production` strict validator,
+`127.0.0.1` port bindings by default, TLS via `TLS_MODE=auto` (autocert).
 
-| Function | Description |
-|----------|-------------|
-| `pgr.subscribe(query_id, query)` | Register a live query |
-| `pgr.unsubscribe(query_id)` | Remove a subscription |
-| `pgr.subscriptions` (view) | List active subscriptions |
-| `pgr.stats()` | Extension-wide statistics |
-
-### Wire Format
-
-All messages are JSON over the `pgr` NOTIFY channel (extension to proxy) and WebSocket (proxy to SDK):
-
-```json
-{"query_id":"q1","inserted":[{"id":1,"name":"Alice"}],"deleted":[]}
-{"type":"overflow","query_id":"q1","fetch":true}
-{"type":"subscribed","query_id":"q1"}
-```
-
-## SDK
+A fresh VPS bootstrap is one script:
 
 ```bash
-npm install pg-reactive-sdk
+bash scripts/bootstrap-env.sh   # idempotent: generates real secrets via openssl rand
+docker compose --env-file .env -f examples/docker-compose.yml \
+                                -f examples/docker-compose.prod.yml up -d
 ```
 
-### React Hook
+Push to `master` triggers `.github/workflows/deploy.yml` which SSHes to
+the VPS and re-deploys. See [`docs/site/`](docs/site/) for the full
+deployment guide.
 
-```tsx
-import { useLiveQuery } from "pg-reactive-sdk/react";
+## Architecture at a glance
 
-function OrderList() {
-  const { rows, state } = useLiveQuery("orders_q", {
-    url: "ws://127.0.0.1:8080",
-  });
-  if (state === "connecting") return <p>Connecting...</p>;
-  return <ul>{rows.map(r => <li key={String(r.id)}>{String(r.name)}</li>)}</ul>;
-}
+```
++--------------------+           +-----------------------+           +-------------------+
+|  PostgreSQL        |           |  Go proxy (chi)       |           |  Browser / Node   |
+|                    |   NOTIFY  |                       |    WS     |                   |
+|  pg_reactive ext   | --------> |  Realtime backend     | --------> |  pgstack-sdk      |
+|  (one of several   |           |                       |           |  React hooks      |
+|   realtime         |           |  Auth / OAuth         |   REST    |  Studio           |
+|   backends)        |           |  REST + RLS           | <-------> |                   |
+|                    |  pgx pool |  Edge Functions       |           |                   |
+|                    | <-------- |  Storage              |           |                   |
++--------------------+           +-----------------------+           +-------------------+
+                                          |
+                                          | static
+                                          v
+                                  +---------------+
+                                  |  Studio SPA   |
+                                  |  (React)      |
+                                  +---------------+
 ```
 
-### Server-side Admin
+Realtime is pluggable: today it's `pg_reactive` (LISTEN/NOTIFY, low-latency,
+column-level invalidation). Tomorrow the same `realtime/Backend` seam can
+host polling, logical-replication, or CDC backends for workloads where
+NOTIFY's profile doesn't fit.
 
-```typescript
-import { PgReactiveAdmin } from "pg-reactive-sdk/server";
+## Features
 
-const admin = new PgReactiveAdmin({ connectionString: "postgres://..." });
-await admin.register("orders_q", "SELECT * FROM orders");
-await admin.unregister("orders_q");
-await admin.close();
-```
+**Auth**
+- Email + password (Argon2id), OAuth (Google, GitHub, Apple), magic links,
+  email verification, password reset, admin user CRUD.
+- Refresh-token rotation with family-based reuse detection.
+- JWT issuance, RLS context injection.
 
-## CLI
+**REST (PostgREST-compatible)**
+- CRUD on any table.
+- Filter operators: `eq`, `neq`, `gt`/`gte`/`lt`/`lte`, `like`, `ilike`,
+  `in`, `is`, `cs`/`cd` (array contains), `fts`, `not.*`, `or()`, `and()`.
+- Resource embedding via FK joins: `select=id,title,authors(name)`.
+- Pagination, ordering, column selection, `Content-Range` + `Prefer: count=exact`.
+- RPC for SQL functions (scalar and set-returning).
+- Transaction batching: `POST /rest/v1/batch` with `{{op.field}}` templates
+  (atomic + partial modes).
 
-```bash
-pgstack init <project>     # Scaffold a new pgStack project
-pgstack dev                # Start dev environment (docker compose up)
-pgstack dev stop           # Stop dev environment
-pgstack dev logs           # Tail proxy logs
-pgstack migration new <n>  # Create a new migration file
-pgstack migration up       # Apply pending migrations
-pgstack migration list     # List migration status
-pgstack db psql            # Open psql shell
-pgstack db reset           # Reset database
-pgstack generate types     # Generate TypeScript types from schema
-```
+**Realtime**
+- Live queries via `pg_reactive`: subscribe to any `SELECT`, receive deltas
+  on insert/update/delete. Column-level invalidation tracking.
+- Audience-bound subscriptions: server-side enforcement that only matching
+  JWTs receive a delta.
+- Multi-client fan-out, presence channels, broadcast.
 
-## Configuration
+**Edge Functions**
+- Five runtimes: Deno reverse-proxy (Supabase-compatible), embedded goja
+  JS, PL/v8, PL/Python, and `http` (per-function container in any language).
+- Env vars encrypted at rest (AES-256-GCM under `SECRETS_ENCRYPTION_KEY`).
+- Uniform `EDGE_FN_TIMEOUT_MS` deadline.
 
-### Proxy Environment Variables
+**Storage**
+- File upload/download with MIME validation, size limits, RLS-aware
+  bucket/object permissions.
+- Database-backed or filesystem-backed.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgres://...@db:5432/app` | PostgreSQL connection string |
-| `LISTEN_ADDR` | `0.0.0.0:8080` | Bind address |
-| `JWT_SECRET` | (unset) | Enables JWT auth (32+ chars) |
-| `ANON_KEY` | (unset) | Anonymous API key |
-| `SERVICE_ROLE_KEY` | (unset) | Service role API key (bypasses RLS) |
-| `MAX_CONNECTIONS` | `10000` | Max WebSocket connections |
-| `SITE_URL` | (unset) | Required for OAuth redirects |
-| `GOOGLE_CLIENT_ID` | (unset) | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | (unset) | Google OAuth client secret |
-| `GITHUB_CLIENT_ID` | (unset) | GitHub OAuth client ID |
-| `GITHUB_CLIENT_SECRET` | (unset) | GitHub OAuth client secret |
-| `AUTH_RATE_LIMIT` | `30` | Auth endpoint rate limit (requests/window) |
-| `AUTH_RATE_WINDOW` | `60` | Rate limit window (seconds) |
-| `ACCESS_TOKEN_EXPIRY_SECS` | `3600` | JWT access token TTL |
-| `REFRESH_TOKEN_EXPIRY_DAYS` | `30` | Refresh token TTL |
-| `BROADCAST_CAPACITY` | `1024` | Internal broadcast channel capacity |
-| `MAX_BODY_SIZE` | `1048576` | Request body limit (bytes) |
-| `PG_RECONNECT_MAX_BACKOFF` | `30` | Max PG reconnect backoff (seconds) |
-| `ENABLE_SQL_ENDPOINT` | `false` | Enable `/api/sql` (dev only) |
-| `ALLOWED_ORIGINS` | (unset) | Comma-separated CORS origins |
-| `TRUSTED_PROXIES` | (unset) | Trusted reverse proxy IPs for X-Forwarded-For |
-| `REQUIRE_EMAIL_VERIFICATION` | `false` | Block login for unverified emails |
-| `READ_TIMEOUT` | `30` | HTTP read timeout (seconds) |
-| `WRITE_TIMEOUT` | `60` | HTTP write timeout (seconds) |
-| `IDLE_TIMEOUT` | `120` | HTTP keep-alive idle timeout (seconds) |
-| `GZIP_LEVEL` | `5` | Gzip compression (0=off, 1-9) |
-| `PG_POOL_MAX_CONNS` | `50` | Max PG pool connections |
-| `PG_POOL_MIN_CONNS` | `5` | Min idle PG connections |
-| `TLS_MODE` | `off` | `off`, `auto` (Let's Encrypt), or `manual` |
-| `TLS_DOMAINS` | (unset) | Domains for auto mode |
-| `EDGE_RUNTIME_URL` | (unset) | Deno edge-runtime URL (e.g. `http://edge-runtime:9000`) |
-| `EMBEDDED_FUNCTIONS` | `true` | Enable embedded JS runtime (goja) |
+**Webhooks**
+- Outbound HTTP webhooks on table events.
+- Signing secret stored encrypted; SSRF-hardened delivery (refuses
+  loopback, private, link-local, IANA-reserved IPs); fail-closed refresh.
 
-See [Environment Variables](docs/site/docs/deploy/env-vars.md) for the complete list including TLS, SMTP, and OAuth settings.
+**Studio UI**
+- Table editor (CRUD), SQL editor with history, auth user management,
+  database browser, realtime channel inspector, logs viewer.
 
-### Extension (postgresql.conf)
+**Operability**
+- HSTS, CSP, `Permissions-Policy`, strict CORS by default.
+- Rate limiting (per-IP, with `TRUSTED_PROXIES` for X-Forwarded-For).
+- `LOG_LEVEL` env, structured JSON logs (zerolog).
+- Graceful shutdown, healthcheck endpoint.
 
-| Parameter | Default | Restart? | Description |
-|-----------|---------|----------|-------------|
-| `shared_preload_libraries` | — | Yes | Must include `pg_reactive` |
-| `pg_reactive.max_subscriptions` | `1024` | Yes | Max concurrent subscriptions |
-| `pg_reactive.async_recompute` | `off` | Yes | Background worker for async recompute |
+## Documentation
+
+- **Full docs site** (Docusaurus 3, 33 pages): [`docs/site/`](docs/site/)
+- **Architecture & dev workflow**: [`CLAUDE.md`](CLAUDE.md)
+- **Security policy**: [`SECURITY.md`](SECURITY.md)
+- **Security audit** (Critical/High/Medium remediated): [`docs/SECURITY_AUDIT_2026-03-07.md`](docs/SECURITY_AUDIT_2026-03-07.md)
+- **Contributing**: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **Changelog**: [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Testing
 
-### Extension tests
+Per-component test commands and the full E2E matrix (~350 tests) are
+documented in [`CLAUDE.md`](CLAUDE.md). At the highest level:
 
 ```bash
-# pg_regress (10 SQL test files)
-docker compose exec -T db bash -c 'su - postgres -c "cd /ext/ext && make installcheck"'
+# Extension (pg_regress + isolation)
+docker compose exec -T db bash -c 'su - postgres -c "cd /ext/ext && make installcheck && make isolation_installcheck"'
 
-# Isolation tests (3 concurrency specs)
-docker compose exec -T db bash -c 'su - postgres -c "cd /ext/ext && make isolation_installcheck"'
+# Go proxy unit tests
+cd proxy-go && go test ./...
+
+# SDK + CLI
+cd sdk && npm test
+cd cli && npm test
+
+# E2E (requires docker compose up)
+node tests/e2e_ws_test.mjs       # …and 14 other E2E suites
+bash tests/perf/runner.sh         # full perf suite (~10 min)
 ```
 
-### SDK + CLI unit tests
-
-```bash
-cd sdk && npx vitest run        # 42 tests
-cd cli && npx vitest run        # 36 tests
-```
-
-### E2E tests (require docker compose)
-
-```bash
-node tests/e2e_ws_test.mjs              # WebSocket delta delivery
-node tests/e2e_fanout_test.mjs          # Multi-client fan-out
-node tests/e2e_jwt_test.mjs             # JWT auth scenarios
-node tests/e2e_auth_test.mjs            # Auth endpoints (37 tests)
-node tests/e2e_rest_test.mjs            # REST CRUD (34 tests)
-node tests/e2e_rls_test.mjs             # RLS middleware (12 tests)
-node tests/e2e_rpc_test.mjs             # RPC function calls (30 tests)
-node tests/e2e_embed_test.mjs           # Resource embedding (55 tests)
-node tests/e2e_embed_rpc_test.mjs       # Embedding + RPC combined
-node tests/e2e_batch_test.mjs           # Transaction batching
-node tests/e2e_oauth_test.mjs           # OAuth flow (10 tests)
-node tests/e2e_sdk_test.mjs             # SDK integration (29 tests)
-node tests/e2e_gzip_test.mjs            # Gzip compression
-node tests/e2e_static_hosting_test.mjs  # Static file hosting
-node tests/e2e_shopping_patch_test.mjs  # Shopping list PATCH ops
-```
-
-### Integration + Performance
-
-```bash
-# Integration
-docker compose exec -T db bash -c 'cd /ext && python3 tests/integration/test_shmem_pressure.py'
-docker compose exec -T db bash -c 'cd /ext && python3 tests/integration/test_notify_throughput.py'
-
-# Performance suite (~10 min)
-bash tests/perf/runner.sh
-```
-
-## Project Structure
+## Project layout
 
 ```
-ext/                              PostgreSQL C extension
-  src/
-    pg_reactive.c                 Subscribe/unsubscribe, query parsing
-    dependency.c                  Shared memory hash with LRU eviction
-    invalidation.c                DML triggers, DDL hooks, dirty tracking
-    recompute.c                   EXCEPT-based delta, NOTIFY dispatch
-    bgworker.c                    Optional async recompute worker
-  pg_reactive--0.1.sql            Extension install script (pgr schema)
-  sql/                            pg_regress tests (10 files)
-  expected/                       Expected test output
-  specs/                          Isolation test specs (3 files)
-
-proxy-go/                         Go proxy (chi)
-  main.go                         Router, middleware, server startup
-  config.go                       Environment variable configuration
-  state.go                        Shared app state (pool, catalog, hub)
-  auth/                           JWT, password hashing, OAuth, API keys
-  rest/                           Catalog, filters, query builder, handlers, embedding, RPC
-  realtime/                       PG LISTEN loop, WebSocket fan-out hub
-  middleware/                     CORS, rate limiting, RLS, security headers
-  functions/                     Edge functions (Deno, PL/v8, goja embedded)
-  routes/                         Health, SQL endpoint, catalog refresh
-
-cli/                              pgstack CLI tool
-  src/
-    index.ts                      Commander entry point
-    commands/                     init, dev, migration, db, generate
-    lib/                          Config, crypto, docker, pg helpers
-
-sdk/                              TypeScript SDK
-  src/
-    index.ts                      LiveQuery client
-    react.ts                      useLiveQuery React hook
-    server.ts                     PgReactiveAdmin server helper
-
-tests/                            E2E, integration, and performance tests
-  e2e_*.mjs                       15 E2E test suites (~300 tests)
-  integration/                    Shared memory + throughput stress tests
-  perf/                           6 performance tests + runner
-
-examples/                         12 interactive demos + 4 shopping list apps
-  01-live-products/ .. 12-tutorial/
-  apps/                           Full-stack shopping list apps (Angular, React, Svelte, Vue)
-
-docker-compose.yml                Dev environment (PostgreSQL + proxy)
-Dockerfile.dev                    PostgreSQL 16 with build tools
+ext/                  pg_reactive PostgreSQL extension (own README, own LICENSE)
+proxy-go/             Go proxy: REST, Auth, Realtime, Edge Functions, Storage
+studio/               React Studio SPA
+sdk/                  TypeScript SDK (pgstack-sdk)
+cli/                  pgstack CLI tool
+docker/               Production Dockerfiles + init.sql + entrypoint
+examples/             Demo apps + production compose overlay
+tests/                E2E, integration, performance
+docs/                 Docusaurus site + security audit + plans
+scripts/              bootstrap-env.sh and friends
 ```
 
 ## Requirements
@@ -373,22 +227,20 @@ Dockerfile.dev                    PostgreSQL 16 with build tools
 
 ## License
 
-This repository is dual-licensed to fit two different audiences:
+This repository is dual-licensed because it ships two different things:
 
-- **PostgreSQL extension** (`ext/`) — licensed under the **PostgreSQL License**
-  (the same license PostgreSQL itself uses). See [`ext/LICENSE`](ext/LICENSE).
+- **PostgreSQL extension** (`ext/`) is licensed under the **PostgreSQL License**
+  — the same license PostgreSQL itself uses. See [`ext/LICENSE`](ext/LICENSE).
   This is the right license for an extension distributed via PGXN or installed
   into a vanilla PostgreSQL cluster.
-- **Everything else** — the Go proxy (`proxy-go/`), TypeScript SDK (`sdk/`),
-  Studio UI (`studio/`), CLI (`cli/`), examples, infrastructure, and docs —
-  is licensed under the **Apache License 2.0**. See [`LICENSE`](LICENSE) and
-  [`NOTICE`](NOTICE).
+- **Everything else** — Go proxy, TypeScript SDK, Studio, CLI, examples,
+  infrastructure, docs — is licensed under the **Apache License 2.0**. See
+  [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
 
 Both licenses are permissive and mutually compatible. If you redistribute a
 bundled product (e.g. a single Docker image containing both components), you
-must comply with both.
-
-Contributing: by submitting a pull request you agree to license your
+must comply with both. By submitting a pull request you agree to license your
 contribution under the license of the directory it lands in — see
-[`CONTRIBUTING.md`](CONTRIBUTING.md). Security reports: see
-[`SECURITY.md`](SECURITY.md).
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+Security reports: see [`SECURITY.md`](SECURITY.md).
