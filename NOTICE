@@ -32,4 +32,7 @@ own permissive licenses. Notable runtime dependencies include:
   - fast-check — MIT
   - Docusaurus — MIT
 
+Note: outbound SMTP is implemented on top of the Go standard library
+(net/smtp + crypto/tls) — no external mail dependency.
+
 Full license texts are available with each dependency's distribution.

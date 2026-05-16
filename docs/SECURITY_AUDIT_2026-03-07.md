@@ -77,7 +77,7 @@ The codebase demonstrates strong security fundamentals: parameterized SQL querie
 | L4 | Missing `Permissions-Policy` header | `proxy-go/middleware/security.go` |
 | L5 | Missing `X-XSS-Protection: 0` header | `proxy-go/middleware/security.go` |
 | L6 | Docker images not pinned to SHA256 digest | `proxy-go/Dockerfile` |
-| L7 | `gopkg.in/gomail.v2` unmaintained (2016) | `proxy-go/go.mod` |
+| L7 | `gopkg.in/gomail.v2` unmaintained (2016) | `proxy-go/go.mod` (FIXED — replaced by stdlib `net/smtp` + `crypto/tls`) |
 | L8 | `pgr.stats()` and `pgr.get_subscriptions()` executable by PUBLIC | `ext/pg_reactive--0.1.sql:49-55` |
 | L9 | Update handler logs SQL and parameters (potential PII leak) | `proxy-go/rest/handlers.go:312` |
 | L10 | SDK `RealtimeChannel` doesn't validate channel name | `sdk/src/index.ts:295` |
@@ -165,7 +165,7 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 | L4 | Missing `Permissions-Policy` header | OPEN |
 | L5 | Missing `X-XSS-Protection: 0` header | OPEN |
 | L6 | Docker images not pinned to SHA256 digest | OPEN |
-| L7 | `gopkg.in/gomail.v2` unmaintained (2016) | OPEN |
+| L7 | `gopkg.in/gomail.v2` unmaintained (2016) | FIXED — `proxy-go/mailer.go` rewritten on top of stdlib `net/smtp` + `crypto/tls`; supports STARTTLS (587), implicit TLS (465), and PLAIN auth. No external dependency. |
 | L8 | `pgr.stats()` and `pgr.get_subscriptions()` executable by PUBLIC | OPEN |
 | L9 | Update handler logs SQL and parameters | OPEN |
 | L10 | SDK `RealtimeChannel` doesn't validate channel name | OPEN |
