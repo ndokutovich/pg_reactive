@@ -49,6 +49,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // unstubAllGlobals is required to revert vi.stubGlobal — restoreAllMocks
+  // only resets spies/mocks created via vi.mock/spyOn. Without this the
+  // WebSocket stub leaks across files when vitest runs in the same worker,
+  // turning property tests into intermittent timeouts.
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 

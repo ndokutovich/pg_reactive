@@ -42,6 +42,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // unstubAllGlobals reverts vi.stubGlobal — see index.test.ts for the
+  // full story. Required to keep the WebSocket stub from leaking between
+  // files when vitest reuses workers.
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
