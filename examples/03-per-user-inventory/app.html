@@ -135,7 +135,7 @@ document.getElementById('item').addEventListener('keydown', e => { if (e.key ===
 document.getElementById('signout').onclick = () => {
   if (liveSub) liveSub.close();
   pg.signOut();
-  try { localStorage.removeItem('pgr_session_creds'); } catch {}
+  try { sessionStorage.removeItem('pgr_session_creds'); } catch {}
   location.reload();
 };
 

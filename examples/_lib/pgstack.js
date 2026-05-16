@@ -42,10 +42,10 @@
 
     // ─── Auth ────────────────────────────────────────────────────────────
 
-    /** Restore session from localStorage if present. Returns user or null. */
+    /** Restore session from sessionStorage if present. Returns user or null. */
     restoreSession() {
       try {
-        const raw = localStorage.getItem(this.storageKey);
+        const raw = sessionStorage.getItem(this.storageKey);
         if (!raw) return null;
         const session = JSON.parse(raw);
         if (!session.access_token || !session.user) return null;
@@ -58,14 +58,14 @@
     _saveSession(session) {
       this.token = session.access_token;
       this.user = session.user;
-      try { localStorage.setItem(this.storageKey, JSON.stringify(session)); }
+      try { sessionStorage.setItem(this.storageKey, JSON.stringify(session)); }
       catch { /* private mode etc — non-fatal */ }
     }
 
     _clearSession() {
       this.token = null;
       this.user = null;
-      try { localStorage.removeItem(this.storageKey); } catch {}
+      try { sessionStorage.removeItem(this.storageKey); } catch {}
     }
 
     /**
@@ -100,12 +100,12 @@
 
     _loadCreds() {
       try {
-        const raw = localStorage.getItem(this.storageKey + '_creds');
+        const raw = sessionStorage.getItem(this.storageKey + '_creds');
         return raw ? JSON.parse(raw) : null;
       } catch { return null; }
     }
     _saveCreds(c) {
-      try { localStorage.setItem(this.storageKey + '_creds', JSON.stringify(c)); } catch {}
+      try { sessionStorage.setItem(this.storageKey + '_creds', JSON.stringify(c)); } catch {}
     }
 
     async signUp(email, password, data) {

@@ -17,7 +17,12 @@ export interface PgStackClientOptions {
   headers?: Record<string, string>;
   /** Auto-refresh JWT tokens (default: true) */
   autoRefreshToken?: boolean;
-  /** Persist session to localStorage (default: true in browser) */
+  /**
+   * Persist session to sessionStorage (default: true in browser).
+   * sessionStorage is tab-scoped — closing the browser logs the user
+   * out. The React `useAuth` hook uses the same storage. Set false to
+   * keep the session in memory only.
+   */
   persistSession?: boolean;
 }
 

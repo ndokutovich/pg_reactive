@@ -65,7 +65,7 @@ authToggle.onchange = async () => {
     await pg.autoAuth();
   } else {
     pg.signOut();
-    try { localStorage.removeItem('pgr_session_creds'); } catch {}
+    try { sessionStorage.removeItem('pgr_session_creds'); } catch {}
   }
   updateWho();
 };

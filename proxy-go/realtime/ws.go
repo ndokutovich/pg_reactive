@@ -546,7 +546,19 @@ func generateClientID() string {
 
 // PresenceHandler returns the current presence list for a channel.
 // GET /ws/_presence/{channel}
-func PresenceHandler(hub *Hub) http.HandlerFunc {
+//
+// Runs the SAME auth + audience gate as WSHandler. Before the 6th-pass
+// audit this endpoint was an unauthenticated side channel: an attacker
+// who knew (or guessed) a private channel name could read its presence
+// state via HTTP, bypassing the WebSocket-side audience enforcement.
+//
+//   - cfg.JWTSecret == ""  → auth disabled, accept (mirrors dev WS path)
+//   - anon-key + REQUIRE_AUTHENTICATED_WS → 401
+//   - JWT path → ResolveClaims; required when not anon
+//   - subscriptionMeta is then consulted: an audience-bound entry
+//     refuses anon and any JWT whose claims don't satisfy the predicate
+//   - service_role always bypasses
+func PresenceHandler(cfg middleware.RLSConfig, pool *pgxpool.Pool, hub *Hub, requireAuthenticated bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		channel := chi.URLParam(r, "channel")
 		if channel == "" {
@@ -556,12 +568,83 @@ func PresenceHandler(hub *Hub) http.HandlerFunc {
 			return
 		}
 
+		// Auth — same shape as WSHandler so the HTTP and WS surfaces
+		// stay in lockstep. claims is populated for both anon and JWT
+		// paths so the audience matcher below has something to test.
+		var claims middleware.RequestClaims
+		var isAnon bool
+		if cfg.JWTSecret != "" {
+			authHeader := r.Header.Get("Authorization")
+			apikeyParam := r.URL.Query().Get("apikey")
+			if cfg.AnonKey != "" {
+				if middleware.ConstantTimeEqExported(authHeader, "Bearer "+cfg.AnonKey) ||
+					middleware.ConstantTimeEqExported(apikeyParam, cfg.AnonKey) {
+					isAnon = true
+				}
+			}
+			if isAnon && requireAuthenticated {
+				writeJSONStatus(w, http.StatusUnauthorized, "authenticated presence read required")
+				return
+			}
+			if isAnon {
+				claims = middleware.RequestClaims{Role: "anon"}
+			} else {
+				var token string
+				if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+					token = authHeader[7:]
+				}
+				if token == "" {
+					token = r.URL.Query().Get("token")
+				}
+				if token == "" {
+					writeJSONStatus(w, http.StatusUnauthorized, "authentication required")
+					return
+				}
+				r.Header.Set("Authorization", "Bearer "+token)
+				resolved, err := middleware.ResolveClaims(r, cfg)
+				if err != nil || resolved.Role == "" {
+					writeJSONStatus(w, http.StatusUnauthorized, "authentication required")
+					return
+				}
+				claims = resolved
+			}
+		}
+
+		// Audience gate — identical policy to WSHandler. Closes the
+		// "presence map is readable by knowing the channel name" hole.
+		_, audience, metaErr := subscriptionMeta(pool, channel)
+		if metaErr != nil {
+			if errors.Is(metaErr, ErrSubscriptionNotFound) {
+				writeJSONStatus(w, http.StatusNotFound, "channel not found")
+			} else {
+				writeJSONStatus(w, http.StatusServiceUnavailable, "channel metadata unavailable")
+			}
+			return
+		}
+		if audience != "" && claims.Role != "service_role" {
+			if isAnon {
+				writeJSONStatus(w, http.StatusForbidden, "channel requires an authenticated JWT")
+				return
+			}
+			if !claimsSatisfyAudience(audience, claims.ClaimsJSON) {
+				writeJSONStatus(w, http.StatusForbidden, "JWT claims do not satisfy channel audience")
+				return
+			}
+		}
+
 		presenceMap := hub.PresenceList(channel)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(presenceMap)
 	}
+}
+
+// writeJSONStatus is a small helper used by the presence HTTP handler.
+func writeJSONStatus(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
 }
 
 // writeWSError writes a plain HTTP error before WebSocket upgrade. Once the

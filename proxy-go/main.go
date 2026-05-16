@@ -366,8 +366,12 @@ func buildRouter(state *AppState) http.Handler {
 			state.Config.RequireAuthenticatedWS,
 		))
 
-		// Presence — HTTP endpoint for current presence state
-		r.Get("/ws/_presence/{channel}", realtime.PresenceHandler(state.Hub))
+		// Presence — HTTP endpoint for current presence state. Same auth +
+		// audience gate as the WSHandler upgrade path so this isn't a
+		// side channel into private rooms.
+		r.Get("/ws/_presence/{channel}", realtime.PresenceHandler(
+			rlsCfg, state.Pool, state.Hub, state.Config.RequireAuthenticatedWS,
+		))
 
 		// ── Auth routes ───────────────────────────────────────────────────
 		// Rate-limited auth endpoints (brute-force and email-bombing targets).

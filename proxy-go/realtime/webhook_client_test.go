@@ -12,7 +12,7 @@ import (
 
 func TestIsPublicUnicast(t *testing.T) {
 	allowed := []string{
-		"1.1.1.1", "8.8.8.8", "203.0.113.5",
+		"1.1.1.1", "8.8.8.8", "140.82.121.4", // Cloudflare, Google, GitHub
 		"2606:4700:4700::1111", // Cloudflare DNS over IPv6
 	}
 	blocked := []string{
@@ -28,6 +28,17 @@ func TestIsPublicUnicast(t *testing.T) {
 		"::1",                       // IPv6 loopback
 		"fe80::1",                   // IPv6 link-local
 		"fc00::1",                   // IPv6 ULA (private)
+		// IANA special-purpose ranges (6th-pass addition).
+		"192.0.0.1",                // IETF protocol assignments
+		"192.0.2.5",                // TEST-NET-1
+		"198.51.100.42",            // TEST-NET-2
+		"203.0.113.99",             // TEST-NET-3
+		"198.18.1.1",               // benchmark
+		"240.0.0.1",                // reserved (class E)
+		"192.88.99.1",              // deprecated 6to4 anycast
+		"2001:db8::1",              // IPv6 documentation
+		"100::1",                   // IPv6 discard-only
+		"2001:10::1",               // IPv6 ORCHID
 	}
 
 	for _, raw := range allowed {

@@ -91,8 +91,52 @@ func isPublicUnicast(ip net.IP) bool {
 		if v4[0] == 100 && v4[1]&0xC0 == 64 {
 			return false
 		}
+		// IANA special-purpose ranges. Public-only policy refuses each.
+		for _, r := range ipv4Reserved {
+			if r.Contains(v4) {
+				return false
+			}
+		}
+	} else if ip.To16() != nil {
+		for _, r := range ipv6Reserved {
+			if r.Contains(ip) {
+				return false
+			}
+		}
 	}
 	return true
+}
+
+// ipv4Reserved / ipv6Reserved are IANA special-purpose ranges that we
+// refuse to dial as webhook targets — on top of loopback/private/link-
+// local already covered by stdlib checks. (Audit 6th pass, 2026-05.)
+var (
+	ipv4Reserved = mustParseCIDRs(
+		"192.0.0.0/24",     // IETF protocol assignments
+		"192.0.2.0/24",     // TEST-NET-1 (RFC 5737 documentation)
+		"198.51.100.0/24",  // TEST-NET-2
+		"203.0.113.0/24",   // TEST-NET-3
+		"198.18.0.0/15",    // benchmark testing (RFC 2544)
+		"240.0.0.0/4",      // reserved (former class E)
+		"192.88.99.0/24",   // deprecated 6to4 anycast (RFC 7526)
+	)
+	ipv6Reserved = mustParseCIDRs(
+		"2001:db8::/32",    // documentation (RFC 3849)
+		"100::/64",         // discard-only prefix (RFC 6666)
+		"2001::/23",        // IETF protocol assignments (includes ORCHID, TEREDO, etc.)
+	)
+)
+
+func mustParseCIDRs(cidrs ...string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(cidrs))
+	for _, s := range cidrs {
+		_, n, err := net.ParseCIDR(s)
+		if err != nil {
+			panic("webhook policy: invalid CIDR " + s + ": " + err.Error())
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // Context-aware helper for tests that need to verify the dialer policy
