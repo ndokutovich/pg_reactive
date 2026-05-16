@@ -265,6 +265,19 @@ export class RealtimeChannel {
   private token: string | undefined;
 
   constructor(channelName: string, wsUrl: string, token?: string) {
+    // Validate up-front so a malformed name fails at the call site instead
+    // of producing an opaque WebSocket close later. Pattern matches what
+    // the proxy's ad-hoc channel regex accepts: letter or underscore,
+    // followed by 1-63 letters/digits/underscores/hyphens. This blocks
+    // CRLF / path traversal / shell metacharacter smuggling via the WS
+    // URL, and keeps the name embeddable in pgr ad-hoc channel routing.
+    if (!/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(channelName)) {
+      throw new Error(
+        `RealtimeChannel: invalid channel name ${JSON.stringify(channelName)} — ` +
+          'must start with a letter or underscore and contain only letters, ' +
+          'digits, underscores, or hyphens (max 64 chars)',
+      );
+    }
     this.channelName = channelName;
     this.wsUrl = wsUrl;
     this.token = token;

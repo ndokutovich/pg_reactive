@@ -10,7 +10,7 @@
 
 The codebase demonstrates strong security fundamentals: parameterized SQL queries throughout, identifier quoting via `QuoteIdent`, role whitelisting for `SET LOCAL ROLE`, Argon2id password hashing, refresh token rotation with family-based reuse detection, and non-root Docker containers. However, **4 Critical**, **13 High**, **14 Medium**, and **10 Low** findings were identified across all layers.
 
-**Phase 1, Phase 2, and Phase 3 secret-at-rest remediations are complete.** All 4 Critical, all 13 High, and all 14 Medium findings have been resolved as of the round-7/round-8 hardening pass (see `migrations/20260516120000_encrypt_webhook_secrets.sql` and the per-finding notes in the Remediation Status section below). M3 (refresh tokens) is now stored as SHA-256 via `HashToken()` in `pgstack.refresh_tokens.token_hash`. M14 (edge function env vars) and the new webhook signing secrets are now stored as AES-256-GCM ciphertext (`env_vars_encrypted BYTEA`, `secret_encrypted BYTEA`) under `SECRETS_ENCRYPTION_KEY`. The Low findings remain tracked separately.
+**All Critical, High, Medium, and Low findings are now resolved.** Phase 1 / 2 / 3 remediations landed across rounds 1–11 of the security hardening series; the final Low-priority sweep (L1–L10) closed in round 13. See per-finding notes in the Remediation Status section below for the code references.
 
 **Top 3 urgent fixes (at time of original audit):**
 1. Embedded JS (goja) `db.query()` bypasses all RLS — any edge function runs SQL as superuser
@@ -159,16 +159,16 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 
 | ID | Finding | Status |
 |----|---------|--------|
-| L1 | OAuth state token logged at WARN level | OPEN |
-| L2 | CORS allows credentials with reflected origin in dev mode | OPEN |
-| L3 | Expired email tokens never cleaned up | OPEN |
-| L4 | Missing `Permissions-Policy` header | OPEN |
-| L5 | Missing `X-XSS-Protection: 0` header | OPEN |
-| L6 | Docker images not pinned to SHA256 digest | OPEN |
+| L1 | OAuth state token logged at WARN level | FIXED — only an 8-hex-char SHA-256 fingerprint of the state is logged (`auth/oauth.go: stateFingerprint`). Enough to correlate flows in logs without exposing the CSRF-defense secret. |
+| L2 | CORS allows credentials with reflected origin in dev mode | FIXED — `middleware/cors.go` no longer sets `Access-Control-Allow-Credentials` in permissive dev mode. Reflected-Origin+credentials is the CSRF-amplifying combo; pgStack uses Bearer/apikey-header auth, not cookies, so credentials=true was unused. |
+| L3 | Expired email tokens never cleaned up | FIXED — `auth/StartExpiredTokenCleanup` goroutine deletes expired rows from `pgstack.email_tokens` hourly; also reaps `pgstack.refresh_tokens` past expiry (and revoked rows past expiry + 7d grace). Wired in `main.go`. |
+| L4 | Missing `Permissions-Policy` header | FIXED — `middleware/SecurityHeaders` now emits a deny-all `Permissions-Policy` covering 23 high-risk browser features; also propagated to `StudioSecurityHeaders`. |
+| L5 | Missing `X-XSS-Protection: 0` header | FIXED — `middleware/SecurityHeaders` now sets `X-XSS-Protection: 0` explicitly. Disables the legacy IE/Chromium auditor that has known bypass tricks (OWASP recommendation). |
+| L6 | Docker images not pinned to SHA256 digest | FIXED — `proxy-go/Dockerfile` pins `node:20-bookworm-slim`, `golang:1.23-bookworm`, `debian:bookworm-slim` by digest. Refresh instructions are inline at the top of the file. |
 | L7 | `gopkg.in/gomail.v2` unmaintained (2016) | FIXED — `proxy-go/mailer.go` rewritten on top of stdlib `net/smtp` + `crypto/tls`; supports STARTTLS (587), implicit TLS (465), and PLAIN auth. No external dependency. |
-| L8 | `pgr.stats()` and `pgr.get_subscriptions()` executable by PUBLIC | OPEN |
-| L9 | Update handler logs SQL and parameters | OPEN |
-| L10 | SDK `RealtimeChannel` doesn't validate channel name | OPEN |
+| L8 | `pgr.stats()` and `pgr.get_subscriptions()` executable by PUBLIC | FIXED — `REVOKE EXECUTE` added to the install scripts and to a new `pg_reactive 0.1.2 → 0.1.3` migration so existing installations also become default-deny. View `pgr.subscriptions` also revoked from PUBLIC. |
+| L9 | Update handler logs SQL and parameters | FIXED — `rest/handlers.go` update error path drops `Interface("params", …)` and `Str("sql", …)`; logs only `table` + error chain. Prevents PII (emails, free-form text in update payloads) from landing in logs. |
+| L10 | SDK `RealtimeChannel` doesn't validate channel name | FIXED — constructor in `sdk/src/index.ts` throws on names not matching `^[A-Za-z_][A-Za-z0-9_-]{0,63}$`. Blocks CRLF / path-traversal / shell-metacharacter smuggling via the channel name. |
 
 ---
 

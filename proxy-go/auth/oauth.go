@@ -192,7 +192,12 @@ func Callback(d *Deps) http.HandlerFunc {
 			RETURNING code_verifier, provider, expires_at
 		`, state).Scan(&verifier, &provider, &expiresAt)
 		if err != nil {
-			log.Warn().Err(err).Str("state", state).Msg("oauth state not found")
+			// Log only a short fingerprint of the state token, never the full
+			// value. The OAuth state token is a CSRF defense; an attacker
+			// who reads it from logs can replay a successful authentication.
+			// A fingerprint is enough to correlate against other log lines
+			// for the same flow without exposing the secret.
+			log.Warn().Err(err).Str("state_fp", stateFingerprint(state)).Msg("oauth state not found")
 			writeError(w, http.StatusBadRequest, "invalid or expired oauth state")
 			return
 		}
@@ -712,4 +717,15 @@ func httpGetJSON(endpoint, accessToken string, target any) error {
 		return fmt.Errorf("decode response from %s: %w", endpoint, err)
 	}
 	return nil
+}
+
+// stateFingerprint returns the first 8 hex chars of SHA-256(state), enough
+// to correlate log lines for the same OAuth flow without exposing the
+// CSRF-defense secret in logs.
+func stateFingerprint(state string) string {
+	if state == "" {
+		return "(empty)"
+	}
+	sum := sha256.Sum256([]byte(state))
+	return hex.EncodeToString(sum[:4])
 }

@@ -36,13 +36,21 @@ func CORSMiddleware(allowedOrigins []string, allowPermissive bool) func(http.Han
 					w.Header().Set("Access-Control-Allow-Credentials", "true")
 				}
 			case allowPermissive:
+				// Permissive dev mode: reflect the request's Origin (or "*"
+				// for non-browser callers) but DO NOT set
+				// Access-Control-Allow-Credentials. Combining a reflected
+				// Origin with credentials=true is genuinely dangerous (any
+				// site can read cross-origin responses for the authenticated
+				// user) and the audit flagged it. Bearer/apikey-header auth
+				// works without credentials=true; only cookie-based auth
+				// breaks here, and pgStack does not use cookies for the
+				// API surface.
 				if origin != "" {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 					w.Header().Set("Vary", "Origin")
 				} else {
 					w.Header().Set("Access-Control-Allow-Origin", "*")
 				}
-				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			default:
 				// Strict by default: no Allow-Origin emitted. Cross-origin browsers
 				// will block credentialed requests; same-origin requests are

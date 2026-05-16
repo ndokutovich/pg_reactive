@@ -431,7 +431,12 @@ func Update(d *RestDeps) http.HandlerFunc {
 		var result json.RawMessage
 		row := tx.QueryRow(r.Context(), bq.SQL, bq.Params...)
 		if err := row.Scan(&result); err != nil {
-			log.Error().Err(err).Str("sql", bq.SQL).Interface("params", bq.Params).Msg("update: query error")
+			// Do NOT log bq.Params: update payloads can contain PII (emails,
+			// addresses, free-form text). The SQL skeleton (without bound
+			// values) is already in the error chain via pgx.PgError; if you
+			// need to reproduce the query, enable LOG_LEVEL=debug temporarily
+			// in a controlled environment rather than baking PII into logs.
+			log.Error().Err(err).Str("table", tableName).Msg("update: query error")
 			status, msg := pgHTTPStatus(err)
 			writeJSONError(w, status, msg)
 			return

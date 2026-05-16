@@ -37,8 +37,12 @@ func TestCORS_PermissiveMode_ReflectsOrigin(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://dev.example" {
 		t.Fatalf("permissive must reflect origin, got %q", got)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
-		t.Fatalf("permissive must set credentials, got %q", got)
+	// Audit L2 closure: permissive mode MUST NOT advertise credentials,
+	// because reflected-Origin + credentials is the CSRF-amplifying combo
+	// the audit flagged. Auth via Bearer / apikey headers does not need
+	// credentials=true; cookie-based auth (which would) is not supported.
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("permissive must NOT set Allow-Credentials (CSRF amplifier with reflected Origin), got %q", got)
 	}
 }
 

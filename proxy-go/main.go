@@ -99,6 +99,10 @@ func main() {
 	defer cleanupCancel()
 	go state.RateLimiter.StartCleanup(cleanupCtx)
 
+	// Start expired-token reaper for pgstack.email_tokens and
+	// pgstack.refresh_tokens (L3: stale rows would accumulate forever).
+	go auth.StartExpiredTokenCleanup(cleanupCtx, state.Pool)
+
 	// Load webhooks from DB before starting listener.
 	if err := state.WebhookManager.Refresh(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("initial webhook load failed — webhooks will retry on next refresh")
