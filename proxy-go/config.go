@@ -137,6 +137,12 @@ type Config struct {
 	// runtime="deno" functions; empty = disabled. The newer runtime="http"
 	// carries a per-function upstream_url instead and needs no global config.
 	EdgeRuntimeURL string
+	// EdgeFnTimeout is the per-invocation deadline applied to every edge
+	// function runtime (embedded goja, plv8, plpython, deno reverse-proxy,
+	// per-function http upstream). Configurable via EDGE_FN_TIMEOUT_MS env
+	// var; default 60s preserves the previous hardcoded http-runtime
+	// behavior while giving downstream a single knob to tighten or loosen.
+	EdgeFnTimeout time.Duration
 
 	// TLS
 	TLSMode      string // "off" | "auto" | "manual"
@@ -259,6 +265,7 @@ func FromEnv() Config {
 	cfg.StorageDir = envOrDefault("STORAGE_DIR", "/data/storage")
 
 	cfg.EdgeRuntimeURL = os.Getenv("EDGE_RUNTIME_URL") // empty = disabled
+	cfg.EdgeFnTimeout = time.Duration(envIntOrDefault("EDGE_FN_TIMEOUT_MS", 60000)) * time.Millisecond
 
 	cfg.TLSMode = envOrDefault("TLS_MODE", "off")
 	rawDomains := os.Getenv("TLS_DOMAINS")

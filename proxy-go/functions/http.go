@@ -1,7 +1,6 @@
 package functions
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -158,9 +157,8 @@ func proxyToUpstream(w http.ResponseWriter, r *http.Request, fm *FunctionMeta, c
 
 	injectAuthHeaders(r, claims)
 
-	// Per-request deadline as a backstop on top of the Transport timeouts.
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
+	// Per-invocation deadline already applied by invoke() via
+	// EdgeFnTimeout — r.Context() carries it down into the reverse proxy.
 
 	log.Debug().
 		Str("fn", fm.Name).
@@ -168,7 +166,7 @@ func proxyToUpstream(w http.ResponseWriter, r *http.Request, fm *FunctionMeta, c
 		Str("role", claims.Role).
 		Msg("functions: proxying to http upstream")
 
-	proxy.ServeHTTP(w, r.WithContext(ctx))
+	proxy.ServeHTTP(w, r)
 }
 
 // injectAuthHeaders sets the X-Pgstack-* identity headers on an outbound

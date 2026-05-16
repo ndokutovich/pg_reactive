@@ -32,6 +32,13 @@ func main() {
 	if os.Getenv("LOG_PRETTY") == "1" {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
+	if lvl := os.Getenv("LOG_LEVEL"); lvl != "" {
+		if parsed, err := zerolog.ParseLevel(strings.ToLower(lvl)); err == nil {
+			zerolog.SetGlobalLevel(parsed)
+		} else {
+			log.Warn().Str("LOG_LEVEL", lvl).Msg("invalid LOG_LEVEL — expected trace/debug/info/warn/error/fatal/panic; using default")
+		}
+	}
 
 	cfg := FromEnv()
 
@@ -520,6 +527,7 @@ func buildRouter(state *AppState) http.Handler {
 		Catalog:        fnCatalog,
 		DatabaseURL:    state.Config.DatabaseURL,
 		EdgeRuntimeURL: state.Config.EdgeRuntimeURL,
+		EdgeFnTimeout:  state.Config.EdgeFnTimeout,
 	}
 
 	// Auto-refresh the functions catalog via NOTIFY whenever a function is

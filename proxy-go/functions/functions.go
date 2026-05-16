@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,11 @@ type FunctionsDeps struct {
 	Catalog        *FunctionsCatalog
 	DatabaseURL    string // passed to functions as PGSTACK_DB_URL env hint
 	EdgeRuntimeURL string // URL of Deno edge-runtime container (empty = disabled)
+	// EdgeFnTimeout is the per-invocation deadline applied uniformly across
+	// all runtimes (embedded goja interrupt, PL SPI execution, reverse-proxy
+	// upstreams). Zero or negative means no proxy-imposed deadline (only the
+	// HTTP server's own ReadTimeout/WriteTimeout still apply).
+	EdgeFnTimeout time.Duration
 }
 
 // Invoke returns an http.HandlerFunc for POST /functions/v1/{name}.
@@ -73,9 +79,23 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply the uniform edge-function deadline to all runtimes. The original
+	// request context is preserved as parent so that client disconnects still
+	// cancel the work; the timeout is just an upper bound. Runtimes that
+	// reverse-proxy (deno/http) rely on the wrapped r.Context() to flow into
+	// httputil.ReverseProxy; runtimes that execute in-process (embedded/plv8/
+	// plpython) take ctx as an explicit argument.
+	ctx := r.Context()
+	if d.EdgeFnTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d.EdgeFnTimeout)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
+
 	switch fm.Runtime {
 	case "embedded":
-		result, execErr := executeEmbedded(r.Context(), fm.Code, bodyBytes, claims, d.Pool)
+		result, execErr := executeEmbedded(ctx, fm.Code, bodyBytes, claims, d.Pool)
 		if execErr != nil {
 			log.Error().Err(execErr).Str("fn", fnName).Msg("functions: embedded execution failed")
 			writeJSONError(w, http.StatusInternalServerError, "function execution failed")
@@ -86,10 +106,10 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(result)
 
 	case "plv8":
-		invokePLRuntime(d, w, r.Context(), fnName, bodyBytes, claims, "pgstack")
+		invokePLRuntime(d, w, ctx, fnName, bodyBytes, claims, "pgstack")
 
 	case "plpython3u":
-		invokePLRuntime(d, w, r.Context(), fnName, bodyBytes, claims, "pgstack")
+		invokePLRuntime(d, w, ctx, fnName, bodyBytes, claims, "pgstack")
 
 	case "deno":
 		// Restore the request body that was consumed by io.ReadAll above,
