@@ -161,8 +161,20 @@ func Authorize(d *Deps) http.HandlerFunc {
 // and redirects the browser to SiteURL with the token in the fragment.
 func Callback(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Apple's response_mode=form_post returns code/state in the POST
+		// body, not the query string. Read query first, then fall back to
+		// form values so both transports work without branching on
+		// provider here (audit F2, round 14 — the previous version returned
+		// 400 before ever calling r.FormValue, so Apple's callback never
+		// reached the exchange path).
 		code := r.URL.Query().Get("code")
 		state := r.URL.Query().Get("state")
+		if code == "" {
+			code = r.FormValue("code")
+		}
+		if state == "" {
+			state = r.FormValue("state")
+		}
 
 		// Handle provider-side user denial (e.g. ?error=access_denied).
 		if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
@@ -218,10 +230,7 @@ func Callback(d *Deps) http.HandlerFunc {
 		case "github":
 			email, emailVerified, err = exchangeGitHub(d, code, redirectURI)
 		case "apple":
-			// Apple sends code via form_post; also check POST body
-			if code == "" {
-				code = r.FormValue("code")
-			}
+			// form_post body parsing already handled at top of Callback.
 			email, emailVerified, err = exchangeApple(d, code, redirectURI)
 		case "microsoft":
 			email, emailVerified, err = exchangeMicrosoft(d, code, verifier, redirectURI)
@@ -417,11 +426,11 @@ func exchangeGitHub(d *Deps, code, redirectURI string) (string, bool, error) {
 
 // exchangeApple exchanges an authorization code for an Apple id_token JWT
 // and returns the email plus Apple's email_verified assertion. The id_token
-// is treated as authentic because it was just returned by Apple's own token
-// endpoint over TLS in response to our authenticated client_secret JWT —
-// the only attacker model that defeats that is full-MITM of Apple's TLS,
-// which is out of scope. The email_verified claim still gates acceptance
-// (e.g. Apple's private-relay emails come back unverified).
+// is now JWKS-verified (audit F3 round 14): we fetch Apple's public keys
+// from https://appleid.apple.com/auth/keys, check the ES256 signature
+// against the matching kid, and validate iss/aud/exp before reading the
+// email claim. email_verified still gates acceptance (Apple's private-
+// relay emails come back unverified).
 func exchangeApple(d *Deps, code, redirectURI string) (string, bool, error) {
 	tokenResp, err := httpPostForm("https://appleid.apple.com/auth/token", url.Values{
 		"code":          {code},
@@ -439,7 +448,12 @@ func exchangeApple(d *Deps, code, redirectURI string) (string, bool, error) {
 		return "", false, fmt.Errorf("apple token exchange: no id_token in response")
 	}
 
-	email, verified, err := extractEmailFromJWT(idToken)
+	email, verified, err := verifyIDToken(
+		idToken,
+		"https://appleid.apple.com/auth/keys",
+		IssuerEquals("https://appleid.apple.com"),
+		d.AppleClientID,
+	)
 	if err != nil {
 		return "", false, fmt.Errorf("apple id_token: %w", err)
 	}
@@ -597,8 +611,22 @@ func exchangeMicrosoft(d *Deps, code, verifier, redirectURI string) (string, boo
 		return "", false, fmt.Errorf("microsoft token exchange: %w", err)
 	}
 
+	// Audit F3 round 14: JWKS-verify the id_token. Microsoft's "common"
+	// tenant rewrites the iss to https://login.microsoftonline.com/{tenant}/v2.0
+	// per user, so the validator accepts any issuer under that prefix
+	// rather than a single literal. The JWKS endpoint for common still
+	// returns the union of tenant-signing keys, so kid resolution works.
 	if idToken, ok := tokenResp["id_token"].(string); ok && idToken != "" {
-		if email, verified, err := extractEmailFromJWT(idToken); err == nil && email != "" {
+		email, verified, err := verifyIDToken(
+			idToken,
+			"https://login.microsoftonline.com/common/discovery/v2.0/keys",
+			func(iss string) bool {
+				return strings.HasPrefix(iss, "https://login.microsoftonline.com/") &&
+					strings.HasSuffix(iss, "/v2.0")
+			},
+			d.MicrosoftClientID,
+		)
+		if err == nil && email != "" {
 			return strings.ToLower(strings.TrimSpace(email)), verified, nil
 		}
 	}
@@ -630,9 +658,11 @@ func exchangeMicrosoft(d *Deps, code, verifier, redirectURI string) (string, boo
 
 // oidcConfig caches the discovered OpenID Configuration for the session.
 type oidcConfig struct {
+	Issuer                string `json:"issuer"`
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	UserinfoEndpoint      string `json:"userinfo_endpoint"`
+	JWKSURI               string `json:"jwks_uri"`
 }
 
 // discoverOIDCAuthEndpoint fetches the OIDC discovery document and returns
@@ -687,8 +717,17 @@ func exchangeOIDC(d *Deps, code, verifier, redirectURI string) (string, bool, er
 		return "", false, fmt.Errorf("oidc token exchange: %w", err)
 	}
 
-	if idToken, ok := tokenResp["id_token"].(string); ok && idToken != "" {
-		if email, verified, err := extractEmailFromJWT(idToken); err == nil && email != "" {
+	// Audit F3 round 14: JWKS-verify the id_token when both jwks_uri and
+	// issuer are present in the discovery document (required by the OIDC
+	// core spec).
+	if idToken, ok := tokenResp["id_token"].(string); ok && idToken != "" && cfg.JWKSURI != "" && cfg.Issuer != "" {
+		email, verified, err := verifyIDToken(
+			idToken,
+			cfg.JWKSURI,
+			IssuerEquals(cfg.Issuer),
+			d.OIDCClientID,
+		)
+		if err == nil && email != "" {
 			return strings.ToLower(strings.TrimSpace(email)), verified, nil
 		}
 	}

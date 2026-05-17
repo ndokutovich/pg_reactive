@@ -29,6 +29,60 @@ type StorageDeps struct {
 	StorageDir     string // filesystem path for disk backend
 }
 
+// Atomic owner-locked upserts (audit F1, round 14). The WHERE clause on the
+// UPDATE branch refuses ownership transfer: a concurrent first-write race
+// or a deliberate overwrite by a different user produces 0 rows in
+// RETURNING, which the caller maps to HTTP 403. Owner is intentionally
+// omitted from the UPDATE SET — the gate already proved the owner matches
+// EXCLUDED.owner, so re-setting it is a no-op (and prevents anon-uploaded
+// service-row rotation from silently nulling ownership in the future).
+const (
+	upsertObjectDBOwnerLocked = `
+		INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (bucket_id, name) DO UPDATE
+		   SET size = EXCLUDED.size,
+		       mime_type = EXCLUDED.mime_type,
+		       data = EXCLUDED.data,
+		       updated_at = now()
+		   WHERE pgstack.storage_objects.owner IS NOT DISTINCT FROM EXCLUDED.owner
+		RETURNING id::text`
+
+	upsertObjectDiskOwnerLocked = `
+		INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
+		VALUES ($1, $2, $3, $4, NULL, $5)
+		ON CONFLICT (bucket_id, name) DO UPDATE
+		   SET size = EXCLUDED.size,
+		       mime_type = EXCLUDED.mime_type,
+		       data = NULL,
+		       updated_at = now()
+		   WHERE pgstack.storage_objects.owner IS NOT DISTINCT FROM EXCLUDED.owner
+		RETURNING id::text`
+
+	// service_role bypasses the owner gate (admin overwrite). Owner column
+	// is preserved on overwrite — an admin re-upload does not silently
+	// reassign ownership to a service-role principal.
+	upsertObjectDBServiceRole = `
+		INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (bucket_id, name) DO UPDATE
+		   SET size = EXCLUDED.size,
+		       mime_type = EXCLUDED.mime_type,
+		       data = EXCLUDED.data,
+		       updated_at = now()
+		RETURNING id::text`
+
+	upsertObjectDiskServiceRole = `
+		INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
+		VALUES ($1, $2, $3, $4, NULL, $5)
+		ON CONFLICT (bucket_id, name) DO UPDATE
+		   SET size = EXCLUDED.size,
+		       mime_type = EXCLUDED.mime_type,
+		       data = NULL,
+		       updated_at = now()
+		RETURNING id::text`
+)
+
 // storageResolveClaims is a shorthand used by storage handlers. It returns
 // claims + writes an error response on failure.
 func storageResolveClaims(d *StorageDeps, w http.ResponseWriter, r *http.Request) (middleware.RequestClaims, bool) {
@@ -398,38 +452,65 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 			}
 		}
 
-		// Audit F4 closure: enforce owner-match on overwrite for both public
-		// AND private buckets. The old code skipped this check for public
-		// buckets, so any authenticated user could overwrite any object in
-		// a public bucket (deface other users' uploads, replace files with
-		// malware). The check still allows service_role to overwrite (admin
-		// case) and a same-owner overwrite (intended user re-upload).
-		if claims.Role != "service_role" {
-			var existingOwner *string
-			ownerErr := d.Pool.QueryRow(r.Context(),
-				`SELECT owner::text FROM pgstack.storage_objects WHERE bucket_id = $1 AND name = $2`,
-				bucketID, objName).Scan(&existingOwner)
-			if ownerErr != nil && !errors.Is(ownerErr, pgx.ErrNoRows) {
-				log.Error().Err(ownerErr).Msg("storage: IDOR owner check")
-				writeJSONError(w, http.StatusInternalServerError, "internal database error")
-				return
-			}
-			if ownerErr == nil && existingOwner != nil && *existingOwner != claims.Sub {
-				writeJSONError(w, http.StatusForbidden, "cannot overwrite another user's object")
-				return
-			}
-		}
-
-		// Determine owner UUID (nil for anon/service_role without sub)
+		// Determine owner UUID (anon is already refused above; only
+		// service_role can legitimately end up with claims.Sub == "").
 		var ownerID *string
 		if claims.Sub != "" {
 			ownerID = &claims.Sub
 		}
 
-		var objectID string
+		// Audit F1 (round 14): the previous SELECT-then-INSERT-ON-CONFLICT
+		// pattern is racy on first-write. Two parallel POSTs for a new
+		// bucket/name pair both pass the SELECT (no row yet), then one ON
+		// CONFLICT DO UPDATE silently overwrites the other's owner. Replaced
+		// with a single atomic statement: the UPDATE branch only fires when
+		// the existing row's owner already matches EXCLUDED.owner. A row
+		// claimed by user A but UPDATEd by user B yields 0 rows in the
+		// RETURNING — we detect that and refuse with 403. service_role
+		// gets a separate path that may overwrite anyone (admin case);
+		// owner is preserved on overwrite so an admin re-upload does not
+		// silently reassign ownership.
+		var (
+			objectID string
+			scanErr  error
+		)
+		if claims.Role == "service_role" {
+			if d.StorageBackend == "disk" {
+				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDiskServiceRole,
+					bucketID, objName, fileSize, mimeType, ownerID,
+				).Scan(&objectID)
+			} else {
+				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDBServiceRole,
+					bucketID, objName, fileSize, mimeType, fileData, ownerID,
+				).Scan(&objectID)
+			}
+		} else {
+			if d.StorageBackend == "disk" {
+				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDiskOwnerLocked,
+					bucketID, objName, fileSize, mimeType, ownerID,
+				).Scan(&objectID)
+			} else {
+				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDBOwnerLocked,
+					bucketID, objName, fileSize, mimeType, fileData, ownerID,
+				).Scan(&objectID)
+			}
+		}
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			// The UPDATE branch's WHERE filtered the row out — another user
+			// owns this bucket/name. Same 403 as the explicit pre-check used
+			// to return.
+			writeJSONError(w, http.StatusForbidden, "cannot overwrite another user's object")
+			return
+		}
+		if scanErr != nil {
+			log.Error().Err(scanErr).Msg("storage: upload object")
+			writeJSONError(w, http.StatusInternalServerError, "internal database error")
+			return
+		}
 
+		// Disk write happens only AFTER the DB claim succeeds, so a racing
+		// loser cannot leave a stale file under the winner's key.
 		if d.StorageBackend == "disk" {
-			// Disk backend: write file to filesystem, store NULL for data column
 			diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName)
 			if perr != nil {
 				writeJSONError(w, http.StatusBadRequest, perr.Error())
@@ -445,37 +526,6 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 				writeJSONError(w, http.StatusInternalServerError, "failed to write file to disk")
 				return
 			}
-			err = d.Pool.QueryRow(r.Context(),
-				`INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
-				 VALUES ($1, $2, $3, $4, NULL, $5)
-				 ON CONFLICT (bucket_id, name) DO UPDATE
-				   SET size = EXCLUDED.size,
-				       mime_type = EXCLUDED.mime_type,
-				       data = NULL,
-				       owner = EXCLUDED.owner,
-				       updated_at = now()
-				 RETURNING id::text`,
-				bucketID, objName, fileSize, mimeType, ownerID,
-			).Scan(&objectID)
-		} else {
-			// Database backend: store file data in bytea column
-			err = d.Pool.QueryRow(r.Context(),
-				`INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
-				 VALUES ($1, $2, $3, $4, $5, $6)
-				 ON CONFLICT (bucket_id, name) DO UPDATE
-				   SET size = EXCLUDED.size,
-				       mime_type = EXCLUDED.mime_type,
-				       data = EXCLUDED.data,
-				       owner = EXCLUDED.owner,
-				       updated_at = now()
-				 RETURNING id::text`,
-				bucketID, objName, fileSize, mimeType, fileData, ownerID,
-			).Scan(&objectID)
-		}
-		if err != nil {
-			log.Error().Err(err).Msg("storage: upload object")
-			writeJSONError(w, http.StatusInternalServerError, "internal database error")
-			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
