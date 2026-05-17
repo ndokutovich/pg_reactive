@@ -121,7 +121,14 @@ CREATE TABLE IF NOT EXISTS pgstack.storage_buckets (
   public boolean DEFAULT false,
   file_size_limit bigint DEFAULT 52428800,
   allowed_mime_types text[],
-  created_at timestamptz DEFAULT now()
+  created_at timestamptz DEFAULT now(),
+  -- Audit F3 round 21: bucket id is also the on-disk subdirectory name
+  -- under STORAGE_DIR. Restrict it to lowercase alnum + underscore + hyphen
+  -- so it cannot collide with the reserved ".pgstack-staging" sweep root,
+  -- cannot contain slashes (filesystem traversal), and stays portable to
+  -- case-insensitive filesystems. The proxy enforces the same regex at
+  -- CreateBucket; the CHECK is defence-in-depth for direct SQL inserts.
+  CONSTRAINT bucket_id_on_disk_safe CHECK (id ~ '^[a-z0-9][a-z0-9_-]{0,62}$')
 );
 
 ALTER TABLE pgstack.storage_buckets ENABLE ROW LEVEL SECURITY;

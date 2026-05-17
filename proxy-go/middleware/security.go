@@ -75,39 +75,93 @@ func StudioSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// HSTSHeaders adds the Strict-Transport-Security header to every response
-// reaching the client over HTTPS. Per-request gate (not startup-time) so the
-// header still fires when this proxy runs HTTP behind a TLS-terminating
-// reverse proxy (umbrella nginx, Cloudflare, etc.) — those forward the
-// original scheme in X-Forwarded-Proto.
+// HSTSConfig controls Strict-Transport-Security emission.
 //
-// Sending HSTS over plain HTTP is meaningless (browsers ignore it) and can
-// poison clients if the deployment ever needs to roll back to HTTP, so the
-// guard matters.
+// Audit round-21 F4+F5: the previous HSTSHeaders middleware trusted
+// X-Forwarded-Proto from any source, which lets an attacker who reaches a
+// directly-exposed proxy spoof "X-Forwarded-Proto: https" over plaintext
+// HTTP and trigger HSTS-preload poisoning (browser remembers the host as
+// HTTPS-only for the max-age window). Hardcoded `preload` made that
+// poisoning irreversible: hstspreload.org submission is a one-way ticket
+// and the host stays HTTPS-only until manual removal months later.
 //
-// Policy: 2 years + includeSubDomains + preload — meets the hstspreload.org
-// submission requirements.
-func HSTSHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isHTTPS(r) {
-			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
-		}
-		next.ServeHTTP(w, r)
-	})
+// Fix:
+//   - TrustedProxies gates XFP acceptance, mirroring rate_limit.realIP.
+//     Without trusted proxies configured the middleware honours only
+//     r.TLS (direct HTTPS) — XFP is ignored even if present.
+//   - Preload is opt-in via HSTS_PRELOAD=true (default false). Operators
+//     who want hstspreload.org submission flip the env explicitly,
+//     accepting the lock-in.
+//   - MaxAge is configurable via HSTS_MAX_AGE_SECONDS (default 63072000 =
+//     2 years, the preload submission minimum). Lower it during initial
+//     rollout to limit blast radius if TLS breaks.
+type HSTSConfig struct {
+	TrustedProxies []string
+	MaxAge         int  // seconds; 0 → 63072000 default
+	Preload        bool // false by default; opt in to hstspreload.org submission
+}
+
+// HSTSHeaders returns middleware that sets Strict-Transport-Security on
+// responses to requests that demonstrably arrived over TLS.
+func HSTSHeaders(cfg HSTSConfig) func(http.Handler) http.Handler {
+	maxAge := cfg.MaxAge
+	if maxAge <= 0 {
+		maxAge = 63072000
+	}
+	value := "max-age=" + itoa(maxAge) + "; includeSubDomains"
+	if cfg.Preload {
+		value += "; preload"
+	}
+	trustedProxies := cfg.TrustedProxies
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isHTTPS(r, trustedProxies) {
+				w.Header().Set("Strict-Transport-Security", value)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // isHTTPS reports whether the original client request was over TLS.
-// Checks r.TLS (direct HTTPS) and X-Forwarded-Proto (behind a TLS-terminating
-// reverse proxy). Requires that RealIP/proxy-trust middleware runs first so
-// X-Forwarded-Proto is trustworthy.
-func isHTTPS(r *http.Request) bool {
+// Checks r.TLS (direct HTTPS) and X-Forwarded-Proto, but only honours XFP
+// when the immediate connection (r.RemoteAddr) comes from a configured
+// trusted proxy — mirrors realIP's trust model. Without trusted proxies
+// configured, XFP is ignored entirely to defeat HSTS-preload poisoning
+// via spoofed headers against a directly-exposed proxy.
+func isHTTPS(r *http.Request, trustedProxies []string) bool {
 	if r.TLS != nil {
 		return true
 	}
-	if r.Header.Get("X-Forwarded-Proto") == "https" {
-		return true
+	xfp := r.Header.Get("X-Forwarded-Proto")
+	if xfp == "" {
+		return false
+	}
+	directIP := remoteHost(r)
+	for _, tp := range trustedProxies {
+		if directIP == tp {
+			return xfp == "https"
+		}
 	}
 	return false
+}
+
+// itoa is a tiny stdlib-shaped helper kept local to avoid pulling strconv
+// into a hot-path header builder. The HSTS max-age is computed once at
+// constructor time, so the cost is one allocation per restart.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }
 
 // BodyLimit wraps the request body with an http.MaxBytesReader to enforce a

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 )
 
@@ -20,29 +19,33 @@ import (
 // hijacks (handshake rejected, auth failure, anon-key gate, etc.) no counter
 // state is touched, so failed upgrades cannot leak slots.
 //
-// Source IP: respects the first X-Forwarded-For value when present (the
-// umbrella nginx sets it), otherwise r.RemoteAddr stripped of port. This
-// trusts the proxy in front — see realIP in rate_limit.go for the
-// trusted-proxy model used elsewhere; per-IP WS cap is intentionally simpler
-// (the umbrella always sets XFF, and a forged XFF only buys an attacker their
-// own bucket, not a bypass).
+// Source IP: delegates to the package-shared realIP helper (see
+// rate_limit.go) so X-Forwarded-For is honoured ONLY when the immediate
+// connection comes from a configured trusted proxy. Without that gate a
+// client could rotate XFF per request and bypass the cap completely
+// (every spoofed IP gets its own bucket starting at zero) — this was
+// flagged by codex round 21.
 //
 // State: in-memory map keyed by IP, mutex-guarded. This is correct for the
 // all-in-one container (one proxy process). If/when we scale out, replace
 // the counter with a Redis INCR/DECR so the cap is enforced across replicas.
 type WSConnLimiter struct {
-	maxPerIP int
-	mu       sync.Mutex
-	counts   map[string]int
+	maxPerIP       int
+	trustedProxies []string
+	mu             sync.Mutex
+	counts         map[string]int
 }
 
 // NewWSConnLimiter returns a limiter that allows at most maxPerIP concurrent
 // WebSocket connections from a single client IP. maxPerIP <= 0 disables the
-// limit (the middleware becomes a passthrough).
-func NewWSConnLimiter(maxPerIP int) *WSConnLimiter {
+// limit (the middleware becomes a passthrough). trustedProxies is the same
+// list passed to the rate limiter — XFF/XRI headers are only honoured when
+// the immediate r.RemoteAddr matches one of these IPs.
+func NewWSConnLimiter(maxPerIP int, trustedProxies []string) *WSConnLimiter {
 	return &WSConnLimiter{
-		maxPerIP: maxPerIP,
-		counts:   make(map[string]int),
+		maxPerIP:       maxPerIP,
+		trustedProxies: trustedProxies,
+		counts:         make(map[string]int),
 	}
 }
 
@@ -54,7 +57,7 @@ func (l *WSConnLimiter) Middleware(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := wsClientIP(r)
+		ip := realIP(r, l.trustedProxies)
 
 		// Optimistic precheck — reject before invoking the handler when the
 		// IP is already at the cap. Avoids any work for the upgrade attempt.
@@ -155,23 +158,6 @@ func (c *wsTrackedConn) Close() error {
 		c.limiter.decrement(c.ip)
 	})
 	return err
-}
-
-// wsClientIP returns the client's source IP, honouring X-Forwarded-For when
-// present (the umbrella nginx always sets it) and otherwise stripping the
-// port from r.RemoteAddr.
-func wsClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.SplitN(xff, ",", 2)
-		if ip := strings.TrimSpace(parts[0]); ip != "" {
-			return ip
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // writeWSLimitError emits the standard 429 response when the per-IP cap is

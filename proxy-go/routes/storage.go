@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -175,6 +176,18 @@ func CreateBucket(d *StorageDeps) http.HandlerFunc {
 		}
 		if bucketID == "" {
 			writeJSONError(w, http.StatusBadRequest, "bucket id or name is required")
+			return
+		}
+		// Audit F3 (round 21): reject bucket ids that collide with our
+		// reserved internal staging directory or that contain anything
+		// other than [a-z0-9_-] / are over 63 chars. A bucket called
+		// ".pgstack-staging" would otherwise share its on-disk path with
+		// SweepDiskOrphans's sweep root and have real objects deleted
+		// after minAge. The same regex also blocks ".."/".env"-style
+		// names that could play games with filesystem layouts.
+		if !validBucketID(bucketID) {
+			writeJSONError(w, http.StatusBadRequest,
+				"invalid bucket id: must match ^[a-z0-9][a-z0-9_-]{0,62}$ and not collide with internal names")
 			return
 		}
 
@@ -1182,6 +1195,23 @@ func pgErrCode(err error) string {
 		return e.SQLState()
 	}
 	return ""
+}
+
+// bucketIDRe pins the on-disk-safe bucket name shape: lowercase alnum +
+// underscore + hyphen, must start with alnum, 1-63 chars. Conservative on
+// purpose — rejects dots (so ".pgstack-staging" cannot be created as a
+// bucket and collide with the reserved staging dir), slashes (filesystem
+// traversal), and uppercase (case-insensitive filesystems on macOS/Windows
+// would surface aliasing). Audit F3 round 21.
+var bucketIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+
+// validBucketID reports whether the supplied bucket id is on-disk-safe and
+// does not collide with the reserved staging directory.
+func validBucketID(id string) bool {
+	if id == stagingSubdir {
+		return false // belt-and-braces; the regex already rejects "."
+	}
+	return bucketIDRe.MatchString(id)
 }
 
 // stagingSubdir is the reserved directory under StorageDir that holds

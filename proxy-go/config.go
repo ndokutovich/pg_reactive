@@ -107,8 +107,18 @@ type Config struct {
 	// CORS
 	AllowedOrigins []string
 
-	// Trusted reverse proxies (for X-Forwarded-For)
+	// Trusted reverse proxies (for X-Forwarded-For and X-Forwarded-Proto)
 	TrustedProxies []string
+
+	// HSTS controls (audit round-21 F4+F5).
+	//   HSTSMaxAgeSeconds: default 63072000 (2y); meets hstspreload submission
+	//     minimum. Lower temporarily during initial rollout to limit blast
+	//     radius if TLS breaks.
+	//   HSTSPreload: false by default. Setting true adds "; preload" to the
+	//     header — hstspreload.org submission is a ONE-WAY ticket. Opt in
+	//     only when you intend to submit and never revert to HTTP.
+	HSTSMaxAgeSeconds int
+	HSTSPreload       bool
 
 	// SMTP / email
 	SMTPFrom                 string
@@ -252,6 +262,11 @@ func FromEnv() Config {
 			}
 		}
 	}
+
+	// HSTS knobs (audit round-21). Default max-age = 63072000 (2y); preload
+	// off by default because hstspreload.org submission is irreversible.
+	cfg.HSTSMaxAgeSeconds = envIntOrDefault("HSTS_MAX_AGE_SECONDS", 63072000)
+	cfg.HSTSPreload = envBoolOrDefault("HSTS_PRELOAD", false)
 
 	cfg.SMTPFrom = envOrDefault("SMTP_FROM", "noreply@pgstack.local")
 	cfg.RequireEmailVerification = envBoolOrDefault("REQUIRE_EMAIL_VERIFICATION", false)

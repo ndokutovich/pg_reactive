@@ -354,8 +354,16 @@ func buildRouter(state *AppState) http.Handler {
 	// HSTS self-gates per-request via r.TLS / X-Forwarded-Proto so the header
 	// also fires when this proxy runs HTTP behind a TLS-terminating reverse
 	// proxy (umbrella nginx, Cloudflare). Plain HTTP requests are skipped
-	// inside the middleware.
-	r.Use(appMiddleware.HSTSHeaders)
+	// inside the middleware. X-Forwarded-Proto is only honoured when the
+	// immediate connection comes from a configured TRUSTED_PROXIES IP —
+	// without that gate a directly-exposed proxy could be tricked into
+	// HSTS-preload poisoning. Preload is opt-in (HSTS_PRELOAD env, default
+	// off) because hstspreload.org submission is a one-way ticket.
+	r.Use(appMiddleware.HSTSHeaders(appMiddleware.HSTSConfig{
+		TrustedProxies: state.Config.TrustedProxies,
+		MaxAge:         state.Config.HSTSMaxAgeSeconds,
+		Preload:        state.Config.HSTSPreload,
+	}))
 
 	// ── Studio SPA (relaxed CSP) ──────────────────────────────────────────
 	r.Group(func(r chi.Router) {
@@ -380,7 +388,7 @@ func buildRouter(state *AppState) http.Handler {
 		// single client cannot exhaust the WSSemaphore. The limiter
 		// increments only on successful hijack (i.e. real upgrades) and
 		// decrements on conn close, so failed handshakes don't leak slots.
-		wsLimiter := appMiddleware.NewWSConnLimiter(state.Config.WSMaxPerIP)
+		wsLimiter := appMiddleware.NewWSConnLimiter(state.Config.WSMaxPerIP, state.Config.TrustedProxies)
 		r.Group(func(r chi.Router) {
 			r.Use(wsLimiter.Middleware)
 			// Live query subscription

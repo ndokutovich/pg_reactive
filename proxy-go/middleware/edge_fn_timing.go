@@ -1,6 +1,10 @@
 package middleware
 
 import (
+	"bufio"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -58,6 +62,15 @@ func edgeFnNameFromPath(p string) string {
 // statusCaptureWriter records the response status code written by downstream
 // handlers so the timing log line can include it. Defaults to 200 when no
 // WriteHeader is ever called (Go writes 200 implicitly on first Write).
+//
+// Round-21 codex F2: the wrapper also delegates http.Flusher, http.Hijacker,
+// http.Pusher, and io.ReaderFrom to the underlying writer when available.
+// Without these passthroughs, mounting the middleware on routes that do
+// reverse-proxy / streaming / hijack-based upgrades (the /functions/v1
+// "deno" and "http" runtimes, anything that calls io.Copy from a file) would
+// silently degrade — httputil.ReverseProxy in particular short-circuits to
+// io.Copy through ReaderFrom and falls back to a generic per-buffer loop
+// without it.
 type statusCaptureWriter struct {
 	http.ResponseWriter
 	status      int
@@ -77,4 +90,44 @@ func (s *statusCaptureWriter) Write(b []byte) (int, error) {
 		s.wroteHeader = true
 	}
 	return s.ResponseWriter.Write(b)
+}
+
+// Flush implements http.Flusher when the underlying ResponseWriter does.
+// SSE, log tailing, and any chunked-streaming response needs this.
+func (s *statusCaptureWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack implements http.Hijacker when the underlying writer does. Required
+// for WebSocket upgrades reached via an edge function path.
+func (s *statusCaptureWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, errors.New("edge_fn_timing: underlying ResponseWriter does not Hijack")
+}
+
+// Push implements http.Pusher (HTTP/2 server push) when the underlying
+// writer does. Rare on edge fns but cheap to forward.
+func (s *statusCaptureWriter) Push(target string, opts *http.PushOptions) error {
+	if p, ok := s.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+// ReadFrom lets httputil.ReverseProxy (and any io.Copy(w, src)) use the
+// optimised path on the underlying writer. Without this it falls back to a
+// 32 KiB-buffer copy loop and we lose splice/sendfile when the target file
+// is a *os.File.
+func (s *statusCaptureWriter) ReadFrom(src io.Reader) (int64, error) {
+	if !s.wroteHeader {
+		s.wroteHeader = true
+	}
+	if rf, ok := s.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(s.ResponseWriter, src)
 }

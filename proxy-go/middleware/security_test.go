@@ -98,8 +98,14 @@ func TestPublicSecurityHeaders_CSPPolicyEnvOverride(t *testing.T) {
 	}
 }
 
+// hstsMiddleware builds the middleware for the given config and wraps a
+// no-op handler — every test only inspects response headers.
+func hstsMiddleware(cfg HSTSConfig) http.Handler {
+	return HSTSHeaders(cfg)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+}
+
 func TestHSTSHeaders_SkipsPlainHTTP(t *testing.T) {
-	rec := runHandler(HSTSHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})),
+	rec := runHandler(hstsMiddleware(HSTSConfig{}),
 		httptest.NewRequest(http.MethodGet, "/", nil))
 	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
 		t.Errorf("plain HTTP must not get HSTS; got %q", got)
@@ -109,27 +115,68 @@ func TestHSTSHeaders_SkipsPlainHTTP(t *testing.T) {
 func TestHSTSHeaders_FiresOnDirectTLS(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.TLS = &tls.ConnectionState{}
-	rec := runHandler(HSTSHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), r)
+	rec := runHandler(hstsMiddleware(HSTSConfig{Preload: true}), r)
 	got := rec.Header().Get("Strict-Transport-Security")
 	if !strings.Contains(got, "max-age=63072000") || !strings.Contains(got, "includeSubDomains") || !strings.Contains(got, "preload") {
 		t.Errorf("HSTS missing required tokens for preload list: %q", got)
 	}
 }
 
-func TestHSTSHeaders_FiresOnXForwardedProtoHTTPS(t *testing.T) {
+// Round-21 F4: XFP from an UNTRUSTED source must NOT trigger HSTS.
+// Without this gate an attacker reaching a directly-exposed proxy could
+// spoof XFP:https and poison browsers with HSTS preload.
+func TestHSTSHeaders_IgnoresXFPFromUntrustedSource(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("X-Forwarded-Proto", "https")
-	rec := runHandler(HSTSHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), r)
+	// No TrustedProxies configured AND RemoteAddr is httptest's default
+	// (192.0.2.1) — XFP must be ignored.
+	rec := runHandler(hstsMiddleware(HSTSConfig{}), r)
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("XFP from untrusted source must NOT trigger HSTS; got %q", got)
+	}
+}
+
+func TestHSTSHeaders_FiresOnXForwardedProtoHTTPSFromTrustedProxy(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.0.0.1:443"
+	r.Header.Set("X-Forwarded-Proto", "https")
+	rec := runHandler(hstsMiddleware(HSTSConfig{TrustedProxies: []string{"10.0.0.1"}}), r)
 	if rec.Header().Get("Strict-Transport-Security") == "" {
-		t.Error("HSTS must fire when X-Forwarded-Proto=https (TLS-terminating proxy in front)")
+		t.Error("HSTS must fire when X-Forwarded-Proto=https from a trusted proxy")
 	}
 }
 
 func TestHSTSHeaders_SkipsXForwardedProtoHTTP(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.0.0.1:443"
 	r.Header.Set("X-Forwarded-Proto", "http")
-	rec := runHandler(HSTSHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), r)
+	rec := runHandler(hstsMiddleware(HSTSConfig{TrustedProxies: []string{"10.0.0.1"}}), r)
 	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
 		t.Errorf("X-Forwarded-Proto=http must not set HSTS; got %q", got)
+	}
+}
+
+// Round-21 F5: preload is opt-in. Default config must NOT include it,
+// because hstspreload.org submission is irreversible.
+func TestHSTSHeaders_PreloadOptIn(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.TLS = &tls.ConnectionState{}
+	rec := runHandler(hstsMiddleware(HSTSConfig{}), r)
+	got := rec.Header().Get("Strict-Transport-Security")
+	if strings.Contains(got, "preload") {
+		t.Errorf("default HSTS must NOT include preload; got %q", got)
+	}
+	if got == "" || !strings.Contains(got, "max-age=") {
+		t.Errorf("HSTS should still fire on direct TLS without preload; got %q", got)
+	}
+}
+
+func TestHSTSHeaders_CustomMaxAge(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.TLS = &tls.ConnectionState{}
+	rec := runHandler(hstsMiddleware(HSTSConfig{MaxAge: 300}), r)
+	got := rec.Header().Get("Strict-Transport-Security")
+	if !strings.Contains(got, "max-age=300") {
+		t.Errorf("expected max-age=300 to override default; got %q", got)
 	}
 }

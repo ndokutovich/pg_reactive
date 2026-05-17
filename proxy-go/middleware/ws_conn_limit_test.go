@@ -64,7 +64,7 @@ func openConn(t *testing.T, srv *httptest.Server, path, ip string) (net.Conn, st
 
 func TestWSConnLimiter_AllowsUpToCap(t *testing.T) {
 	const cap = 3
-	limiter := NewWSConnLimiter(cap)
+	limiter := NewWSConnLimiter(cap, []string{"127.0.0.1"})
 	release := make(chan struct{}, cap)
 	srv := httptest.NewServer(limiter.Middleware(hijackEchoHandler(t, release)))
 	defer srv.Close()
@@ -90,7 +90,7 @@ func TestWSConnLimiter_AllowsUpToCap(t *testing.T) {
 
 func TestWSConnLimiter_RejectsOverCap(t *testing.T) {
 	const cap = 2
-	limiter := NewWSConnLimiter(cap)
+	limiter := NewWSConnLimiter(cap, []string{"127.0.0.1"})
 	release := make(chan struct{}, cap+1)
 	srv := httptest.NewServer(limiter.Middleware(hijackEchoHandler(t, release)))
 	defer srv.Close()
@@ -124,7 +124,7 @@ func TestWSConnLimiter_RejectsOverCap(t *testing.T) {
 
 func TestWSConnLimiter_CloseDecrementsCounter(t *testing.T) {
 	const cap = 1
-	limiter := NewWSConnLimiter(cap)
+	limiter := NewWSConnLimiter(cap, []string{"127.0.0.1"})
 	release := make(chan struct{}, 4)
 	srv := httptest.NewServer(limiter.Middleware(hijackEchoHandler(t, release)))
 	defer srv.Close()
@@ -155,7 +155,7 @@ func TestWSConnLimiter_CloseDecrementsCounter(t *testing.T) {
 
 func TestWSConnLimiter_TracksIPsIndependently(t *testing.T) {
 	const cap = 1
-	limiter := NewWSConnLimiter(cap)
+	limiter := NewWSConnLimiter(cap, []string{"127.0.0.1"})
 	release := make(chan struct{}, 4)
 	srv := httptest.NewServer(limiter.Middleware(hijackEchoHandler(t, release)))
 	defer srv.Close()
@@ -191,7 +191,9 @@ func TestWSConnLimiter_PrechecksBeforeHijack(t *testing.T) {
 	// When the cap is already at zero (or the precheck rejects), the handler
 	// should never be invoked — guarantees a rejected upgrade doesn't even
 	// hit the goja runtime.
-	limiter := NewWSConnLimiter(1)
+	// Trusted-proxy 127.0.0.1 so XFF from httptest's RemoteAddr=127.0.0.1
+	// is honoured and we can seed the counter under that spoofed IP.
+	limiter := NewWSConnLimiter(1, []string{"127.0.0.1"})
 	// Seed counter directly.
 	limiter.mu.Lock()
 	limiter.counts["10.0.0.6"] = 1
@@ -206,6 +208,7 @@ func TestWSConnLimiter_PrechecksBeforeHijack(t *testing.T) {
 	}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ws/x", nil)
+	req.RemoteAddr = "127.0.0.1:55555" // trusted source so XFF is honoured
 	req.Header.Set("X-Forwarded-For", "10.0.0.6")
 	h.ServeHTTP(rec, req)
 
@@ -221,7 +224,7 @@ func TestWSConnLimiter_PrechecksBeforeHijack(t *testing.T) {
 }
 
 func TestWSConnLimiter_ZeroDisablesLimit(t *testing.T) {
-	limiter := NewWSConnLimiter(0)
+	limiter := NewWSConnLimiter(0, nil)
 	// Any handler — passthrough should preserve the response verbatim.
 	h := limiter.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -238,20 +241,43 @@ func TestWSConnLimiter_ZeroDisablesLimit(t *testing.T) {
 	}
 }
 
-func TestWSClientIP_XFFFirstValue(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
-	r.RemoteAddr = "127.0.0.1:5555"
-	if got := wsClientIP(r); got != "1.2.3.4" {
-		t.Errorf("wsClientIP = %q, want 1.2.3.4", got)
-	}
-}
+// wsClientIP is gone — wsHijackWriter now delegates to realIP() from
+// rate_limit.go so the per-IP cap honours TrustedProxies exactly like the
+// HTTP rate limiter. The shared helper is covered by rate_limit's own
+// test suite; here we add a smoke test for the trusted-proxy gate at
+// the limiter boundary to pin the round-21 fix.
 
-func TestWSClientIP_FallsBackToRemoteAddr(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.RemoteAddr = "203.0.113.5:5555"
-	if got := wsClientIP(r); got != "203.0.113.5" {
-		t.Errorf("wsClientIP = %q, want 203.0.113.5", got)
+func TestWSConnLimiter_IgnoresXFFFromUntrustedSource(t *testing.T) {
+	// No trusted proxies configured. The client connects directly and
+	// rotates X-Forwarded-For on every request: under the old wsClientIP
+	// behaviour each spoofed IP would get its own bucket and the cap
+	// would never trip. With realIP() the limiter ignores XFF entirely
+	// and counts against r.RemoteAddr — same direct IP for every probe.
+	limiter := NewWSConnLimiter(1, nil)
+	release := make(chan struct{}, 8)
+	srv := httptest.NewServer(limiter.Middleware(hijackEchoHandler(t, release)))
+	defer srv.Close()
+	defer func() {
+		for i := 0; i < 8; i++ {
+			select {
+			case release <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	// First conn succeeds (direct IP cap = 1).
+	c1, status1 := openConn(t, srv, "/ws/x", "10.0.0.99")
+	defer c1.Close()
+	if !strings.Contains(status1, "101") {
+		t.Fatalf("conn 1: status = %q", status1)
+	}
+	// Second conn from same direct IP but DIFFERENT spoofed XFF must
+	// still be refused — the limiter is keyed on the real connection IP.
+	c2, status2 := openConn(t, srv, "/ws/x", "10.0.0.100")
+	defer c2.Close()
+	if !strings.Contains(status2, "429") {
+		t.Fatalf("conn 2 with spoofed XFF must be rejected; status = %q", status2)
 	}
 }
 
