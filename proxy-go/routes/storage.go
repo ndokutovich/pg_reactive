@@ -1,7 +1,6 @@
 package routes
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,14 +120,6 @@ const (
 		          (SELECT size      FROM prev) AS prev_size,
 		          (SELECT mime_type FROM prev) AS prev_mime`
 
-	// Compensation when the post-claim disk rename fails for an UPDATE
-	// upsert. The previous file on disk is untouched (rename failed before
-	// consuming the existing dest), so restoring the previous metadata
-	// makes the (row, file) pair consistent again.
-	restoreObjectMetadata = `
-		UPDATE pgstack.storage_objects
-		SET size = $1, mime_type = $2, updated_at = now()
-		WHERE id = $3`
 )
 
 // storageResolveClaims is a shorthand used by storage handlers. It returns
@@ -572,66 +563,125 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 			}
 		}
 
-		var (
-			objectID string
-			inserted bool
-			prevSize *int64
-			prevMime *string
-			scanErr  error
-		)
-		if claims.Role == "service_role" {
-			if d.StorageBackend == "disk" {
-				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDiskServiceRole,
+		var objectID string
+
+		if d.StorageBackend == "disk" {
+			// Audit F1 (round 17): serialize per-(bucket,name) so that two
+			// concurrent same-owner / service_role overwrites cannot
+			// interleave as DB(A→B) + rename(B→A) and leave the row's
+			// metadata describing B while the file on disk is A's bytes.
+			//
+			// Strategy: open a tx, take an xact-scoped advisory lock keyed
+			// by hashtext(bucket)/hashtext(name), do the upsert + rename
+			// inside the tx, and either commit (releases lock) or rollback
+			// (which undoes the INSERT/UPDATE — no manual compensation
+			// needed). Two parallel uploads to the same key now run
+			// strictly sequentially and the (DB, FS) pair is always
+			// consistent.
+			tx, err := d.Pool.Begin(r.Context())
+			if err != nil {
+				log.Error().Err(err).Msg("storage: begin upload tx")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+			// Default to rollback; replaced by an explicit Commit on the
+			// happy path. Rollback after a successful Commit is a no-op.
+			committed := false
+			defer func() {
+				if !committed {
+					_ = tx.Rollback(r.Context())
+				}
+			}()
+
+			if _, err := tx.Exec(r.Context(),
+				`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+				bucketID, objName,
+			); err != nil {
+				log.Error().Err(err).Msg("storage: acquire per-key advisory lock")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+
+			var (
+				inserted bool
+				prevSize *int64
+				prevMime *string
+				scanErr  error
+			)
+			if claims.Role == "service_role" {
+				scanErr = tx.QueryRow(r.Context(), upsertObjectDiskServiceRole,
 					bucketID, objName, fileSize, mimeType, ownerID,
 				).Scan(&objectID, &inserted, &prevSize, &prevMime)
 			} else {
-				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDBServiceRole,
-					bucketID, objName, fileSize, mimeType, fileData, ownerID,
+				scanErr = tx.QueryRow(r.Context(), upsertObjectDiskOwnerLocked,
+					bucketID, objName, fileSize, mimeType, ownerID,
 				).Scan(&objectID, &inserted, &prevSize, &prevMime)
 			}
+			if errors.Is(scanErr, pgx.ErrNoRows) {
+				writeJSONError(w, http.StatusForbidden, "cannot overwrite another user's object")
+				return
+			}
+			if scanErr != nil {
+				log.Error().Err(scanErr).Msg("storage: upload object")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+			// Suppress unused-warning for the snapshot vars — they are
+			// part of the SQL contract (kept for any future compensation
+			// path) but not consulted on the rollback-based flow.
+			_, _ = inserted, prevSize
+			_ = prevMime
+
+			if err := os.Rename(tmpPath, diskPath); err != nil {
+				log.Error().Err(err).Str("tmp", tmpPath).Str("final", diskPath).
+					Msg("storage: promote staged upload — rolling back tx")
+				writeJSONError(w, http.StatusInternalServerError, "failed to finalise upload")
+				return
+			}
+			tmpPath = "" // rename consumed the temp file; suppress defer cleanup.
+
+			if err := tx.Commit(r.Context()); err != nil {
+				// Rename succeeded but commit failed: the file is now at
+				// the final path but the DB tx will roll back. Remove
+				// the file so a subsequent retry sees a clean slate. The
+				// file's previous contents (if this was an overwrite) are
+				// lost, but so is the consistent state — we picked the
+				// "loudly broken" outcome over "silently divergent".
+				log.Error().Err(err).Str("final", diskPath).
+					Msg("storage: tx commit after successful rename — removing final file to stay consistent")
+				_ = os.Remove(diskPath)
+				writeJSONError(w, http.StatusInternalServerError, "failed to finalise upload")
+				return
+			}
+			committed = true
 		} else {
-			if d.StorageBackend == "disk" {
-				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDiskOwnerLocked,
-					bucketID, objName, fileSize, mimeType, ownerID,
+			// Database backend: bytea column carries the bytes; the
+			// upsert itself is atomic, no FS to coordinate with.
+			var (
+				inserted bool
+				prevSize *int64
+				prevMime *string
+				scanErr  error
+			)
+			if claims.Role == "service_role" {
+				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDBServiceRole,
+					bucketID, objName, fileSize, mimeType, fileData, ownerID,
 				).Scan(&objectID, &inserted, &prevSize, &prevMime)
 			} else {
 				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDBOwnerLocked,
 					bucketID, objName, fileSize, mimeType, fileData, ownerID,
 				).Scan(&objectID, &inserted, &prevSize, &prevMime)
 			}
-		}
-		if errors.Is(scanErr, pgx.ErrNoRows) {
-			// The UPDATE branch's WHERE filtered the row out — another user
-			// owns this bucket/name. Same 403 as the explicit pre-check used
-			// to return.
-			writeJSONError(w, http.StatusForbidden, "cannot overwrite another user's object")
-			return
-		}
-		if scanErr != nil {
-			log.Error().Err(scanErr).Msg("storage: upload object")
-			writeJSONError(w, http.StatusInternalServerError, "internal database error")
-			return
-		}
-
-		// DB claim succeeded — promote the staged file into its final
-		// location atomically (POSIX rename). If rename fails we compensate:
-		//   - inserted (no prior file or row): DELETE the freshly-inserted
-		//     row so a retry can claim the key cleanly.
-		//   - overwrite (prior file still intact at diskPath because the
-		//     failed rename never replaced it): restore the previous
-		//     size/mime_type so the row matches the file again. Skipping
-		//     this would leave a row whose metadata describes the new
-		//     payload while the file on disk still holds the old bytes.
-		if d.StorageBackend == "disk" {
-			if err := os.Rename(tmpPath, diskPath); err != nil {
-				log.Error().Err(err).Str("tmp", tmpPath).Str("final", diskPath).
-					Bool("inserted", inserted).
-					Msg("storage: promote staged upload — compensating DB row")
-				compensateDiskRenameFailure(r.Context(), d.Pool, objectID, inserted, prevSize, prevMime)
-				writeJSONError(w, http.StatusInternalServerError, "failed to finalise upload")
+			if errors.Is(scanErr, pgx.ErrNoRows) {
+				writeJSONError(w, http.StatusForbidden, "cannot overwrite another user's object")
 				return
 			}
-			tmpPath = "" // rename consumed the temp file; suppress defer cleanup.
+			if scanErr != nil {
+				log.Error().Err(scanErr).Msg("storage: upload object")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+			_, _, _ = inserted, prevSize, prevMime
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -914,41 +964,3 @@ func pgErrCode(err error) string {
 	return ""
 }
 
-// compensateDiskRenameFailure undoes the DB side of a disk upload whose
-// post-claim os.Rename failed. The semantics are different for INSERT vs
-// UPDATE — see the call site for the rationale. Errors are logged but
-// not surfaced; the caller has already decided to return 500.
-func compensateDiskRenameFailure(
-	ctx context.Context,
-	pool *pgxpool.Pool,
-	objectID string,
-	inserted bool,
-	prevSize *int64,
-	prevMime *string,
-) {
-	if inserted {
-		if _, err := pool.Exec(ctx,
-			`DELETE FROM pgstack.storage_objects WHERE id = $1`,
-			objectID); err != nil {
-			log.Error().Err(err).Str("id", objectID).
-				Msg("storage: compensation delete failed — row may be orphaned")
-		}
-		return
-	}
-	// UPDATE path: the prior row existed and the prior file at diskPath
-	// was untouched by the failed rename. Restore the previous size and
-	// mime so the metadata matches the bytes still on disk.
-	if prevSize == nil || prevMime == nil {
-		// Defensive: should never happen — an UPDATE upsert by definition
-		// has a prior row. If we get here, the metadata is inconsistent
-		// and we have no way to repair it; leave a loud log line.
-		log.Error().Str("id", objectID).
-			Msg("storage: compensation update skipped — previous metadata unavailable; row metadata may not match disk file")
-		return
-	}
-	if _, err := pool.Exec(ctx, restoreObjectMetadata,
-		*prevSize, *prevMime, objectID); err != nil {
-		log.Error().Err(err).Str("id", objectID).
-			Msg("storage: compensation update failed — row metadata may not match disk file")
-	}
-}
