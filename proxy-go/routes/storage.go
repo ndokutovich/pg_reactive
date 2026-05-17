@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,15 +30,29 @@ type StorageDeps struct {
 	StorageDir     string // filesystem path for disk backend
 }
 
-// Atomic owner-locked upserts (audit F1, round 14). The WHERE clause on the
+// Atomic owner-locked upserts (audit F1, round 14; metadata snapshot
+// added round 16 for fine-grained rollback). The WHERE clause on the
 // UPDATE branch refuses ownership transfer: a concurrent first-write race
 // or a deliberate overwrite by a different user produces 0 rows in
 // RETURNING, which the caller maps to HTTP 403. Owner is intentionally
 // omitted from the UPDATE SET — the gate already proved the owner matches
-// EXCLUDED.owner, so re-setting it is a no-op (and prevents anon-uploaded
-// service-row rotation from silently nulling ownership in the future).
+// EXCLUDED.owner, so re-setting it is a no-op.
+//
+// Round 16: each variant now returns (id, inserted, prev_size, prev_mime).
+// `inserted` (via xmax = 0) lets the caller distinguish a fresh INSERT
+// from an UPDATE. prev_size/prev_mime are NULL on INSERT and carry the
+// PRE-UPDATE values on UPDATE (captured via a CTE that snapshots the row
+// before the upsert touches it). If the post-claim disk rename fails, the
+// caller can compensate precisely: DELETE when inserted, restore the
+// previous metadata when updated. Without that flag the previous blanket
+// DELETE would have silently wiped a same-owner / service_role overwrite
+// of an existing object whose original file on disk was still intact.
 const (
 	upsertObjectDBOwnerLocked = `
+		WITH prev AS (
+			SELECT size, mime_type FROM pgstack.storage_objects
+			WHERE bucket_id = $1 AND name = $2
+		)
 		INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (bucket_id, name) DO UPDATE
@@ -46,9 +61,16 @@ const (
 		       data = EXCLUDED.data,
 		       updated_at = now()
 		   WHERE pgstack.storage_objects.owner IS NOT DISTINCT FROM EXCLUDED.owner
-		RETURNING id::text`
+		RETURNING id::text,
+		          (xmax = 0) AS inserted,
+		          (SELECT size      FROM prev) AS prev_size,
+		          (SELECT mime_type FROM prev) AS prev_mime`
 
 	upsertObjectDiskOwnerLocked = `
+		WITH prev AS (
+			SELECT size, mime_type FROM pgstack.storage_objects
+			WHERE bucket_id = $1 AND name = $2
+		)
 		INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
 		VALUES ($1, $2, $3, $4, NULL, $5)
 		ON CONFLICT (bucket_id, name) DO UPDATE
@@ -57,12 +79,19 @@ const (
 		       data = NULL,
 		       updated_at = now()
 		   WHERE pgstack.storage_objects.owner IS NOT DISTINCT FROM EXCLUDED.owner
-		RETURNING id::text`
+		RETURNING id::text,
+		          (xmax = 0) AS inserted,
+		          (SELECT size      FROM prev) AS prev_size,
+		          (SELECT mime_type FROM prev) AS prev_mime`
 
 	// service_role bypasses the owner gate (admin overwrite). Owner column
 	// is preserved on overwrite — an admin re-upload does not silently
 	// reassign ownership to a service-role principal.
 	upsertObjectDBServiceRole = `
+		WITH prev AS (
+			SELECT size, mime_type FROM pgstack.storage_objects
+			WHERE bucket_id = $1 AND name = $2
+		)
 		INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (bucket_id, name) DO UPDATE
@@ -70,9 +99,16 @@ const (
 		       mime_type = EXCLUDED.mime_type,
 		       data = EXCLUDED.data,
 		       updated_at = now()
-		RETURNING id::text`
+		RETURNING id::text,
+		          (xmax = 0) AS inserted,
+		          (SELECT size      FROM prev) AS prev_size,
+		          (SELECT mime_type FROM prev) AS prev_mime`
 
 	upsertObjectDiskServiceRole = `
+		WITH prev AS (
+			SELECT size, mime_type FROM pgstack.storage_objects
+			WHERE bucket_id = $1 AND name = $2
+		)
 		INSERT INTO pgstack.storage_objects (bucket_id, name, size, mime_type, data, owner)
 		VALUES ($1, $2, $3, $4, NULL, $5)
 		ON CONFLICT (bucket_id, name) DO UPDATE
@@ -80,7 +116,19 @@ const (
 		       mime_type = EXCLUDED.mime_type,
 		       data = NULL,
 		       updated_at = now()
-		RETURNING id::text`
+		RETURNING id::text,
+		          (xmax = 0) AS inserted,
+		          (SELECT size      FROM prev) AS prev_size,
+		          (SELECT mime_type FROM prev) AS prev_mime`
+
+	// Compensation when the post-claim disk rename fails for an UPDATE
+	// upsert. The previous file on disk is untouched (rename failed before
+	// consuming the existing dest), so restoring the previous metadata
+	// makes the (row, file) pair consistent again.
+	restoreObjectMetadata = `
+		UPDATE pgstack.storage_objects
+		SET size = $1, mime_type = $2, updated_at = now()
+		WHERE id = $3`
 )
 
 // storageResolveClaims is a shorthand used by storage handlers. It returns
@@ -526,27 +574,30 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 
 		var (
 			objectID string
+			inserted bool
+			prevSize *int64
+			prevMime *string
 			scanErr  error
 		)
 		if claims.Role == "service_role" {
 			if d.StorageBackend == "disk" {
 				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDiskServiceRole,
 					bucketID, objName, fileSize, mimeType, ownerID,
-				).Scan(&objectID)
+				).Scan(&objectID, &inserted, &prevSize, &prevMime)
 			} else {
 				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDBServiceRole,
 					bucketID, objName, fileSize, mimeType, fileData, ownerID,
-				).Scan(&objectID)
+				).Scan(&objectID, &inserted, &prevSize, &prevMime)
 			}
 		} else {
 			if d.StorageBackend == "disk" {
 				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDiskOwnerLocked,
 					bucketID, objName, fileSize, mimeType, ownerID,
-				).Scan(&objectID)
+				).Scan(&objectID, &inserted, &prevSize, &prevMime)
 			} else {
 				scanErr = d.Pool.QueryRow(r.Context(), upsertObjectDBOwnerLocked,
 					bucketID, objName, fileSize, mimeType, fileData, ownerID,
-				).Scan(&objectID)
+				).Scan(&objectID, &inserted, &prevSize, &prevMime)
 			}
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
@@ -563,19 +614,20 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 		}
 
 		// DB claim succeeded — promote the staged file into its final
-		// location atomically (POSIX rename). If rename fails we still
-		// need to mark the DB row inconsistent: delete it so a subsequent
-		// upload can claim the key cleanly.
+		// location atomically (POSIX rename). If rename fails we compensate:
+		//   - inserted (no prior file or row): DELETE the freshly-inserted
+		//     row so a retry can claim the key cleanly.
+		//   - overwrite (prior file still intact at diskPath because the
+		//     failed rename never replaced it): restore the previous
+		//     size/mime_type so the row matches the file again. Skipping
+		//     this would leave a row whose metadata describes the new
+		//     payload while the file on disk still holds the old bytes.
 		if d.StorageBackend == "disk" {
 			if err := os.Rename(tmpPath, diskPath); err != nil {
 				log.Error().Err(err).Str("tmp", tmpPath).Str("final", diskPath).
+					Bool("inserted", inserted).
 					Msg("storage: promote staged upload — compensating DB row")
-				if _, derr := d.Pool.Exec(r.Context(),
-					`DELETE FROM pgstack.storage_objects WHERE bucket_id = $1 AND name = $2 AND id = $3`,
-					bucketID, objName, objectID); derr != nil {
-					log.Error().Err(derr).Str("id", objectID).
-						Msg("storage: compensation delete failed — row may be orphaned")
-				}
+				compensateDiskRenameFailure(r.Context(), d.Pool, objectID, inserted, prevSize, prevMime)
 				writeJSONError(w, http.StatusInternalServerError, "failed to finalise upload")
 				return
 			}
@@ -860,4 +912,43 @@ func pgErrCode(err error) string {
 		return e.SQLState()
 	}
 	return ""
+}
+
+// compensateDiskRenameFailure undoes the DB side of a disk upload whose
+// post-claim os.Rename failed. The semantics are different for INSERT vs
+// UPDATE — see the call site for the rationale. Errors are logged but
+// not surfaced; the caller has already decided to return 500.
+func compensateDiskRenameFailure(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	objectID string,
+	inserted bool,
+	prevSize *int64,
+	prevMime *string,
+) {
+	if inserted {
+		if _, err := pool.Exec(ctx,
+			`DELETE FROM pgstack.storage_objects WHERE id = $1`,
+			objectID); err != nil {
+			log.Error().Err(err).Str("id", objectID).
+				Msg("storage: compensation delete failed — row may be orphaned")
+		}
+		return
+	}
+	// UPDATE path: the prior row existed and the prior file at diskPath
+	// was untouched by the failed rename. Restore the previous size and
+	// mime so the metadata matches the bytes still on disk.
+	if prevSize == nil || prevMime == nil {
+		// Defensive: should never happen — an UPDATE upsert by definition
+		// has a prior row. If we get here, the metadata is inconsistent
+		// and we have no way to repair it; leave a loud log line.
+		log.Error().Str("id", objectID).
+			Msg("storage: compensation update skipped — previous metadata unavailable; row metadata may not match disk file")
+		return
+	}
+	if _, err := pool.Exec(ctx, restoreObjectMetadata,
+		*prevSize, *prevMime, objectID); err != nil {
+		log.Error().Err(err).Str("id", objectID).
+			Msg("storage: compensation update failed — row metadata may not match disk file")
+	}
 }

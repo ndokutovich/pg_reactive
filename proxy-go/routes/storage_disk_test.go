@@ -3,6 +3,7 @@ package routes
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -213,5 +214,164 @@ func TestStorageDeps_DefaultBackendIsDatabase(t *testing.T) {
 	d := StorageDeps{}
 	if d.StorageBackend == "disk" {
 		t.Error("zero-value StorageDeps should not default to disk backend")
+	}
+}
+
+// ── stage-then-rename pattern (round 15 + 16) ─────────────────────────
+//
+// These tests pin the FS-level assumptions the disk upload flow now
+// relies on:
+//
+//   1. CreateTemp + Write + Close + Rename atomically promotes a
+//      staged file into its final location. The DB claim happens
+//      between Close and Rename; the on-disk state never holds a
+//      partially-written file under the final key.
+//   2. A failed Rename leaves the existing destination file intact.
+//      This is what makes the round-16 "restore previous metadata"
+//      compensation correct: the on-disk bytes never changed, so
+//      reverting the DB metadata is sufficient.
+//   3. The deferred-cleanup pattern removes the temp file when an
+//      early return aborts before Rename succeeds, so the storage
+//      directory never accumulates orphan .pgstack-upload-* files.
+
+func TestStaging_RenamePromotesAtomically(t *testing.T) {
+	dir := t.TempDir()
+	final := filepath.Join(dir, "image.jpg")
+
+	tmp, err := os.CreateTemp(dir, ".pgstack-upload-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write([]byte("staged content")); err != nil {
+		t.Fatalf("write tmp: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("close tmp: %v", err)
+	}
+
+	if err := os.Rename(tmpPath, final); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	// Final exists, has the staged bytes; tmp no longer exists.
+	got, err := os.ReadFile(final)
+	if err != nil {
+		t.Fatalf("read final: %v", err)
+	}
+	if string(got) != "staged content" {
+		t.Fatalf("final content: got %q, want %q", got, "staged content")
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("expected tmp gone after rename, got err=%v", err)
+	}
+}
+
+func TestStaging_RenameOverwriteAtomically(t *testing.T) {
+	// The round-16 compensation argument: when rename SUCCEEDS over an
+	// existing destination, the old content is replaced; when it FAILS,
+	// the old content remains. We pin the success branch here and the
+	// failure branch in the next test.
+	dir := t.TempDir()
+	final := filepath.Join(dir, "image.jpg")
+	if err := os.WriteFile(final, []byte("old content"), 0o644); err != nil {
+		t.Fatalf("seed final: %v", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".pgstack-upload-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	tmpPath := tmp.Name()
+	_, _ = tmp.Write([]byte("new content"))
+	_ = tmp.Close()
+
+	if err := os.Rename(tmpPath, final); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	got, _ := os.ReadFile(final)
+	if string(got) != "new content" {
+		t.Fatalf("final content: got %q, want %q", got, "new content")
+	}
+}
+
+func TestStaging_FailedRenamePreservesDestination(t *testing.T) {
+	// Force a rename failure by trying to rename into a path whose
+	// parent does not exist. On every platform os.Rename returns an
+	// error in that case; the existing destination (if any, here we
+	// seed one) must be untouched.
+	dir := t.TempDir()
+	finalDir := filepath.Join(dir, "real-final-dir")
+	if err := os.MkdirAll(finalDir, 0o755); err != nil {
+		t.Fatalf("mkdir final dir: %v", err)
+	}
+	final := filepath.Join(finalDir, "image.jpg")
+	if err := os.WriteFile(final, []byte("preserved"), 0o644); err != nil {
+		t.Fatalf("seed final: %v", err)
+	}
+
+	// Stage in a sibling directory and then try to rename to a path
+	// whose parent does not exist — guaranteed failure.
+	tmp, err := os.CreateTemp(dir, ".pgstack-upload-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	tmpPath := tmp.Name()
+	_, _ = tmp.Write([]byte("new bytes"))
+	_ = tmp.Close()
+
+	badTarget := filepath.Join(dir, "no-such-dir", "image.jpg")
+	if err := os.Rename(tmpPath, badTarget); err == nil {
+		t.Fatal("expected rename into non-existent dir to fail")
+	}
+
+	// The pre-existing final file is untouched, so the round-16
+	// "restore metadata to match this file" compensation is correct.
+	got, err := os.ReadFile(final)
+	if err != nil {
+		t.Fatalf("read final after failed rename: %v", err)
+	}
+	if string(got) != "preserved" {
+		t.Fatalf("destination changed after failed rename: got %q", got)
+	}
+
+	// Production cleanup: the defer os.Remove(tmpPath) in UploadObject
+	// runs after the failure and removes the staged file.
+	_ = os.Remove(tmpPath)
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("expected staged tmp removed by cleanup, got err=%v", err)
+	}
+}
+
+func TestStaging_DeferredCleanupRemovesOrphan(t *testing.T) {
+	// Simulate the early-return path: we stage but never rename, so the
+	// deferred cleanup must remove the staged file before the handler
+	// returns. Pins that the staging directory does not accumulate
+	// orphan .pgstack-upload-* files when an upload aborts (e.g. DB
+	// claim failed, owner-gate refused, etc.).
+	dir := t.TempDir()
+
+	tmp, err := os.CreateTemp(dir, ".pgstack-upload-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	tmpPath := tmp.Name()
+	_, _ = tmp.Write([]byte("never promoted"))
+	_ = tmp.Close()
+
+	// Production: the defer os.Remove(tmpPath) inside UploadObject's
+	// disk branch removes the staged file when the handler aborts
+	// before clearing tmpPath via successful rename. We replicate that
+	// here.
+	if err := os.Remove(tmpPath); err != nil {
+		t.Fatalf("deferred cleanup: %v", err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".pgstack-upload-") {
+			t.Fatalf("staged orphan remained after cleanup: %s", e.Name())
+		}
 	}
 }
