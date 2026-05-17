@@ -78,6 +78,34 @@ async function setup() {
   );
 }
 
+// assertDiskBackend confirms the proxy is running with STORAGE_BACKEND=disk
+// — that's the only mode the per-key advisory lock matters in. On the
+// database backend the data column carries the bytes and the lock path
+// is never exercised, so a green test wouldn't say anything about the
+// fix this file is meant to pin. Audit F2 round 19.
+async function assertDiskBackend(seqProbe) {
+  await uploadOnce(seqProbe);
+  const dataLen = psql(
+    `SELECT COALESCE(octet_length(data)::text, 'null')
+     FROM pgstack.storage_objects
+     WHERE bucket_id = '${BUCKET}' AND name = '${KEY}';`,
+  );
+  // Clean up probe row before the real run.
+  psql(
+    `DELETE FROM pgstack.storage_objects
+     WHERE bucket_id = '${BUCKET}' AND name = '${KEY}';`,
+  );
+  if (dataLen !== 'null') {
+    console.error(
+      `\nTest aborted: storage_objects.data is ${dataLen} bytes (database backend).\n` +
+      `This test only validates the advisory-lock path that the disk backend uses.\n` +
+      `Restart the proxy with STORAGE_BACKEND=disk to exercise it.`,
+    );
+    process.exit(2);
+  }
+  console.log('# proxy confirmed running with STORAGE_BACKEND=disk');
+}
+
 async function uploadOnce(seq) {
   // Body: first 8 bytes = seq, remainder zero-filled to writerSize(seq).
   const size = writerSize(seq);
@@ -119,8 +147,12 @@ async function downloadObject() {
 }
 
 async function main() {
-  console.log(`# pgStack storage concurrent-upload integration test (×${CONCURRENCY}, round 18)`);
+  console.log(`# pgStack storage concurrent-upload integration test (×${CONCURRENCY}, round 19)`);
   await setup();
+  // Sanity-check: this test only exercises the advisory-lock path that
+  // the disk backend uses. Fail loudly if the proxy is running on the
+  // database backend so a green result cannot be misread.
+  await assertDiskBackend(0);
 
   const results = await Promise.all(
     Array.from({ length: CONCURRENCY }, (_, i) => uploadOnce(i)),

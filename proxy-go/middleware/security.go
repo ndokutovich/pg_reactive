@@ -75,15 +75,39 @@ func StudioSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// HSTSHeaders adds the Strict-Transport-Security header to every response.
-// Apply this middleware only when TLS is active — sending HSTS over plain HTTP
-// is meaningless and can cause issues if the service is behind a TLS-terminating
-// proxy that also talks to backends over HTTP.
+// HSTSHeaders adds the Strict-Transport-Security header to every response
+// reaching the client over HTTPS. Per-request gate (not startup-time) so the
+// header still fires when this proxy runs HTTP behind a TLS-terminating
+// reverse proxy (umbrella nginx, Cloudflare, etc.) — those forward the
+// original scheme in X-Forwarded-Proto.
+//
+// Sending HSTS over plain HTTP is meaningless (browsers ignore it) and can
+// poison clients if the deployment ever needs to roll back to HTTP, so the
+// guard matters.
+//
+// Policy: 2 years + includeSubDomains + preload — meets the hstspreload.org
+// submission requirements.
 func HSTSHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		if isHTTPS(r) {
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isHTTPS reports whether the original client request was over TLS.
+// Checks r.TLS (direct HTTPS) and X-Forwarded-Proto (behind a TLS-terminating
+// reverse proxy). Requires that RealIP/proxy-trust middleware runs first so
+// X-Forwarded-Proto is trustworthy.
+func isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if r.Header.Get("X-Forwarded-Proto") == "https" {
+		return true
+	}
+	return false
 }
 
 // BodyLimit wraps the request body with an http.MaxBytesReader to enforce a

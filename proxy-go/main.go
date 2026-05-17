@@ -103,6 +103,15 @@ func main() {
 	// pgstack.refresh_tokens (L3: stale rows would accumulate forever).
 	go auth.StartExpiredTokenCleanup(cleanupCtx, state.Pool)
 
+	// One-shot orphan sweep for disk-backend storage (audit F1 round 19):
+	// removes .pgstack-upload-* / .pgstack-backup-* files left behind by
+	// uploads killed mid-flight. Runs only when STORAGE_BACKEND=disk.
+	// minAge=10m keeps a generous safety margin so a slow in-flight
+	// upload is never mistaken for an orphan.
+	if cfg.StorageBackend == "disk" && cfg.StorageDir != "" {
+		go routes.SweepDiskOrphans(cfg.StorageDir, 10*time.Minute)
+	}
+
 	// Load webhooks from DB before starting listener.
 	if err := state.WebhookManager.Refresh(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("initial webhook load failed — webhooks will retry on next refresh")
@@ -342,9 +351,11 @@ func buildRouter(state *AppState) http.Handler {
 		r.Use(chiMiddleware.Compress(state.Config.GzipLevel))
 	}
 	r.Use(appMiddleware.CORSMiddleware(state.Config.AllowedOrigins, state.Config.AllowPermissiveCORS))
-	if state.Config.TLSMode != "off" {
-		r.Use(appMiddleware.HSTSHeaders)
-	}
+	// HSTS self-gates per-request via r.TLS / X-Forwarded-Proto so the header
+	// also fires when this proxy runs HTTP behind a TLS-terminating reverse
+	// proxy (umbrella nginx, Cloudflare). Plain HTTP requests are skipped
+	// inside the middleware.
+	r.Use(appMiddleware.HSTSHeaders)
 
 	// ── Studio SPA (relaxed CSP) ──────────────────────────────────────────
 	r.Group(func(r chi.Router) {

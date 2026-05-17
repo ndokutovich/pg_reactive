@@ -777,16 +777,51 @@ func DownloadObject(d *StorageDeps) http.HandlerFunc {
 			return
 		}
 
-		// Query the object metadata (and data if database backend)
-		var mimeType, ownerStr string
-		var size int64
-		var data []byte
-		err := d.Pool.QueryRow(r.Context(),
-			`SELECT mime_type, size, COALESCE(owner::text, ''), data
-			 FROM pgstack.storage_objects
-			 WHERE bucket_id = $1 AND name = $2`,
-			bucketID, objName,
-		).Scan(&mimeType, &size, &ownerStr, &data)
+		// Audit F1 (round 19): for the disk backend, take a SHARED
+		// advisory lock so a concurrent upload (which holds an EXCLUSIVE
+		// lock) cannot tear the (DB metadata, on-disk bytes) pair
+		// underneath us. Multiple parallel reads of the same key DO NOT
+		// block each other — pg_advisory_xact_lock_shared is reader/
+		// reader compatible — so throughput is unaffected outside the
+		// rare overwrite window. The DB backend has nothing to serialise
+		// (data lives in the row) and skips the tx to avoid the round-
+		// trip overhead on every download.
+		var (
+			mimeType, ownerStr string
+			size               int64
+			data               []byte
+			err                error
+		)
+		if d.StorageBackend == "disk" {
+			tx, txErr := d.Pool.Begin(r.Context())
+			if txErr != nil {
+				log.Error().Err(txErr).Msg("storage: begin download tx")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+			defer func() { _ = tx.Rollback(r.Context()) }()
+			if _, lerr := tx.Exec(r.Context(),
+				`SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))`,
+				bucketID, objName,
+			); lerr != nil {
+				log.Error().Err(lerr).Msg("storage: acquire shared lock for download")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+			err = tx.QueryRow(r.Context(),
+				`SELECT mime_type, size, COALESCE(owner::text, ''), data
+				 FROM pgstack.storage_objects
+				 WHERE bucket_id = $1 AND name = $2`,
+				bucketID, objName,
+			).Scan(&mimeType, &size, &ownerStr, &data)
+		} else {
+			err = d.Pool.QueryRow(r.Context(),
+				`SELECT mime_type, size, COALESCE(owner::text, ''), data
+				 FROM pgstack.storage_objects
+				 WHERE bucket_id = $1 AND name = $2`,
+				bucketID, objName,
+			).Scan(&mimeType, &size, &ownerStr, &data)
+		}
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeJSONError(w, http.StatusNotFound, "object not found")
@@ -810,7 +845,11 @@ func DownloadObject(d *StorageDeps) http.HandlerFunc {
 			}
 		}
 
-		// If disk backend, read from filesystem
+		// If disk backend, read from filesystem. The shared advisory lock
+		// above is still held by the surrounding tx, so the file at
+		// diskPath cannot be replaced by a concurrent upload while we
+		// read it. The tx defers rollback until the response is fully
+		// written, releasing the lock when the handler returns.
 		if d.StorageBackend == "disk" && data == nil {
 			diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName)
 			if perr != nil {
@@ -877,30 +916,72 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 			return
 		}
 
-		var tag string
-		if claims.Role == "service_role" {
-			// Service role can delete any object
-			result, err := d.Pool.Exec(r.Context(),
-				`DELETE FROM pgstack.storage_objects WHERE bucket_id = $1 AND name = $2`,
-				bucketID, objName)
-			if err != nil {
-				log.Error().Err(err).Msg("storage: delete object")
+		// Audit F1 (round 19): for the disk backend wrap DB delete + file
+		// remove in a tx with the EXCLUSIVE per-key lock so a concurrent
+		// upload to the same key cannot land its rename between our
+		// DELETE and our os.Remove (which would either remove the just-
+		// written file or leave an orphan with a stale row). On commit
+		// failure the file removal is skipped — the row stays, but the
+		// orphan file is rare and the next list/sweep picks it up.
+		var (
+			tag string
+			tx  pgx.Tx
+		)
+		if d.StorageBackend == "disk" {
+			var txErr error
+			tx, txErr = d.Pool.Begin(r.Context())
+			if txErr != nil {
+				log.Error().Err(txErr).Msg("storage: begin delete tx")
 				writeJSONError(w, http.StatusInternalServerError, "internal database error")
 				return
 			}
-			tag = fmt.Sprintf("%d", result.RowsAffected())
+			defer func() {
+				if tx != nil {
+					_ = tx.Rollback(r.Context())
+				}
+			}()
+			if _, lerr := tx.Exec(r.Context(),
+				`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+				bucketID, objName,
+			); lerr != nil {
+				log.Error().Err(lerr).Msg("storage: acquire lock for delete")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+		}
+
+		runDeleteExec := func(sql string, args ...any) (string, error) {
+			if d.StorageBackend == "disk" {
+				result, err := tx.Exec(r.Context(), sql, args...)
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("%d", result.RowsAffected()), nil
+			}
+			result, err := d.Pool.Exec(r.Context(), sql, args...)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d", result.RowsAffected()), nil
+		}
+
+		var execErr error
+		if claims.Role == "service_role" {
+			tag, execErr = runDeleteExec(
+				`DELETE FROM pgstack.storage_objects WHERE bucket_id = $1 AND name = $2`,
+				bucketID, objName,
+			)
 		} else {
-			// Authenticated user: only delete own objects
-			result, err := d.Pool.Exec(r.Context(),
+			tag, execErr = runDeleteExec(
 				`DELETE FROM pgstack.storage_objects
 				 WHERE bucket_id = $1 AND name = $2 AND owner = $3`,
-				bucketID, objName, claims.Sub)
-			if err != nil {
-				log.Error().Err(err).Msg("storage: delete object")
-				writeJSONError(w, http.StatusInternalServerError, "internal database error")
-				return
-			}
-			tag = fmt.Sprintf("%d", result.RowsAffected())
+				bucketID, objName, claims.Sub,
+			)
+		}
+		if execErr != nil {
+			log.Error().Err(execErr).Msg("storage: delete object")
+			writeJSONError(w, http.StatusInternalServerError, "internal database error")
+			return
 		}
 
 		if tag == "0" {
@@ -908,10 +989,18 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 			return
 		}
 
-		// If disk backend, also remove the file from disk
+		// If disk backend: commit DB first, then remove the file. On
+		// commit failure the file stays — better than DB row gone +
+		// file gone when we can't be sure DB rollback worked.
 		if d.StorageBackend == "disk" {
+			if err := tx.Commit(r.Context()); err != nil {
+				log.Error().Err(err).Msg("storage: commit delete")
+				writeJSONError(w, http.StatusInternalServerError, "internal database error")
+				return
+			}
+			tx = nil // suppress rollback in defer
 			if diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName); perr == nil {
-				_ = os.Remove(diskPath) // best-effort; DB record is already gone
+				_ = os.Remove(diskPath) // best-effort; DB row already gone
 			}
 		}
 
@@ -1026,5 +1115,54 @@ func pgErrCode(err error) string {
 		return e.SQLState()
 	}
 	return ""
+}
+
+// SweepDiskOrphans removes leftover .pgstack-upload-* and .pgstack-backup-*
+// files older than minAge in storageDir/<bucket>/... . These are produced
+// by an upload that crashed between os.CreateTemp and either successful
+// Rename or the deferred cleanup, OR between backup-rename and the
+// post-commit backup delete. In both cases the file has no DB row pointing
+// at it, so removing it is safe.
+//
+// Audit F1 (round 19): closes the orphan accumulation that would otherwise
+// follow a process kill during an upload. Intentionally conservative:
+// minAge avoids racing in-flight uploads on the same shard. Run once at
+// boot, optionally on a periodic ticker. Best-effort — errors are logged
+// and the sweep moves on.
+func SweepDiskOrphans(storageDir string, minAge time.Duration) {
+	if storageDir == "" {
+		return
+	}
+	cutoff := time.Now().Add(-minAge)
+	removed := 0
+	filepath.WalkDir(storageDir, func(path string, dirent os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // skip unreadable subtrees
+		}
+		if dirent.IsDir() {
+			return nil
+		}
+		name := dirent.Name()
+		if !strings.HasPrefix(name, ".pgstack-upload-") && !strings.HasPrefix(name, ".pgstack-backup-") {
+			return nil
+		}
+		info, err := dirent.Info()
+		if err != nil {
+			return nil
+		}
+		if info.ModTime().After(cutoff) {
+			return nil // young file — might be a live upload
+		}
+		if err := os.Remove(path); err != nil {
+			log.Warn().Err(err).Str("path", path).Msg("storage: orphan sweep — remove failed")
+			return nil
+		}
+		removed++
+		return nil
+	})
+	if removed > 0 {
+		log.Info().Int("removed", removed).Str("dir", storageDir).
+			Msg("storage: orphan sweep cleaned up stale staging/backup files")
+	}
 }
 
