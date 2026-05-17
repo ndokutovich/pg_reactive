@@ -1039,29 +1039,44 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 			diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName)
 			if perr == nil {
 				if _, statErr := os.Stat(diskPath); statErr == nil {
+					// Audit F2 round 22: staging dir / temp file failure
+					// here is a HARD failure — without the stage-aside we
+					// cannot finish delete without racing concurrent
+					// uploads, and committing the DB delete anyway would
+					// leave an orphan file with no row pointing at it.
+					// Roll back via defer and return 500.
 					staging, serr := ensureStagingDir(d.StorageDir)
-					if serr == nil {
-						bk, berr := os.CreateTemp(staging, "backup-*")
-						if berr == nil {
-							deleteBackupPath = bk.Name()
-							_ = bk.Close()
-							if err := os.Rename(diskPath, deleteBackupPath); err != nil {
-								// Could not move file aside — let the
-								// caller see 500 and the tx rollback
-								// will keep the row.
-								_ = os.Remove(deleteBackupPath)
-								log.Error().Err(err).Str("src", diskPath).
-									Msg("storage: stage file for delete")
-								writeJSONError(w, http.StatusInternalServerError, "failed to stage delete")
-								return
-							}
-						} else {
-							log.Warn().Err(berr).Msg("storage: stage backup file for delete (continuing without backup)")
-						}
-					} else {
-						log.Warn().Err(serr).Msg("storage: prepare staging dir for delete (continuing without backup)")
+					if serr != nil {
+						log.Error().Err(serr).Msg("storage: prepare staging dir for delete")
+						writeJSONError(w, http.StatusInternalServerError, "failed to stage delete")
+						return
+					}
+					bk, berr := os.CreateTemp(staging, "backup-*")
+					if berr != nil {
+						log.Error().Err(berr).Str("dir", staging).
+							Msg("storage: open backup file for delete")
+						writeJSONError(w, http.StatusInternalServerError, "failed to stage delete")
+						return
+					}
+					deleteBackupPath = bk.Name()
+					_ = bk.Close()
+					if err := os.Rename(diskPath, deleteBackupPath); err != nil {
+						_ = os.Remove(deleteBackupPath)
+						log.Error().Err(err).Str("src", diskPath).
+							Msg("storage: stage file for delete")
+						writeJSONError(w, http.StatusInternalServerError, "failed to stage delete")
+						return
 					}
 				}
+			} else {
+				// safeStoragePath rejected the path. The DB delete already
+				// happened in the tx — if we can't even validate the path
+				// we have no idea what's on disk (or where), so prefer
+				// rollback over committing into the unknown.
+				log.Error().Err(perr).Str("bucket", bucketID).Str("object", objName).
+					Msg("storage: invalid path for delete")
+				writeJSONError(w, http.StatusBadRequest, perr.Error())
+				return
 			}
 
 			if err := tx.Commit(r.Context()); err != nil {

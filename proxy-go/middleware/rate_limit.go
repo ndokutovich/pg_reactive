@@ -124,44 +124,68 @@ func remoteHost(r *http.Request) string {
 	return host
 }
 
-// realIP extracts the client IP for rate limiting purposes.
+// realIP extracts the client IP for rate-limiting purposes.
 //
-// When trustedProxies is empty, X-Forwarded-For is ignored entirely and the IP
-// is taken directly from r.RemoteAddr. This prevents IP spoofing via forged
-// headers when there is no known reverse proxy in front of the server.
+// When trustedProxies is empty, X-Forwarded-For / X-Real-IP are ignored
+// entirely and the IP is taken from r.RemoteAddr — prevents header
+// spoofing when there is no known reverse proxy in front of the server.
 //
-// When trustedProxies is set, X-Forwarded-For and X-Real-IP are only trusted
-// if the immediate connection (r.RemoteAddr) comes from one of the listed
-// proxy IPs.
+// When trustedProxies is set:
+//
+//  1. X-Real-IP wins when present. nginx's `proxy_set_header X-Real-IP
+//     $remote_addr` is an OVERWRITE (single value the proxy fully
+//     controls); the equivalent X-Forwarded-For pattern is an APPEND, so
+//     XRI is the less-foot-gunny source.
+//
+//  2. Otherwise we walk the X-Forwarded-For list FROM THE RIGHT and
+//     return the first IP that is NOT itself a trusted proxy. This
+//     defeats the `$proxy_add_x_forwarded_for` foot-gun (audit F1
+//     round 22): when nginx is configured to append, a client-supplied
+//     `X-Forwarded-For: 1.2.3.4` lands at the LEFT of the resulting
+//     chain `1.2.3.4, <real-client-ip>`. Taking the leftmost value
+//     would honour the spoof; the rightmost-non-trusted IP is the
+//     last hop the trusted chain attests to.
+//
+//  3. If every IP in the chain is itself a trusted proxy (or the
+//     header is empty), fall back to directIP.
 func realIP(r *http.Request, trustedProxies []string) string {
 	directIP := remoteHost(r)
 
 	if len(trustedProxies) == 0 {
-		// No trusted proxies configured: use the direct connection IP only.
 		return directIP
 	}
 
-	// Check whether the direct connection is from a trusted proxy.
-	trusted := false
+	trustedSet := make(map[string]struct{}, len(trustedProxies))
 	for _, tp := range trustedProxies {
-		if directIP == tp {
-			trusted = true
-			break
-		}
+		trustedSet[tp] = struct{}{}
 	}
-	if !trusted {
+	if _, ok := trustedSet[directIP]; !ok {
+		// Immediate hop is NOT a trusted proxy — header values are
+		// untrustworthy regardless of contents.
 		return directIP
 	}
 
-	// Connection is from a trusted proxy: honour forwarded headers.
+	// XRI is a single value; honour it first because nginx's canonical
+	// X-Real-IP $remote_addr pattern is a clean overwrite.
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		return xri
+	}
+
+	// XFF: walk from right (closest to us) to left (furthest from us),
+	// skipping any IPs that are themselves trusted proxies. The first
+	// untrusted IP is the real client the chain attests to.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.SplitN(xff, ",", 2)
-		if ip := strings.TrimSpace(parts[0]); ip != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			ip := strings.TrimSpace(parts[i])
+			if ip == "" {
+				continue
+			}
+			if _, isProxy := trustedSet[ip]; isProxy {
+				continue
+			}
 			return ip
 		}
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
 	}
 	return directIP
 }

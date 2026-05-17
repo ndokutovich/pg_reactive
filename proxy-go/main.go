@@ -391,7 +391,11 @@ func buildRouter(state *AppState) http.Handler {
 		wsLimiter := appMiddleware.NewWSConnLimiter(state.Config.WSMaxPerIP, state.Config.TrustedProxies)
 		r.Group(func(r chi.Router) {
 			r.Use(wsLimiter.Middleware)
-			// Live query subscription
+			// Live query subscription — the only route that actually
+			// hijacks the connection. Presence is a plain HTTP read and
+			// must NOT be in this group (audit F3 round 22: clients at
+			// the WS cap would otherwise get 429 on presence reads too,
+			// even though presence doesn't consume a slot).
 			r.Get("/ws/{queryID}", realtime.WSHandler(
 				rlsCfg,
 				state.Pool,
@@ -402,14 +406,15 @@ func buildRouter(state *AppState) http.Handler {
 				state.Config.AllowPermissiveCORS,
 				state.Config.RequireAuthenticatedWS,
 			))
-
-			// Presence — HTTP endpoint for current presence state. Same auth +
-			// audience gate as the WSHandler upgrade path so this isn't a
-			// side channel into private rooms.
-			r.Get("/ws/_presence/{channel}", realtime.PresenceHandler(
-				rlsCfg, state.Pool, state.Hub, state.Config.RequireAuthenticatedWS,
-			))
 		})
+
+		// Presence — HTTP endpoint for current presence state. Same auth +
+		// audience gate as the WSHandler upgrade path so this isn't a
+		// side channel into private rooms. Outside the wsLimiter group
+		// because presence reads don't consume a WebSocket slot.
+		r.Get("/ws/_presence/{channel}", realtime.PresenceHandler(
+			rlsCfg, state.Pool, state.Hub, state.Config.RequireAuthenticatedWS,
+		))
 
 		// ── Auth routes ───────────────────────────────────────────────────
 		// Rate-limited auth endpoints (brute-force and email-bombing targets).

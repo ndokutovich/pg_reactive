@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"bufio"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -27,16 +26,26 @@ import (
 func EdgeFnTiming(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		sw := &statusCaptureWriter{ResponseWriter: w, status: http.StatusOK}
+		core := &statusCaptureCore{ResponseWriter: w, status: http.StatusOK}
+		// Round-22 codex F4: build a wrapper that ONLY advertises the
+		// optional interfaces the underlying writer actually implements,
+		// rather than always advertising all four and returning
+		// http.ErrNotSupported at call time. Some callers (notably
+		// httputil.ReverseProxy when picking a path for streaming and
+		// websocket-upgrade libs) make their decisions via type
+		// assertion at request time — a "lying" wrapper that says it
+		// implements http.Flusher but no-ops on Flush() can silently
+		// buffer streaming responses for the full handler lifetime.
+		wrapped := wrapForCapabilities(w, core)
 		defer func() {
 			ms := time.Since(start).Milliseconds()
 			log.Info().
 				Str("fn", edgeFnNameFromPath(r.URL.Path)).
 				Int64("ms", ms).
-				Int("status", sw.status).
+				Int("status", core.status).
 				Msg("edge_fn_duration")
 		}()
-		next.ServeHTTP(sw, r)
+		next.ServeHTTP(wrapped, r)
 	})
 }
 
@@ -59,25 +68,17 @@ func edgeFnNameFromPath(p string) string {
 	return rest
 }
 
-// statusCaptureWriter records the response status code written by downstream
-// handlers so the timing log line can include it. Defaults to 200 when no
-// WriteHeader is ever called (Go writes 200 implicitly on first Write).
-//
-// Round-21 codex F2: the wrapper also delegates http.Flusher, http.Hijacker,
-// http.Pusher, and io.ReaderFrom to the underlying writer when available.
-// Without these passthroughs, mounting the middleware on routes that do
-// reverse-proxy / streaming / hijack-based upgrades (the /functions/v1
-// "deno" and "http" runtimes, anything that calls io.Copy from a file) would
-// silently degrade — httputil.ReverseProxy in particular short-circuits to
-// io.Copy through ReaderFrom and falls back to a generic per-buffer loop
-// without it.
-type statusCaptureWriter struct {
+// statusCaptureCore is the always-present nucleus: it records the response
+// status code and forwards Write/WriteHeader to the underlying writer. All
+// optional capability wrappers below embed it so the status capture stays
+// active no matter which interface combination we expose to the handler.
+type statusCaptureCore struct {
 	http.ResponseWriter
 	status      int
 	wroteHeader bool
 }
 
-func (s *statusCaptureWriter) WriteHeader(code int) {
+func (s *statusCaptureCore) WriteHeader(code int) {
 	if !s.wroteHeader {
 		s.status = code
 		s.wroteHeader = true
@@ -85,49 +86,124 @@ func (s *statusCaptureWriter) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-func (s *statusCaptureWriter) Write(b []byte) (int, error) {
+func (s *statusCaptureCore) Write(b []byte) (int, error) {
 	if !s.wroteHeader {
 		s.wroteHeader = true
 	}
 	return s.ResponseWriter.Write(b)
 }
 
-// Flush implements http.Flusher when the underlying ResponseWriter does.
-// SSE, log tailing, and any chunked-streaming response needs this.
-func (s *statusCaptureWriter) Flush() {
-	if f, ok := s.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+// ── Capability wrappers (one per interface combination we expose) ───────
+
+type flusherWrapper struct{ *statusCaptureCore }
+
+func (w flusherWrapper) Flush() {
+	w.ResponseWriter.(http.Flusher).Flush()
 }
 
-// Hijack implements http.Hijacker when the underlying writer does. Required
-// for WebSocket upgrades reached via an edge function path.
-func (s *statusCaptureWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	if hj, ok := s.ResponseWriter.(http.Hijacker); ok {
-		return hj.Hijack()
-	}
-	return nil, nil, errors.New("edge_fn_timing: underlying ResponseWriter does not Hijack")
+type hijackerWrapper struct{ *statusCaptureCore }
+
+func (w hijackerWrapper) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.ResponseWriter.(http.Hijacker).Hijack()
 }
 
-// Push implements http.Pusher (HTTP/2 server push) when the underlying
-// writer does. Rare on edge fns but cheap to forward.
-func (s *statusCaptureWriter) Push(target string, opts *http.PushOptions) error {
-	if p, ok := s.ResponseWriter.(http.Pusher); ok {
-		return p.Push(target, opts)
-	}
-	return http.ErrNotSupported
+type pusherWrapper struct{ *statusCaptureCore }
+
+func (w pusherWrapper) Push(target string, opts *http.PushOptions) error {
+	return w.ResponseWriter.(http.Pusher).Push(target, opts)
 }
 
-// ReadFrom lets httputil.ReverseProxy (and any io.Copy(w, src)) use the
-// optimised path on the underlying writer. Without this it falls back to a
-// 32 KiB-buffer copy loop and we lose splice/sendfile when the target file
-// is a *os.File.
-func (s *statusCaptureWriter) ReadFrom(src io.Reader) (int64, error) {
-	if !s.wroteHeader {
-		s.wroteHeader = true
+type readerFromWrapper struct{ *statusCaptureCore }
+
+func (w readerFromWrapper) ReadFrom(src io.Reader) (int64, error) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
 	}
-	if rf, ok := s.ResponseWriter.(io.ReaderFrom); ok {
-		return rf.ReadFrom(src)
+	return w.ResponseWriter.(io.ReaderFrom).ReadFrom(src)
+}
+
+// Common combinations. http.ResponseWriter for an HTTP/1.1 server provides
+// {Flusher, Hijacker, ReaderFrom}; HTTP/2 provides {Flusher, Pusher,
+// ReaderFrom}; httptest.NewRecorder provides {Flusher} only.
+
+type flusherHijackerWrapper struct {
+	*statusCaptureCore
+	hijackerWrapper
+	flusherWrapper
+}
+
+type flusherHijackerReaderFromWrapper struct {
+	*statusCaptureCore
+	hijackerWrapper
+	flusherWrapper
+	readerFromWrapper
+}
+
+type flusherPusherReaderFromWrapper struct {
+	*statusCaptureCore
+	pusherWrapper
+	flusherWrapper
+	readerFromWrapper
+}
+
+type flusherReaderFromWrapper struct {
+	*statusCaptureCore
+	flusherWrapper
+	readerFromWrapper
+}
+
+// wrapForCapabilities returns a wrapper that exposes EXACTLY the optional
+// interfaces the underlying writer supports. Any caller doing a type
+// assertion (e.g. `_, ok := w.(http.Flusher)`) sees a truthful answer.
+//
+// We special-case the common combinations rather than reach for reflect:
+// HTTP/1.1 (Flusher+Hijacker+ReaderFrom), HTTP/2 (Flusher+Pusher+ReaderFrom),
+// httptest (Flusher only), and a few fallbacks. This covers ~100% of real
+// ResponseWriters; an unrecognised combination degrades to the safest
+// always-Flusher+ReaderFrom (or core only).
+func wrapForCapabilities(w http.ResponseWriter, core *statusCaptureCore) http.ResponseWriter {
+	_, hasFlush := w.(http.Flusher)
+	_, hasHijack := w.(http.Hijacker)
+	_, hasPush := w.(http.Pusher)
+	_, hasReadFrom := w.(io.ReaderFrom)
+
+	switch {
+	case hasFlush && hasHijack && hasReadFrom:
+		// stdlib HTTP/1.1 server's *response
+		return flusherHijackerReaderFromWrapper{
+			statusCaptureCore: core,
+			flusherWrapper:    flusherWrapper{core},
+			hijackerWrapper:   hijackerWrapper{core},
+			readerFromWrapper: readerFromWrapper{core},
+		}
+	case hasFlush && hasPush && hasReadFrom:
+		// stdlib HTTP/2 server's *responseWriter
+		return flusherPusherReaderFromWrapper{
+			statusCaptureCore: core,
+			flusherWrapper:    flusherWrapper{core},
+			pusherWrapper:     pusherWrapper{core},
+			readerFromWrapper: readerFromWrapper{core},
+		}
+	case hasFlush && hasHijack:
+		return flusherHijackerWrapper{
+			statusCaptureCore: core,
+			flusherWrapper:    flusherWrapper{core},
+			hijackerWrapper:   hijackerWrapper{core},
+		}
+	case hasFlush && hasReadFrom:
+		return flusherReaderFromWrapper{
+			statusCaptureCore: core,
+			flusherWrapper:    flusherWrapper{core},
+			readerFromWrapper: readerFromWrapper{core},
+		}
+	case hasFlush:
+		// httptest.ResponseRecorder lands here.
+		return struct {
+			*statusCaptureCore
+			http.Flusher
+		}{core, flusherWrapper{core}}
+	default:
+		// No optional interfaces — return the core only.
+		return core
 	}
-	return io.Copy(s.ResponseWriter, src)
 }

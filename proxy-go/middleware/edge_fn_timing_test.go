@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -95,6 +96,53 @@ func TestEdgeFnTiming_ImplicitOKWhenHandlerOnlyWrites(t *testing.T) {
 	}
 	if got := entry["fn"]; got != "heartbeat" {
 		t.Errorf("fn = %v, want heartbeat", got)
+	}
+}
+
+// Round-22 F4: conditional capability wrapping. The wrapper should expose
+// the optional interfaces the UNDERLYING ResponseWriter supports, no more
+// and no less — so a type-asserting caller gets a truthful answer.
+
+type onlyWriter struct{ http.ResponseWriter }
+
+func TestEdgeFnTiming_OnlyExposesUnderlyingCapabilities(t *testing.T) {
+	// Bare ResponseWriter that supports NO optional interfaces.
+	bare := &onlyWriter{ResponseWriter: httptest.NewRecorder()}
+	var captured http.ResponseWriter
+	h := EdgeFnTiming(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = w
+	}))
+	h.ServeHTTP(bare, httptest.NewRequest(http.MethodGet, "/functions/v1/x", nil))
+
+	if _, ok := captured.(http.Flusher); ok {
+		t.Error("wrapper exposes Flusher when underlying does not")
+	}
+	if _, ok := captured.(http.Hijacker); ok {
+		t.Error("wrapper exposes Hijacker when underlying does not")
+	}
+	if _, ok := captured.(http.Pusher); ok {
+		t.Error("wrapper exposes Pusher when underlying does not")
+	}
+	if _, ok := captured.(io.ReaderFrom); ok {
+		t.Error("wrapper exposes io.ReaderFrom when underlying does not")
+	}
+}
+
+func TestEdgeFnTiming_PreservesFlusherWhenUnderlyingSupports(t *testing.T) {
+	// httptest.ResponseRecorder implements http.Flusher (as of Go 1.20+).
+	rec := httptest.NewRecorder()
+	var captured http.ResponseWriter
+	h := EdgeFnTiming(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = w
+	}))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/functions/v1/x", nil))
+
+	if _, ok := captured.(http.Flusher); !ok {
+		t.Error("wrapper must expose Flusher when underlying writer is httptest.ResponseRecorder")
+	}
+	// Hijacker is NOT supported by httptest.ResponseRecorder.
+	if _, ok := captured.(http.Hijacker); ok {
+		t.Error("httptest.ResponseRecorder does not implement Hijacker; wrapper must not advertise it")
 	}
 }
 
