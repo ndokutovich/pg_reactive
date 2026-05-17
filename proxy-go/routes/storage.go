@@ -470,6 +470,60 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 		// gets a separate path that may overwrite anyone (admin case);
 		// owner is preserved on overwrite so an admin re-upload does not
 		// silently reassign ownership.
+		// Audit F1 (round 15): for the disk backend, validate the path and
+		// pre-stage the file BEFORE the DB claim, then on success rename
+		// the temp file into place atomically. If WriteFile/MkdirAll fail
+		// after the DB claim there is no way to roll back PG cleanly inside
+		// a serverless flow — the only safe sequencing is: file-side errors
+		// happen before the row exists; DB-side errors happen before the
+		// file moves into place. This eliminates the previous orphan
+		// scenarios (invalid path → 400 left a metadata row; WriteFile
+		// failure same). For overwrites the same-owner check still gates
+		// the DB UPDATE, so two parallel writes by different users cannot
+		// race the file rename.
+		var (
+			diskPath string
+			tmpPath  string
+		)
+		if d.StorageBackend == "disk" {
+			var perr error
+			diskPath, perr = safeStoragePath(d.StorageDir, bucketID, objName)
+			if perr != nil {
+				writeJSONError(w, http.StatusBadRequest, perr.Error())
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(diskPath), 0o755); err != nil {
+				log.Error().Err(err).Str("path", diskPath).Msg("storage: mkdir for disk upload")
+				writeJSONError(w, http.StatusInternalServerError, "failed to create storage directory")
+				return
+			}
+			tmp, terr := os.CreateTemp(filepath.Dir(diskPath), ".pgstack-upload-*")
+			if terr != nil {
+				log.Error().Err(terr).Str("dir", filepath.Dir(diskPath)).Msg("storage: open temp file")
+				writeJSONError(w, http.StatusInternalServerError, "failed to stage upload")
+				return
+			}
+			tmpPath = tmp.Name()
+			// On any early return below, clean up the staged file. If we
+			// successfully rename, this delete becomes a no-op.
+			defer func() {
+				if tmpPath != "" {
+					_ = os.Remove(tmpPath)
+				}
+			}()
+			if _, werr := tmp.Write(fileData); werr != nil {
+				_ = tmp.Close()
+				log.Error().Err(werr).Str("path", tmpPath).Msg("storage: write temp file")
+				writeJSONError(w, http.StatusInternalServerError, "failed to stage upload")
+				return
+			}
+			if cerr := tmp.Close(); cerr != nil {
+				log.Error().Err(cerr).Str("path", tmpPath).Msg("storage: close temp file")
+				writeJSONError(w, http.StatusInternalServerError, "failed to stage upload")
+				return
+			}
+		}
+
 		var (
 			objectID string
 			scanErr  error
@@ -508,24 +562,24 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 			return
 		}
 
-		// Disk write happens only AFTER the DB claim succeeds, so a racing
-		// loser cannot leave a stale file under the winner's key.
+		// DB claim succeeded — promote the staged file into its final
+		// location atomically (POSIX rename). If rename fails we still
+		// need to mark the DB row inconsistent: delete it so a subsequent
+		// upload can claim the key cleanly.
 		if d.StorageBackend == "disk" {
-			diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName)
-			if perr != nil {
-				writeJSONError(w, http.StatusBadRequest, perr.Error())
+			if err := os.Rename(tmpPath, diskPath); err != nil {
+				log.Error().Err(err).Str("tmp", tmpPath).Str("final", diskPath).
+					Msg("storage: promote staged upload — compensating DB row")
+				if _, derr := d.Pool.Exec(r.Context(),
+					`DELETE FROM pgstack.storage_objects WHERE bucket_id = $1 AND name = $2 AND id = $3`,
+					bucketID, objName, objectID); derr != nil {
+					log.Error().Err(derr).Str("id", objectID).
+						Msg("storage: compensation delete failed — row may be orphaned")
+				}
+				writeJSONError(w, http.StatusInternalServerError, "failed to finalise upload")
 				return
 			}
-			if err := os.MkdirAll(filepath.Dir(diskPath), 0o755); err != nil {
-				log.Error().Err(err).Str("path", diskPath).Msg("storage: mkdir for disk upload")
-				writeJSONError(w, http.StatusInternalServerError, "failed to create storage directory")
-				return
-			}
-			if err := os.WriteFile(diskPath, fileData, 0o644); err != nil {
-				log.Error().Err(err).Str("path", diskPath).Msg("storage: disk write")
-				writeJSONError(w, http.StatusInternalServerError, "failed to write file to disk")
-				return
-			}
+			tmpPath = "" // rename consumed the temp file; suppress defer cleanup.
 		}
 
 		w.Header().Set("Content-Type", "application/json")

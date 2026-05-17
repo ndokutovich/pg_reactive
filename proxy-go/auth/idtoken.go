@@ -94,7 +94,7 @@ func fetchJWKSCached(jwksURI string) (*cachedJWKS, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "pgstack-proxy-go/1.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", jwksURI, err)
 	}
@@ -224,7 +224,14 @@ func verifyIDToken(idToken, jwksURI string, validIssuer IssuerValidator, expecte
 			return nil, fmt.Errorf("kid %q not in JWKS even after refresh", kid)
 		}
 		return key, nil
-	}, jwt.WithValidMethods([]string{"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}))
+	},
+		jwt.WithValidMethods([]string{"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}),
+		// Defence in depth: require exp explicitly. jwt-go's default merely
+		// checks exp WHEN present, so a misconfigured IdP that omits exp
+		// would produce a "forever" id_token whose only mitigation is the
+		// short-lived authorization code in front of it. Audit F2 round 15.
+		jwt.WithExpirationRequired(),
+	)
 	if err != nil {
 		return "", false, fmt.Errorf("verify id_token: %w", err)
 	}

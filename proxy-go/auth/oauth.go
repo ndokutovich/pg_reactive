@@ -766,7 +766,7 @@ func httpPostForm(endpoint string, values url.Values) (map[string]any, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", endpoint, err)
 	}
@@ -801,7 +801,7 @@ func httpGetJSON(endpoint, accessToken string, target any) error {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "pgstack-proxy-go/1.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", endpoint, err)
 	}
@@ -820,6 +820,18 @@ func httpGetJSON(endpoint, accessToken string, target any) error {
 		return fmt.Errorf("decode response from %s: %w", endpoint, err)
 	}
 	return nil
+}
+
+// oauthHTTPClient is the shared client for all OAuth provider HTTP calls
+// (token exchange, userinfo, Microsoft Graph, JWKS in idtoken.go). It has
+// per-request timeouts so a stalling provider cannot pin a callback
+// goroutine forever. Audit F3 round 15.
+//
+// 10s covers ordinary OAuth latencies (Apple/Google/MS routinely return
+// in <500ms) with enough slack for cold-start TLS to a distant region.
+// Bumping further would just convert quick failures into slow ones.
+var oauthHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
 }
 
 // stateFingerprint returns the first 8 hex chars of SHA-256(state), enough
