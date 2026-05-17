@@ -148,6 +148,19 @@ func requireJWT(w http.ResponseWriter, r *http.Request, secret string) *Claims {
 // requireServiceRole checks that the Bearer token equals the service-role key.
 // Writes 403 and returns false on failure.
 func requireServiceRole(w http.ResponseWriter, r *http.Request, serviceRoleKey string) bool {
+	// Defence in depth (audit round 24): an unset SERVICE_ROLE_KEY MUST
+	// never authenticate anyone, even if a client manages to send a
+	// Bearer token that compares equal to the empty string. Go's
+	// net/http already trims trailing whitespace from header values
+	// (and the production validator refuses to start in PGSTACK_ENV=
+	// production with an empty key), so this is belt-and-braces against
+	// future HTTP parser quirks and dev/test deployments that didn't
+	// set the env at all.
+	if serviceRoleKey == "" {
+		writeError(w, http.StatusForbidden, "service role not configured")
+		return false
+	}
+
 	raw := r.Header.Get("Authorization")
 	if !strings.HasPrefix(raw, "Bearer ") {
 		writeError(w, http.StatusForbidden, "service role required")
