@@ -536,9 +536,21 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 				writeJSONError(w, http.StatusInternalServerError, "failed to create storage directory")
 				return
 			}
-			tmp, terr := os.CreateTemp(filepath.Dir(diskPath), ".pgstack-upload-*")
+			// Audit F1 (round 20): stage temp files in a reserved internal
+			// directory, never inside the bucket namespace. SweepDiskOrphans
+			// walks only that reserved dir, so a real object whose basename
+			// happens to start with ".pgstack-upload-" or ".pgstack-backup-"
+			// (legal under our object-name rules) can never be mistaken for
+			// a stale staging file.
+			staging, serr := ensureStagingDir(d.StorageDir)
+			if serr != nil {
+				log.Error().Err(serr).Str("dir", staging).Msg("storage: prepare staging dir")
+				writeJSONError(w, http.StatusInternalServerError, "failed to prepare staging area")
+				return
+			}
+			tmp, terr := os.CreateTemp(staging, "upload-*")
 			if terr != nil {
-				log.Error().Err(terr).Str("dir", filepath.Dir(diskPath)).Msg("storage: open temp file")
+				log.Error().Err(terr).Str("dir", staging).Msg("storage: open temp file")
 				writeJSONError(w, http.StatusInternalServerError, "failed to stage upload")
 				return
 			}
@@ -640,17 +652,25 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 			// file that no longer exists.
 			//
 			// Backup the existing file (if any) under the same advisory
-			// lock so we can restore it on any post-stage failure. The
-			// backup lives in the same directory as the target so the
-			// final rename / restore are guaranteed to be same-fs (and
-			// therefore atomic on POSIX). The backup is cleaned up on
-			// the happy path; on failure paths it is rolled back into
-			// place over whatever is currently at diskPath.
+			// lock so we can restore it on any post-stage failure. Audit
+			// F1 round 20: the backup lives in the reserved staging dir
+			// (<StorageDir>/.pgstack-staging/), NOT alongside the target.
+			// SweepDiskOrphans walks only that reserved dir, so backup
+			// files cannot collide with legitimate object names. Both
+			// the staging dir and the target file are under StorageDir
+			// so os.Rename remains same-fs and atomic on POSIX.
 			var backupPath string
 			if _, statErr := os.Stat(diskPath); statErr == nil {
-				bk, berr := os.CreateTemp(filepath.Dir(diskPath), ".pgstack-backup-*")
+				staging, serr := ensureStagingDir(d.StorageDir)
+				if serr != nil {
+					log.Error().Err(serr).Str("dir", staging).
+						Msg("storage: prepare staging dir for backup")
+					writeJSONError(w, http.StatusInternalServerError, "failed to stage backup")
+					return
+				}
+				bk, berr := os.CreateTemp(staging, "backup-*")
 				if berr != nil {
-					log.Error().Err(berr).Str("dir", filepath.Dir(diskPath)).
+					log.Error().Err(berr).Str("dir", staging).
 						Msg("storage: open backup file")
 					writeJSONError(w, http.StatusInternalServerError, "failed to stage backup")
 					return
@@ -662,7 +682,7 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 				if err := os.Rename(diskPath, backupPath); err != nil {
 					_ = os.Remove(backupPath)
 					backupPath = ""
-					log.Error().Err(err).Str("src", diskPath).Str("dst", backupPath).
+					log.Error().Err(err).Str("src", diskPath).
 						Msg("storage: backup existing file")
 					writeJSONError(w, http.StatusInternalServerError, "failed to stage backup")
 					return
@@ -919,10 +939,18 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 		// Audit F1 (round 19): for the disk backend wrap DB delete + file
 		// remove in a tx with the EXCLUSIVE per-key lock so a concurrent
 		// upload to the same key cannot land its rename between our
-		// DELETE and our os.Remove (which would either remove the just-
-		// written file or leave an orphan with a stale row). On commit
-		// failure the file removal is skipped — the row stays, but the
-		// orphan file is rare and the next list/sweep picks it up.
+		// DELETE and our os.Remove.
+		//
+		// Round 20 sharpening: the previous order (DB delete → commit →
+		// os.Remove) released the lock at commit, then did the file
+		// remove without the lock. A concurrent upload could acquire
+		// the lock right after commit, write a new file at diskPath, and
+		// our os.Remove would then delete THAT new file. Fix: under the
+		// lock, RENAME diskPath into the reserved staging dir BEFORE
+		// commit. After commit we remove only our staged copy — the
+		// original namespace path is empty, so any concurrent upload
+		// that wins the lock writes its own file safely. On commit
+		// failure we restore the staged copy back to diskPath.
 		var (
 			tag string
 			tx  pgx.Tx
@@ -989,18 +1017,57 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 			return
 		}
 
-		// If disk backend: commit DB first, then remove the file. On
-		// commit failure the file stays — better than DB row gone +
-		// file gone when we can't be sure DB rollback worked.
+		// If disk backend: rename the file aside BEFORE commit, then
+		// commit, then remove only the staged copy. A concurrent upload
+		// that wins the lock after our commit sees an empty diskPath
+		// and its own write is preserved.
 		if d.StorageBackend == "disk" {
+			var deleteBackupPath string
+			diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName)
+			if perr == nil {
+				if _, statErr := os.Stat(diskPath); statErr == nil {
+					staging, serr := ensureStagingDir(d.StorageDir)
+					if serr == nil {
+						bk, berr := os.CreateTemp(staging, "backup-*")
+						if berr == nil {
+							deleteBackupPath = bk.Name()
+							_ = bk.Close()
+							if err := os.Rename(diskPath, deleteBackupPath); err != nil {
+								// Could not move file aside — let the
+								// caller see 500 and the tx rollback
+								// will keep the row.
+								_ = os.Remove(deleteBackupPath)
+								log.Error().Err(err).Str("src", diskPath).
+									Msg("storage: stage file for delete")
+								writeJSONError(w, http.StatusInternalServerError, "failed to stage delete")
+								return
+							}
+						} else {
+							log.Warn().Err(berr).Msg("storage: stage backup file for delete (continuing without backup)")
+						}
+					} else {
+						log.Warn().Err(serr).Msg("storage: prepare staging dir for delete (continuing without backup)")
+					}
+				}
+			}
+
 			if err := tx.Commit(r.Context()); err != nil {
+				// Commit failed — restore the staged file so the row
+				// (which the tx rollback brings back) again points at
+				// real bytes.
+				if deleteBackupPath != "" {
+					if rerr := os.Rename(deleteBackupPath, diskPath); rerr != nil {
+						log.Error().Err(rerr).Str("backup", deleteBackupPath).Str("final", diskPath).
+							Msg("storage: restore staged file after delete commit failure — file lost")
+					}
+				}
 				log.Error().Err(err).Msg("storage: commit delete")
 				writeJSONError(w, http.StatusInternalServerError, "internal database error")
 				return
 			}
 			tx = nil // suppress rollback in defer
-			if diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName); perr == nil {
-				_ = os.Remove(diskPath) // best-effort; DB row already gone
+			if deleteBackupPath != "" {
+				_ = os.Remove(deleteBackupPath) // remove OUR staged copy only
 			}
 		}
 
@@ -1117,33 +1184,66 @@ func pgErrCode(err error) string {
 	return ""
 }
 
-// SweepDiskOrphans removes leftover .pgstack-upload-* and .pgstack-backup-*
-// files older than minAge in storageDir/<bucket>/... . These are produced
-// by an upload that crashed between os.CreateTemp and either successful
-// Rename or the deferred cleanup, OR between backup-rename and the
-// post-commit backup delete. In both cases the file has no DB row pointing
-// at it, so removing it is safe.
+// stagingSubdir is the reserved directory under StorageDir that holds
+// every upload temp file and overwrite/delete backup. Living outside the
+// bucket namespace means SweepDiskOrphans can never collide with a
+// legitimate object name (real objects are addressed as
+// <StorageDir>/<bucket>/<name>; staging files live at
+// <StorageDir>/.pgstack-staging/...). Audit F1 round 20.
+const stagingSubdir = ".pgstack-staging"
+
+func stagingDirPath(storageDir string) string {
+	return filepath.Join(storageDir, stagingSubdir)
+}
+
+// ensureStagingDir creates (if needed) and returns the reserved staging
+// directory under StorageDir. Both the staging dir and the bucket-rooted
+// final files are under StorageDir, so any os.Rename between them stays
+// on a single filesystem and is atomic on POSIX.
+func ensureStagingDir(storageDir string) (string, error) {
+	s := stagingDirPath(storageDir)
+	if err := os.MkdirAll(s, 0o755); err != nil {
+		return "", err
+	}
+	return s, nil
+}
+
+// SweepDiskOrphans removes leftover upload temp / backup files older than
+// minAge from the reserved staging directory only — it never descends into
+// the bucket namespace. Audit F1 round 20: this is the change that lets
+// us safely run the sweep without risking deletion of a legitimate object
+// whose basename happens to start with ".pgstack-upload-" or
+// ".pgstack-backup-" (the previous round-19 implementation walked the
+// whole StorageDir and matched on basename prefix only).
 //
-// Audit F1 (round 19): closes the orphan accumulation that would otherwise
-// follow a process kill during an upload. Intentionally conservative:
-// minAge avoids racing in-flight uploads on the same shard. Run once at
-// boot, optionally on a periodic ticker. Best-effort — errors are logged
-// and the sweep moves on.
+// Files in the staging dir are produced by:
+//   - an upload that crashed between os.CreateTemp and either successful
+//     rename-into-place or the deferred cleanup,
+//   - an overwrite that crashed between backup-rename and the post-commit
+//     backup remove,
+//   - a delete that crashed between stage-aside and the post-commit
+//     backup remove.
+//
+// All three cases share the same property: the file has no DB row
+// pointing at it, so removal is safe. minAge avoids racing live uploads.
 func SweepDiskOrphans(storageDir string, minAge time.Duration) {
 	if storageDir == "" {
 		return
 	}
+	staging := stagingDirPath(storageDir)
+	if _, err := os.Stat(staging); err != nil {
+		// Staging dir not created yet — nothing to sweep. The dir is
+		// created lazily on first upload, so a fresh deployment with
+		// no uploads is the normal case here.
+		return
+	}
 	cutoff := time.Now().Add(-minAge)
 	removed := 0
-	filepath.WalkDir(storageDir, func(path string, dirent os.DirEntry, walkErr error) error {
+	filepath.WalkDir(staging, func(path string, dirent os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // skip unreadable subtrees
 		}
 		if dirent.IsDir() {
-			return nil
-		}
-		name := dirent.Name()
-		if !strings.HasPrefix(name, ".pgstack-upload-") && !strings.HasPrefix(name, ".pgstack-backup-") {
 			return nil
 		}
 		info, err := dirent.Info()
@@ -1161,7 +1261,7 @@ func SweepDiskOrphans(storageDir string, minAge time.Duration) {
 		return nil
 	})
 	if removed > 0 {
-		log.Info().Int("removed", removed).Str("dir", storageDir).
+		log.Info().Int("removed", removed).Str("dir", staging).
 			Msg("storage: orphan sweep cleaned up stale staging/backup files")
 	}
 }

@@ -376,24 +376,32 @@ func buildRouter(state *AppState) http.Handler {
 		// Health
 		r.Get("/health", routes.Health(&state.PGConnected))
 
-		// WebSocket — live query subscription
-		r.Get("/ws/{queryID}", realtime.WSHandler(
-			rlsCfg,
-			state.Pool,
-			state.Hub,
-			state.WSSemaphore,
-			state.Config.BroadcastCapacity,
-			state.Config.AllowedOrigins,
-			state.Config.AllowPermissiveCORS,
-			state.Config.RequireAuthenticatedWS,
-		))
+		// WebSocket routes — wrapped in a per-IP connection limiter so a
+		// single client cannot exhaust the WSSemaphore. The limiter
+		// increments only on successful hijack (i.e. real upgrades) and
+		// decrements on conn close, so failed handshakes don't leak slots.
+		wsLimiter := appMiddleware.NewWSConnLimiter(state.Config.WSMaxPerIP)
+		r.Group(func(r chi.Router) {
+			r.Use(wsLimiter.Middleware)
+			// Live query subscription
+			r.Get("/ws/{queryID}", realtime.WSHandler(
+				rlsCfg,
+				state.Pool,
+				state.Hub,
+				state.WSSemaphore,
+				state.Config.BroadcastCapacity,
+				state.Config.AllowedOrigins,
+				state.Config.AllowPermissiveCORS,
+				state.Config.RequireAuthenticatedWS,
+			))
 
-		// Presence — HTTP endpoint for current presence state. Same auth +
-		// audience gate as the WSHandler upgrade path so this isn't a
-		// side channel into private rooms.
-		r.Get("/ws/_presence/{channel}", realtime.PresenceHandler(
-			rlsCfg, state.Pool, state.Hub, state.Config.RequireAuthenticatedWS,
-		))
+			// Presence — HTTP endpoint for current presence state. Same auth +
+			// audience gate as the WSHandler upgrade path so this isn't a
+			// side channel into private rooms.
+			r.Get("/ws/_presence/{channel}", realtime.PresenceHandler(
+				rlsCfg, state.Pool, state.Hub, state.Config.RequireAuthenticatedWS,
+			))
+		})
 
 		// ── Auth routes ───────────────────────────────────────────────────
 		// Rate-limited auth endpoints (brute-force and email-bombing targets).
@@ -551,6 +559,7 @@ func buildRouter(state *AppState) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.SecurityHeaders)
 		r.Use(appMiddleware.BodyLimit(state.Config.MaxBodySize))
+		r.Use(appMiddleware.EdgeFnTiming)
 		r.Get("/functions/v1/", functions.List(fnDeps))
 		r.Post("/functions/v1/_refresh", functions.Refresh(fnDeps))
 		r.Get("/functions/v1/{name}", functions.InvokeGet(fnDeps))

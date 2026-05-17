@@ -63,6 +63,9 @@ type Config struct {
 
 	// WebSocket
 	BroadcastCapacity int
+	// WSMaxPerIP caps concurrent WebSocket connections per source IP. 0
+	// disables the cap (passthrough middleware). Default 10.
+	WSMaxPerIP int
 
 	// HTTP
 	MaxBodySize        int64
@@ -195,6 +198,7 @@ func FromEnv() Config {
 	cfg.RefreshTokenExpiryDays = envIntOrDefault("REFRESH_TOKEN_EXPIRY_DAYS", 30)
 
 	cfg.BroadcastCapacity = envIntOrDefault("BROADCAST_CAPACITY", 1024)
+	cfg.WSMaxPerIP = envIntOrDefault("WS_MAX_PER_IP", 10)
 
 	cfg.MaxBodySize = int64(envIntOrDefault("MAX_BODY_SIZE", 1024*1024))
 	cfg.MaxFileSize = int64(envIntOrDefault("MAX_FILE_SIZE", 52428800)) // 50 MB default for storage uploads
