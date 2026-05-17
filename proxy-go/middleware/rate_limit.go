@@ -126,28 +126,30 @@ func remoteHost(r *http.Request) string {
 
 // realIP extracts the client IP for rate-limiting purposes.
 //
-// When trustedProxies is empty, X-Forwarded-For / X-Real-IP are ignored
-// entirely and the IP is taken from r.RemoteAddr — prevents header
-// spoofing when there is no known reverse proxy in front of the server.
+// When trustedProxies is empty, X-Forwarded-For is ignored entirely and the
+// IP is taken from r.RemoteAddr — prevents header spoofing when there is
+// no known reverse proxy in front of the server.
 //
-// When trustedProxies is set:
+// When trustedProxies is set and the immediate hop matches one, we walk
+// the X-Forwarded-For list FROM THE RIGHT and return the first IP that is
+// NOT itself a trusted proxy. This defeats the
+// `$proxy_add_x_forwarded_for` foot-gun (audit F1 round 22): when nginx
+// is configured to append, a client-supplied `X-Forwarded-For: 1.2.3.4`
+// lands at the LEFT of the resulting chain `1.2.3.4, <real-client-ip>`.
+// Taking the leftmost value would honour the spoof; the rightmost-non-
+// trusted IP is the last hop the trusted chain attests to.
 //
-//  1. X-Real-IP wins when present. nginx's `proxy_set_header X-Real-IP
-//     $remote_addr` is an OVERWRITE (single value the proxy fully
-//     controls); the equivalent X-Forwarded-For pattern is an APPEND, so
-//     XRI is the less-foot-gunny source.
+// X-Real-IP is intentionally NOT honoured (audit F1 round 23). The XRI
+// single-value form has no chain to attest the source — if a proxy in
+// the deployment doesn't explicitly overwrite or drop client-supplied
+// XRI, a client can spoof it just as easily as the leftmost XFF value.
+// XFF carries the chain explicitly and self-verifies via the trusted-
+// proxy walk, so it's the safer canonical source. Operators whose proxy
+// only sets XRI must configure it to also set XFF (every mainstream
+// reverse proxy supports both).
 //
-//  2. Otherwise we walk the X-Forwarded-For list FROM THE RIGHT and
-//     return the first IP that is NOT itself a trusted proxy. This
-//     defeats the `$proxy_add_x_forwarded_for` foot-gun (audit F1
-//     round 22): when nginx is configured to append, a client-supplied
-//     `X-Forwarded-For: 1.2.3.4` lands at the LEFT of the resulting
-//     chain `1.2.3.4, <real-client-ip>`. Taking the leftmost value
-//     would honour the spoof; the rightmost-non-trusted IP is the
-//     last hop the trusted chain attests to.
-//
-//  3. If every IP in the chain is itself a trusted proxy (or the
-//     header is empty), fall back to directIP.
+// If every IP in the chain is itself a trusted proxy (or the header is
+// empty), fall back to directIP.
 func realIP(r *http.Request, trustedProxies []string) string {
 	directIP := remoteHost(r)
 
@@ -163,12 +165,6 @@ func realIP(r *http.Request, trustedProxies []string) string {
 		// Immediate hop is NOT a trusted proxy — header values are
 		// untrustworthy regardless of contents.
 		return directIP
-	}
-
-	// XRI is a single value; honour it first because nginx's canonical
-	// X-Real-IP $remote_addr pattern is a clean overwrite.
-	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
-		return xri
 	}
 
 	// XFF: walk from right (closest to us) to left (furthest from us),

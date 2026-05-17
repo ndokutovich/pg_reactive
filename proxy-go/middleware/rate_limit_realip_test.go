@@ -42,13 +42,26 @@ func TestRealIP_UntrustedSource_IgnoresHeaders(t *testing.T) {
 	}
 }
 
-func TestRealIP_PrefersXRealIPOverXFF(t *testing.T) {
+// Audit F1 round 23: XRI is no longer honoured at all. Without a chain
+// to attest the source it's as spoofable as leftmost XFF. XFF wins
+// always; XRI is silently ignored even from a trusted source.
+func TestRealIP_IgnoresXRealIP(t *testing.T) {
 	r := newReqWithHeaders("10.0.0.1:1234", map[string]string{
-		"X-Forwarded-For": "1.2.3.4",
+		"X-Real-IP": "5.6.7.8",
+		// no XFF
+	})
+	if got := realIP(r, []string{"10.0.0.1"}); got != "10.0.0.1" {
+		t.Errorf("realIP with only XRI = %q, want directIP 10.0.0.1 (XRI must NOT be honoured)", got)
+	}
+}
+
+func TestRealIP_XFFWinsOverXRI(t *testing.T) {
+	r := newReqWithHeaders("10.0.0.1:1234", map[string]string{
+		"X-Forwarded-For": "203.0.113.5",
 		"X-Real-IP":       "5.6.7.8",
 	})
-	if got := realIP(r, []string{"10.0.0.1"}); got != "5.6.7.8" {
-		t.Errorf("realIP = %q, want 5.6.7.8 (XRI wins over XFF)", got)
+	if got := realIP(r, []string{"10.0.0.1"}); got != "203.0.113.5" {
+		t.Errorf("realIP = %q, want 203.0.113.5 (XFF wins; XRI ignored)", got)
 	}
 }
 

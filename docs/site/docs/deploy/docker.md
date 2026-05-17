@@ -135,7 +135,12 @@ server {
         # received by the proxy. pgStack's realIP scans XFF right-to-left and
         # skips trusted-proxy hops, so it would still find the real client even
         # under the appending pattern, but overwriting with $remote_addr is the
-        # less foot-gunny defaults.
+        # less foot-gunny default.
+        #
+        # X-Real-IP is set for downstream apps that prefer it, but pgStack's
+        # own rate limiter intentionally IGNORES X-Real-IP — it has no chain
+        # to attest the source and is as spoofable as leftmost XFF. The
+        # XFF-overwrite line above is what pgStack uses.
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;

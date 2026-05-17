@@ -1038,7 +1038,17 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 			var deleteBackupPath string
 			diskPath, perr := safeStoragePath(d.StorageDir, bucketID, objName)
 			if perr == nil {
-				if _, statErr := os.Stat(diskPath); statErr == nil {
+				// Audit F2 round 23: only IsNotExist is a benign "nothing
+				// to stage" — every other Stat error (EACCES, EIO, broken
+				// symlink loop, etc.) is a real FS problem. The previous
+				// code silently fell through to commit, leaving the row
+				// deleted while bytes potentially remained on disk; we
+				// now hard-fail with 500 + rollback so the row stays
+				// in sync with whatever is actually on disk.
+				_, statErr := os.Stat(diskPath)
+				switch {
+				case statErr == nil:
+					// File exists — stage it aside before committing.
 					// Audit F2 round 22: staging dir / temp file failure
 					// here is a HARD failure — without the stage-aside we
 					// cannot finish delete without racing concurrent
@@ -1067,6 +1077,18 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 						writeJSONError(w, http.StatusInternalServerError, "failed to stage delete")
 						return
 					}
+				case os.IsNotExist(statErr):
+					// No file to stage — DB-only delete is fine. The row
+					// pointed at nothing anyway (manual cleanup, prior
+					// crash, etc.).
+				default:
+					// EACCES / EIO / etc. — we can't determine FS state.
+					// Refuse to commit a DB delete that might leave bytes
+					// on disk we can't verify.
+					log.Error().Err(statErr).Str("path", diskPath).
+						Msg("storage: stat for delete returned non-IsNotExist error")
+					writeJSONError(w, http.StatusInternalServerError, "failed to stat object on disk")
+					return
 				}
 			} else {
 				// safeStoragePath rejected the path. The DB delete already
