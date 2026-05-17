@@ -40,6 +40,27 @@ func generateHexToken() string {
 	return hex.EncodeToString(b)
 }
 
+// consumeEmailToken atomically marks a pgstack.email_tokens row as used and
+// returns its user_id. The single UPDATE filters on used_at IS NULL AND
+// expires_at > now() so two parallel verifications of the same token can't
+// both succeed. Returns pgx.ErrNoRows when the token is unknown, already
+// used, or expired — callers should respond with a generic 400 in that case
+// (do not leak which condition matched). Audit F6.
+func consumeEmailToken(ctx context.Context, q interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}, tokenHash, tokenType string) (userID string, err error) {
+	err = q.QueryRow(ctx, `
+		UPDATE pgstack.email_tokens
+		SET used_at = now()
+		WHERE token_hash = $1
+		  AND token_type = $2
+		  AND used_at IS NULL
+		  AND expires_at > now()
+		RETURNING user_id
+	`, tokenHash, tokenType).Scan(&userID)
+	return userID, err
+}
+
 // generateTokenPair mints a JWT access token and an opaque refresh token,
 // persists the refresh token in pgstack.refresh_tokens, and returns both.
 func generateTokenPair(ctx context.Context, d *Deps, userID, email, role string) (access, refresh string, err error) {
@@ -292,45 +313,12 @@ func handleRefreshGrant(w http.ResponseWriter, r *http.Request, ctx context.Cont
 		return
 	}
 
-	// Look up the token.
-	var (
-		tokenID  string
-		userID   string
-		familyID string
-		revoked  bool
-		expiresAt time.Time
-	)
-	err := d.Pool.QueryRow(ctx, `
-		SELECT id, user_id, family_id, revoked, expires_at
-		FROM pgstack.refresh_tokens
-		WHERE token_hash = $1
-	`, HashToken(refreshToken)).Scan(&tokenID, &userID, &familyID, &revoked, &expiresAt)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusUnauthorized, "invalid refresh token")
-			return
-		}
-		log.Error().Err(err).Msg("lookup refresh token")
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
+	tokenHash := HashToken(refreshToken)
 
-	// Reuse detection: if the presented token is already revoked, revoke the
-	// entire family (the token has been stolen or replayed).
-	if revoked {
-		_, _ = d.Pool.Exec(ctx, `
-			DELETE FROM pgstack.refresh_tokens WHERE family_id = $1
-		`, familyID)
-		writeError(w, http.StatusUnauthorized, "refresh token reuse detected — please log in again")
-		return
-	}
-
-	if time.Now().UTC().After(expiresAt) {
-		writeError(w, http.StatusUnauthorized, "refresh token expired")
-		return
-	}
-
-	// Rotate: mark old token revoked, insert new one with same family.
+	// Audit F6: atomic consume. Two parallel refreshes with the same token
+	// must not both succeed. The UPDATE filters on revoked=false so only one
+	// statement can flip it, and RETURNING gives us the row's identity in
+	// the same round-trip — no SELECT→UPDATE race.
 	newRefresh := generateOpaqueToken()
 	newExpiry := time.Now().UTC().Add(time.Duration(d.RefreshTokenExpiryDays) * 24 * time.Hour)
 
@@ -342,15 +330,56 @@ func handleRefreshGrant(w http.ResponseWriter, r *http.Request, ctx context.Cont
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	_, err = tx.Exec(ctx, `
-		UPDATE pgstack.refresh_tokens SET revoked = true WHERE id = $1
-	`, tokenID)
+	var (
+		userID    string
+		familyID  string
+	)
+	err = tx.QueryRow(ctx, `
+		UPDATE pgstack.refresh_tokens
+		SET revoked = true
+		WHERE token_hash = $1 AND revoked = false AND expires_at > now()
+		RETURNING user_id, family_id
+	`, tokenHash).Scan(&userID, &familyID)
 	if err != nil {
-		log.Error().Err(err).Msg("revoke old refresh token")
-		writeError(w, http.StatusInternalServerError, "internal error")
+		if err != pgx.ErrNoRows {
+			log.Error().Err(err).Msg("atomic refresh consume")
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		// 0 rows: either unknown, already-revoked (replay), or expired.
+		// Resolve which separately. Pool is fine here — we are not part of
+		// the rotation tx anymore on this path.
+		var prevRevoked bool
+		var prevExpires time.Time
+		var prevFamily string
+		lookupErr := d.Pool.QueryRow(ctx, `
+			SELECT revoked, expires_at, family_id
+			FROM pgstack.refresh_tokens
+			WHERE token_hash = $1
+		`, tokenHash).Scan(&prevRevoked, &prevExpires, &prevFamily)
+		if lookupErr == pgx.ErrNoRows {
+			writeError(w, http.StatusUnauthorized, "invalid refresh token")
+			return
+		}
+		if lookupErr != nil {
+			log.Error().Err(lookupErr).Msg("resolve failed refresh consume")
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if prevRevoked {
+			// Replay of a previously-rotated token — burn the whole family.
+			_, _ = d.Pool.Exec(ctx, `
+				DELETE FROM pgstack.refresh_tokens WHERE family_id = $1
+			`, prevFamily)
+			writeError(w, http.StatusUnauthorized, "refresh token reuse detected — please log in again")
+			return
+		}
+		// Otherwise the token is plain expired.
+		writeError(w, http.StatusUnauthorized, "refresh token expired")
 		return
 	}
 
+	// Old token revoked atomically above. Issue the rotated one in the same tx.
 	_, err = tx.Exec(ctx, `
 		INSERT INTO pgstack.refresh_tokens (user_id, token_hash, family_id, expires_at)
 		VALUES ($1, $2, $3, $4)
@@ -613,32 +642,6 @@ func RecoverConfirm(d *Deps) http.HandlerFunc {
 
 		ctx := r.Context()
 
-		var tokenID, userID string
-		var usedAt *time.Time
-		var expiresAt time.Time
-		err := d.Pool.QueryRow(ctx, `
-			SELECT id, user_id, used_at, expires_at
-			FROM pgstack.email_tokens
-			WHERE token_hash = $1 AND token_type = 'recovery'
-		`, HashToken(body.Token)).Scan(&tokenID, &userID, &usedAt, &expiresAt)
-		if err != nil {
-			if err == pgx.ErrNoRows {
-				writeError(w, http.StatusBadRequest, "invalid or expired token")
-				return
-			}
-			log.Error().Err(err).Msg("lookup recovery token")
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		if usedAt != nil {
-			writeError(w, http.StatusBadRequest, "token already used")
-			return
-		}
-		if time.Now().UTC().After(expiresAt) {
-			writeError(w, http.StatusBadRequest, "token expired")
-			return
-		}
-
 		hashed, err := HashPassword(body.Password)
 		if err != nil {
 			log.Error().Err(err).Msg("hash recovery password")
@@ -654,20 +657,25 @@ func RecoverConfirm(d *Deps) http.HandlerFunc {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		_, err = tx.Exec(ctx, `
-			UPDATE pgstack.users SET encrypted_password = $1, updated_at = now() WHERE id = $2
-		`, hashed, userID)
+		// Atomic consume (F6) — UPDATE returning user_id is the only path
+		// that observes / marks the token; two parallel confirmations of
+		// the same token can never both pass the WHERE clause.
+		userID, err := consumeEmailToken(ctx, tx, HashToken(body.Token), "recovery")
 		if err != nil {
-			log.Error().Err(err).Msg("update password after recovery")
+			if err == pgx.ErrNoRows {
+				writeError(w, http.StatusBadRequest, "invalid or expired token")
+				return
+			}
+			log.Error().Err(err).Msg("consume recovery token")
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 
 		_, err = tx.Exec(ctx, `
-			UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1
-		`, tokenID)
+			UPDATE pgstack.users SET encrypted_password = $1, updated_at = now() WHERE id = $2
+		`, hashed, userID)
 		if err != nil {
-			log.Error().Err(err).Msg("mark recovery token used")
+			log.Error().Err(err).Msg("update password after recovery")
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -754,32 +762,6 @@ func MagiclinkVerify(d *Deps) http.HandlerFunc {
 
 		ctx := r.Context()
 
-		var tokenID, userID string
-		var usedAt *time.Time
-		var expiresAt time.Time
-		err := d.Pool.QueryRow(ctx, `
-			SELECT id, user_id, used_at, expires_at
-			FROM pgstack.email_tokens
-			WHERE token_hash = $1 AND token_type = 'magiclink'
-		`, HashToken(tok)).Scan(&tokenID, &userID, &usedAt, &expiresAt)
-		if err != nil {
-			if err == pgx.ErrNoRows {
-				writeError(w, http.StatusBadRequest, "invalid or expired token")
-				return
-			}
-			log.Error().Err(err).Msg("lookup magiclink token")
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		if usedAt != nil {
-			writeError(w, http.StatusBadRequest, "token already used")
-			return
-		}
-		if time.Now().UTC().After(expiresAt) {
-			writeError(w, http.StatusBadRequest, "token expired")
-			return
-		}
-
 		tx, err := d.Pool.Begin(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("begin magiclink verify tx")
@@ -788,16 +770,18 @@ func MagiclinkVerify(d *Deps) http.HandlerFunc {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		_, err = tx.Exec(ctx, `
-			UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1
-		`, tokenID)
+		// Atomic consume (F6).
+		userID, err := consumeEmailToken(ctx, tx, HashToken(tok), "magiclink")
 		if err != nil {
-			log.Error().Err(err).Msg("mark magiclink token used")
+			if err == pgx.ErrNoRows {
+				writeError(w, http.StatusBadRequest, "invalid or expired token")
+				return
+			}
+			log.Error().Err(err).Msg("consume magiclink token")
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 
-		// Also confirm email.
 		_, err = tx.Exec(ctx, `
 			UPDATE pgstack.users
 			SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
@@ -849,32 +833,6 @@ func VerifyEmail(d *Deps) http.HandlerFunc {
 
 		ctx := r.Context()
 
-		var tokenID, userID string
-		var usedAt *time.Time
-		var expiresAt time.Time
-		err := d.Pool.QueryRow(ctx, `
-			SELECT id, user_id, used_at, expires_at
-			FROM pgstack.email_tokens
-			WHERE token_hash = $1 AND token_type = 'email_verification'
-		`, HashToken(tok)).Scan(&tokenID, &userID, &usedAt, &expiresAt)
-		if err != nil {
-			if err == pgx.ErrNoRows {
-				writeError(w, http.StatusBadRequest, "invalid or expired token")
-				return
-			}
-			log.Error().Err(err).Msg("lookup email verification token")
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		if usedAt != nil {
-			writeError(w, http.StatusBadRequest, "token already used")
-			return
-		}
-		if time.Now().UTC().After(expiresAt) {
-			writeError(w, http.StatusBadRequest, "token expired")
-			return
-		}
-
 		tx, err := d.Pool.Begin(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("begin email verify tx")
@@ -883,6 +841,18 @@ func VerifyEmail(d *Deps) http.HandlerFunc {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
+		// Atomic consume (F6).
+		userID, err := consumeEmailToken(ctx, tx, HashToken(tok), "email_verification")
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				writeError(w, http.StatusBadRequest, "invalid or expired token")
+				return
+			}
+			log.Error().Err(err).Msg("consume email verification token")
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
 		_, err = tx.Exec(ctx, `
 			UPDATE pgstack.users
 			SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
@@ -890,15 +860,6 @@ func VerifyEmail(d *Deps) http.HandlerFunc {
 		`, userID)
 		if err != nil {
 			log.Error().Err(err).Msg("confirm email")
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		_, err = tx.Exec(ctx, `
-			UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1
-		`, tokenID)
-		if err != nil {
-			log.Error().Err(err).Msg("mark email token used")
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}

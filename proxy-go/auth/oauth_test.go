@@ -31,7 +31,7 @@ func TestExtractEmailFromJWT_ValidToken(t *testing.T) {
 		"exp":   9999999999,
 	})
 
-	got, err := extractEmailFromJWT(token)
+	got, _, err := extractEmailFromJWT(token)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestExtractEmailFromJWT_MissingEmailClaim(t *testing.T) {
 		// no "email" field
 	})
 
-	_, err := extractEmailFromJWT(token)
+	_, _, err := extractEmailFromJWT(token)
 	if err == nil {
 		t.Fatal("expected error when email claim is absent, got nil")
 	}
@@ -58,28 +58,28 @@ func TestExtractEmailFromJWT_EmptyEmailClaim(t *testing.T) {
 		"email": "",
 	})
 
-	_, err := extractEmailFromJWT(token)
+	_, _, err := extractEmailFromJWT(token)
 	if err == nil {
 		t.Fatal("expected error when email claim is empty string, got nil")
 	}
 }
 
 func TestExtractEmailFromJWT_InvalidFormat_TwoParts(t *testing.T) {
-	_, err := extractEmailFromJWT("header.payload")
+	_, _, err := extractEmailFromJWT("header.payload")
 	if err == nil {
 		t.Fatal("expected error for JWT with only two parts")
 	}
 }
 
 func TestExtractEmailFromJWT_InvalidFormat_OnePart(t *testing.T) {
-	_, err := extractEmailFromJWT("notajwt")
+	_, _, err := extractEmailFromJWT("notajwt")
 	if err == nil {
 		t.Fatal("expected error for single-segment string")
 	}
 }
 
 func TestExtractEmailFromJWT_InvalidFormat_Empty(t *testing.T) {
-	_, err := extractEmailFromJWT("")
+	_, _, err := extractEmailFromJWT("")
 	if err == nil {
 		t.Fatal("expected error for empty string")
 	}
@@ -88,7 +88,7 @@ func TestExtractEmailFromJWT_InvalidFormat_Empty(t *testing.T) {
 func TestExtractEmailFromJWT_BadBase64Payload(t *testing.T) {
 	// Construct a token whose middle segment is not valid base64url.
 	token := "validheader.!!!notbase64!!!.validsig"
-	_, err := extractEmailFromJWT(token)
+	_, _, err := extractEmailFromJWT(token)
 	if err == nil {
 		t.Fatal("expected error for bad base64 payload segment")
 	}
@@ -98,7 +98,7 @@ func TestExtractEmailFromJWT_PayloadNotJSON(t *testing.T) {
 	// Valid base64url but not JSON.
 	payload := base64.RawURLEncoding.EncodeToString([]byte("this is not json"))
 	token := fmt.Sprintf("header.%s.sig", payload)
-	_, err := extractEmailFromJWT(token)
+	_, _, err := extractEmailFromJWT(token)
 	if err == nil {
 		t.Fatal("expected error when payload is not valid JSON")
 	}
@@ -109,7 +109,7 @@ func TestExtractEmailFromJWT_NonStringEmailClaim(t *testing.T) {
 	token := buildJWT(map[string]any{
 		"email": 12345,
 	})
-	_, err := extractEmailFromJWT(token)
+	_, _, err := extractEmailFromJWT(token)
 	if err == nil {
 		t.Fatal("expected error when email claim is not a string")
 	}

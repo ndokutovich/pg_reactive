@@ -329,9 +329,13 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 			return
 		}
 
-		// Private bucket: only owner (authenticated) or service_role can upload
-		if !bucket.Public && claims.Role == "anon" {
-			writeJSONError(w, http.StatusForbidden, "upload to private bucket requires authentication")
+		// Audit F4 closure: anon uploads are refused for both public and
+		// private buckets. A "public" bucket means anyone can READ; it does
+		// not authorise unauthenticated writes. Anon-writable storage is a
+		// classic abuse vector (spam hosting, malware delivery, deface).
+		// Allow only authenticated users or service_role to upload anywhere.
+		if claims.Role == "anon" {
+			writeJSONError(w, http.StatusForbidden, "upload requires authentication")
 			return
 		}
 
@@ -394,8 +398,13 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 			}
 		}
 
-		// IDOR check: prevent overwriting another user's object in private buckets
-		if !bucket.Public && claims.Role != "service_role" {
+		// Audit F4 closure: enforce owner-match on overwrite for both public
+		// AND private buckets. The old code skipped this check for public
+		// buckets, so any authenticated user could overwrite any object in
+		// a public bucket (deface other users' uploads, replace files with
+		// malware). The check still allows service_role to overwrite (admin
+		// case) and a same-owner overwrite (intended user re-upload).
+		if claims.Role != "service_role" {
 			var existingOwner *string
 			ownerErr := d.Pool.QueryRow(r.Context(),
 				`SELECT owner::text FROM pgstack.storage_objects WHERE bucket_id = $1 AND name = $2`,

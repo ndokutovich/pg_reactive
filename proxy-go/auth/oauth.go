@@ -208,22 +208,25 @@ func Callback(d *Deps) http.HandlerFunc {
 
 		redirectURI := d.SiteURL + "/auth/v1/callback"
 
-		var email string
+		var (
+			email         string
+			emailVerified bool
+		)
 		switch provider {
 		case "google":
-			email, err = exchangeGoogle(d, code, verifier, redirectURI)
+			email, emailVerified, err = exchangeGoogle(d, code, verifier, redirectURI)
 		case "github":
-			email, err = exchangeGitHub(d, code, redirectURI)
+			email, emailVerified, err = exchangeGitHub(d, code, redirectURI)
 		case "apple":
 			// Apple sends code via form_post; also check POST body
 			if code == "" {
 				code = r.FormValue("code")
 			}
-			email, err = exchangeApple(d, code, redirectURI)
+			email, emailVerified, err = exchangeApple(d, code, redirectURI)
 		case "microsoft":
-			email, err = exchangeMicrosoft(d, code, verifier, redirectURI)
+			email, emailVerified, err = exchangeMicrosoft(d, code, verifier, redirectURI)
 		case "oidc":
-			email, err = exchangeOIDC(d, code, verifier, redirectURI)
+			email, emailVerified, err = exchangeOIDC(d, code, verifier, redirectURI)
 		default:
 			writeError(w, http.StatusBadRequest, "unknown provider")
 			return
@@ -236,22 +239,65 @@ func Callback(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Upsert user, appending this provider to the providers array.
-		var userID, role string
+		// Account-takeover defense (audit F3):
+		//
+		// An OAuth provider that returns an unverified or attacker-controlled
+		// email could otherwise hijack an existing pgstack.users row simply by
+		// completing a successful OAuth flow with that email. We require:
+		//
+		//   1. The provider explicitly asserted email_verified=true for this
+		//      flow. If not, refuse the login outright. Apple, Google, GitHub,
+		//      Microsoft and standards-compliant OIDC IdPs all carry a verified
+		//      claim; if a provider does not, it cannot be used here.
+		//   2. When merging into an existing pgstack.users row that was created
+		//      via email+password but never verified (email_confirmed_at IS
+		//      NULL), refuse the merge. Otherwise an unverified password signup
+		//      becomes a free OAuth on-ramp for an attacker who simply knows
+		//      the victim's email.
+		//
+		// On success, email_confirmed_at is set only on INSERT — never elevated
+		// on UPDATE.
+		if !emailVerified {
+			log.Warn().Str("provider", provider).Msg("oauth refused: provider did not assert email_verified")
+			redirectURL := fmt.Sprintf("%s#error=access_denied&error_description=%s",
+				d.SiteURL, url.QueryEscape("provider did not verify email ownership"))
+			http.Redirect(w, r, redirectURL, http.StatusFound)
+			return
+		}
+
+		// Upsert user, appending this provider to the providers array. Refuse
+		// to merge into an unverified existing account.
+		var (
+			userID         string
+			role           string
+			conflictBlock  bool
+		)
 		err = d.Pool.QueryRow(ctx, `
 			INSERT INTO pgstack.users (email, role, provider, providers, email_confirmed_at)
 			VALUES ($1, 'authenticated', $2, ARRAY[$2], now())
 			ON CONFLICT (email) DO UPDATE
 			  SET providers = CASE
+			        WHEN pgstack.users.email_confirmed_at IS NULL THEN pgstack.users.providers
 			        WHEN $2 = ANY(pgstack.users.providers) THEN pgstack.users.providers
 			        ELSE array_append(pgstack.users.providers, $2)
 			      END,
-			      updated_at = now()
-			RETURNING id, role
-		`, email, provider).Scan(&userID, &role)
+			      updated_at = CASE
+			        WHEN pgstack.users.email_confirmed_at IS NULL THEN pgstack.users.updated_at
+			        ELSE now()
+			      END
+			RETURNING id, role, (email_confirmed_at IS NULL) AS conflict_block
+		`, email, provider).Scan(&userID, &role, &conflictBlock)
 		if err != nil {
 			log.Error().Err(err).Msg("upsert oauth user")
 			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if conflictBlock {
+			log.Warn().Str("provider", provider).
+				Msg("oauth refused: existing account with this email is not verified — possible takeover attempt")
+			redirectURL := fmt.Sprintf("%s#error=access_denied&error_description=%s",
+				d.SiteURL, url.QueryEscape("an unverified account already exists for this email; complete verification or contact support"))
+			http.Redirect(w, r, redirectURL, http.StatusFound)
 			return
 		}
 
@@ -272,10 +318,11 @@ func Callback(d *Deps) http.HandlerFunc {
 // Google OAuth exchange
 // ─────────────────────────────────────────────────────────────────────────────
 
-// exchangeGoogle exchanges an authorization code for a Google access token, then
-// fetches the user's email via the userinfo endpoint. Returns the verified email.
-func exchangeGoogle(d *Deps, code, verifier, redirectURI string) (string, error) {
-	// Step 1: exchange code for tokens.
+// exchangeGoogle exchanges an authorization code for a Google access token,
+// fetches the user's email via the userinfo endpoint, and returns the email
+// plus Google's email_verified assertion. Per audit F3 the caller refuses
+// the login when verified is false.
+func exchangeGoogle(d *Deps, code, verifier, redirectURI string) (string, bool, error) {
 	tokenResp, err := httpPostForm("https://oauth2.googleapis.com/token", url.Values{
 		"code":          {code},
 		"client_id":     {d.GoogleClientID},
@@ -285,36 +332,48 @@ func exchangeGoogle(d *Deps, code, verifier, redirectURI string) (string, error)
 		"code_verifier": {verifier},
 	})
 	if err != nil {
-		return "", fmt.Errorf("google token exchange: %w", err)
+		return "", false, fmt.Errorf("google token exchange: %w", err)
 	}
 
 	accessToken, ok := tokenResp["access_token"].(string)
 	if !ok || accessToken == "" {
-		return "", fmt.Errorf("google token exchange: no access_token in response")
+		return "", false, fmt.Errorf("google token exchange: no access_token in response")
 	}
 
-	// Step 2: fetch user info.
 	var userInfo map[string]any
 	if err := httpGetJSON("https://www.googleapis.com/oauth2/v3/userinfo", accessToken, &userInfo); err != nil {
-		return "", fmt.Errorf("google userinfo: %w", err)
+		return "", false, fmt.Errorf("google userinfo: %w", err)
 	}
 
 	email, _ := userInfo["email"].(string)
 	if email == "" {
-		return "", fmt.Errorf("google userinfo: email not present")
+		return "", false, fmt.Errorf("google userinfo: email not present")
 	}
+	verified := claimTrue(userInfo["email_verified"])
+	return strings.ToLower(strings.TrimSpace(email)), verified, nil
+}
 
-	return strings.ToLower(strings.TrimSpace(email)), nil
+// claimTrue normalises the bool/string forms of an email_verified claim.
+// OIDC technically requires bool but real providers occasionally send "true".
+func claimTrue(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return strings.EqualFold(t, "true")
+	}
+	return false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GitHub OAuth exchange
 // ─────────────────────────────────────────────────────────────────────────────
 
-// exchangeGitHub exchanges an authorization code for a GitHub access token, then
-// fetches the primary verified email. Returns the email.
-func exchangeGitHub(d *Deps, code, redirectURI string) (string, error) {
-	// Step 1: exchange code for access token.
+// exchangeGitHub exchanges an authorization code for a GitHub access token,
+// then fetches the primary verified email. GitHub only returns emails the
+// user has explicitly verified in their account settings — we still require
+// the .verified flag per row before accepting one.
+func exchangeGitHub(d *Deps, code, redirectURI string) (string, bool, error) {
 	tokenResp, err := httpPostForm("https://github.com/login/oauth/access_token", url.Values{
 		"code":          {code},
 		"client_id":     {d.GitHubClientID},
@@ -322,47 +381,48 @@ func exchangeGitHub(d *Deps, code, redirectURI string) (string, error) {
 		"redirect_uri":  {redirectURI},
 	})
 	if err != nil {
-		return "", fmt.Errorf("github token exchange: %w", err)
+		return "", false, fmt.Errorf("github token exchange: %w", err)
 	}
 
 	accessToken, ok := tokenResp["access_token"].(string)
 	if !ok || accessToken == "" {
-		return "", fmt.Errorf("github token exchange: no access_token in response")
+		return "", false, fmt.Errorf("github token exchange: no access_token in response")
 	}
 
-	// Step 2: fetch emails (user:email scope).
 	var emails []struct {
 		Email    string `json:"email"`
 		Primary  bool   `json:"primary"`
 		Verified bool   `json:"verified"`
 	}
 	if err := httpGetJSON("https://api.github.com/user/emails", accessToken, &emails); err != nil {
-		return "", fmt.Errorf("github user emails: %w", err)
+		return "", false, fmt.Errorf("github user emails: %w", err)
 	}
 
 	for _, e := range emails {
 		if e.Primary && e.Verified && e.Email != "" {
-			return strings.ToLower(strings.TrimSpace(e.Email)), nil
+			return strings.ToLower(strings.TrimSpace(e.Email)), true, nil
 		}
 	}
-
-	// Fallback: first verified email.
 	for _, e := range emails {
 		if e.Verified && e.Email != "" {
-			return strings.ToLower(strings.TrimSpace(e.Email)), nil
+			return strings.ToLower(strings.TrimSpace(e.Email)), true, nil
 		}
 	}
-
-	return "", fmt.Errorf("github user emails: no verified email found")
+	return "", false, fmt.Errorf("github user emails: no verified email found")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Apple OAuth exchange
 // ─────────────────────────────────────────────────────────────────────────────
 
-// exchangeApple exchanges an authorization code for an Apple id_token JWT,
-// then extracts the email from the JWT claims (Apple uses id_token, not userinfo).
-func exchangeApple(d *Deps, code, redirectURI string) (string, error) {
+// exchangeApple exchanges an authorization code for an Apple id_token JWT
+// and returns the email plus Apple's email_verified assertion. The id_token
+// is treated as authentic because it was just returned by Apple's own token
+// endpoint over TLS in response to our authenticated client_secret JWT —
+// the only attacker model that defeats that is full-MITM of Apple's TLS,
+// which is out of scope. The email_verified claim still gates acceptance
+// (e.g. Apple's private-relay emails come back unverified).
+func exchangeApple(d *Deps, code, redirectURI string) (string, bool, error) {
 	tokenResp, err := httpPostForm("https://appleid.apple.com/auth/token", url.Values{
 		"code":          {code},
 		"client_id":     {d.AppleClientID},
@@ -371,22 +431,19 @@ func exchangeApple(d *Deps, code, redirectURI string) (string, error) {
 		"grant_type":    {"authorization_code"},
 	})
 	if err != nil {
-		return "", fmt.Errorf("apple token exchange: %w", err)
+		return "", false, fmt.Errorf("apple token exchange: %w", err)
 	}
 
 	idToken, ok := tokenResp["id_token"].(string)
 	if !ok || idToken == "" {
-		return "", fmt.Errorf("apple token exchange: no id_token in response")
+		return "", false, fmt.Errorf("apple token exchange: no id_token in response")
 	}
 
-	// Decode the id_token JWT payload (Apple tokens are signed but we trust
-	// them here because we got them directly from Apple's token endpoint over TLS).
-	email, err := extractEmailFromJWT(idToken)
+	email, verified, err := extractEmailFromJWT(idToken)
 	if err != nil {
-		return "", fmt.Errorf("apple id_token: %w", err)
+		return "", false, fmt.Errorf("apple id_token: %w", err)
 	}
-
-	return strings.ToLower(strings.TrimSpace(email)), nil
+	return strings.ToLower(strings.TrimSpace(email)), verified, nil
 }
 
 // appleSecretCache memoises the generated Apple client-secret JWT. Apple permits
@@ -475,17 +532,20 @@ func parseApplePrivateKey(pemKey string) (*ecdsa.PrivateKey, error) {
 	return ecKey, nil
 }
 
-// extractEmailFromJWT decodes a JWT without verification and extracts the email claim.
-// This is safe when the token was received directly from the provider over TLS.
-func extractEmailFromJWT(token string) (string, error) {
+// extractEmailFromJWT decodes a JWT's payload without verifying its signature
+// and returns the email plus the email_verified claim. The "skip signature
+// verification" stance is only safe when the token arrived directly from the
+// provider's token endpoint over TLS in response to an authenticated client
+// exchange — the TLS handshake authenticates the provider, and the response
+// body is bound to that connection. Callers MUST refuse the login when the
+// verified flag is false (closes audit F3 silent-trust path).
+func extractEmailFromJWT(token string) (string, bool, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return "", fmt.Errorf("invalid JWT format")
+		return "", false, fmt.Errorf("invalid JWT format")
 	}
 
-	// Decode the payload (part 1)
 	payload := parts[1]
-	// Add padding if needed
 	switch len(payload) % 4 {
 	case 2:
 		payload += "=="
@@ -495,32 +555,36 @@ func extractEmailFromJWT(token string) (string, error) {
 
 	decoded, err := base64.URLEncoding.DecodeString(payload)
 	if err != nil {
-		// Try without padding (base64url)
 		decoded, err = base64.RawURLEncoding.DecodeString(parts[1])
 		if err != nil {
-			return "", fmt.Errorf("decode JWT payload: %w", err)
+			return "", false, fmt.Errorf("decode JWT payload: %w", err)
 		}
 	}
 
 	var claims map[string]any
 	if err := json.Unmarshal(decoded, &claims); err != nil {
-		return "", fmt.Errorf("parse JWT claims: %w", err)
+		return "", false, fmt.Errorf("parse JWT claims: %w", err)
 	}
 
 	email, ok := claims["email"].(string)
 	if !ok || email == "" {
-		return "", fmt.Errorf("email not present in JWT claims")
+		return "", false, fmt.Errorf("email not present in JWT claims")
 	}
-	return email, nil
+	return email, claimTrue(claims["email_verified"]), nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Microsoft OAuth exchange
 // ─────────────────────────────────────────────────────────────────────────────
 
-// exchangeMicrosoft exchanges an authorization code for a Microsoft access token,
-// then fetches the user's email via the Microsoft Graph API.
-func exchangeMicrosoft(d *Deps, code, verifier, redirectURI string) (string, error) {
+// exchangeMicrosoft exchanges an authorization code for a Microsoft access
+// token and returns the email plus whether the provider asserted it as
+// verified. Microsoft's id_token carries an xms_edov / email_verified claim
+// for personal accounts and tenant-validated work accounts; falls back to
+// Graph /me only as a last resort and treats those as unverified (Graph
+// has no email-verified field — work accounts with a verified domain are
+// trustworthy, personal accounts are not, and there's no way to tell).
+func exchangeMicrosoft(d *Deps, code, verifier, redirectURI string) (string, bool, error) {
 	tokenResp, err := httpPostForm("https://login.microsoftonline.com/common/oauth2/v2.0/token", url.Values{
 		"code":          {code},
 		"client_id":     {d.MicrosoftClientID},
@@ -530,25 +594,23 @@ func exchangeMicrosoft(d *Deps, code, verifier, redirectURI string) (string, err
 		"code_verifier": {verifier},
 	})
 	if err != nil {
-		return "", fmt.Errorf("microsoft token exchange: %w", err)
+		return "", false, fmt.Errorf("microsoft token exchange: %w", err)
 	}
 
-	// Microsoft returns an id_token with email — try that first
 	if idToken, ok := tokenResp["id_token"].(string); ok && idToken != "" {
-		if email, err := extractEmailFromJWT(idToken); err == nil && email != "" {
-			return strings.ToLower(strings.TrimSpace(email)), nil
+		if email, verified, err := extractEmailFromJWT(idToken); err == nil && email != "" {
+			return strings.ToLower(strings.TrimSpace(email)), verified, nil
 		}
 	}
 
-	// Fallback to access_token + Graph API
 	accessToken, ok := tokenResp["access_token"].(string)
 	if !ok || accessToken == "" {
-		return "", fmt.Errorf("microsoft token exchange: no access_token in response")
+		return "", false, fmt.Errorf("microsoft token exchange: no access_token in response")
 	}
 
 	var userInfo map[string]any
 	if err := httpGetJSON("https://graph.microsoft.com/v1.0/me", accessToken, &userInfo); err != nil {
-		return "", fmt.Errorf("microsoft graph /me: %w", err)
+		return "", false, fmt.Errorf("microsoft graph /me: %w", err)
 	}
 
 	email, _ := userInfo["mail"].(string)
@@ -556,10 +618,10 @@ func exchangeMicrosoft(d *Deps, code, verifier, redirectURI string) (string, err
 		email, _ = userInfo["userPrincipalName"].(string)
 	}
 	if email == "" {
-		return "", fmt.Errorf("microsoft graph: email not found in user profile")
+		return "", false, fmt.Errorf("microsoft graph: email not found in user profile")
 	}
-
-	return strings.ToLower(strings.TrimSpace(email)), nil
+	// Graph carries no verified claim; do not assert verification here.
+	return strings.ToLower(strings.TrimSpace(email)), false, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -601,11 +663,16 @@ func discoverOIDC(issuerURL string) (*oidcConfig, error) {
 	return &cfg, nil
 }
 
-// exchangeOIDC exchanges an authorization code using the OIDC discovery document.
-func exchangeOIDC(d *Deps, code, verifier, redirectURI string) (string, error) {
+// exchangeOIDC exchanges an authorization code using the OIDC discovery
+// document. Per OIDC core, the id_token MUST contain email_verified when
+// email is present; this implementation propagates that flag rather than
+// silently trusting any address the IdP hands back. If a non-compliant
+// provider omits the claim, the login is treated as unverified — callers
+// will refuse it.
+func exchangeOIDC(d *Deps, code, verifier, redirectURI string) (string, bool, error) {
 	cfg, err := discoverOIDC(d.OIDCIssuerURL)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	tokenResp, err := httpPostForm(cfg.TokenEndpoint, url.Values{
@@ -617,35 +684,32 @@ func exchangeOIDC(d *Deps, code, verifier, redirectURI string) (string, error) {
 		"code_verifier": {verifier},
 	})
 	if err != nil {
-		return "", fmt.Errorf("oidc token exchange: %w", err)
+		return "", false, fmt.Errorf("oidc token exchange: %w", err)
 	}
 
-	// Try id_token first
 	if idToken, ok := tokenResp["id_token"].(string); ok && idToken != "" {
-		if email, err := extractEmailFromJWT(idToken); err == nil && email != "" {
-			return strings.ToLower(strings.TrimSpace(email)), nil
+		if email, verified, err := extractEmailFromJWT(idToken); err == nil && email != "" {
+			return strings.ToLower(strings.TrimSpace(email)), verified, nil
 		}
 	}
 
-	// Fallback to userinfo endpoint
 	accessToken, ok := tokenResp["access_token"].(string)
 	if !ok || accessToken == "" {
-		return "", fmt.Errorf("oidc token exchange: no access_token in response")
+		return "", false, fmt.Errorf("oidc token exchange: no access_token in response")
 	}
 
 	if cfg.UserinfoEndpoint != "" {
 		var userInfo map[string]any
 		if err := httpGetJSON(cfg.UserinfoEndpoint, accessToken, &userInfo); err != nil {
-			return "", fmt.Errorf("oidc userinfo: %w", err)
+			return "", false, fmt.Errorf("oidc userinfo: %w", err)
 		}
-
 		email, _ := userInfo["email"].(string)
 		if email != "" {
-			return strings.ToLower(strings.TrimSpace(email)), nil
+			return strings.ToLower(strings.TrimSpace(email)), claimTrue(userInfo["email_verified"]), nil
 		}
 	}
 
-	return "", fmt.Errorf("oidc: email not found in id_token or userinfo")
+	return "", false, fmt.Errorf("oidc: email not found in id_token or userinfo")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

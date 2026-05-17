@@ -20,6 +20,29 @@ import (
 // underscore, followed by up to 62 alphanumeric/underscore characters.
 var fnNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
 
+// isAuthenticatedRequest reports whether the request carries any identity
+// surface that could segment the response on a per-user basis. Used by
+// RPC caching to decide between "public" and "private, Vary: Authorization"
+// Cache-Control. We intentionally treat the mere presence of an Authorization
+// header / apikey header / token query param as authenticated even if the
+// proxy resolved the caller as anon — a CDN cache hit serving an RLS-scoped
+// payload to a different user is worse than a cache miss.
+func isAuthenticatedRequest(r *http.Request) bool {
+	if r.Header.Get("Authorization") != "" {
+		return true
+	}
+	if r.Header.Get("apikey") != "" {
+		return true
+	}
+	if r.URL.Query().Get("token") != "" {
+		return true
+	}
+	if c, _ := r.Cookie("token"); c != nil && c.Value != "" {
+		return true
+	}
+	return false
+}
+
 // FunctionMeta describes a PostgreSQL function's parameter list and return type.
 type FunctionMeta struct {
 	Params     []FnParam
@@ -135,13 +158,28 @@ func execRPC(w http.ResponseWriter, r *http.Request, d *RestDeps, fnName string,
 		return
 	}
 
-	// Set Cache-Control for STABLE and IMMUTABLE functions so downstream caches
-	// and clients can avoid redundant calls. VOLATILE functions get no cache header.
-	switch meta.Volatility {
-	case "i": // IMMUTABLE — result never changes for same args
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-	case "s": // STABLE — result is stable within a transaction / short window
-		w.Header().Set("Cache-Control", "public, max-age=60")
+	// Cache-Control for STABLE / IMMUTABLE functions.
+	//
+	// Audit F5: any RPC executed under an authenticated identity could be
+	// observed differently across users (RLS scopes rows by JWT claims,
+	// service_role bypasses RLS, etc.). A shared cache that keys only on
+	// the URL would then serve user A's response to user B. Treat any
+	// request that carries a token / Authorization / apikey header as
+	// per-user — Cache-Control: private, plus Vary: Authorization, apikey
+	// so any well-behaved intermediary segments by credential. Anonymous
+	// requests (no auth surface at all) keep the original public cache.
+	if meta.Volatility == "i" || meta.Volatility == "s" {
+		maxAge := 60
+		if meta.Volatility == "i" {
+			maxAge = 3600
+		}
+		if isAuthenticatedRequest(r) {
+			w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", maxAge))
+			w.Header().Add("Vary", "Authorization")
+			w.Header().Add("Vary", "apikey")
+		} else {
+			w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", maxAge))
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

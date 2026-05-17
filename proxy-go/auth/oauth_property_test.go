@@ -52,7 +52,7 @@ func TestProperty_ExtractEmailFromJWT_RoundTrip(t *testing.T) {
 			"exp":   9999999999,
 		})
 
-		got, err := extractEmailFromJWT(token)
+		got, _, err := extractEmailFromJWT(token)
 		if err != nil {
 			t.Fatalf(
 				"extractEmailFromJWT returned unexpected error for valid token: email=%q err=%v",
@@ -85,7 +85,7 @@ func TestProperty_ExtractEmailFromJWT_PreservesEmail(t *testing.T) {
 			"email": email,
 		})
 
-		got, err := extractEmailFromJWT(token)
+		got, _, err := extractEmailFromJWT(token)
 		if err != nil {
 			t.Fatalf("unexpected error: email=%q err=%v", email, err)
 		}
@@ -125,7 +125,7 @@ func TestProperty_ExtractEmailFromJWT_MissingEmail(t *testing.T) {
 			// deliberately no "email" claim
 		})
 
-		_, err := extractEmailFromJWT(token)
+		_, _, err := extractEmailFromJWT(token)
 		if err == nil {
 			t.Fatalf(
 				"expected error for JWT without email claim, got nil (sub=%q)", sub,
@@ -161,7 +161,7 @@ func TestProperty_ExtractEmailFromJWT_InvalidFormat(t *testing.T) {
 			token = strings.Join(parts, ".")
 		}
 
-		_, err := extractEmailFromJWT(token)
+		_, _, err := extractEmailFromJWT(token)
 		if err == nil {
 			t.Fatalf(
 				"expected error for token with %d dot(s) (not a 3-segment JWT): token=%q",
