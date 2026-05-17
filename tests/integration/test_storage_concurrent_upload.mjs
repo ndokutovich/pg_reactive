@@ -1,4 +1,4 @@
-// Integration test for audit F1 round 17.
+// Integration test for audit F1 round 17 + strengthened in round 18.
 //
 // Two concurrent same-key uploads must serialise via the per-key advisory
 // lock the upload handler now takes (pg_advisory_xact_lock on
@@ -7,6 +7,15 @@
 // row metadata describing B while the file on disk is A's bytes. With
 // the lock the two writes run strictly sequentially and the (DB, FS)
 // pair stays consistent.
+//
+// Round-18 strengthening: every writer uses a DIFFERENT body size (and a
+// different MIME type), so the consistency check actually exercises the
+// metadata/file pairing. Earlier the test sent identical 1024-byte
+// bodies, so even a DB(A)/file(B) mismatch would have passed the
+// `size == 1024` assertion. Now we read the downloaded bytes, identify
+// the winning writer via the embedded sequence in the first 8 bytes,
+// and assert that the row's size AND mime_type match exactly what that
+// writer uploaded.
 //
 // Requires:
 //   - docker compose up -d (Postgres, proxy on 127.0.0.1:8080)
@@ -24,6 +33,33 @@ const SERVICE_KEY = process.env.SERVICE_ROLE_KEY
 const BUCKET = 'concurrent-test';
 const KEY = 'race-target.bin';
 const CONCURRENCY = 16;
+
+// Per-writer payload shape: each writer's body has a distinct size and a
+// distinct MIME so an interleave between DB metadata and the on-disk
+// file is detectable.
+const BASE_SIZE = 1024;
+const SIZE_STEP = 256; // writer i uploads BASE_SIZE + i*SIZE_STEP bytes
+const MIMES = [
+  'application/octet-stream',
+  'application/x-pgstack-1',
+  'application/x-pgstack-2',
+  'application/x-pgstack-3',
+  'application/x-pgstack-4',
+  'application/x-pgstack-5',
+  'application/x-pgstack-6',
+  'application/x-pgstack-7',
+  'application/x-pgstack-8',
+  'application/x-pgstack-9',
+  'application/x-pgstack-a',
+  'application/x-pgstack-b',
+  'application/x-pgstack-c',
+  'application/x-pgstack-d',
+  'application/x-pgstack-e',
+  'application/x-pgstack-f',
+];
+
+const writerSize = (seq) => BASE_SIZE + seq * SIZE_STEP;
+const writerMime = (seq) => MIMES[seq % MIMES.length];
 
 let failed = 0;
 const fail = (msg) => { console.error('✗', msg); failed++; };
@@ -43,13 +79,14 @@ async function setup() {
 }
 
 async function uploadOnce(seq) {
-  // Use a body whose first 8 bytes encode the sequence number so we can
-  // identify which writer's bytes ended up on disk.
-  const body = new Uint8Array(1024);
+  // Body: first 8 bytes = seq, remainder zero-filled to writerSize(seq).
+  const size = writerSize(seq);
+  const body = new Uint8Array(size);
   new DataView(body.buffer).setBigUint64(0, BigInt(seq), false);
 
+  const mime = writerMime(seq);
   const form = new FormData();
-  form.append('file', new Blob([body], { type: 'application/octet-stream' }), `${seq}.bin`);
+  form.append('file', new Blob([body], { type: mime }), `${seq}.bin`);
 
   const res = await fetch(`${PROXY}/storage/v1/object/${BUCKET}/${KEY}`, {
     method: 'POST',
@@ -65,10 +102,11 @@ async function readDBMetadata() {
      FROM pgstack.storage_objects
      WHERE bucket_id = '${BUCKET}' AND name = '${KEY}';`,
   );
-  return row;
+  const [sizeStr, mimeStr] = row.split('|');
+  return { size: Number(sizeStr), mime: mimeStr };
 }
 
-async function readFileFirstUint64() {
+async function downloadObject() {
   const res = await fetch(`${PROXY}/storage/v1/object/${BUCKET}/${KEY}`, {
     headers: { 'Authorization': `Bearer ${SERVICE_KEY}`, 'apikey': SERVICE_KEY },
   });
@@ -76,11 +114,12 @@ async function readFileFirstUint64() {
     throw new Error(`download returned ${res.status}`);
   }
   const buf = new Uint8Array(await res.arrayBuffer());
-  return Number(new DataView(buf.buffer).getBigUint64(0, false));
+  const seq = Number(new DataView(buf.buffer).getBigUint64(0, false));
+  return { bytes: buf, size: buf.length, seq };
 }
 
 async function main() {
-  console.log(`# pgStack storage concurrent-upload integration test (×${CONCURRENCY})`);
+  console.log(`# pgStack storage concurrent-upload integration test (×${CONCURRENCY}, round 18)`);
   await setup();
 
   const results = await Promise.all(
@@ -109,26 +148,43 @@ async function main() {
     pass(`exactly 1 storage_objects row for the contested key`);
   }
 
-  // Consistency: read the file bytes (first 8 = seq) and confirm the row's
-  // size matches the actual file. If DB updates and renames had interleaved,
-  // the metadata size could disagree with what's on disk.
-  const fileSeq = await readFileFirstUint64();
-  if (fileSeq < 0 || fileSeq >= CONCURRENCY) {
-    fail(`file's embedded sequence ${fileSeq} is out of range`);
+  // Identify the winning writer via the seq embedded in the on-disk
+  // bytes, then assert that the DB row's size AND mime match what
+  // THAT writer uploaded. Without the per-key advisory lock, the
+  // metadata could be from a different writer than the bytes.
+  const downloaded = await downloadObject();
+  if (downloaded.seq < 0 || downloaded.seq >= CONCURRENCY) {
+    fail(`file's embedded sequence ${downloaded.seq} is out of range`);
   } else {
-    pass(`file's embedded sequence (${fileSeq}) is one of the contended writers`);
+    pass(`file's embedded sequence (${downloaded.seq}) is one of the contended writers`);
   }
 
-  const metaSizeMime = await readDBMetadata();
-  const [sizeStr] = metaSizeMime.split('|');
-  if (Number(sizeStr) !== 1024) {
-    fail(`metadata size ${sizeStr} != actual upload size 1024`);
+  const expected = {
+    size: writerSize(downloaded.seq),
+    mime: writerMime(downloaded.seq),
+  };
+  if (downloaded.size !== expected.size) {
+    fail(`downloaded byte length ${downloaded.size} != expected ${expected.size} for writer ${downloaded.seq}`);
   } else {
-    pass(`metadata size matches actual upload size`);
+    pass(`downloaded byte length matches writer ${downloaded.seq}'s payload (${expected.size}B)`);
+  }
+
+  const meta = await readDBMetadata();
+  if (meta.size !== expected.size) {
+    fail(`metadata size ${meta.size} does not match winning writer ${downloaded.seq}'s size ${expected.size} ` +
+         `— DB metadata describes a different writer than the bytes on disk (advisory lock failed)`);
+  } else {
+    pass(`metadata size matches winning writer ${downloaded.seq}'s payload (${meta.size}B)`);
+  }
+  if (meta.mime !== expected.mime) {
+    fail(`metadata mime ${meta.mime} does not match winning writer ${downloaded.seq}'s mime ${expected.mime} ` +
+         `— DB metadata describes a different writer than the bytes on disk (advisory lock failed)`);
+  } else {
+    pass(`metadata mime matches winning writer ${downloaded.seq}'s payload (${meta.mime})`);
   }
 
   if (failed === 0) {
-    console.log(`\nAll checks passed (${CONCURRENCY} concurrent uploads, 1 row, file matches metadata).`);
+    console.log(`\nAll checks passed (${CONCURRENCY} concurrent uploads, 1 row, file+metadata both from writer ${downloaded.seq}).`);
     process.exit(0);
   } else {
     console.error(`\n${failed} check(s) failed.`);

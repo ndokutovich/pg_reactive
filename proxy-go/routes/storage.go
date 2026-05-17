@@ -632,7 +632,63 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 			_, _ = inserted, prevSize
 			_ = prevMime
 
+			// Audit F1 (round 18): for the rare but real case where
+			// os.Rename succeeds and tx.Commit then fails, the previous
+			// strategy was to os.Remove(diskPath) — but for an overwrite
+			// that destroys the previous file too, while DB rollback
+			// restores the previous metadata. Net effect: row points at a
+			// file that no longer exists.
+			//
+			// Backup the existing file (if any) under the same advisory
+			// lock so we can restore it on any post-stage failure. The
+			// backup lives in the same directory as the target so the
+			// final rename / restore are guaranteed to be same-fs (and
+			// therefore atomic on POSIX). The backup is cleaned up on
+			// the happy path; on failure paths it is rolled back into
+			// place over whatever is currently at diskPath.
+			var backupPath string
+			if _, statErr := os.Stat(diskPath); statErr == nil {
+				bk, berr := os.CreateTemp(filepath.Dir(diskPath), ".pgstack-backup-*")
+				if berr != nil {
+					log.Error().Err(berr).Str("dir", filepath.Dir(diskPath)).
+						Msg("storage: open backup file")
+					writeJSONError(w, http.StatusInternalServerError, "failed to stage backup")
+					return
+				}
+				backupPath = bk.Name()
+				_ = bk.Close()
+				// Move existing diskPath aside; the CreateTemp file is
+				// replaced atomically by the rename target.
+				if err := os.Rename(diskPath, backupPath); err != nil {
+					_ = os.Remove(backupPath)
+					backupPath = ""
+					log.Error().Err(err).Str("src", diskPath).Str("dst", backupPath).
+						Msg("storage: backup existing file")
+					writeJSONError(w, http.StatusInternalServerError, "failed to stage backup")
+					return
+				}
+			}
+			// Cleanup contract: backupPath != "" means a backup is in
+			// flight that the happy path must consume. Failure paths set
+			// it back to "" after explicit restore/cleanup.
+			defer func() {
+				if backupPath != "" {
+					_ = os.Remove(backupPath)
+				}
+			}()
+
 			if err := os.Rename(tmpPath, diskPath); err != nil {
+				// Rename failed BEFORE diskPath was replaced. If we
+				// backed up the previous file, restore it; otherwise
+				// there was no file to begin with. tx rollback (defer)
+				// undoes the DB upsert so metadata stays consistent.
+				if backupPath != "" {
+					if rerr := os.Rename(backupPath, diskPath); rerr != nil {
+						log.Error().Err(rerr).Str("backup", backupPath).Str("final", diskPath).
+							Msg("storage: restore backup after rename failure also failed — file lost")
+					}
+					backupPath = "" // restore consumed it
+				}
 				log.Error().Err(err).Str("tmp", tmpPath).Str("final", diskPath).
 					Msg("storage: promote staged upload — rolling back tx")
 				writeJSONError(w, http.StatusInternalServerError, "failed to finalise upload")
@@ -641,15 +697,23 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 			tmpPath = "" // rename consumed the temp file; suppress defer cleanup.
 
 			if err := tx.Commit(r.Context()); err != nil {
-				// Rename succeeded but commit failed: the file is now at
-				// the final path but the DB tx will roll back. Remove
-				// the file so a subsequent retry sees a clean slate. The
-				// file's previous contents (if this was an overwrite) are
-				// lost, but so is the consistent state — we picked the
-				// "loudly broken" outcome over "silently divergent".
+				// Rename succeeded, commit failed. DB will rollback (defer)
+				// to whatever it was before — the previous metadata for an
+				// overwrite, or nothing for an INSERT. Restore the on-disk
+				// state to match: for an overwrite, swap the backup back
+				// over the new file; for an INSERT (no backup), remove
+				// the new file so a retry sees a clean slate.
+				if backupPath != "" {
+					if rerr := os.Rename(backupPath, diskPath); rerr != nil {
+						log.Error().Err(rerr).Str("backup", backupPath).Str("final", diskPath).
+							Msg("storage: restore backup after commit failure also failed — file lost")
+					}
+					backupPath = ""
+				} else {
+					_ = os.Remove(diskPath)
+				}
 				log.Error().Err(err).Str("final", diskPath).
-					Msg("storage: tx commit after successful rename — removing final file to stay consistent")
-				_ = os.Remove(diskPath)
+					Msg("storage: tx commit after successful rename — restored previous file (or removed orphan)")
 				writeJSONError(w, http.StatusInternalServerError, "failed to finalise upload")
 				return
 			}
