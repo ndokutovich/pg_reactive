@@ -3,7 +3,7 @@ CREATE EXTENSION pg_reactive;
 SELECT extname, extversion FROM pg_extension WHERE extname = 'pg_reactive';
    extname   | extversion 
 -------------+------------
- pg_reactive | 0.1.2
+ pg_reactive | 0.1.3
 (1 row)
 
 -- Verify schema was created
