@@ -123,24 +123,54 @@ BEGIN
 END;
 $$;
 
--- The bootstrap default-denies PUBLIC EXECUTE on functions, so each
--- helper that the server should be able to call via REST RPC needs
--- an explicit grant. Service_role would work too, but authenticated
--- is the usual role for an OTP-sender that runs server-side.
-GRANT EXECUTE ON FUNCTION public.request_otp(TEXT)        TO authenticated;
-GRANT EXECUTE ON FUNCTION public.verify_otp(TEXT, TEXT)   TO authenticated;
+-- ⚠️  service_role ONLY — these functions are NOT safe for the
+--     authenticated browser client.
+--
+-- request_otp returns the raw OTP token in its result. Granting it
+-- to `authenticated` would let any logged-in user call
+--    POST /rest/v1/rpc/request_otp { p_email: "victim@example.com" }
+-- and read back the OTP for the victim's account, bypassing the
+-- email delivery channel entirely — that is a complete account
+-- takeover. Same applies to verify_otp: a client that can guess or
+-- brute-force tokens for arbitrary emails would short-circuit the
+-- whole flow.
+--
+-- These helpers MUST be called only from a server-side process
+-- holding SERVICE_ROLE_KEY (your Next.js / Express / Workers
+-- backend) that has already authenticated the requesting user via
+-- its own session and authorised that THIS user may receive an OTP
+-- for THIS email. The raw OTP token must never travel back to the
+-- browser; only the success/failure outcome of verify_otp does.
+REVOKE EXECUTE ON FUNCTION public.request_otp(TEXT)      FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.verify_otp(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.request_otp(TEXT)      TO service_role;
+GRANT  EXECUTE ON FUNCTION public.verify_otp(TEXT, TEXT) TO service_role;
 ```
 
-Then call these via the REST API from your server:
+Call these from your server-side code using a client constructed
+with the **SERVICE_ROLE_KEY** (never the anon key). Browser code
+must never call these endpoints directly — it would be calling them
+as `authenticated` and the GRANT above explicitly refuses:
 
 ```typescript
-// Server-side: generate OTP and send email
-const { data } = await pgstack.rpc('request_otp', { p_email: email });
-await sendEmail(email, 'Your login link', `Click here: /verify?token=${data}`);
+// Server-side ONLY — uses SERVICE_ROLE_KEY, not the anon key.
+// Initialise this client in your backend bootstrap and never expose
+// the key to the browser bundle.
+const pgstackAdmin = createClient(PGSTACK_URL, process.env.SERVICE_ROLE_KEY!);
 
-// Server-side: verify OTP and issue session
-const { data: valid } = await pgstack.rpc('verify_otp', { p_email: email, p_token: token });
+// 1. The server authenticates the requesting user from its own session
+//    and decides whether to send an OTP to that email.
+const { data: token } = await pgstackAdmin.rpc('request_otp', { p_email: email });
+
+// 2. The raw token is delivered ONLY via the side channel (email).
+//    Never include `token` in the response to the browser.
+await sendEmail(email, 'Your login link', `Click here: /verify?token=${token}`);
+
+// 3. When the user clicks through, your server (still SERVICE_ROLE_KEY)
+//    verifies the token and issues its own session cookie. The browser
+//    sees a redirect, never the token, never the boolean directly.
+const { data: valid } = await pgstackAdmin.rpc('verify_otp', { p_email: email, p_token: token });
 if (valid) {
-  // Sign in the user
+  // issue server-managed session
 }
 ```
