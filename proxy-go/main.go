@@ -346,7 +346,14 @@ func buildRouter(state *AppState) http.Handler {
 
 	// Global middleware
 	r.Use(chiMiddleware.RequestID)
-	r.Use(chiMiddleware.RealIP)
+	// NOTE: chiMiddleware.RealIP is intentionally NOT used — it rewrites
+	// r.RemoteAddr from True-Client-IP / X-Real-IP / first-XFF with no
+	// trusted-proxy check, which defeats every downstream security gate
+	// that reads RemoteAddr (rate limiter, WS per-IP cap, HSTS isHTTPS).
+	// Audit round 25 (HIGH). Our own appMiddleware.realIP() is
+	// TrustedProxies-aware and is consulted directly by the rate limiter
+	// and the WS limiter; the underlying r.RemoteAddr stays authentic
+	// for the HSTS XFP gate.
 	if state.Config.GzipLevel > 0 {
 		r.Use(chiMiddleware.Compress(state.Config.GzipLevel))
 	}
