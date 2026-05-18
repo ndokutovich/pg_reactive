@@ -112,12 +112,22 @@ const { data } = await pgstack.rpc('place_order', {
 ```
 
 ```sql
-CREATE OR REPLACE FUNCTION place_order(p_items JSONB, p_payment_token TEXT)
-RETURNS orders AS $$
-DECLARE v_order orders;
+-- SECURITY DEFINER with a pinned search_path of pg_catalog + pg_temp.
+-- Every app-schema reference is fully qualified (public.orders,
+-- dbos.job_queue, auth.uid) so a CREATE-on-public role cannot shadow
+-- public.orders, jsonb_build_object, or auth.uid and run code as the
+-- definer. Granting EXECUTE to authenticated is also explicit — the
+-- pgStack bootstrap default-denies PUBLIC EXECUTE on functions
+-- (see security defaults).
+CREATE OR REPLACE FUNCTION public.place_order(p_items JSONB, p_payment_token TEXT)
+RETURNS public.orders
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE v_order public.orders;
 BEGIN
   -- Insert the order
-  INSERT INTO orders (user_id, status)
+  INSERT INTO public.orders (user_id, status)
   VALUES (auth.uid(), 'pending')
   RETURNING * INTO v_order;
 
@@ -130,7 +140,9 @@ BEGIN
 
   RETURN v_order;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.place_order(JSONB, TEXT) TO authenticated;
 ```
 
 ## Next steps

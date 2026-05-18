@@ -34,11 +34,15 @@ CREATE POLICY exp_own_delete ON expenses FOR DELETE TO authenticated USING (user
 GRANT SELECT, INSERT, UPDATE, DELETE ON expenses TO authenticated;
 GRANT USAGE, SELECT ON SEQUENCE expenses_id_seq TO authenticated;
 
+-- SECURITY DEFINER with a pinned search_path of pg_catalog + pg_temp
+-- (audit round 28 F2). Every app object is fully qualified so a
+-- CREATE-on-public role cannot shadow auth.uid / format / public.expenses
+-- and run code as the definer.
 CREATE OR REPLACE FUNCTION public.subscribe_my_expenses()
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pgr, pgstack, pg_temp
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
   v_uid    uuid := auth.uid();
@@ -53,7 +57,7 @@ BEGIN
   PERFORM pgr.subscribe(
     v_items,
     format('SELECT id, amount, category, description, spent_at
-            FROM expenses WHERE user_id = %L
+            FROM public.expenses WHERE user_id = %L
             ORDER BY spent_at DESC, id DESC', v_uid),
     'delta',
     jsonb_build_object('sub', v_uid::text)
@@ -64,7 +68,7 @@ BEGIN
     format('SELECT category,
                    SUM(amount)::numeric(10,2)  AS total,
                    COUNT(*)::int               AS items
-            FROM expenses
+            FROM public.expenses
             WHERE user_id = %L
               AND spent_at >= date_trunc(''month'', CURRENT_DATE)
             GROUP BY category

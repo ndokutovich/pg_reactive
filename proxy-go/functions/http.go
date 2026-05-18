@@ -79,6 +79,18 @@ func validateUpstreamURL(raw string) (*url.URL, error) {
 	if strings.Contains(host, ".") {
 		return nil, fmt.Errorf("upstream_url host must be a bare docker-network hostname, not a dotted name (%s)", host)
 	}
+	// Audit round 28 F3: the IP-literal block above catches 127.0.0.1 / ::1
+	// but a bare hostname like "localhost" resolves to the loopback in
+	// every libc resolver — so a function pointed at http://localhost:8080
+	// would loop back to the proxy itself (or to whatever else is bound
+	// to loopback inside the proxy's container). Reject the loopback bare
+	// names explicitly. Same for the synthetic Kubernetes
+	// "kubernetes.default" hop (caught by the dotted-name rule above) and
+	// any other reserved-meaning name the resolver special-cases.
+	switch strings.ToLower(host) {
+	case "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback":
+		return nil, fmt.Errorf("upstream_url host %q resolves to loopback — refusing to target the proxy itself", host)
+	}
 	return u, nil
 }
 

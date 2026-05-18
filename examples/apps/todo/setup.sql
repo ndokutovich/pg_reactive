@@ -32,11 +32,16 @@ CREATE POLICY todos_own_delete ON todos FOR DELETE TO authenticated USING (user_
 GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO authenticated;
 GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO authenticated;
 
+-- SECURITY DEFINER + pinned search_path (audit round 28 F2):
+-- pg_catalog + pg_temp only, every app object fully qualified
+-- (public.todos, pgr.subscribe, auth.uid). Keeping `public` on a
+-- definer's search_path lets a CREATE-on-public role shadow auth.uid
+-- or format() and run code as the definer.
 CREATE OR REPLACE FUNCTION public.subscribe_my_todos()
 RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pgr, pgstack, pg_temp
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
   v_uid uuid := auth.uid();
@@ -47,7 +52,7 @@ BEGIN
   PERFORM pgr.subscribe(
     v_qid,
     format('SELECT id, text, priority, done, due_at, created_at
-            FROM todos WHERE user_id = %L
+            FROM public.todos WHERE user_id = %L
             ORDER BY done ASC, priority DESC, created_at DESC', v_uid),
     'delta',
     jsonb_build_object('sub', v_uid::text)

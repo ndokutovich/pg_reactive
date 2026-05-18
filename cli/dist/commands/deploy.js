@@ -47,15 +47,25 @@ export function registerDeployCommand(program) {
         const remoteDir = opts.dir;
         const dryRun = opts.dryRun ?? false;
         let spinner = ora();
-        // Validate inputs against shell injection
+        // Validate inputs against shell + option injection.
+        //
+        // Audit round 28 F4: the previous regexes allowed leading '-' in both
+        // --host and --dir. The values are spliced into argv for ssh/rsync,
+        // where a leading dash turns into option-injection (e.g. host
+        // "-oProxyCommand=..." or path "-e ssh-command"). The regex match
+        // still allows internal dashes, but we explicitly reject any
+        // path segment or the host itself starting with '-'.
         const SAFE_PATH_RE = /^[a-zA-Z0-9_.~\/-]+$/;
-        if (!SAFE_PATH_RE.test(remoteDir) || remoteDir.split('/').includes('..')) {
-            spinner.fail(chalk.red('Error: --dir path contains unsafe characters or traversal'));
+        const pathSegments = remoteDir.split('/').filter((s) => s.length > 0);
+        if (!SAFE_PATH_RE.test(remoteDir)
+            || pathSegments.includes('..')
+            || pathSegments.some((s) => s.startsWith('-'))) {
+            spinner.fail(chalk.red('Error: --dir path contains unsafe characters, traversal, or a leading-dash segment'));
             process.exit(1);
         }
         const SAFE_HOST_RE = /^[a-zA-Z0-9._@-]+$/;
-        if (!SAFE_HOST_RE.test(host)) {
-            spinner.fail(chalk.red('Error: --host contains unsafe characters'));
+        if (!SAFE_HOST_RE.test(host) || host.startsWith('-')) {
+            spinner.fail(chalk.red('Error: --host contains unsafe characters or starts with a dash'));
             process.exit(1);
         }
         // ---------------------------------------------------------------

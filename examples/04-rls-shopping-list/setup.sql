@@ -107,22 +107,29 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON lists, list_members, list_items TO authe
 GRANT USAGE, SELECT ON SEQUENCE lists_id_seq, list_items_id_seq TO authenticated;
 
 -- Capability helpers (SECURITY DEFINER — audience always derived from JWT).
+--
+-- search_path note: every SECURITY DEFINER helper below pins search_path to
+-- pg_catalog + pg_temp ONLY, and references every app object with its
+-- explicit schema (public.lists, public.list_members, pgr.subscribe,
+-- auth.uid). Keeping `public` on a definer's search_path lets a role
+-- with CREATE on public shadow auth.uid / format / public.lists and
+-- run code as the definer. Audit round 28 F2.
 
 -- Join a list by share_code. Returns the list_id.
 CREATE OR REPLACE FUNCTION public.join_list(p_code text)
 RETURNS int
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pgstack, pg_temp
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
   v_uid   uuid := auth.uid();
   v_list  int;
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'auth required' USING ERRCODE = '28000'; END IF;
-  SELECT id INTO v_list FROM lists WHERE share_code = p_code;
+  SELECT id INTO v_list FROM public.lists WHERE share_code = p_code;
   IF v_list IS NULL THEN RAISE EXCEPTION 'list not found'; END IF;
-  INSERT INTO list_members (list_id, user_id) VALUES (v_list, v_uid)
+  INSERT INTO public.list_members (list_id, user_id) VALUES (v_list, v_uid)
   ON CONFLICT DO NOTHING;
   RETURN v_list;
 END;
@@ -136,7 +143,7 @@ CREATE OR REPLACE FUNCTION public.subscribe_list(p_list_id int)
 RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pgr, pgstack, pg_temp
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
   v_uid uuid := auth.uid();
@@ -146,9 +153,9 @@ BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'auth required' USING ERRCODE = '28000'; END IF;
 
   SELECT (l.owner_id = v_uid)
-         OR EXISTS (SELECT 1 FROM list_members m WHERE m.list_id = l.id AND m.user_id = v_uid)
+         OR EXISTS (SELECT 1 FROM public.list_members m WHERE m.list_id = l.id AND m.user_id = v_uid)
     INTO v_is_member
-    FROM lists l WHERE l.id = p_list_id;
+    FROM public.lists l WHERE l.id = p_list_id;
   IF NOT COALESCE(v_is_member, false) THEN
     RAISE EXCEPTION 'not a member of this list' USING ERRCODE = '42501';
   END IF;
@@ -158,7 +165,7 @@ BEGIN
   PERFORM pgr.subscribe(
     v_qid,
     format('SELECT id, text, done, added_by, created_at
-            FROM list_items WHERE list_id = %s
+            FROM public.list_items WHERE list_id = %s
             ORDER BY created_at ASC', p_list_id),
     'delta',
     jsonb_build_object('sub', v_uid::text)

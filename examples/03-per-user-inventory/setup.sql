@@ -49,11 +49,20 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON player_inventory TO authenticated;
 
 -- The capability helper. Returns the query_id; client opens
 -- /ws/<query_id> with its JWT and the audience matcher does the rest.
+--
+-- search_path note: SECURITY DEFINER functions must avoid schemas where
+-- an attacker can create shadowing objects. We pin search_path to the
+-- two built-in schemas (pg_catalog for system funcs, pg_temp for the
+-- temp namespace) and reference every app object with its explicit
+-- schema (public.player_inventory, pgr.subscribe, auth.uid). Audit
+-- round 28 F2: keeping `public` on search_path of a SECURITY DEFINER
+-- helper lets a CREATE-on-public role shadow auth.uid or format() and
+-- run code as the definer.
 CREATE OR REPLACE FUNCTION public.subscribe_my_inventory()
 RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pgr, pgstack, pg_temp
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
   v_uid uuid := auth.uid();
@@ -69,7 +78,7 @@ BEGIN
   -- updates in place. Safe to call on every login.
   PERFORM pgr.subscribe(
     v_qid,
-    format('SELECT item, count FROM player_inventory WHERE player_id = %L',
+    format('SELECT item, count FROM public.player_inventory WHERE player_id = %L',
            v_uid),
     'delta',
     jsonb_build_object('sub', v_uid::text)

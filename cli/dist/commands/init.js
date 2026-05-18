@@ -319,6 +319,20 @@ GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES    TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
 
+-- Functions: revoke the PostgreSQL default of PUBLIC EXECUTE.
+--
+-- The REST endpoint at /rest/v1/rpc/{fn} walks pg_proc and exposes any
+-- function in the public schema. PostgreSQL grants EXECUTE on every
+-- new function to PUBLIC by default, which means anon and authenticated
+-- would inherit the right to call it via REST the moment it is created
+-- — even (and especially) SECURITY DEFINER helpers that were meant to
+-- be invoked only from triggers or other definer-context paths.
+-- Default-deny here, the same way tables already work.
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+GRANT  EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role;
+
 -- For each NEW user table you add under public/, explicitly grant only
 -- what the API needs and rely on RLS to scope rows. Example:
 --
@@ -329,6 +343,11 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role
 --     USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 --   GRANT SELECT, INSERT, UPDATE, DELETE ON public.todos TO authenticated;
 --   GRANT SELECT                         ON public.todos TO anon;  -- if public-readable
+--
+-- For RPC-exposed functions, GRANT EXECUTE explicitly (default-deny applies):
+--
+--   CREATE FUNCTION public.search_users(q text) RETURNS SETOF users ...;
+--   GRANT EXECUTE ON FUNCTION public.search_users(text) TO authenticated;
 `;
 }
 function generateSeed() {

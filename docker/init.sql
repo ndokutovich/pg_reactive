@@ -276,6 +276,21 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO se
 
 -- (intentionally no `ALTER DEFAULT PRIVILEGES ... GRANT ... TO anon|authenticated`)
 
+-- ── Functions: revoke default PUBLIC EXECUTE ────────────────────────────────
+-- Audit round 28 F1 (HIGH): PostgreSQL grants EXECUTE on every new function
+-- to PUBLIC by default, which means anon/authenticated automatically inherit
+-- EXECUTE. The REST RPC endpoint walks pg_proc and exposes any public.fn,
+-- so a SECURITY DEFINER helper in `public` becomes anon-callable via
+-- /rest/v1/rpc/{fn} the moment it's created — unless the author remembers
+-- to revoke. Move the burden the other direction: PUBLIC has nothing by
+-- default, the operator GRANTs EXECUTE explicitly for the functions they
+-- intend to expose as RPC.
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+-- service_role keeps blanket EXECUTE (admin role; bypasses RLS too).
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role;
+
 -- Test table (used by e2e_rest_test.mjs)
 CREATE TABLE IF NOT EXISTS todos (
   id serial PRIMARY KEY,

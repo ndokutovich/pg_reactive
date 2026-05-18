@@ -78,22 +78,34 @@ CREATE TABLE auth_otps (
   used       BOOLEAN NOT NULL DEFAULT false
 );
 
--- Generate an OTP
+-- Generate an OTP.
+--
+-- SECURITY DEFINER with a pinned search_path of pg_catalog + pg_temp
+-- only. Every app-schema reference is fully qualified
+-- (pgstack.auth_otps) so a CREATE-on-public role cannot shadow the
+-- table or any built-in (encode, gen_random_bytes, now) and run code
+-- as the definer.
 CREATE OR REPLACE FUNCTION pgstack.request_otp(p_email TEXT)
-RETURNS TEXT AS $$
+RETURNS TEXT
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
 DECLARE v_token TEXT;
 BEGIN
-  INSERT INTO auth_otps (email) VALUES (p_email)
+  INSERT INTO pgstack.auth_otps (email) VALUES (p_email)
   RETURNING token INTO v_token;
   RETURN v_token;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
--- Verify and consume an OTP
+-- Verify and consume an OTP.
 CREATE OR REPLACE FUNCTION pgstack.verify_otp(p_email TEXT, p_token TEXT)
-RETURNS BOOLEAN AS $$
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
 BEGIN
-  UPDATE auth_otps
+  UPDATE pgstack.auth_otps
   SET used = true
   WHERE email = p_email
     AND token = p_token
@@ -101,7 +113,7 @@ BEGIN
     AND used = false;
   RETURN FOUND;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 ```
 
 Then call these via the REST API from your server:

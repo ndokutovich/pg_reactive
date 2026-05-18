@@ -55,14 +55,27 @@ export class PgReactiveAdmin {
 
   /**
    * Register a live query subscription in PostgreSQL.
-   * Calls pgr.subscribe(query_id, sql, mode).
+   * Calls pgr.subscribe(query_id, sql, mode, audience).
    *
+   * @param queryId - stable subscription id
+   * @param sql - the SELECT to track
    * @param mode - 'delta' (default) for full diff, 'notify' for lightweight invalidation
+   * @param audience - optional JWT-claim filter; when set, only WebSocket
+   *   clients whose JWT contains every key/value pair receive deltas.
+   *   Example: `{ sub: userId }` to scope the subscription to one user.
+   *   Without this, deltas are public — anyone on the WS endpoint can see
+   *   them. Audit round 28 F5: required for per-user live queries.
    */
-  async register(queryId: string, sql: string, mode: "delta" | "notify" = "delta"): Promise<RegisteredQuery> {
+  async register(
+    queryId: string,
+    sql: string,
+    mode: "delta" | "notify" = "delta",
+    audience?: Record<string, string>,
+  ): Promise<RegisteredQuery> {
+    const audienceJson = audience ? JSON.stringify(audience) : null;
     const result = await this.pool.query(
-      "SELECT pgr.subscribe($1, $2, $3) AS result",
-      [queryId, sql, mode],
+      "SELECT pgr.subscribe($1, $2, $3, $4::jsonb) AS result",
+      [queryId, sql, mode, audienceJson],
     );
     const jsonb = result.rows[0].result;
     return {
