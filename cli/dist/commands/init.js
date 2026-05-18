@@ -328,10 +328,32 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role
 -- — even (and especially) SECURITY DEFINER helpers that were meant to
 -- be invoked only from triggers or other definer-context paths.
 -- Default-deny here, the same way tables already work.
+--
+-- ALTER DEFAULT PRIVILEGES is scoped to the role that CREATEd the rule,
+-- so we loop over the plausible owners (postgres + current_user). A
+-- bare ALTER DEFAULT PRIVILEGES would only cover whichever role ran
+-- this bootstrap and miss future per-tenant owners. Failures swallowed
+-- — the rule may not yet exist for a given owner.
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 GRANT  EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role;
+DO $$
+DECLARE
+  owners text[] := ARRAY['postgres', current_user];
+  o text;
+BEGIN
+  FOREACH o IN ARRAY owners LOOP
+    BEGIN
+      EXECUTE format(
+        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
+        o);
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+    BEGIN
+      EXECUTE format(
+        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role',
+        o);
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+  END LOOP;
+END $$;
 
 -- For each NEW user table you add under public/, explicitly grant only
 -- what the API needs and rely on RLS to scope rows. Example:

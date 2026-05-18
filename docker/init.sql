@@ -285,11 +285,33 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO se
 -- to revoke. Move the burden the other direction: PUBLIC has nothing by
 -- default, the operator GRANTs EXECUTE explicitly for the functions they
 -- intend to expose as RPC.
+--
+-- Round 29 F1: ALTER DEFAULT PRIVILEGES is scoped to the role that
+-- CREATEd the rule. A bare ALTER DEFAULT PRIVILEGES only covers the
+-- current bootstrap user; functions later created under a different
+-- owner (postgres in some deployments, per-tenant roles, etc.) would
+-- still grant PUBLIC EXECUTE. Loop over every plausible owner — same
+-- pattern as the table-grants migration.
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
--- service_role keeps blanket EXECUTE (admin role; bypasses RLS too).
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role;
+GRANT  EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+DO $$
+DECLARE
+  owners text[] := ARRAY['postgres', current_user];
+  o text;
+BEGIN
+  FOREACH o IN ARRAY owners LOOP
+    BEGIN
+      EXECUTE format(
+        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
+        o);
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+    BEGIN
+      EXECUTE format(
+        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role',
+        o);
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+  END LOOP;
+END $$;
 
 -- Test table (used by e2e_rest_test.mjs)
 CREATE TABLE IF NOT EXISTS todos (

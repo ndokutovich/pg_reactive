@@ -83,19 +83,29 @@ Response:
 Functions can return `json` or `jsonb` directly:
 
 ```sql
-CREATE OR REPLACE FUNCTION get_dashboard_stats()
-RETURNS jsonb AS $$
+-- SECURITY DEFINER + pinned search_path (audit hardening): pg_catalog
+-- + pg_temp only. Every app object is fully qualified (public.orders)
+-- so a CREATE-on-public role cannot shadow the table or jsonb_build_object
+-- and run code as the definer. The bootstrap default-denies PUBLIC
+-- EXECUTE, so GRANT EXECUTE is explicit.
+CREATE OR REPLACE FUNCTION public.get_dashboard_stats()
+RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
   SELECT jsonb_build_object(
-    'total_orders', (SELECT count(*) FROM orders),
-    'pending_orders', (SELECT count(*) FROM orders WHERE status = 'pending'),
-    'revenue_today', (
+    'total_orders',   (SELECT count(*) FROM public.orders),
+    'pending_orders', (SELECT count(*) FROM public.orders WHERE status = 'pending'),
+    'revenue_today',  (
       SELECT COALESCE(SUM(amount), 0)
-      FROM orders
+      FROM public.orders
       WHERE created_at >= CURRENT_DATE
         AND status != 'cancelled'
     )
   );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_dashboard_stats() TO authenticated;
 ```
 
 ```bash
@@ -114,13 +124,31 @@ Response:
 
 `SECURITY DEFINER` runs the function as its owner (typically `postgres`). Use this carefully — it bypasses RLS. Common use cases: reading from tables the user doesn't have direct access to, or performing admin operations that are safe to expose.
 
+Every `SECURITY DEFINER` function in this codebase ships with two
+required hardenings:
+
+1. **Pinned `search_path`** — `SET search_path = pg_catalog, pg_temp`
+   prevents a role with `CREATE` on `public` from shadowing
+   `auth.uid` / `format` / your application tables and running code
+   as the definer.
+2. **Fully-qualified references** — write `public.orders`, not bare
+   `orders`. The pinned `search_path` removes `public` from the
+   lookup chain, so unqualified refs would error at runtime.
+3. **Explicit `GRANT EXECUTE`** — the bootstrap revokes the PostgreSQL
+   default of `PUBLIC EXECUTE` on functions in `public`. Any function
+   you want callable via `/rest/v1/rpc` needs an explicit grant.
+
 ```sql
 -- Safe: reads system stats, no user data
-CREATE OR REPLACE FUNCTION app_version()
+CREATE OR REPLACE FUNCTION public.app_version()
 RETURNS TEXT
-LANGUAGE sql STABLE SECURITY DEFINER AS $$
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
   SELECT '1.0.0';
 $$;
+
+GRANT EXECUTE ON FUNCTION public.app_version() TO anon, authenticated;
 ```
 
 ## SDK usage

@@ -68,9 +68,19 @@ See [Environment Variables](../installation#smtp--email-optional) for details.
 
 While magic links are not yet implemented, you can implement a similar flow yourself using PostgreSQL functions and your own email provider:
 
+Everything lives in `public.*`. The REST endpoint at
+`/rest/v1/rpc/{fn}` walks `pg_proc` in the `public` schema only, so
+functions placed elsewhere (e.g. `pgstack.*`) are unreachable via RPC
+and would force you back into raw SQL. Both helpers below carry an
+explicit `GRANT EXECUTE` because the bootstrap default-denies
+`PUBLIC EXECUTE` (see [Security defaults](../security/defaults)) —
+without the grant the RPC call returns "permission denied for
+function".
+
 ```sql
--- Store OTP tokens
-CREATE TABLE auth_otps (
+-- Store OTP tokens (in public so the helpers below can write to it
+-- while running with their pinned pg_catalog,pg_temp search_path).
+CREATE TABLE IF NOT EXISTS public.auth_otps (
   id         BIGSERIAL PRIMARY KEY,
   email      TEXT NOT NULL,
   token      TEXT NOT NULL DEFAULT encode(gen_random_bytes(32), 'hex'),
@@ -81,31 +91,30 @@ CREATE TABLE auth_otps (
 -- Generate an OTP.
 --
 -- SECURITY DEFINER with a pinned search_path of pg_catalog + pg_temp
--- only. Every app-schema reference is fully qualified
--- (pgstack.auth_otps) so a CREATE-on-public role cannot shadow the
--- table or any built-in (encode, gen_random_bytes, now) and run code
--- as the definer.
-CREATE OR REPLACE FUNCTION pgstack.request_otp(p_email TEXT)
+-- only. Every app object is fully qualified (public.auth_otps) so a
+-- CREATE-on-public role cannot shadow the table or any built-in
+-- (encode, gen_random_bytes, now) and run code as the definer.
+CREATE OR REPLACE FUNCTION public.request_otp(p_email TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE v_token TEXT;
 BEGIN
-  INSERT INTO pgstack.auth_otps (email) VALUES (p_email)
+  INSERT INTO public.auth_otps (email) VALUES (p_email)
   RETURNING token INTO v_token;
   RETURN v_token;
 END;
 $$;
 
 -- Verify and consume an OTP.
-CREATE OR REPLACE FUNCTION pgstack.verify_otp(p_email TEXT, p_token TEXT)
+CREATE OR REPLACE FUNCTION public.verify_otp(p_email TEXT, p_token TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
-  UPDATE pgstack.auth_otps
+  UPDATE public.auth_otps
   SET used = true
   WHERE email = p_email
     AND token = p_token
@@ -114,6 +123,13 @@ BEGIN
   RETURN FOUND;
 END;
 $$;
+
+-- The bootstrap default-denies PUBLIC EXECUTE on functions, so each
+-- helper that the server should be able to call via REST RPC needs
+-- an explicit grant. Service_role would work too, but authenticated
+-- is the usual role for an OTP-sender that runs server-side.
+GRANT EXECUTE ON FUNCTION public.request_otp(TEXT)        TO authenticated;
+GRANT EXECUTE ON FUNCTION public.verify_otp(TEXT, TEXT)   TO authenticated;
 ```
 
 Then call these via the REST API from your server:

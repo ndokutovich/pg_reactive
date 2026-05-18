@@ -234,18 +234,30 @@ CREATE POLICY "Good insert" ON orders FOR INSERT WITH CHECK (user_id = auth.uid(
 **Infinite recursion.** Policies that query a table protected by a policy on the same table can cause infinite recursion. Use `SECURITY DEFINER` functions as a workaround:
 
 ```sql
--- Safe: helper function bypasses RLS for the membership check
-CREATE OR REPLACE FUNCTION is_team_member(p_team_id UUID)
+-- Safe: helper function bypasses RLS for the membership check.
+--
+-- SECURITY DEFINER with a pinned search_path (pg_catalog + pg_temp).
+-- Every app object is fully qualified (public.team_members, auth.uid)
+-- so a CREATE-on-public role cannot shadow team_members or auth.uid
+-- and run code as the definer. The bootstrap default-denies PUBLIC
+-- EXECUTE on functions, so the explicit GRANT below is required —
+-- otherwise the RLS policy that calls is_team_member() would fail
+-- with "permission denied for function".
+CREATE OR REPLACE FUNCTION public.is_team_member(p_team_id UUID)
 RETURNS BOOLEAN
-LANGUAGE sql SECURITY DEFINER AS $$
+LANGUAGE sql SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
   SELECT EXISTS(
-    SELECT 1 FROM team_members
+    SELECT 1 FROM public.team_members
     WHERE team_id = p_team_id AND user_id = auth.uid()
   );
 $$;
 
-CREATE POLICY "Team access" ON projects FOR SELECT
-  USING (is_team_member(team_id));
+GRANT EXECUTE ON FUNCTION public.is_team_member(UUID) TO authenticated;
+
+CREATE POLICY "Team access" ON public.projects FOR SELECT
+  USING (public.is_team_member(team_id));
 ```
 
 **Not enabling RLS.** RLS policies are only evaluated when RLS is enabled on the table. A table without `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` allows all access.

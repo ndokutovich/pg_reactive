@@ -1,0 +1,36 @@
+-- ⚠️  UNSAFE EMERGENCY ROLLBACK — DO NOT RUN UNDER NORMAL CIRCUMSTANCES.
+--
+-- This script restores the PostgreSQL default of PUBLIC EXECUTE on
+-- functions in `public` that migration
+-- 20260519120000_revoke_public_function_execute.sql removed. It exists
+-- only for the rare case where an operator must temporarily reopen the
+-- old permission model to recover from a botched application change.
+--
+-- Running this re-introduces audit round-28 F1 (HIGH):
+--   • Every public.* function — including SECURITY DEFINER helpers
+--     intended for trigger / internal use — becomes callable via the
+--     /rest/v1/rpc/{fn} endpoint by anon and authenticated.
+--   • ALTER DEFAULT PRIVILEGES makes EVERY future CREATE FUNCTION
+--     inherit the unsafe default for every listed owner.
+--
+-- After applying, immediately re-apply the proper migration and
+-- per-function GRANTs your app actually needs.
+--
+-- The default migrate:down path for the original migration aborts
+-- with a RAISE EXCEPTION pointing here, so an operator never invokes
+-- this by accident.
+
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO PUBLIC;
+DO $$
+DECLARE
+  owners text[] := ARRAY['postgres', current_user];
+  o text;
+BEGIN
+  FOREACH o IN ARRAY owners LOOP
+    BEGIN
+      EXECUTE format(
+        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC',
+        o);
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+  END LOOP;
+END $$;
