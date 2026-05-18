@@ -174,3 +174,30 @@ if (valid) {
   // issue server-managed session
 }
 ```
+
+### Production-quality variant: keep the token inside Postgres
+
+The snippet above returns the raw OTP out of `request_otp()` so the
+example fits in a single page. That's acceptable as an internal
+helper called only by a server holding `SERVICE_ROLE_KEY` — there is
+no role boundary between the function and the caller. But if you
+turn this pattern into a real product feature (a `/auth/v1/otp/send`
+endpoint, say), the token should never leave Postgres in any code
+path that's reachable from the network. Two stronger shapes:
+
+1. **Function emits the email itself.** Have `request_otp()` insert
+   the row, then `pg_notify('email_outbox', json_build_object(...))`.
+   A small worker (in the proxy, in DBOS, or any LISTENer) consumes
+   the channel and calls the SMTP provider. The function returns a
+   bare boolean — never the token. A leaky log line or a forgotten
+   `RETURNS TEXT` no longer hands an attacker an OTP.
+
+2. **Function returns an opaque receipt-id, not the secret.** If you
+   need a synchronous response (e.g. for a rate-limit decision in
+   the same request), return `RETURNS uuid` (the receipt id). The
+   caller logs the receipt-id alongside the user's session id for
+   audit; the raw token still goes out via the email outbox above.
+
+Both shapes preserve the "raw token only ever exists in the email"
+property even when the function call site is broader than the
+admin-only helpers shown here.
