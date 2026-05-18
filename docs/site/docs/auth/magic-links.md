@@ -73,9 +73,8 @@ Everything lives in `public.*`. The REST endpoint at
 functions placed elsewhere (e.g. `pgstack.*`) are unreachable via RPC
 and would force you back into raw SQL. Both helpers below carry an
 explicit `GRANT EXECUTE` because the bootstrap default-denies
-`PUBLIC EXECUTE` (see [Security defaults](../security/defaults)) —
-without the grant the RPC call returns "permission denied for
-function".
+`PUBLIC EXECUTE` on functions — without the grant the RPC call
+returns "permission denied for function".
 
 ```sql
 -- Store OTP tokens (in public so the helpers below can write to it
