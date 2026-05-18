@@ -21,7 +21,11 @@ proxy/target/
 # Node
 node_modules/
 sdk/dist/
-cli/dist/
+# cli/dist/ is intentionally TRACKED (round 26 F2). The CLI's bin
+# points at dist/index.js and `files: [dist]` ships it on npm publish,
+# so the published artifact must match the source. The CI parity step
+# (cli/dist parity) re-runs `npm run build` and fails when the tracked
+# dist drifts from a fresh build of src.
 
 # Python
 __pycache__/
