@@ -400,24 +400,32 @@ audience from server-side state:
 -- Define ONE wrapper per query shape your app needs to subscribe to.
 -- The SQL text is a literal string the app cannot influence; only the
 -- arguments are taken from the caller.
+--
+-- pgr.subscribe signature (see ext/pg_reactive--0.1.3.sql):
+--   pgr.subscribe(query_id text, query text, mode text DEFAULT 'delta',
+--                 audience jsonb DEFAULT NULL) RETURNS jsonb
+-- `mode` is the delivery mode ('delta' = ship inserted/deleted rows on
+-- NOTIFY, 'notify' = ship a bare invalidation signal). It is NOT a role
+-- and the function does not switch identity per call.
 CREATE FUNCTION public.subscribe_my_orders(p_user uuid)
-RETURNS text
+RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp  -- ⚠ NO public; closes search-path attack
 AS $$
 DECLARE
   qid text := 'orders_' || p_user::text;
 BEGIN
-  -- AuthZ check the wrapper enforces; the underlying pgr.subscribe
-  -- bypasses RLS via SECURITY DEFINER, so the wrapper IS the gate.
+  -- AuthZ check the wrapper enforces. The wrapper IS the gate: callers
+  -- only ever reach pgr.subscribe via this function, so the JWT-sub
+  -- match below is what binds a subscription to its owner.
   IF p_user IS DISTINCT FROM (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid THEN
     RAISE EXCEPTION 'forbidden: caller may only subscribe to own orders';
   END IF;
   RETURN pgr.subscribe(
     qid,
     format('SELECT id, status, total FROM public.orders WHERE user_id = %L', p_user),
-    'authenticated',
-    jsonb_build_object('aud', p_user::text)
+    'delta',                                  -- delivery mode (delta | notify)
+    jsonb_build_object('sub', p_user::text)   -- audience binding: only JWTs with this sub receive deltas
   );
 END $$;
 
