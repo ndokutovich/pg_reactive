@@ -357,12 +357,87 @@ The trigger function runs as `SECURITY DEFINER` so that recompute and snapshot S
 
 ### 9.4 Permissions
 
-By default, `pgr.subscribe` and `pgr.unsubscribe` are revoked from `PUBLIC`. Grant them to specific roles as needed:
+`pgr.subscribe` and `pgr.unsubscribe` are revoked from `PUBLIC` by default and
+**MUST be treated as a privileged admin API**, not a per-tenant grant.
+
+**Why:** the SQL text passed to `pgr.subscribe` is stored verbatim and later
+re-executed by the extension's trigger path. That path runs as `SECURITY
+DEFINER` (the extension owner — typically `postgres` or `pgstack_admin`),
+so anything the caller can put into the query string runs with elevated
+privileges on every relevant DML.
+
+A role that holds `EXECUTE` on `pgr.subscribe` and ALSO has `CREATE` on any
+schema in its `search_path` (e.g. `public`) can:
+
+1. `CREATE FUNCTION attacker_payload() RETURNS int LANGUAGE plpgsql AS $$ ... $$`
+   under its own privileges, and then
+2. Subscribe a query like `SELECT attacker_payload() FROM pg_namespace LIMIT 1`,
+3. Which the extension's `SECURITY DEFINER` trigger path then evaluates on every
+   matching DML — running the attacker's function as the extension owner.
+
+This is a privilege boundary, not a usage convenience.
+
+**Do NOT do this (footgun):**
 
 ```sql
+-- ❌ Grants every app user the ability to register arbitrary SQL that
+--    later runs SECURITY DEFINER. Combined with CREATE FUNCTION (which
+--    most authenticated roles have on the public schema) this is a
+--    DEFINER-context RCE.
 GRANT EXECUTE ON FUNCTION pgr.subscribe(text, text, text, jsonb) TO myapp_role;
 GRANT EXECUTE ON FUNCTION pgr.unsubscribe(text) TO myapp_role;
 ```
+
+**Recommended pattern: SECURITY DEFINER wrappers with fixed SQL.**
+
+Keep `pgr.subscribe`/`unsubscribe` available only to your admin role
+(typically `postgres` / `service_role`). Expose subscription registration
+to application clients through purpose-built `SECURITY DEFINER` wrappers
+that inject a constant query template and derive the `query_id` and
+audience from server-side state:
+
+```sql
+-- Define ONE wrapper per query shape your app needs to subscribe to.
+-- The SQL text is a literal string the app cannot influence; only the
+-- arguments are taken from the caller.
+CREATE FUNCTION public.subscribe_my_orders(p_user uuid)
+RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp  -- ⚠ NO public; closes search-path attack
+AS $$
+DECLARE
+  qid text := 'orders_' || p_user::text;
+BEGIN
+  -- AuthZ check the wrapper enforces; the underlying pgr.subscribe
+  -- bypasses RLS via SECURITY DEFINER, so the wrapper IS the gate.
+  IF p_user IS DISTINCT FROM (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid THEN
+    RAISE EXCEPTION 'forbidden: caller may only subscribe to own orders';
+  END IF;
+  RETURN pgr.subscribe(
+    qid,
+    format('SELECT id, status, total FROM public.orders WHERE user_id = %L', p_user),
+    'authenticated',
+    jsonb_build_object('aud', p_user::text)
+  );
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.subscribe_my_orders(uuid) TO authenticated;
+-- pgr.subscribe itself stays revoked from authenticated.
+```
+
+The wrapper:
+
+- has a **fixed query template** the caller cannot rewrite,
+- derives `query_id` and the audience filter from `auth.uid()` so a caller
+  cannot subscribe to someone else's stream,
+- runs `SET search_path = pg_catalog, pg_temp` (no `public`) so a malicious
+  function shadowing `format()` / `pgr.subscribe` in `public` can never be
+  resolved by the wrapper body,
+- enforces its own application-level authorisation before delegating.
+
+If you cannot use wrappers (e.g. truly admin-only tooling), grant
+`pgr.subscribe` only to a dedicated admin role and never to a role that
+also holds `CREATE` on any schema on the `search_path`.
 
 ---
 

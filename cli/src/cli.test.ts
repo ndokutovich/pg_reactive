@@ -120,10 +120,20 @@ describe("pgstack init", () => {
     expect(files).toContain("CREATE SCHEMA IF NOT EXISTS pgstack");
     expect(files).toContain("pgstack.users");
     expect(files).toContain("pgstack.refresh_tokens");
-    expect(files).toContain("pgstack.sessions");
+    // pgstack.email_tokens replaces the old pgstack.sessions table — see the
+    // hardened bootstrap (audit F2 round 13). Both refresh and email
+    // tokens are stored as SHA-256 hashes with family_id reuse detection.
+    expect(files).toContain("pgstack.email_tokens");
+    expect(files).toContain("token_hash");
+    expect(files).toContain("family_id");
     expect(files).toContain("CREATE ROLE anon NOLOGIN");
     expect(files).toContain("CREATE ROLE authenticated NOLOGIN");
     expect(files).toContain("CREATE ROLE service_role NOLOGIN BYPASSRLS");
+    // Audit F2 round 26: published bootstrap must NOT include blanket
+    // GRANT ALL for authenticated/anon — pin the absence so future
+    // regressions are caught at test time.
+    expect(files).not.toContain("GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated");
+    expect(files).not.toContain("GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon");
   });
 
   it(".gitignore excludes .env and generated types", () => {

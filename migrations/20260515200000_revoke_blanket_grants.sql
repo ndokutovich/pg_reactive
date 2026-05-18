@@ -109,11 +109,28 @@ BEGIN
 END $$;
 
 -- migrate:down
+--
+-- Audit round 26 F4: the previous down-migration reissued blanket
+-- GRANT ALL ON ALL TABLES TO authenticated and ALTER DEFAULT PRIVILEGES
+-- restoring the exact footgun this migration removed. Running it would
+-- re-open the bypass on every new table you ever add. Emergency rollback
+-- is not worth that cost — operators who genuinely need it can apply
+-- migrations/unsafe-rollback/20260515200000_restore_blanket_grants.sql
+-- by hand after reading the warning.
+--
+-- The default down path is now a hard abort with a pointer to the
+-- explicit script. dbmate / sqlx-migrate / golang-migrate / Atlas all
+-- surface the RAISE EXCEPTION as a rollback failure, so the operator
+-- has to consciously opt into the unsafe recovery.
 
--- Restore the old (footgun) blanket grants. This is provided for emergency
--- rollback only; running this in production reintroduces F3.
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
-GRANT ALL    ON ALL TABLES IN SCHEMA public TO authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL    ON TABLES TO authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated;
+DO $$ BEGIN
+    RAISE EXCEPTION
+        'Refusing to roll back 20260515200000_revoke_blanket_grants — '
+        'restoring blanket GRANTs would re-introduce audit F3 (any '
+        'authenticated user can read/write every public-schema table, '
+        'bypassing RLS on future tables via ALTER DEFAULT PRIVILEGES). '
+        'If you truly need the rollback, apply '
+        'migrations/unsafe-rollback/20260515200000_restore_blanket_grants.sql '
+        'manually and accept that subsequent table creates will inherit '
+        'the unsafe defaults.';
+END $$;

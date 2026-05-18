@@ -392,6 +392,14 @@ func (c Config) Validate() []string {
 		if len(c.SecretsEncryptionKey) == 0 {
 			errs = append(errs, "PGSTACK_ENV=production: SECRETS_ENCRYPTION_KEY is required (at-rest encryption for edge function env vars AND webhook signing secrets)")
 		}
+		// Audit round 26 F5: dev-mode mailer writes recovery / magiclink /
+		// verification URLs to the console (anyone with log access can
+		// read a victim's reset token). In production, SMTP is required —
+		// the routes that emit those URLs are not safe to expose without
+		// a real delivery channel.
+		if c.SMTPHost == "" || c.SMTPUser == "" || c.SMTPPass == "" {
+			errs = append(errs, "PGSTACK_ENV=production: SMTP_HOST, SMTP_USER and SMTP_PASS are required — without SMTP the mailer logs reset/magiclink URLs to the console")
+		}
 	}
 	if c.RequireEmailVerification && c.SMTPHost == "" {
 		errs = append(errs, "REQUIRE_EMAIL_VERIFICATION=true but SMTP_HOST is not set")

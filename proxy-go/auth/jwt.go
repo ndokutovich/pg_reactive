@@ -21,7 +21,16 @@ type Claims struct {
 
 // GenerateToken creates a signed HS256 JWT for the given subject.
 // expirySecs ≤ 0 means no expiry claim is embedded.
+//
+// Audit round 26 F1 (CRITICAL): refuses to mint a token when secret is
+// empty. A token signed with []byte("") would be forgeable by anyone
+// who guessed the empty key (i.e. everyone). The login/signup/refresh
+// paths surface this as 500 "internal error" — better than handing out
+// a worthless token the same attacker can replay.
 func GenerateToken(sub, role, email, secret string, expirySecs int) (string, error) {
+	if secret == "" {
+		return "", fmt.Errorf("JWT_SECRET is not configured")
+	}
 	now := time.Now().UTC()
 
 	mc := jwt.MapClaims{
@@ -47,7 +56,17 @@ func GenerateToken(sub, role, email, secret string, expirySecs int) (string, err
 // ValidateToken parses and verifies a HS256 JWT.
 // It tolerates tokens without an exp claim (backwards compatibility).
 // A 60-second clock leeway is applied.
+//
+// Audit round 26 F1 (CRITICAL): refuses any token when secret is empty.
+// Without this guard, []byte("") becomes the HMAC key and any attacker
+// can forge a token with sub=victim_uuid that ValidateToken happily
+// accepts. The production validator already refuses to boot with an
+// empty JWT_SECRET, but this guard makes the auth path itself
+// fail-closed in dev / test / mis-configured deployments too.
 func ValidateToken(tokenStr, secret string) (*Claims, error) {
+	if secret == "" {
+		return nil, fmt.Errorf("JWT_SECRET is not configured")
+	}
 	// We parse with MapClaims so we can manually handle the optional exp field.
 	tok, err := jwt.ParseWithClaims(
 		tokenStr,
@@ -129,7 +148,16 @@ func ExtractToken(r *http.Request) string {
 // requireJWT extracts and validates the Bearer JWT from r.
 // On failure it writes a 401 JSON response and returns nil.
 // On success it returns the parsed *Claims.
+//
+// Audit round 26 F1: empty-secret short-circuit. ValidateToken itself
+// already refuses to verify against []byte(""), but rejecting at the
+// gate keeps the failure mode crystal-clear in logs ("auth disabled,
+// every request 401") rather than buried in token-validation errors.
 func requireJWT(w http.ResponseWriter, r *http.Request, secret string) *Claims {
+	if secret == "" {
+		writeError(w, http.StatusUnauthorized, "JWT auth is not configured")
+		return nil
+	}
 	raw := r.Header.Get("Authorization")
 	if !strings.HasPrefix(raw, "Bearer ") {
 		writeError(w, http.StatusUnauthorized, "missing authorization header")

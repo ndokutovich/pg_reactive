@@ -22,6 +22,7 @@ export function registerInitCommand(program) {
         // Create directories
         await mkdir(resolve(projectDir, "migrations"), { recursive: true });
         await mkdir(resolve(projectDir, "types"), { recursive: true });
+        await mkdir(resolve(projectDir, "public"), { recursive: true });
         // Generate secrets
         const jwtSecret = generateJwtSecret();
         const anonKey = generateApiKey();
@@ -46,12 +47,15 @@ export function registerInitCommand(program) {
         await writeFile(join(projectDir, "migrations", "00000000000000_pgstack_init.sql"), generateBootstrapMigration());
         // Write seed.sql
         await writeFile(join(projectDir, "seed.sql"), generateSeed());
+        // Write public/index.html starter page
+        await writeFile(join(projectDir, "public", "index.html"), generateStarterPage(projectName));
         console.log(chalk.green("\nProject created successfully!\n"));
         console.log("Next steps:");
         console.log(chalk.cyan(`  cd ${name}`));
         console.log(chalk.cyan("  npx pgstack dev"));
         console.log(chalk.cyan("  npx pgstack migration run"));
         console.log();
+        console.log(`Your app:   ${chalk.yellow(`http://127.0.0.1:${DEFAULT_PROXY_PORT}/`)}`);
         console.log(`REST API:   ${chalk.yellow(`http://127.0.0.1:${DEFAULT_PROXY_PORT}/rest/v1/`)}`);
         console.log(`WebSocket:  ${chalk.yellow(`ws://127.0.0.1:${DEFAULT_PROXY_PORT}/ws/`)}`);
         console.log(`Health:     ${chalk.yellow(`http://127.0.0.1:${DEFAULT_PROXY_PORT}/health`)}`);
@@ -89,6 +93,9 @@ function generateDockerCompose() {
       ANON_KEY: \${ANON_KEY}
       SERVICE_ROLE_KEY: \${SERVICE_ROLE_KEY}
       LISTEN_ADDR: 0.0.0.0:${DEFAULT_PROXY_PORT}
+      PUBLIC_DIR: /public
+    volumes:
+      - ./public:/public:ro
     depends_on:
       db:
         condition: service_healthy
@@ -126,18 +133,34 @@ DATABASE_URL=postgres://postgres:postgres@127.0.0.1:${DEFAULT_DB_PORT}/${DEFAULT
 }
 function generateEnvExample() {
     return `# pgStack Environment
-# Copy to .env and fill in values
+# Copy to .env and fill in values. EVERY secret below MUST be replaced before
+# the proxy is exposed to the network — the strict production validator
+# (PGSTACK_ENV=production) will refuse to start with placeholder values.
+#
+# Generate each secret with:
+#   for v in POSTGRES_PASSWORD JWT_SECRET ANON_KEY SERVICE_ROLE_KEY SECRETS_ENCRYPTION_KEY; do
+#     printf '%s=%s\\n' "$v" "$(openssl rand -base64 32)" >> .env
+#   done
 
-POSTGRES_PASSWORD=postgres
+POSTGRES_PASSWORD=<openssl rand -base64 32>
 POSTGRES_DB=${DEFAULT_DB_NAME}
 PG_PORT=${DEFAULT_DB_PORT}
 PROXY_PORT=${DEFAULT_PROXY_PORT}
 
-JWT_SECRET=<generate-a-random-secret-min-32-chars>
-ANON_KEY=<generate-a-random-api-key>
-SERVICE_ROLE_KEY=<generate-a-random-api-key>
+JWT_SECRET=<openssl rand -base64 32>
+ANON_KEY=<openssl rand -base64 32>
+SERVICE_ROLE_KEY=<openssl rand -base64 32>
 
-DATABASE_URL=postgres://postgres:postgres@127.0.0.1:${DEFAULT_DB_PORT}/${DEFAULT_DB_NAME}
+# Encrypts edge function env vars and webhook signing secrets at rest.
+# Required if you create any encrypted webhook or store env vars on
+# pgstack.edge_functions; otherwise the proxy will refuse those operations.
+SECRETS_ENCRYPTION_KEY=<openssl rand -base64 32>
+
+DATABASE_URL=postgres://postgres:\${POSTGRES_PASSWORD}@127.0.0.1:${DEFAULT_DB_PORT}/${DEFAULT_DB_NAME}
+
+# Set to "production" to enable the fail-fast validator (refuses placeholders,
+# dev flags like ENABLE_SQL_ENDPOINT, ALLOW_PERMISSIVE_CORS, etc.).
+# PGSTACK_ENV=production
 
 # GOOGLE_CLIENT_ID=
 # GOOGLE_CLIENT_SECRET=
@@ -152,8 +175,17 @@ types/database.ts
 `;
 }
 function generateBootstrapMigration() {
+    // Kept in sync with docker/init.sql — same hardened shape:
+    //  - refresh/email tokens stored as SHA-256 hashes, never plaintext
+    //  - refresh tokens carry a family_id for stolen-token reuse detection
+    //  - RLS enabled on every auth table; row visibility scoped to JWT sub
+    //  - oauth_sessions for PKCE state validation
+    //  - no blanket public-schema GRANTs; default-deny, opt-in per-table
+    //
+    // If you change the bootstrap, update docker/init.sql at the same time
+    // (and vice versa) — they describe the same logical schema.
     return `-- pgStack bootstrap migration
--- Creates auth schema, roles, and system tables
+-- Roles + auth schema + hardened auth tables.
 
 -- Roles (idempotent)
 DO $$
@@ -170,65 +202,133 @@ BEGIN
 END
 $$;
 
--- Grant roles to postgres (so SET LOCAL role works)
+-- Let postgres switch into those roles via SET LOCAL ROLE.
 GRANT anon TO postgres;
 GRANT authenticated TO postgres;
 GRANT service_role TO postgres;
 
--- Auth schema
+-- Auth + helper schemas
 CREATE SCHEMA IF NOT EXISTS pgstack;
+GRANT USAGE ON SCHEMA pgstack TO anon, authenticated, service_role;
 
--- Users
-CREATE TABLE pgstack.users (
+CREATE SCHEMA IF NOT EXISTS auth;
+GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
+
+-- Supabase-compatible helpers for RLS policy expressions.
+CREATE OR REPLACE FUNCTION auth.uid()
+RETURNS uuid LANGUAGE sql STABLE AS $$
+  SELECT NULLIF(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid
+$$;
+
+CREATE OR REPLACE FUNCTION auth.role()
+RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT COALESCE(NULLIF(current_setting('request.jwt.claims', true)::jsonb ->> 'role', ''), 'anon')
+$$;
+
+CREATE OR REPLACE FUNCTION auth.email()
+RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT NULLIF(current_setting('request.jwt.claims', true)::jsonb ->> 'email', '')
+$$;
+
+CREATE OR REPLACE FUNCTION auth.jwt()
+RETURNS jsonb LANGUAGE sql STABLE AS $$
+  SELECT COALESCE(NULLIF(current_setting('request.jwt.claims', true), '')::jsonb, '{}'::jsonb)
+$$;
+
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anon, authenticated, service_role;
+
+-- Users.
+CREATE TABLE IF NOT EXISTS pgstack.users (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email               text UNIQUE NOT NULL,
   encrypted_password  text,
-  email_confirmed_at  timestamptz,
   role                text NOT NULL DEFAULT 'authenticated',
   raw_user_meta       jsonb DEFAULT '{}',
   raw_app_meta        jsonb DEFAULT '{}',
   provider            text NOT NULL DEFAULT 'email',
   providers           text[] DEFAULT '{email}',
+  email_confirmed_at  timestamptz,
   created_at          timestamptz DEFAULT now(),
   updated_at          timestamptz DEFAULT now()
 );
+ALTER TABLE pgstack.users ENABLE ROW LEVEL SECURITY;
 
--- Refresh tokens
-CREATE TABLE pgstack.refresh_tokens (
+-- Authenticated users can only see their own row.
+DROP POLICY IF EXISTS users_self_select ON pgstack.users;
+CREATE POLICY users_self_select ON pgstack.users
+  FOR SELECT TO authenticated
+  USING (id = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
+
+-- Refresh tokens are stored as SHA-256 hashes; plaintext leaves the proxy
+-- exactly once (to the client). family_id supports reuse-detection: any
+-- replay of a revoked token revokes the whole family.
+CREATE TABLE IF NOT EXISTS pgstack.refresh_tokens (
   id          bigserial PRIMARY KEY,
-  token       text UNIQUE NOT NULL,
-  user_id     uuid REFERENCES pgstack.users(id) ON DELETE CASCADE,
+  token_hash  text UNIQUE NOT NULL,
+  user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
+  family_id   uuid DEFAULT gen_random_uuid(),
   revoked     boolean DEFAULT false,
-  created_at  timestamptz DEFAULT now(),
-  expires_at  timestamptz NOT NULL
+  expires_at  timestamptz NOT NULL,
+  created_at  timestamptz DEFAULT now()
 );
+ALTER TABLE pgstack.refresh_tokens ENABLE ROW LEVEL SECURITY;
 
--- Sessions
-CREATE TABLE pgstack.sessions (
+-- Email tokens (verification / recovery / magic link), also hashed at rest.
+CREATE TABLE IF NOT EXISTS pgstack.email_tokens (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid REFERENCES pgstack.users(id) ON DELETE CASCADE,
-  created_at  timestamptz DEFAULT now(),
-  updated_at  timestamptz DEFAULT now(),
-  ip          inet,
-  user_agent  text
+  user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
+  token_hash  text NOT NULL UNIQUE,
+  token_type  text NOT NULL CHECK (token_type IN ('email_verification', 'recovery', 'magiclink')),
+  used_at     timestamptz,
+  expires_at  timestamptz NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE pgstack.email_tokens ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_email_tokens_hash ON pgstack.email_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON pgstack.email_tokens(user_id);
 
--- Indexes
-CREATE INDEX idx_pgstack_refresh_tokens_user ON pgstack.refresh_tokens(user_id);
-CREATE INDEX idx_pgstack_refresh_tokens_token ON pgstack.refresh_tokens(token) WHERE NOT revoked;
-CREATE INDEX idx_pgstack_sessions_user ON pgstack.sessions(user_id);
-CREATE INDEX idx_pgstack_users_email ON pgstack.users(email);
+-- OAuth state + PKCE verifier per outstanding flow.
+CREATE TABLE IF NOT EXISTS pgstack.oauth_sessions (
+  state         text PRIMARY KEY,
+  code_verifier text NOT NULL,
+  provider      text NOT NULL,
+  created_at    timestamptz DEFAULT now(),
+  expires_at    timestamptz DEFAULT now() + interval '10 minutes'
+);
+ALTER TABLE pgstack.oauth_sessions ENABLE ROW LEVEL SECURITY;
 
--- Grant access: anon can read public schema, authenticated can CRUD public schema
+-- Indexes.
+CREATE INDEX IF NOT EXISTS idx_pgstack_refresh_tokens_user
+  ON pgstack.refresh_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_pgstack_refresh_tokens_hash
+  ON pgstack.refresh_tokens(token_hash) WHERE NOT revoked;
+CREATE INDEX IF NOT EXISTS idx_pgstack_users_email
+  ON pgstack.users(email);
+
+-- public-schema access: default-deny, opt in per table.
+-- The unauthenticated 'anon' role gets *only* what you explicitly GRANT.
+-- The 'authenticated' role likewise needs explicit grants combined with RLS
+-- policies that scope visibility. Avoid blanket "GRANT ALL ON ALL TABLES" —
+-- it bypasses the RLS posture this stack relies on.
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated, service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
 
--- Default privileges for future tables
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO authenticated, service_role;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO authenticated, service_role;
+-- service_role bypasses RLS (declared NOLOGIN BYPASSRLS above) so it does
+-- need broad object access for admin tasks driven by SERVICE_ROLE_KEY.
+GRANT ALL ON ALL TABLES    IN SCHEMA public TO service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES    TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
+
+-- For each NEW user table you add under public/, explicitly grant only
+-- what the API needs and rely on RLS to scope rows. Example:
+--
+--   CREATE TABLE public.todos (...);
+--   ALTER TABLE public.todos ENABLE ROW LEVEL SECURITY;
+--   CREATE POLICY todos_owner ON public.todos
+--     FOR ALL TO authenticated
+--     USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+--   GRANT SELECT, INSERT, UPDATE, DELETE ON public.todos TO authenticated;
+--   GRANT SELECT                         ON public.todos TO anon;  -- if public-readable
 `;
 }
 function generateSeed() {
@@ -239,6 +339,48 @@ function generateSeed() {
 -- INSERT INTO products (name, price) VALUES
 --   ('Widget', 9.99),
 --   ('Gadget', 19.99);
+`;
+}
+function generateStarterPage(projectName) {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${projectName}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f9fafb; color: #111827; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 2rem; max-width: 420px; width: 100%; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    p { color: #6b7280; margin-bottom: 1.5rem; }
+    .links { display: flex; flex-direction: column; gap: 0.5rem; }
+    .links a { color: #2563eb; text-decoration: none; font-size: 0.95rem; }
+    .links a:hover { text-decoration: underline; }
+    .status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; margin-right: 6px; vertical-align: middle; }
+    .status.ok { background: #10b981; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>${projectName}</h1>
+    <p>Your pgStack app is running. <span class="status" id="dot"></span><span id="health">checking...</span></p>
+    <div class="links">
+      <a href="/rest/v1/">REST API</a>
+      <a href="/health">Health check</a>
+      <a href="/studio/">Studio</a>
+    </div>
+  </div>
+  <script>
+    fetch('/health').then(r => r.json()).then(() => {
+      document.getElementById('dot').classList.add('ok');
+      document.getElementById('health').textContent = 'healthy';
+    }).catch(() => {
+      document.getElementById('health').textContent = 'unreachable';
+    });
+  </script>
+</body>
+</html>
 `;
 }
 //# sourceMappingURL=init.js.map

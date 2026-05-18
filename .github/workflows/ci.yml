@@ -147,6 +147,18 @@ jobs:
         working-directory: cli
         run: npm run build
 
+      # Audit round 26 F2: published cli/dist must match a fresh build of
+      # cli/src. Otherwise a hardened source change (e.g. removing blanket
+      # GRANTs from the generated bootstrap migration) can sit in the
+      # repo while the published bin runs stale insecure JS.
+      - name: cli/dist parity (rebuild must produce no diff)
+        working-directory: cli
+        run: |
+          if ! git diff --exit-code dist/; then
+            echo "::error::cli/dist is out of date — run 'npm run build' inside cli/ and commit the result."
+            exit 1
+          fi
+
   # ─── E2E tests (full stack) ──────────────────────────────────────────────────
   test-e2e:
     name: E2E tests

@@ -67,17 +67,23 @@ func NewMailer(cfg Config) *Mailer {
 }
 
 // Send delivers an HTML email to the given address.
-// When SMTP is not configured the message is written to the logger instead.
+//
+// When SMTP is not configured (dev / tutorial mode) the message is NOT
+// written to the log — audit round 26 F5: previous versions wrote the
+// HTML body, which contains the reset/magiclink/verification URL with
+// the one-time token in plaintext. Anyone with read access to the proxy
+// logs could then take over an account. Now we log only that an email
+// would have been sent, plus the subject and recipient — enough to debug
+// flow without leaking the token. The production validator separately
+// refuses to boot in dev-mode mailer state when PGSTACK_ENV=production,
+// so this is the dev / test escape hatch.
 func (m *Mailer) Send(to, subject, htmlBody string) error {
+	_ = htmlBody // body is intentionally discarded in dev-mode logs
 	if m.dialer == nil {
-		preview := htmlBody
-		if len(preview) > 200 {
-			preview = preview[:200]
-		}
-		log.Info().
+		log.Warn().
 			Str("to", to).
 			Str("subject", subject).
-			Msgf("EMAIL (dev mode — configure SMTP to send for real)\n  Body: %s", preview)
+			Msg("EMAIL DROPPED — SMTP not configured (dev mode). Body contains one-time tokens and is NOT logged; set SMTP_HOST/SMTP_USER/SMTP_PASS to deliver for real.")
 		return nil
 	}
 
