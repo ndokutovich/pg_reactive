@@ -309,22 +309,22 @@ jobs:
           fi
           echo "✓ refused missing SMTP in production"
 
-      # Round 32 F4: the previous version of this step ended in
-      # `|| true`, so the validator silently regressing on a valid
-      # production env would not have failed CI. Now we capture the
-      # exit code and accept only the "validator OK, then DB
-      # unreachable (because we didn't start one)" outcome — any
-      # `configuration errors` line from the validator means the
-      # gate failed and the step exits non-zero.
+      # Round 32 F4 (revised round 33): the previous version backgrounded
+      # `docker compose run` and racily captured its stdout, which lost
+      # the "pgstack listening" line on CI. Switch to a foreground run
+      # under `timeout`: validator failures exit fast with a
+      # "configuration errors" line, valid env reaches the listen loop
+      # and `timeout` SIGTERMs after 10s. Either way we capture full
+      # output reliably.
       - name: Accepts a fully-configured production environment
         run: |
           set +e
-          # Bring up just the DB so the validator's downstream pool
-          # probe doesn't masquerade as a validator failure.
+          # Bring up the db so the validator's downstream pool probe
+          # doesn't masquerade as a validator failure.
           docker compose up -d db
           docker compose exec -T db bash -c 'until pg_isready -U postgres; do sleep 1; done'
 
-          out=$(docker compose run --rm \
+          out=$(timeout 15 docker compose run --rm \
             -e PGSTACK_ENV=production \
             -e JWT_SECRET=$(openssl rand -base64 32) \
             -e ANON_KEY=$(openssl rand -base64 32) \
@@ -334,12 +334,9 @@ jobs:
             -e ALLOWED_ORIGINS=https://example.com \
             -e REQUIRE_AUTHENTICATED_WS=true \
             -e TLS_MODE=off \
-            proxy-go 2>&1 &)
-          # Give the proxy a couple of seconds to either die in the
-          # validator (bad) or settle past it (good).
-          sleep 5
-          docker compose stop proxy-go >/dev/null 2>&1
+            proxy-go 2>&1)
           echo "$out"
+
           if echo "$out" | grep -q "configuration errors"; then
             echo "::error::production validator REJECTED a valid production env"
             exit 1

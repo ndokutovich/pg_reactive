@@ -20,8 +20,15 @@ import { URL } from "node:url";
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8080";
 // Must match JWT_SECRET configured in the proxy (docker-compose env).
 const JWT_SECRET = process.env.JWT_SECRET || "test";
-// A REST endpoint that requires auth — 401 when no/bad token, 200/400 with valid token.
-const PROTECTED_PATH = process.env.PROTECTED_PATH || "/rest/v1/load_test_items";
+// A REST endpoint that requires auth — 401 when no/bad token, 200/400 with
+// valid token. Round 32 follow-up: use /auth/v1/user which fires the JWT
+// gate BEFORE any table lookup. Earlier the default was
+// /rest/v1/load_test_items but on a clean compose the table doesn't
+// exist, so the request hit a 404 from the table-resolution path
+// before the auth gate could speak — every assertion saw "got 404,
+// expected 401" and we couldn't distinguish auth-pass from
+// table-miss. /auth/v1/user has no such dependency.
+const PROTECTED_PATH = process.env.PROTECTED_PATH || "/auth/v1/user";
 
 // ---------------------------------------------------------------------------
 // Minimal JWT builder (no external deps)
