@@ -33,6 +33,10 @@ services:
       ANON_KEY: ${ANON_KEY:-dev-only-anon-key-do-not-use-in-production}
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"
+      # REQUIRE_AUTHENTICATED_WS is propagated from the host env so CI
+      # can flip it on for the adversarial-security suite without
+      # editing compose (round 32 F2). Default in dev: empty (= false).
+      REQUIRE_AUTHENTICATED_WS: ${REQUIRE_AUTHENTICATED_WS:-}
       PUBLIC_DIR: /public
       # EDGE_RUNTIME_URL: http://edge-runtime:9000  # uncomment to enable Deno functions
     ports:

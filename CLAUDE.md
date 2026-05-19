@@ -4,7 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries with real-time delta notifications. Three-layer architecture: C extension (ext/) → Rust WebSocket proxy (proxy/) → TypeScript SDK (sdk/).
+pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries with real-time delta notifications. Three-layer core: C extension (ext/) → Go WebSocket proxy (proxy-go/, primary) + Rust proxy (proxy/, reference) → TypeScript SDK (sdk/). Around that core lives the pgStack umbrella: a Supabase-compatible REST/RPC/auth/storage/edge-functions layer (also in `proxy-go/`), a CLI (`cli/`) that scaffolds new pgStack projects, a Studio SPA (`studio/`), and a Docusaurus docs site (`docs/site/`).
+
+## Security discipline — read this BEFORE touching auth / RLS / grants / secrets
+
+[`SECURITY.md`](SECURITY.md) is the single source of truth for the project's trust boundaries. The "Trust model" section there has:
+
+- the role list (`anon` / `authenticated` / `service_role` / `admin`),
+- a capability × role matrix for every network-reachable surface, and
+- 10 cross-cutting invariants (no PUBLIC EXECUTE on functions, chi.RealIP must never be added, empty JWT_SECRET fails closed, etc).
+
+When you change anything that touches a capability in that matrix, the **ritual** applies (also documented in SECURITY.md and enforced by `.github/PULL_REQUEST_TEMPLATE.md`):
+
+1. **One negative test** in `tests/security/` (or `*_test.go` next to the code) that fails on pre-fix and passes after. Reference the audit round / invariant number in the test header.
+2. **One updated row** in the SECURITY.md trust matrix, or a new row/invariant if you're documenting a gap.
+3. **One lint rule** in `tests/lint/security_patterns.mjs` when the mistake can be grep-matched (codify the class, not just the instance).
+
+In commit messages and code comments the project refers to past fixes by **round number** (e.g. "round 26 F1 CRITICAL"). Use the same style — search `git log --grep "round NN"` to find the rationale for a hardening you're about to touch.
 
 ## Development Environment
 
@@ -75,6 +91,34 @@ cd proxy-go && go build ./...             # Build all packages
 cd proxy-go && go test ./...              # Run all unit tests (config, gzip, TLS, template)
 cd proxy-go && go test -v -run TestValidate ./...  # Run specific tests
 ```
+
+### CLI (`cli/`)
+
+```bash
+cd cli && npm run build    # tsc — required: bin points at cli/dist/index.js
+cd cli && npm test         # vitest, 160 tests
+cd cli && npx tsc --noEmit # type-check only
+```
+
+`cli/dist/` is **intentionally tracked in git** (NOT in `.gitignore` — see the comment block in the root `.gitignore`). The `bin` field in `cli/package.json` points at `dist/index.js` and npm publishes it as-is, so source/dist drift would silently ship stale (and possibly insecure) JS to anyone running `npx pgstack init`. CI has a "cli/dist parity" step that re-runs `npm run build` and fails on diff.
+
+After editing `docker/init.sql` between the `BEGIN-PGSTACK-CORE` / `END-PGSTACK-CORE` sentinels, run:
+
+```bash
+node scripts/sync-cli-bootstrap.mjs
+```
+
+That regenerates `cli/templates/bootstrap-core.sql` (the file `pgstack init` lays into the user's first migration). CI fails on parity drift here too. See "Schema source of truth" below.
+
+### Security / lint / adversarial fixtures
+
+```bash
+node tests/lint/security_patterns.mjs              # static lint for unsafe SQL/MD patterns
+node tests/doc_sql_smoke_test.mjs                  # extract every ```sql block from docs and run it
+for t in tests/security/*.test.mjs; do node "$t"; done   # negative HTTP-level regression tests
+```
+
+The lint rules are named after SECURITY.md invariants (`SEC-R3`, `SEC-R25`, `SEC-R28`, `SEC-R30`). Override a verified-safe occurrence with `-- lint:allow=SEC-RXX` on the same line. The adversarial tests need `docker compose up` first (they hit the proxy over loopback). The doc-test harness runs each fenced `sql` block in an isolated `doctest` schema — mark intentionally-unsafe examples with `\`\`\`sql doc-test:skip=<reason>`.
 
 ### E2E Tests (require running docker compose)
 
@@ -162,6 +206,26 @@ Use `\gset` for relative counter checks — shared memory counters accumulate ac
 ### Extension Control File
 
 Do NOT set `schema =` in `pg_reactive.control` when the SQL install script creates its own schema. The extension creates `pgr` schema in the install script.
+
+### Schema source of truth (docker/init.sql ⇒ cli/templates/bootstrap-core.sql)
+
+The security-critical bootstrap backbone — roles, schemas, auth tables, RLS, default-deny grants, function-execute revoke — lives ONCE in `docker/init.sql` between sentinel comments:
+
+```sql
+-- BEGIN-PGSTACK-CORE
+... canonical security backbone ...
+-- END-PGSTACK-CORE
+```
+
+`scripts/sync-cli-bootstrap.mjs` extracts that region verbatim into `cli/templates/bootstrap-core.sql`, which the CLI reads at runtime when scaffolding `pgstack init`. CI fails on drift. **Always edit `docker/init.sql` as the SoT** — never the generated template — then re-run the sync script. The same applies to security-critical SQL elsewhere: prefer adding to `init.sql` core over duplicating in CLI scaffolds, migrations, or example files.
+
+### pgr.subscribe is a privileged API
+
+`pgr.subscribe()` stores raw SQL that is later re-executed by `SECURITY DEFINER` triggers. Granting `EXECUTE` to an app role that also holds `CREATE FUNCTION` on any schema in its `search_path` is a definer-context RCE waiting to happen. Expose subscription registration to app clients only through purpose-built `SECURITY DEFINER` wrappers with a fixed query template, server-derived `query_id`/audience, and `SET search_path = pg_catalog, pg_temp`. See `docs/specs/pg_reactive_spec.md` §9.4 for the canonical pattern and `examples/03-per-user-inventory/setup.sql` for a working example.
+
+### SECURITY DEFINER hardening
+
+Every `SECURITY DEFINER` function in this repo MUST: (a) carry `SET search_path = pg_catalog, pg_temp` — no user schemas; (b) fully-qualify every object reference (`public.todos`, `pgr.subscribe`, `auth.uid`); (c) ship with an explicit `GRANT EXECUTE TO {role}` — the bootstrap default-denies `PUBLIC EXECUTE`. The `SEC-R3` lint rule catches missing pins. Without (a) a role with `CREATE` on `public` can shadow `auth.uid` and run code as the definer; without (b) the unqualified ref fails at runtime because `public` isn't on the pinned path; without (c) RPC callers see "permission denied for function".
 
 ## GUC Parameters
 
