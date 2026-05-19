@@ -108,6 +108,19 @@ func pgHTTPStatus(err error) (int, string) {
 		return http.StatusForbidden, "insufficient privileges"
 	case len(code) >= 2 && code[:2] == "42":
 		return http.StatusBadRequest, "invalid request"
+	// Round-33 / audit F2: class 22 (data exception) is client-input
+	// shape — invalid_text_representation for an int column,
+	// numeric_value_out_of_range, bad datetime format, etc. Mapping
+	// these to 500 made the sql_injection test (which passes
+	// "1' OR '1'='1" as an int filter value) look like a server crash.
+	// 400 is the right answer — the client sent garbage, the server
+	// is fine.
+	case len(code) >= 2 && code[:2] == "22":
+		return http.StatusBadRequest, "invalid input value for column"
+	// Class 23 (integrity constraint violation) other than 23505 above:
+	// foreign-key / not-null / check — also caller's bad input shape.
+	case len(code) >= 2 && code[:2] == "23":
+		return http.StatusBadRequest, "integrity constraint violation"
 	default:
 		return http.StatusInternalServerError, "internal database error"
 	}

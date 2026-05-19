@@ -21,9 +21,23 @@ import https from "node:https";
 import { URL } from "node:url";
 
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8080";
-// Use a known safe table that exposes no sensitive data.
-const TABLE = process.env.TABLE || "load_test_items";
-const AUTH_TOKEN = process.env.AUTH_TOKEN || "";
+// Use a fixture table that exists in docker/init.sql so the REST
+// parser's "table not found" 404 doesn't mask the actual injection-
+// detector codepath we want to assert. Earlier default was
+// load_test_items which is absent on CI compose. Round-33 follow-up,
+// same fix shape as auth__jwt_manipulation.test.mjs.
+const TABLE = process.env.TABLE || "todos";
+// The proxy default-denies anon/authenticated on every public-schema
+// table (round 12 bootstrap), so a request without any auth header
+// gets 401 at the auth gate before the URL parser ever sees the
+// injection probe. The point of THIS test is to exercise the
+// injection detector, so we want the request to reach the parser —
+// fall back to ANON_KEY (or its dev-compose default) when AUTH_TOKEN
+// is unset. anon is the minimum identity the parser needs to look
+// at column names.
+const AUTH_TOKEN = process.env.AUTH_TOKEN
+  || process.env.ANON_KEY
+  || "dev-only-anon-key-do-not-use-in-production";
 
 // ---------------------------------------------------------------------------
 // Minimal HTTP client

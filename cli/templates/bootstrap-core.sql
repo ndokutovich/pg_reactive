@@ -325,3 +325,48 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN NULL; END;
   END LOOP;
 END $$;
+
+-- Round-33 / audit F1: PostgreSQL's PUBLIC=EXECUTE built-in default on
+-- functions cannot be overridden via ALTER DEFAULT PRIVILEGES REVOKE
+-- alone. The REVOKE above only removes EXPLICIT grants from
+-- pg_default_acl; if PUBLIC was there only via the built-in implicit
+-- default (which is the usual case for fresh deployments), the REVOKE
+-- is a no-op and every newly-created public.* function still has
+-- PUBLIC=EXECUTE in its proacl. A DDL event trigger fires after every
+-- CREATE FUNCTION / CREATE PROCEDURE in `public` and revokes PUBLIC
+-- EXECUTE explicitly — that IS visible in proacl and survives the
+-- next round-28 regression test.
+CREATE OR REPLACE FUNCTION pgstack.revoke_public_execute_on_new_function()
+RETURNS event_trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+    obj record;
+BEGIN
+    FOR obj IN
+        SELECT * FROM pg_event_trigger_ddl_commands()
+        WHERE command_tag IN ('CREATE FUNCTION', 'CREATE PROCEDURE')
+          AND schema_name = 'public'
+    LOOP
+        BEGIN
+            EXECUTE format(
+                'REVOKE EXECUTE ON %s %s FROM PUBLIC',
+                CASE WHEN obj.object_type = 'procedure' THEN 'PROCEDURE' ELSE 'FUNCTION' END,
+                obj.object_identity);
+        EXCEPTION WHEN OTHERS THEN
+            -- swallow per-object failures so a bad DDL doesn't break
+            -- the whole transaction; the explicit REVOKE the operator
+            -- writes for the affected fn will still take effect.
+            NULL;
+        END;
+    END LOOP;
+END $$;
+
+-- Drop and recreate so init.sql is idempotent across container restarts.
+DROP EVENT TRIGGER IF EXISTS pgstack_revoke_public_execute;
+CREATE EVENT TRIGGER pgstack_revoke_public_execute
+    ON ddl_command_end
+    WHEN TAG IN ('CREATE FUNCTION', 'CREATE PROCEDURE')
+    EXECUTE FUNCTION pgstack.revoke_public_execute_on_new_function();
