@@ -21,14 +21,22 @@ const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8080";
 // Must match JWT_SECRET configured in the proxy (docker-compose env).
 const JWT_SECRET = process.env.JWT_SECRET || "test";
 // A REST endpoint that requires auth — 401 when no/bad token, 200/400 with
-// valid token. Round 32 follow-up: use /auth/v1/user which fires the JWT
-// gate BEFORE any table lookup. Earlier the default was
-// /rest/v1/load_test_items but on a clean compose the table doesn't
-// exist, so the request hit a 404 from the table-resolution path
-// before the auth gate could speak — every assertion saw "got 404,
-// expected 401" and we couldn't distinguish auth-pass from
-// table-miss. /auth/v1/user has no such dependency.
-const PROTECTED_PATH = process.env.PROTECTED_PATH || "/auth/v1/user";
+// valid token. Iteration log:
+//   v1 (orig): /rest/v1/load_test_items — table absent on CI compose →
+//              404 from table-resolution before auth gate could speak.
+//   v2 round 32: /auth/v1/user — fires JWT gate first, but a valid-signature
+//              token with a synthetic sub trips the downstream DB lookup
+//              and returns 500 ("user not found"), which the test counts
+//              as failure for the "valid token returns non-401" baseline.
+//              Same problem for the HS512 case: the proxy DOES reject
+//              the signature, but the response shape is 500, not 401.
+//   v3 round 33: /rest/v1/todos — todos is a permanent fixture in
+//              docker/init.sql, so the table-resolution step always
+//              succeeds. The REST handler then maps "no/bad token" to a
+//              clean 401, and "valid token" to a clean 200 with an array
+//              of rows. Same protected-path shape as the original test
+//              intended, just pointing at a table that exists.
+const PROTECTED_PATH = process.env.PROTECTED_PATH || "/rest/v1/todos";
 
 // ---------------------------------------------------------------------------
 // Minimal JWT builder (no external deps)
