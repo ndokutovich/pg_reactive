@@ -171,6 +171,19 @@ func validateJWT(tokenStr, secret string) (jwt.MapClaims, error) {
 		}
 	}
 
+	// Round-33 / audit F1: require a non-empty `sub` claim. Without
+	// this the REST / RPC / storage path accepted a signed-but-
+	// identityless JWT and resolved it as `authenticated` with
+	// sub="". RLS policies that key on auth.uid() would then see
+	// NULL, and any policy whose USING expression evaluates that to
+	// truthy for missing identity becomes a row-level bypass. The
+	// /auth/v1/* path already enforced this in auth/jwt.go's
+	// ValidateToken — this brings the REST validator in line.
+	sub, _ := claims["sub"].(string)
+	if sub == "" {
+		return nil, errors.New("JWT validation failed: missing or empty sub claim")
+	}
+
 	return claims, nil
 }
 

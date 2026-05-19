@@ -134,6 +134,7 @@ per-capability rule that contradicts them.
 8. **Raw OTP tokens never leave Postgres on any code path reachable from a non-`service_role` caller.** Round 30 HIGH.
 9. **Edge function HTTP upstreams reject loopback bare hostnames** (`localhost`, `ip6-localhost`, …) in addition to IP literals (round 21 F3).
 10. **HSTS `preload` is opt-in via `HSTS_PRELOAD=true`.** The `preload` directive is irreversible; never default-on (round 21 F5).
+11. **JWT MUST carry a non-empty `sub` claim** to authenticate as anything other than anon — both the `/auth/v1/*` path (`auth/jwt.go:ValidateToken`) and the REST / RPC / storage path (`middleware/rls.go:validateJWT`) enforce this. Without the gate a signed-but-identityless token resolves as `authenticated` with `sub=""`, and RLS policies keyed on `auth.uid()` see NULL — any policy whose USING expression evaluates that to truthy becomes a row-level bypass (round 33 / audit F1).
 
 ## Ritual: every security finding leaves three things behind
 
