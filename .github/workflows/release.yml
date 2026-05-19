@@ -12,7 +12,7 @@ jobs:
   # ─── Build and push Docker images ────────────────────────────────────────────
   docker-proxy:
     name: Docker — pgstack-proxy
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
       packages: write
@@ -56,7 +56,7 @@ jobs:
 
   docker-postgres:
     name: Docker — pgstack-postgres
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
       packages: write
@@ -102,7 +102,7 @@ jobs:
   # ─── Publish npm packages ────────────────────────────────────────────────────
   npm-sdk:
     name: npm — pg-reactive-sdk
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
       id-token: write
@@ -126,7 +126,7 @@ jobs:
 
   npm-cli:
     name: npm — pgstack CLI
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
       id-token: write
@@ -151,7 +151,7 @@ jobs:
   # ─── GitHub Release ──────────────────────────────────────────────────────────
   github-release:
     name: GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     needs: [docker-proxy, docker-postgres, npm-sdk, npm-cli]
     permissions:
       contents: write

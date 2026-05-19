@@ -14,7 +14,7 @@ jobs:
   # ─── Extension tests (pg_regress + isolation) ───────────────────────────────
   test-extension:
     name: Extension tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -54,7 +54,7 @@ jobs:
   # Audit round 32 F1.
   test-proxy-go:
     name: Proxy (Go)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -80,7 +80,7 @@ jobs:
   # depend on test-proxy-go above.
   test-proxy:
     name: Proxy (Rust, reference)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -117,7 +117,7 @@ jobs:
   # ─── TypeScript SDK ──────────────────────────────────────────────────────────
   test-sdk:
     name: SDK (TypeScript)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -151,7 +151,7 @@ jobs:
   # ─── CLI ────────────────────────────────────────────────────────────────────
   test-cli:
     name: CLI (TypeScript)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -206,7 +206,7 @@ jobs:
   # such test behind, per the SECURITY.md ritual.
   test-security:
     name: Adversarial security
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@v4
@@ -265,7 +265,7 @@ jobs:
   # deploy to a public VPS to discover the prod posture is broken.
   test-prod-validator:
     name: Production validator
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@v4
@@ -369,7 +369,7 @@ jobs:
   # ─── E2E tests (full stack) ──────────────────────────────────────────────────
   test-e2e:
     name: E2E tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     needs: [test-extension, test-proxy, test-sdk]
     steps:
       - uses: actions/checkout@v4
@@ -429,7 +429,7 @@ jobs:
   # ─── Integration tests ───────────────────────────────────────────────────────
   test-integration:
     name: Integration tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     needs: [test-extension]
     steps:
       - uses: actions/checkout@v4
@@ -452,7 +452,7 @@ jobs:
   # ─── Security audit ──────────────────────────────────────────────────────────
   security:
     name: Security audit
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
