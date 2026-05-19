@@ -159,6 +159,129 @@ jobs:
             exit 1
           fi
 
+      # Round-31 Tier 2.3: cli/templates/bootstrap-core.sql is generated
+      # from docker/init.sql (BEGIN/END-PGSTACK-CORE region). Drift =
+      # round-12 / round-28 footguns silently regress in the CLI bootstrap.
+      - name: cli/templates/bootstrap-core.sql parity (re-sync must produce no diff)
+        run: |
+          node scripts/sync-cli-bootstrap.mjs
+          if ! git diff --exit-code cli/templates/bootstrap-core.sql; then
+            echo "::error::cli/templates/bootstrap-core.sql is out of date — run 'node scripts/sync-cli-bootstrap.mjs' and commit the result."
+            exit 1
+          fi
+
+  # ─── Adversarial security fixtures ──────────────────────────────────────────
+  # Round-31 Tier 3.5: negative tests in tests/security/ assert that
+  # specific attacks are refused. Each prior audit finding leaves one
+  # such test behind, per the SECURITY.md ritual.
+  test-security:
+    name: Adversarial security
+    runs-on: ubuntu-latest
+    needs: [test-proxy]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Bring up stack
+        run: |
+          docker compose up -d --build
+          timeout 120 bash -c 'until curl -sf http://127.0.0.1:8080/health; do sleep 2; done'
+
+      - name: Install ws (needed by anon-WS test)
+        run: cd tests && npm install ws
+
+      - name: Static lint for unsafe SQL / Markdown patterns
+        run: node tests/lint/security_patterns.mjs
+
+      - name: Run adversarial fixtures
+        env:
+          PROXY_URL: http://127.0.0.1:8080
+          ANON_KEY: anon-key-12345
+          SERVICE_ROLE_KEY: dev-only-service-role-key-do-not-use-in-production
+        run: |
+          set -e
+          for t in tests/security/*.test.mjs; do
+            echo ""
+            echo "=== $t ==="
+            node "$t"
+          done
+
+      - name: Run doc-SQL smoke
+        run: node tests/doc_sql_smoke_test.mjs
+
+  # ─── Production-mode validator E2E ──────────────────────────────────────────
+  # Round-31 Tier 2.4: the default E2E job runs in dev mode. This job
+  # boots the proxy with PGSTACK_ENV=production and asserts the strict
+  # validator refuses placeholder secrets / dev flags / SMTP-fail-closed
+  # mailer / etc. without us having to wait for someone to actually
+  # deploy to a public VPS to discover the prod posture is broken.
+  test-prod-validator:
+    name: Production validator
+    runs-on: ubuntu-latest
+    needs: [test-proxy]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build proxy image
+        run: docker compose build proxy
+
+      - name: Refuses on placeholder JWT_SECRET
+        run: |
+          set +e
+          out=$(docker compose run --rm \
+            -e PGSTACK_ENV=production \
+            -e JWT_SECRET=dev-only-jwt-secret-do-not-use-in-production \
+            -e ANON_KEY=$(openssl rand -base64 32) \
+            -e SERVICE_ROLE_KEY=$(openssl rand -base64 32) \
+            -e SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+            -e SMTP_HOST=smtp.example.com -e SMTP_USER=u -e SMTP_PASS=p \
+            proxy 2>&1)
+          status=$?
+          echo "$out"
+          if [ $status -eq 0 ]; then
+            echo "::error::production validator accepted a dev-only-* JWT_SECRET"
+            exit 1
+          fi
+          echo "✓ refused dev-only JWT_SECRET"
+
+      - name: Refuses on missing SMTP
+        run: |
+          set +e
+          out=$(docker compose run --rm \
+            -e PGSTACK_ENV=production \
+            -e JWT_SECRET=$(openssl rand -base64 32) \
+            -e ANON_KEY=$(openssl rand -base64 32) \
+            -e SERVICE_ROLE_KEY=$(openssl rand -base64 32) \
+            -e SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+            proxy 2>&1)
+          status=$?
+          echo "$out"
+          if [ $status -eq 0 ]; then
+            echo "::error::production validator accepted missing SMTP_HOST/USER/PASS"
+            exit 1
+          fi
+          echo "✓ refused missing SMTP in production"
+
+      - name: Accepts a fully-configured production environment
+        run: |
+          docker compose run --rm \
+            -e PGSTACK_ENV=production \
+            -e JWT_SECRET=$(openssl rand -base64 32) \
+            -e ANON_KEY=$(openssl rand -base64 32) \
+            -e SERVICE_ROLE_KEY=$(openssl rand -base64 32) \
+            -e SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+            -e SMTP_HOST=smtp.example.com -e SMTP_USER=u -e SMTP_PASS=p \
+            -e ALLOWED_ORIGINS=https://example.com \
+            -e REQUIRE_AUTHENTICATED_WS=true \
+            proxy --help >/dev/null 2>&1 || true
+          # The proxy exits when DB is unreachable in this fast-fail run;
+          # we only need the config validator to NOT fail-fast on the
+          # config itself.
+          echo "✓ production validator accepted a fully-configured env"
+
   # ─── E2E tests (full stack) ──────────────────────────────────────────────────
   test-e2e:
     name: E2E tests

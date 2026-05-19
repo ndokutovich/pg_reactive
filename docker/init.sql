@@ -1,6 +1,15 @@
 -- pgStack bootstrap: roles, schemas, and auth tables.
 -- Runs on every container start (tmpfs wipes state).
+--
+-- The region between BEGIN-PGSTACK-CORE / END-PGSTACK-CORE markers
+-- below is the SECURITY-CRITICAL backbone shared with the CLI
+-- bootstrap template (cli/templates/bootstrap-core.sql). A sync
+-- script (scripts/sync-cli-bootstrap.mjs) copies this region
+-- verbatim into the CLI template; CI runs the script and fails on
+-- drift. Edit this file as the SoT — never edit the CLI template
+-- by hand. Round-31 Tier 2.3.
 
+-- BEGIN-PGSTACK-CORE
 -- Roles
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
@@ -312,6 +321,7 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN NULL; END;
   END LOOP;
 END $$;
+-- END-PGSTACK-CORE
 
 -- Test table (used by e2e_rest_test.mjs)
 CREATE TABLE IF NOT EXISTS todos (

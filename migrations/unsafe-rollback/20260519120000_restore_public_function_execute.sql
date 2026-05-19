@@ -20,7 +20,11 @@
 -- with a RAISE EXCEPTION pointing here, so an operator never invokes
 -- this by accident.
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO PUBLIC;
+-- The two GRANT lines below are exactly what makes this script
+-- "unsafe-rollback". The lint:allow markers acknowledge the rule —
+-- this file is the manually-invoked recovery hatch the default
+-- migrate:down points to; it is never run automatically.
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO PUBLIC;  -- lint:allow=SEC-R28
 DO $$
 DECLARE
   owners text[] := ARRAY['postgres', current_user];
@@ -29,7 +33,7 @@ BEGIN
   FOREACH o IN ARRAY owners LOOP
     BEGIN
       EXECUTE format(
-        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC',
+        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC',  -- lint:allow=SEC-R28
         o);
     EXCEPTION WHEN OTHERS THEN NULL; END;
   END LOOP;

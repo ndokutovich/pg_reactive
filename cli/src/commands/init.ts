@@ -1,9 +1,31 @@
 import { Command } from "commander";
 import { mkdir, writeFile } from "node:fs/promises";
-import { resolve, join, basename } from "node:path";
-import { existsSync } from "node:fs";
+import { resolve, join, basename, dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import { generateJwtSecret, generateApiKey } from "../lib/crypto.js";
+
+// Bootstrap core is the security-critical part of the migration —
+// roles, schemas, auth tables, RLS, default-deny grants, function-
+// execute revoke. It lives in cli/templates/bootstrap-core.sql,
+// which is generated from docker/init.sql by
+// scripts/sync-cli-bootstrap.mjs. SoT lives in docker/init.sql;
+// CI fails on drift. Round-31 Tier 2.3.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const BOOTSTRAP_CORE_PATH = resolve(__dirname, "..", "..", "templates", "bootstrap-core.sql");
+
+function readBootstrapCore(): string {
+  try {
+    return readFileSync(BOOTSTRAP_CORE_PATH, "utf-8");
+  } catch (e) {
+    throw new Error(
+      `cli/templates/bootstrap-core.sql is missing — was the package built? ` +
+      `(expected at ${BOOTSTRAP_CORE_PATH}). Run \`node scripts/sync-cli-bootstrap.mjs\` ` +
+      `or rebuild the cli package.`,
+    );
+  }
+}
 
 const DEFAULT_DB_PORT = 15432;
 const DEFAULT_PROXY_PORT = 3000;
@@ -228,186 +250,16 @@ types/database.ts
 }
 
 function generateBootstrapMigration(): string {
-  // Kept in sync with docker/init.sql — same hardened shape:
-  //  - refresh/email tokens stored as SHA-256 hashes, never plaintext
-  //  - refresh tokens carry a family_id for stolen-token reuse detection
-  //  - RLS enabled on every auth table; row visibility scoped to JWT sub
-  //  - oauth_sessions for PKCE state validation
-  //  - no blanket public-schema GRANTs; default-deny, opt-in per-table
-  //
-  // If you change the bootstrap, update docker/init.sql at the same time
-  // (and vice versa) — they describe the same logical schema.
+  // Round-31 Tier 2.3: the SECURITY-CRITICAL backbone (roles, schemas,
+  // auth tables, RLS, default-deny grants, function-execute revoke) is
+  // read verbatim from cli/templates/bootstrap-core.sql — itself
+  // generated from docker/init.sql by scripts/sync-cli-bootstrap.mjs.
+  // SoT for that region is docker/init.sql; CI fails on drift between
+  // the source region and the template. Anything CLI-specific (the
+  // "how to add your own tables" guidance below) is appended here.
+  const core = readBootstrapCore();
   return `-- pgStack bootstrap migration
--- Roles + auth schema + hardened auth tables.
-
--- Roles (idempotent)
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
-    CREATE ROLE anon NOLOGIN;
-  END IF;
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
-    CREATE ROLE authenticated NOLOGIN;
-  END IF;
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
-    CREATE ROLE service_role NOLOGIN BYPASSRLS;
-  END IF;
-END
-$$;
-
--- Let postgres switch into those roles via SET LOCAL ROLE.
-GRANT anon TO postgres;
-GRANT authenticated TO postgres;
-GRANT service_role TO postgres;
-
--- Auth + helper schemas
-CREATE SCHEMA IF NOT EXISTS pgstack;
-GRANT USAGE ON SCHEMA pgstack TO anon, authenticated, service_role;
-
-CREATE SCHEMA IF NOT EXISTS auth;
-GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
-
--- Supabase-compatible helpers for RLS policy expressions.
-CREATE OR REPLACE FUNCTION auth.uid()
-RETURNS uuid LANGUAGE sql STABLE AS $$
-  SELECT NULLIF(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid
-$$;
-
-CREATE OR REPLACE FUNCTION auth.role()
-RETURNS text LANGUAGE sql STABLE AS $$
-  SELECT COALESCE(NULLIF(current_setting('request.jwt.claims', true)::jsonb ->> 'role', ''), 'anon')
-$$;
-
-CREATE OR REPLACE FUNCTION auth.email()
-RETURNS text LANGUAGE sql STABLE AS $$
-  SELECT NULLIF(current_setting('request.jwt.claims', true)::jsonb ->> 'email', '')
-$$;
-
-CREATE OR REPLACE FUNCTION auth.jwt()
-RETURNS jsonb LANGUAGE sql STABLE AS $$
-  SELECT COALESCE(NULLIF(current_setting('request.jwt.claims', true), '')::jsonb, '{}'::jsonb)
-$$;
-
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anon, authenticated, service_role;
-
--- Users.
-CREATE TABLE IF NOT EXISTS pgstack.users (
-  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  email               text UNIQUE NOT NULL,
-  encrypted_password  text,
-  role                text NOT NULL DEFAULT 'authenticated',
-  raw_user_meta       jsonb DEFAULT '{}',
-  raw_app_meta        jsonb DEFAULT '{}',
-  provider            text NOT NULL DEFAULT 'email',
-  providers           text[] DEFAULT '{email}',
-  email_confirmed_at  timestamptz,
-  created_at          timestamptz DEFAULT now(),
-  updated_at          timestamptz DEFAULT now()
-);
-ALTER TABLE pgstack.users ENABLE ROW LEVEL SECURITY;
-
--- Authenticated users can only see their own row.
-DROP POLICY IF EXISTS users_self_select ON pgstack.users;
-CREATE POLICY users_self_select ON pgstack.users
-  FOR SELECT TO authenticated
-  USING (id = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
-
--- Refresh tokens are stored as SHA-256 hashes; plaintext leaves the proxy
--- exactly once (to the client). family_id supports reuse-detection: any
--- replay of a revoked token revokes the whole family.
-CREATE TABLE IF NOT EXISTS pgstack.refresh_tokens (
-  id          bigserial PRIMARY KEY,
-  token_hash  text UNIQUE NOT NULL,
-  user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
-  family_id   uuid DEFAULT gen_random_uuid(),
-  revoked     boolean DEFAULT false,
-  expires_at  timestamptz NOT NULL,
-  created_at  timestamptz DEFAULT now()
-);
-ALTER TABLE pgstack.refresh_tokens ENABLE ROW LEVEL SECURITY;
-
--- Email tokens (verification / recovery / magic link), also hashed at rest.
-CREATE TABLE IF NOT EXISTS pgstack.email_tokens (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
-  token_hash  text NOT NULL UNIQUE,
-  token_type  text NOT NULL CHECK (token_type IN ('email_verification', 'recovery', 'magiclink')),
-  used_at     timestamptz,
-  expires_at  timestamptz NOT NULL,
-  created_at  timestamptz NOT NULL DEFAULT now()
-);
-ALTER TABLE pgstack.email_tokens ENABLE ROW LEVEL SECURITY;
-CREATE INDEX IF NOT EXISTS idx_email_tokens_hash ON pgstack.email_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON pgstack.email_tokens(user_id);
-
--- OAuth state + PKCE verifier per outstanding flow.
-CREATE TABLE IF NOT EXISTS pgstack.oauth_sessions (
-  state         text PRIMARY KEY,
-  code_verifier text NOT NULL,
-  provider      text NOT NULL,
-  created_at    timestamptz DEFAULT now(),
-  expires_at    timestamptz DEFAULT now() + interval '10 minutes'
-);
-ALTER TABLE pgstack.oauth_sessions ENABLE ROW LEVEL SECURITY;
-
--- Indexes.
-CREATE INDEX IF NOT EXISTS idx_pgstack_refresh_tokens_user
-  ON pgstack.refresh_tokens(user_id);
-CREATE INDEX IF NOT EXISTS idx_pgstack_refresh_tokens_hash
-  ON pgstack.refresh_tokens(token_hash) WHERE NOT revoked;
-CREATE INDEX IF NOT EXISTS idx_pgstack_users_email
-  ON pgstack.users(email);
-
--- public-schema access: default-deny, opt in per table.
--- The unauthenticated 'anon' role gets *only* what you explicitly GRANT.
--- The 'authenticated' role likewise needs explicit grants combined with RLS
--- policies that scope visibility. Avoid blanket "GRANT ALL ON ALL TABLES" —
--- it bypasses the RLS posture this stack relies on.
-GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-
--- service_role bypasses RLS (declared NOLOGIN BYPASSRLS above) so it does
--- need broad object access for admin tasks driven by SERVICE_ROLE_KEY.
-GRANT ALL ON ALL TABLES    IN SCHEMA public TO service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES    TO service_role;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
-
--- Functions: revoke the PostgreSQL default of PUBLIC EXECUTE.
---
--- The REST endpoint at /rest/v1/rpc/{fn} walks pg_proc and exposes any
--- function in the public schema. PostgreSQL grants EXECUTE on every
--- new function to PUBLIC by default, which means anon and authenticated
--- would inherit the right to call it via REST the moment it is created
--- — even (and especially) SECURITY DEFINER helpers that were meant to
--- be invoked only from triggers or other definer-context paths.
--- Default-deny here, the same way tables already work.
---
--- ALTER DEFAULT PRIVILEGES is scoped to the role that CREATEd the rule,
--- so we loop over the plausible owners (postgres + current_user). A
--- bare ALTER DEFAULT PRIVILEGES would only cover whichever role ran
--- this bootstrap and miss future per-tenant owners. Failures swallowed
--- — the rule may not yet exist for a given owner.
-REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
-GRANT  EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
-DO $$
-DECLARE
-  owners text[] := ARRAY['postgres', current_user];
-  o text;
-BEGIN
-  FOREACH o IN ARRAY owners LOOP
-    BEGIN
-      EXECUTE format(
-        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
-        o);
-    EXCEPTION WHEN OTHERS THEN NULL; END;
-    BEGIN
-      EXECUTE format(
-        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role',
-        o);
-    EXCEPTION WHEN OTHERS THEN NULL; END;
-  END LOOP;
-END $$;
-
+${core}
 -- For each NEW user table you add under public/, explicitly grant only
 -- what the API needs and rely on RLS to scope rows. Example:
 --
@@ -425,6 +277,7 @@ END $$;
 --   GRANT EXECUTE ON FUNCTION public.search_users(text) TO authenticated;
 `;
 }
+
 
 function generateSeed(): string {
   return `-- Seed data
