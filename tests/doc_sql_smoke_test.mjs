@@ -1,35 +1,42 @@
 #!/usr/bin/env node
 // Doc-test harness — round 31 Tier 1.2 from the SECURITY.md ritual.
 //
-// Walks every ```sql fenced block in docs/site/docs/**/*.md, executes
-// it against an isolated PostgreSQL test database, and fails if PG
-// rejects it. This catches the class of regression that hit us
-// repeatedly in audit rounds: docs teaching a SECURITY DEFINER that
-// can't actually be CREATEd as written (wrong RETURNS, mismatched
-// schema, missing CREATE EXTENSION dep), or a GRANT line that
-// references a non-existent function signature, or a CREATE TABLE
-// without the schema the surrounding helpers write to.
+// Walks every ```sql fenced block in docs/site/docs/**/*.md and
+// executes the OPT-IN subset against an isolated test database.
+// Catches the class of regression that hit us repeatedly: docs
+// teaching a SECURITY DEFINER that can't be CREATEd as written
+// (wrong RETURNS, mismatched schema), a GRANT line that references
+// a non-existent function signature, a CREATE TABLE without the
+// schema the surrounding helpers write to.
+//
+// Opt-in: by default we DO NOT run blocks. A block is executed
+// only when its opening fence carries the directive
+//   ```sql doc-test:run
+// This way illustration-only blocks (Supabase-style SELECTs against
+// auth.users, pgr.* examples that depend on the extension being
+// installed, "this is the kind of query you can write in Studio"
+// snippets) don't poison the gate. New blocks default to "not
+// tested" — explicit opt-in keeps CI honest about what's actually
+// guarded.
 //
 // Run:
 //   docker compose up -d                              # PG must be live
 //   node tests/doc_sql_smoke_test.mjs
-//
-// Skip individual blocks that are deliberately non-executable
-// (illustration-only, "footgun" examples) with the per-block
-// directive comment:
-//   ```sql  doc-test:skip=<reason>
-//   ...
-//   ```
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 // We use execFile (no shell) — never use the shell-invoking variant
 // here; doc bodies are untrusted input even though they come from
 // the repo (a malicious PR could otherwise inject commands).
 import { execFileSync as runProc } from "node:child_process";
 
-const REPO = new URL("..", import.meta.url).pathname.replace(/^\//, "").replace(/\/$/, "");
-const DOCS_ROOT = `${REPO}/docs/site/docs`;
+// fileURLToPath does the right thing on both platforms: Windows
+// turns file:///W:/... into W:\..., Linux turns file:///home/... into
+// /home/.... The earlier `pathname.replace(/^\//, "")` trick worked
+// on Windows but produced a relative path on Linux ("home/runner/...").
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const DOCS_ROOT = join(REPO, "docs", "site", "docs");
 
 // Skip suffixes that are intentionally narrative-only (config snippets,
 // nginx, JSON examples, output samples). We only execute SQL.
@@ -59,8 +66,8 @@ function walk(dir, acc = []) {
   return acc;
 }
 
-// extractSqlBlocks returns [{ runner, code, skipReason, line }] for
-// the file. line = 1-based start line of the block opening fence.
+// extractSqlBlocks returns [{ runner, code, optIn, line }] for the
+// file. line = 1-based start line of the block opening fence.
 function extractSqlBlocks(text) {
   const lines = text.split(/\r?\n/);
   const blocks = [];
@@ -73,11 +80,10 @@ function extractSqlBlocks(text) {
       if (m) {
         const runner = m[1].toLowerCase();
         const extras = m[2] || "";
-        const skipDirective = /\bdoc-test:skip=([^\s]+)/.exec(extras);
         inBlock = {
           runner,
           line: i + 1,
-          skipReason: skipDirective ? skipDirective[1] : null,
+          optIn: /\bdoc-test:run\b/.test(extras),
         };
         buf = [];
       }
@@ -94,8 +100,8 @@ function extractSqlBlocks(text) {
 }
 
 function shouldRun(block) {
-  if (block.skipReason) return [false, `skip directive: ${block.skipReason}`];
   if (!RUNNERS.has(block.runner)) return [false, `runner=${block.runner}`];
+  if (!block.optIn) return [false, "no doc-test:run directive (opt-in)"];
   if (block.code.trim().length === 0) return [false, "empty block"];
   for (const needle of HEURISTIC_SKIPS) {
     if (block.code.includes(needle)) {
