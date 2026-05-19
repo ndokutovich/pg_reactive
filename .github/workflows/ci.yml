@@ -232,7 +232,7 @@ jobs:
           # Health-check from inside the proxy-go container — works regardless
           # of host port mapping (self-hosted runner can't see 127.0.0.1:8080
           # on the daemon host).
-          timeout 120 bash -c 'until docker compose exec -T proxy-go wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
+          timeout 120 bash -c 'until docker compose exec -T proxy-go curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
           # Self-hosted: join the compose network so this runner can
           # address the proxy by service name on later steps.
           docker network connect "${COMPOSE_PROJECT_NAME:-pg_reactive}_default" "$(hostname)" || true
@@ -401,7 +401,7 @@ jobs:
           echo "Waiting for stack to be healthy..."
           # Self-hosted: health-check via compose exec (127.0.0.1 inside
           # this runner doesn't see the daemon-host's published ports).
-          timeout 120 bash -c 'until docker compose exec -T proxy-go wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
+          timeout 120 bash -c 'until docker compose exec -T proxy-go curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
           docker network connect "${COMPOSE_PROJECT_NAME:-pg_reactive}_default" "$(hostname)" || true
           # E2E test files hardcode 127.0.0.1:8080 and 127.0.0.1:15432.
           # socat forwards those to the compose service names so the
