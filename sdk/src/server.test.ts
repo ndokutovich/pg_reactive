@@ -4,10 +4,16 @@ import { PgReactiveAdmin } from "./server.js";
 /**
  * Integration tests for PgReactiveAdmin.
  * Requires: docker compose db running on port 15432 with pg_reactive loaded.
+ *
+ * On self-hosted CI the test runs inside the runner container, which can
+ * reach the db service by name on the compose network (PG_HOST=db,
+ * PG_TEST_PORT=5432). Defaults preserve the local-dev workflow.
  */
 
+const PG_HOST = process.env.PG_HOST || "127.0.0.1";
+const PG_TEST_PORT = process.env.PG_TEST_PORT || "15432";
 const CONNECTION_STRING =
-  "postgres://postgres:postgres@127.0.0.1:15432/pg_reactive_test";
+  `postgres://postgres:postgres@${PG_HOST}:${PG_TEST_PORT}/pg_reactive_test`;
 
 let admin: PgReactiveAdmin;
 
