@@ -324,6 +324,13 @@ jobs:
           docker compose up -d db
           docker compose exec -T db bash -c 'until pg_isready -U postgres; do sleep 1; done'
 
+          # The dev docker-compose.yml sets ENABLE_SQL_ENDPOINT=true
+          # so the e2e suite can use the raw SQL gateway. The
+          # production validator correctly refuses to boot with that
+          # flag — so the positive-case run must EXPLICITLY override
+          # it (and any other dev-only flag the validator rejects)
+          # to false. Otherwise this step keeps catching the
+          # validator's own dev-vs-prod machinery, not a regression.
           out=$(timeout 15 docker compose run --rm \
             -e PGSTACK_ENV=production \
             -e JWT_SECRET=$(openssl rand -base64 32) \
@@ -333,6 +340,9 @@ jobs:
             -e SMTP_HOST=smtp.example.com -e SMTP_USER=u -e SMTP_PASS=p \
             -e ALLOWED_ORIGINS=https://example.com \
             -e REQUIRE_AUTHENTICATED_WS=true \
+            -e ENABLE_SQL_ENDPOINT=false \
+            -e ENABLE_DEMO_ENDPOINT=false \
+            -e ALLOW_PERMISSIVE_CORS=false \
             -e TLS_MODE=off \
             proxy-go 2>&1)
           echo "$out"
