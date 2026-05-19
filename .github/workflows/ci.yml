@@ -233,8 +233,13 @@ jobs:
       - name: Run adversarial fixtures
         env:
           PROXY_URL: http://127.0.0.1:8080
-          # Match the dev-compose default so ws__anon_refused_when_required
-          # actually authenticates as anon (round 32 F2).
+          # Every secret here must match the dev-compose default the
+          # proxy was started with (docker-compose.yml). Otherwise
+          # tests that mint a "valid" token (auth__jwt_manipulation
+          # baseline) sign with the wrong key and the proxy correctly
+          # 401s — making the test look broken when the gate is fine.
+          # Round 33 follow-up.
+          JWT_SECRET: dev-only-jwt-secret-do-not-use-in-production
           ANON_KEY: dev-only-anon-key-do-not-use-in-production
           SERVICE_ROLE_KEY: dev-only-service-role-key-do-not-use-in-production
           # Surface to the test so it asserts the right outcome — the
