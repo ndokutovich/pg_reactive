@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "access/tupdesc.h"
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "executor/spi.h"
@@ -24,7 +25,7 @@
 	((PGR_NOTIFY_PAYLOAD_LIMIT) - (int) strlen(ch) - PGR_NOTIFY_OVERHEAD)
 
 static char *pgr_build_delta_json(const char *query_id, const char *query_text,
-								  int64 seq);
+								  int64 seq, bool *needs_resync);
 static char *pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 									TupleDesc tupdesc);
 /* pgr_json_escape_string declared extern in recompute.h */
@@ -126,7 +127,34 @@ pgr_recompute_query(const char *query_id)
 	}
 
 	/* Delta mode: full EXCEPT-based diff computation */
-	delta_json = pgr_build_delta_json(local_qid, local_qtext, seq);
+	{
+		bool		needs_resync = false;
+
+		delta_json = pgr_build_delta_json(local_qid, local_qtext, seq,
+										  &needs_resync);
+
+		/*
+		 * The snapshot's column layout drifted from the live query (count or
+		 * type changed under a stable query_id, or a snapshot survived an
+		 * older deploy). pgr_build_delta_json has already rebuilt the
+		 * snapshot; signal a full resync so clients drop local state and
+		 * re-fetch instead of applying a delta that was never computed.
+		 */
+		if (needs_resync)
+		{
+			StringInfoData resync;
+
+			initStringInfo(&resync);
+			appendStringInfoString(&resync,
+								   "{\"type\":\"overflow\",\"query_id\":");
+			pgr_json_escape_string(&resync, local_qid);
+			appendStringInfo(&resync,
+							 ",\"seq\":" INT64_FORMAT ",\"fetch\":true}",
+							 seq);
+			Async_Notify(pgr_notify_channel, resync.data);
+			pfree(resync.data);
+		}
+	}
 
 	if (delta_json != NULL)
 	{
@@ -198,7 +226,7 @@ pgr_recompute_for_table(Oid table_oid)
  */
 static char *
 pgr_build_delta_json(const char *query_id, const char *query_text,
-					 int64 seq)
+					 int64 seq, bool *needs_resync)
 {
 	StringInfoData	snap_name;
 	StringInfoData	sql;
@@ -234,6 +262,97 @@ pgr_build_delta_json(const char *query_id, const char *query_text,
 		pfree(snap_name.data);
 		pfree(sql.data);
 		return NULL;
+	}
+
+	/*
+	 * Guard against query-shape drift. pgr._snap_<qid> is created once at
+	 * subscribe time with CREATE ... IF NOT EXISTS, so its column layout is
+	 * frozen. If the subscription is re-registered under the same query_id
+	 * with a different projection — or the snapshot survived an older deploy
+	 * — the cached result and the snapshot disagree on column count or type,
+	 * and the EXCEPT below aborts the triggering DML outright
+	 * ("each EXCEPT query must have the same number of columns").
+	 *
+	 * Detect the mismatch, rebuild the snapshot from the fresh result, and
+	 * signal a full resync instead of attempting a delta this round.
+	 */
+	{
+		TupleDesc	rdesc;
+		int			rnatts;
+		Oid		   *rtypes;
+		bool		drift = false;
+		int			i;
+
+		ret = SPI_execute("SELECT * FROM _pgr_recompute LIMIT 0", false, 0);
+		if (ret != SPI_OK_SELECT || SPI_tuptable == NULL)
+		{
+			elog(WARNING,
+				 "pg_reactive: could not inspect recompute shape for %s",
+				 query_id);
+			pfree(snap_name.data);
+			pfree(sql.data);
+			return NULL;
+		}
+		rdesc = SPI_tuptable->tupdesc;
+		rnatts = rdesc->natts;
+		rtypes = (Oid *) palloc(sizeof(Oid) * rnatts);
+		for (i = 0; i < rnatts; i++)
+			rtypes[i] = TupleDescAttr(rdesc, i)->atttypid;
+
+		resetStringInfo(&sql);
+		appendStringInfo(&sql, "SELECT * FROM %s LIMIT 0", snap_name.data);
+		ret = SPI_execute(sql.data, false, 0);
+		if (ret != SPI_OK_SELECT || SPI_tuptable == NULL)
+		{
+			/* snapshot unreadable — rebuild it from the fresh result */
+			drift = true;
+		}
+		else
+		{
+			TupleDesc	sdesc = SPI_tuptable->tupdesc;
+
+			if (sdesc->natts != rnatts)
+				drift = true;
+			else
+				for (i = 0; i < rnatts; i++)
+					if (TupleDescAttr(sdesc, i)->atttypid != rtypes[i])
+					{
+						drift = true;
+						break;
+					}
+		}
+		pfree(rtypes);
+
+		if (drift)
+		{
+			SPI_execute("SET LOCAL client_min_messages TO warning", false, 0);
+
+			resetStringInfo(&sql);
+			appendStringInfo(&sql, "DROP TABLE IF EXISTS %s", snap_name.data);
+			SPI_execute(sql.data, false, 0);
+
+			resetStringInfo(&sql);
+			appendStringInfo(&sql,
+							 "CREATE UNLOGGED TABLE %s AS "
+							 "SELECT * FROM _pgr_recompute", snap_name.data);
+			ret = SPI_execute(sql.data, false, 0);
+			if (ret < 0)
+				elog(WARNING,
+					 "pg_reactive: failed to rebuild snapshot %s after shape "
+					 "drift (SPI error %d)", snap_name.data, ret);
+
+			SPI_execute("DROP TABLE IF EXISTS _pgr_recompute", false, 0);
+			SPI_execute("RESET client_min_messages", false, 0);
+
+			elog(WARNING,
+				 "pg_reactive: query \"%s\" shape drifted from its snapshot; "
+				 "snapshot rebuilt, clients signalled to re-fetch", query_id);
+
+			*needs_resync = true;
+			pfree(snap_name.data);
+			pfree(sql.data);
+			return NULL;
+		}
 	}
 
 	/*
