@@ -166,53 +166,53 @@
     <p class="section-desc">Interactive demos showing real-time SQL subscriptions, from simple filters to full-stack applications.</p>
 
     <div class="example-grid">
-      <a href="/examples/01-live-products/" class="example-card">
+      <a href="/examples/01-live-public/" class="example-card">
         <div class="example-num">Example 01</div>
-        <div class="example-name">Live Products Dashboard</div>
-        <p class="example-desc">Real-time product catalog with live price and stock updates.</p>
+        <div class="example-name">Live Public Data</div>
+        <p class="example-desc">Anonymous live query against a public table — the smallest end-to-end demo.</p>
         <span class="example-badge badge-basic">Basic</span>
       </a>
 
-      <a href="/examples/02-order-feed/" class="example-card">
+      <a href="/examples/02-joins-aggregates/" class="example-card">
         <div class="example-num">Example 02</div>
-        <div class="example-name">Order Feed</div>
-        <p class="example-desc">Streaming order feed with live status transitions.</p>
-        <span class="example-badge badge-basic">Basic</span>
+        <div class="example-name">Joins &amp; Aggregates</div>
+        <p class="example-desc">Multi-table joins with a live GROUP BY recomputed on every write.</p>
+        <span class="example-badge badge-intermediate">Intermediate</span>
       </a>
 
-      <a href="/examples/03-revenue-dashboard/" class="example-card">
+      <a href="/examples/03-per-user-inventory/" class="example-card">
         <div class="example-num">Example 03</div>
-        <div class="example-name">Revenue Dashboard</div>
-        <p class="example-desc">Aggregate revenue metrics updating in real time.</p>
+        <div class="example-name">Per-user Inventory</div>
+        <p class="example-desc">Audience-bound subscription scoped to the JWT user via SECURITY DEFINER.</p>
         <span class="example-badge badge-intermediate">Intermediate</span>
       </a>
 
-      <a href="/examples/04-category-leaderboard/" class="example-card">
+      <a href="/examples/04-rls-shopping-list/" class="example-card">
         <div class="example-num">Example 04</div>
-        <div class="example-name">Category Leaderboard</div>
-        <p class="example-desc">Live-ranked leaderboard with animated position changes.</p>
-        <span class="example-badge badge-intermediate">Intermediate</span>
-      </a>
-
-      <a href="/examples/05-realtime-crm/" class="example-card">
-        <div class="example-num">Example 05</div>
-        <div class="example-name">Realtime CRM</div>
-        <p class="example-desc">Customer pipeline with multi-stage live tracking.</p>
+        <div class="example-name">RLS Shopping List</div>
+        <p class="example-desc">Live query running under row-level security policies — no leakage between users.</p>
         <span class="example-badge badge-advanced">Advanced</span>
       </a>
 
-      <a href="/examples/06-inventory-monitor/" class="example-card">
-        <div class="example-num">Example 06</div>
-        <div class="example-name">Inventory Monitor</div>
-        <p class="example-desc">Stock level monitoring with threshold alerts.</p>
+      <a href="/examples/05-notify-mode/" class="example-card">
+        <div class="example-num">Example 05</div>
+        <div class="example-name">Notify Mode</div>
+        <p class="example-desc">Same data, notify vs delta side-by-side — pick the wire for the job.</p>
         <span class="example-badge badge-intermediate">Intermediate</span>
       </a>
 
-      <a href="/examples/12-tutorial/" class="example-card">
-        <div class="example-num">Tutorial</div>
-        <div class="example-name">Interactive Tutorial</div>
-        <p class="example-desc">Step-by-step guide to building live queries from scratch.</p>
-        <span class="example-badge badge-basic">Basic</span>
+      <a href="/examples/06-presence-broadcast/" class="example-card">
+        <div class="example-num">Example 06</div>
+        <div class="example-name">Presence &amp; Broadcast</div>
+        <p class="example-desc">Live presence and broadcast channels layered on the same WebSocket.</p>
+        <span class="example-badge badge-advanced">Advanced</span>
+      </a>
+
+      <a href="/examples/07-edge-function/" class="example-card">
+        <div class="example-num">Example 07</div>
+        <div class="example-name">Edge Function</div>
+        <p class="example-desc">Calling a goja edge function from a live UI, claims propagated end-to-end.</p>
+        <span class="example-badge badge-advanced">Advanced</span>
       </a>
 
       <a href="/examples/apps/todo/" class="example-card">
@@ -222,10 +222,10 @@
         <span class="example-badge badge-fullstack">Full-stack</span>
       </a>
 
-      <a href="/examples/apps/shopping-list/" class="example-card">
+      <a href="/examples/apps/expenses/" class="example-card">
         <div class="example-num">Full-stack App</div>
-        <div class="example-name">Shopping List</div>
-        <p class="example-desc">Collaborative shopping list PWA with sharing and live updates.</p>
+        <div class="example-name">Expenses</div>
+        <p class="example-desc">Multi-user expense tracker with auth, REST, and a live shared ledger.</p>
         <span class="example-badge badge-fullstack">Full-stack</span>
       </a>
     </div>
