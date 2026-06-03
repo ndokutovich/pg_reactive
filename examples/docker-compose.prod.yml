@@ -57,6 +57,17 @@ services:
       # Lock CORS to whatever fronts you. Empty + permissive=false = strict
       # (cross-origin browsers blocked; same-origin still works).
       ALLOWED_ORIGINS:   ${ALLOWED_ORIGINS:-}
+      # SMTP — required in PGSTACK_ENV=production (audit round 26 F5: a
+      # console-logged reset URL is a takeover token in plaintext). The
+      # defaults wire the proxy at a sibling Inbucket container, a fake
+      # SMTP catcher that accepts any auth and exposes the captured mail
+      # over a web UI. Honest satisfaction of the audit gate without
+      # shipping real credentials in a public demo. Override SMTP_HOST in
+      # .env to point at a real provider (SendGrid, Mailgun, SES, etc.).
+      SMTP_HOST: ${SMTP_HOST:-inbucket}
+      SMTP_PORT: ${SMTP_PORT:-2500}
+      SMTP_USER: ${SMTP_USER:-demo}
+      SMTP_PASS: ${SMTP_PASS:-demo}
     networks:
       default:
       gateway:
@@ -79,3 +90,12 @@ services:
     # The default block in docker-compose.yml already declares the
     # gateway alias `pgr-web`; the override just keeps it without
     # re-exposing :3000 on the host.
+
+  # Fake SMTP catcher. Satisfies the PGSTACK_ENV=production SMTP gate
+  # without shipping real credentials. Listens on :2500 (SMTP) and :9000
+  # (web UI) on the internal `default` network; not exposed to the host —
+  # umbrella nginx can route to it if the admin needs to read captured
+  # mail. Replace with a real provider in .env when going live.
+  inbucket:
+    image: inbucket/inbucket:edge
+    restart: unless-stopped
