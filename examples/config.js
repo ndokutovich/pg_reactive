@@ -68,13 +68,42 @@
     try { sessionStorage.setItem(STORAGE_KEY, token); } catch (e) { /* private mode */ }
   }
 
+  function clearCachedToken() {
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) { /* private mode */ }
+  }
+
+  // Decode the JWT payload (middle segment) and check its exp claim. A
+  // 60-second skew gives us a margin for token-mint latency vs WS open,
+  // so a token doesn't expire mid-handshake. Anything we cannot parse is
+  // treated as expired — fail-closed forces a fresh mint.
+  function tokenStillValid(token) {
+    try {
+      var parts = token.split('.');
+      if (parts.length !== 3) return false;
+      var b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      var payload = JSON.parse(atob(b64));
+      if (!payload.exp) return false;
+      return payload.exp > (Date.now() / 1000) + 60;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function signInAnonymously() {
     if (tokenPromise) return tokenPromise;
     var cached = loadCachedToken();
-    if (cached) {
+    if (cached && tokenStillValid(cached)) {
       window.PGR.token = cached;
       tokenPromise = Promise.resolve(cached);
       return tokenPromise;
+    }
+    if (cached) {
+      // Expired or unparseable — drop it before minting a fresh one so
+      // a botched mint doesn't leave the stale token lingering for the
+      // next page load.
+      clearCachedToken();
+      window.PGR.token = null;
     }
     tokenPromise = fetch(authBase + '/anonymous', {
       method: 'POST',
@@ -108,7 +137,7 @@
     wsBase:  wsProto + location.host + base + '/ws',
     apiBase: apiBase,
     anonKey: anonKey,
-    token:   loadCachedToken(),
+    token:   (function () { var t = loadCachedToken(); return t && tokenStillValid(t) ? t : null; })(),
     signInAnonymously: signInAnonymously,
   };
 
