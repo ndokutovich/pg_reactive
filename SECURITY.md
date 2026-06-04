@@ -110,6 +110,7 @@ this matrix is a bug.
 | Storage: overwrite existing object | DENY | COND | ALLOW | same-owner check + atomic upsert (round 14) |
 | Auth: signup / token / refresh | ALLOW | ALLOW | ALLOW | rate-limited per real-IP (`middleware/rate_limit.go`) |
 | Auth: password reset / magiclink / verify | ALLOW | ALLOW | ALLOW | atomic token consume (F6 round 13); SMTP required in production (F5 round 26) |
+| Auth: anonymous signin `/auth/v1/anonymous` | COND | COND | COND | **default-deny** — `ALLOW_ANONYMOUS_SIGNIN=false` returns 503 (round 34); when enabled mints a short-lived role=anon JWT (`ANONYMOUS_JWT_TTL`, default 3600s), no DB row, no refresh, rate-limited by per-IP `AUTH_RATE_LIMIT` |
 | Auth: admin user CRUD | DENY | DENY | ALLOW | `requireServiceRole` empty-key guard (`auth/jwt.go` round 24) |
 | Auth: full JWT validation | COND | COND | COND | empty `JWT_SECRET` fails closed in `GenerateToken`/`ValidateToken`/`requireJWT` (round 26 F1 CRITICAL) |
 | Edge function: call any function | COND | ALLOW | ALLOW | invokes function with caller's RLS context |

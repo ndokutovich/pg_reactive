@@ -108,6 +108,34 @@
       try { sessionStorage.setItem(this.storageKey + '_creds', JSON.stringify(c)); } catch {}
     }
 
+    /**
+     * Mint a short-lived role=anon JWT (no email, no refresh token, no DB
+     * row). Public-read example pages call this on load to satisfy the
+     * proxy's REQUIRE_AUTHENTICATED_WS gate without ever sending the raw
+     * anon-key as a fake "credential". Stash + reuse via sessionStorage so
+     * reloads don't burn fresh tokens.
+     *
+     * Server must run with ALLOW_ANONYMOUS_SIGNIN=true; otherwise 503 is
+     * surfaced to the caller verbatim.
+     */
+    async signInAnonymously() {
+      const restored = this.restoreSession();
+      if (restored && this.user && this.user.is_anonymous) {
+        return this.user;
+      }
+      const res = await fetch(`${this.authBase}/anonymous`, {
+        method: 'POST',
+        headers: this._authHeaders(),
+        body: '{}'
+      });
+      const session = await res.json();
+      if (!res.ok) {
+        throw new Error(session.error || `anonymous signin failed (${res.status})`);
+      }
+      this._saveSession(session);
+      return session.user;
+    }
+
     async signUp(email, password, data) {
       const body = { email, password };
       if (data) body.data = data;

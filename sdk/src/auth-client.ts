@@ -17,6 +17,8 @@ export interface AuthUser {
   user_metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  /** True when issued by signInAnonymously(); no email, no refresh token. */
+  is_anonymous?: boolean;
 }
 
 export type AuthChangeEvent =
@@ -165,6 +167,30 @@ export class PgStackAuth {
     };
 
     const res = await this.fetch('/auth/v1/token', 'POST', body);
+    if (res.error) return { data: null, error: res.error };
+
+    const session = res.data as AuthSession;
+    this.setSession(session);
+    return {
+      data: { user: session.user, session },
+      error: null,
+    };
+  }
+
+  /**
+   * Sign in anonymously — mints a short-lived role=anon JWT with a random
+   * sub, no DB row, no refresh token. Lets public-read demo pages satisfy
+   * the proxy's REQUIRE_AUTHENTICATED_WS gate without embedding the raw
+   * anon-key as a fake credential.
+   *
+   * The server must run with ALLOW_ANONYMOUS_SIGNIN=true; otherwise this
+   * resolves to { data: null, error: { status: 503 } }.
+   */
+  async signInAnonymously(): Promise<{
+    data: { user: AuthUser; session: AuthSession } | null;
+    error: AuthError | null;
+  }> {
+    const res = await this.fetch('/auth/v1/anonymous', 'POST', {});
     if (res.error) return { data: null, error: res.error };
 
     const session = res.data as AuthSession;

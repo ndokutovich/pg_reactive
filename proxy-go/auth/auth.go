@@ -32,6 +32,11 @@ type Deps struct {
 	AccessTokenExpirySecs  int
 	RefreshTokenExpiryDays int
 
+	// Anonymous signin — see Config.AllowAnonymousSignin. When false, the
+	// /auth/v1/anonymous handler returns 503 (default-deny).
+	AllowAnonymousSignin bool
+	AnonymousJWTTTLSecs  int
+
 	Mailer                   MailerIface // optional; nil → no email sent
 	RequireEmailVerification bool
 	SiteURL                  string
@@ -79,6 +84,7 @@ type UserResponse struct {
 	UpdatedAt        time.Time       `json:"updated_at"`
 	EmailConfirmedAt *time.Time      `json:"email_confirmed_at,omitempty"`
 	Provider         string          `json:"provider,omitempty"`
+	IsAnonymous      bool            `json:"is_anonymous,omitempty"`
 }
 
 // writeError writes {"error":"<msg>"} with the given HTTP status.

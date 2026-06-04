@@ -61,6 +61,13 @@ type Config struct {
 	AccessTokenExpirySecs  int
 	RefreshTokenExpiryDays int
 
+	// Anonymous signin — gate-controlled mint of short-lived role=anon JWTs
+	// so public-read demos can satisfy REQUIRE_AUTHENTICATED_WS=true without
+	// embedding the raw anon-key as a fake "credential". Fail-closed: the
+	// endpoint returns 503 until AllowAnonymousSignin is explicitly true.
+	AllowAnonymousSignin bool
+	AnonymousJWTTTLSecs  int
+
 	// WebSocket
 	BroadcastCapacity int
 	// WSMaxPerIP caps concurrent WebSocket connections per source IP. 0
@@ -206,6 +213,8 @@ func FromEnv() Config {
 
 	cfg.AccessTokenExpirySecs = envIntOrDefault("ACCESS_TOKEN_EXPIRY_SECS", 3600)
 	cfg.RefreshTokenExpiryDays = envIntOrDefault("REFRESH_TOKEN_EXPIRY_DAYS", 30)
+	cfg.AllowAnonymousSignin = envBoolOrDefault("ALLOW_ANONYMOUS_SIGNIN", false)
+	cfg.AnonymousJWTTTLSecs = envIntOrDefault("ANONYMOUS_JWT_TTL", 3600)
 
 	cfg.BroadcastCapacity = envIntOrDefault("BROADCAST_CAPACITY", 1024)
 	cfg.WSMaxPerIP = envIntOrDefault("WS_MAX_PER_IP", 10)

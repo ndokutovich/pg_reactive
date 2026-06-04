@@ -294,6 +294,53 @@ describe('PgStackAuth', () => {
     expect(body.grant_type).toBe('password');
   });
 
+  it('signInAnonymously POSTs to /auth/v1/anonymous and stores session', async () => {
+    fetchMock.mockReturnValue(mockResponse(200, {
+      access_token: 'anon-tok',
+      refresh_token: '',
+      expires_in: 3600,
+      token_type: 'bearer',
+      user: {
+        id: '550e8400-e29b-41d4-a716-446655440000',
+        email: '',
+        role: 'anon',
+        user_metadata: {},
+        created_at: '',
+        updated_at: '',
+        is_anonymous: true,
+      },
+    }));
+
+    const client = createClient('http://127.0.0.1:8080', 'anon-key');
+    const { data, error } = await client.auth.signInAnonymously();
+
+    expect(error).toBeNull();
+    expect(data!.user.role).toBe('anon');
+    expect(data!.user.is_anonymous).toBe(true);
+    expect(data!.session.access_token).toBe('anon-tok');
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:8080/auth/v1/anonymous');
+
+    // Subsequent calls now carry the guest JWT — the WS gate sees a
+    // real token, not the raw anon-key.
+    const { data: sess } = await client.auth.getSession();
+    expect(sess.session!.access_token).toBe('anon-tok');
+  });
+
+  it('signInAnonymously surfaces the 503 gate-off error verbatim', async () => {
+    fetchMock.mockReturnValue(mockResponse(503, {
+      error: 'anonymous signin is disabled',
+    }));
+
+    const client = createClient('http://127.0.0.1:8080', 'anon-key');
+    const { data, error } = await client.auth.signInAnonymously();
+
+    expect(data).toBeNull();
+    expect(error!.status).toBe(503);
+    expect(error!.message).toContain('disabled');
+  });
+
   it('signOut clears session', async () => {
     // First sign in
     fetchMock.mockReturnValue(mockResponse(200, {

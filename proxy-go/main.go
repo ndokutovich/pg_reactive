@@ -301,6 +301,8 @@ func buildRouter(state *AppState) http.Handler {
 		ServiceRoleKey:           state.Config.ServiceRoleKey,
 		AccessTokenExpirySecs:    state.Config.AccessTokenExpirySecs,
 		RefreshTokenExpiryDays:   state.Config.RefreshTokenExpiryDays,
+		AllowAnonymousSignin:     state.Config.AllowAnonymousSignin,
+		AnonymousJWTTTLSecs:      state.Config.AnonymousJWTTTLSecs,
 		Mailer:                   state.Mailer,
 		RequireEmailVerification: state.Config.RequireEmailVerification,
 		SiteURL:                  state.Config.SiteURL,
@@ -432,6 +434,7 @@ func buildRouter(state *AppState) http.Handler {
 			r.Post("/auth/v1/recover", auth.Recover(authDeps))
 			r.Post("/auth/v1/recover/confirm", auth.RecoverConfirm(authDeps))
 			r.Post("/auth/v1/magiclink", auth.Magiclink(authDeps))
+			r.Post("/auth/v1/anonymous", auth.Anonymous(authDeps))
 		})
 
 		// Non-rate-limited auth endpoints.
