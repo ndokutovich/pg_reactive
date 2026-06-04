@@ -28,10 +28,18 @@ set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env}"
 
-# Random 32-byte base64 — suitable for JWT_SECRET, ANON_KEY,
-# SERVICE_ROLE_KEY, POSTGRES_PASSWORD, SECRETS_ENCRYPTION_KEY.
+# Random 32-character URL-safe secret — suitable for JWT_SECRET,
+# ANON_KEY, SERVICE_ROLE_KEY, POSTGRES_PASSWORD, SECRETS_ENCRYPTION_KEY.
+#
+# Why alphanumeric instead of straight base64: POSTGRES_PASSWORD lands
+# verbatim inside a `postgres://postgres:${...}@db:5432/...` connection
+# string. base64's `+`, `/`, `=` are valid base64 alphabet but break
+# URL parsing in subtle ways — pgx's parseSettings rejected a generated
+# password and the proxy crash-looped on startup. ~190 bits of entropy
+# from 32 alphanumeric characters keeps every secret comfortably above
+# its 32+ byte minimum without ever needing URL-encoding.
 rand_b64() {
-  openssl rand -base64 32 | tr -d '\n'
+  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
 }
 
 # Load existing values so we know which keys to leave alone.
