@@ -74,9 +74,17 @@ func demoSQL(action string) (string, bool) {
 		}, " "),
 
 		"delete_demo_product": strings.Join([]string{
-			"DELETE FROM products WHERE name LIKE 'Demo %'",
-			"AND id = (SELECT id FROM products WHERE name LIKE 'Demo %'",
-			"ORDER BY id DESC LIMIT 1)",
+			// products.id is FK'd by orders.product_id (no ON DELETE
+			// CASCADE), so a naked DELETE fails the moment the demo
+			// product has been picked by insert_order. The CTE drops
+			// the dependent orders first, then the product itself.
+			"WITH target AS (",
+			"  SELECT id FROM products WHERE name LIKE 'Demo %'",
+			"  ORDER BY id DESC LIMIT 1",
+			"), purged_orders AS (",
+			"  DELETE FROM orders WHERE product_id IN (SELECT id FROM target)",
+			")",
+			"DELETE FROM products WHERE id IN (SELECT id FROM target)",
 		}, " "),
 
 		"insert_order": strings.Join([]string{
@@ -95,9 +103,15 @@ func demoSQL(action string) (string, bool) {
 		}, " "),
 
 		"delete_demo_customer": strings.Join([]string{
-			"DELETE FROM customers WHERE name LIKE 'Demo %'",
-			"AND id = (SELECT id FROM customers WHERE name LIKE 'Demo %'",
-			"ORDER BY id DESC LIMIT 1)",
+			// Same FK problem as delete_demo_product, mirrored on
+			// customers.id ← orders.customer_id.
+			"WITH target AS (",
+			"  SELECT id FROM customers WHERE name LIKE 'Demo %'",
+			"  ORDER BY id DESC LIMIT 1",
+			"), purged_orders AS (",
+			"  DELETE FROM orders WHERE customer_id IN (SELECT id FROM target)",
+			")",
+			"DELETE FROM customers WHERE id IN (SELECT id FROM target)",
 		}, " "),
 
 		"reduce_stock": strings.Join([]string{
