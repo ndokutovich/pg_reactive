@@ -44,6 +44,17 @@ services:
       # /api/sql is mounted only when this is true. Off in prod — even a
       # leaked SERVICE_ROLE_KEY cannot reach SQL execution.
       ENABLE_SQL_ENDPOINT: "false"
+      # /api/demo is the small toolbar that every example uses to push
+      # mutations and demonstrate the live-query feedback loop ("Add
+      # Order", "Update Price", etc). The endpoint only accepts a hardcoded
+      # whitelist of demo-table actions (routes/demo.go:demoSQL), not raw
+      # SQL. On the public reactive.pgstack.org demo it MUST be on,
+      # otherwise the whole point of the lessons collapses to a static
+      # page. On any non-demo production deployment of this stack leave
+      # it off — random visitors would otherwise be able to mutate your
+      # tables. Treat this line as the marker that distinguishes "public
+      # demo of pg_reactive" from "real customer product built on it".
+      ENABLE_DEMO_ENDPOINT: "true"
       # Production marker: when set, the proxy fail-fasts on empty / dev
       # JWT secrets, permissive CORS, and other "demo-only" combinations.
       PGSTACK_ENV: production
