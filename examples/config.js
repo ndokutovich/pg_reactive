@@ -45,6 +45,11 @@
   var wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   var anonKey = typeof window.PGR_ANON_KEY === 'string' ? window.PGR_ANON_KEY : 'anon-key-12345';
   var apiBase = location.origin + base + '/api';
+  // /auth/ and /rest/ are served directly by the inner nginx without
+  // an /api/ prefix (examples/nginx.conf), so build them off origin
+  // rather than apiBase. Otherwise POST /api/auth/v1/anonymous would
+  // reach the proxy with a literal /api/auth path that doesn't exist.
+  var authBase = location.origin + base + '/auth/v1';
   var STORAGE_KEY = 'pgr_guest_token';
 
   // NOTE: we DELIBERATELY do not surface service_role here. A browser
@@ -71,7 +76,7 @@
       tokenPromise = Promise.resolve(cached);
       return tokenPromise;
     }
-    tokenPromise = fetch(apiBase + '/auth/v1/anonymous', {
+    tokenPromise = fetch(authBase + '/anonymous', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apikey': anonKey },
       body: '{}'
