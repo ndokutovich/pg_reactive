@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_reactive - Revenue Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --text-bright: #f0f6fc;
+  --accent-blue: #58a6ff;
+  --accent-green: #39d353;
+  --accent-red: #f85149;
+  --accent-orange: #f0883e;
+  --accent-purple: #a371f7;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  min-height: 100vh;
+  padding: 0;
+}
+
+/* ===== Header ===== */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-left h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.header-left .subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.header-left .example-tag {
+  font-size: 0.75rem;
+  color: var(--accent-blue);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  transition: background 0.3s ease;
+}
+
+.status-dot.connected {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px rgba(57, 211, 83, 0.4);
+}
+
+/* ===== Main Content ===== */
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+.description {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin-bottom: 32px;
+}
+
+/* ===== Chart Container ===== */
+.chart-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  margin-bottom: 28px;
+}
+
+.chart-container h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 20px;
+}
+
+.chart-wrapper {
+  position: relative;
+  width: 100%;
+  min-height: 280px;
+}
+
+/* ===== Data Table ===== */
+.table-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  margin-bottom: 28px;
+  overflow-x: auto;
+}
+
+.table-container h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+thead th {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+tbody tr {
+  transition: background 0.3s ease, opacity 0.4s ease;
+}
+
+tbody tr:hover {
+  background: rgba(88, 166, 255, 0.06);
+}
+
+tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.revenue-cell {
+  font-weight: 600;
+  color: var(--accent-green);
+  font-variant-numeric: tabular-nums;
+}
+
+.region-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.region-us-east  { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); }
+.region-eu-west  { background: rgba(57, 211, 83, 0.15); color: var(--accent-green); }
+.region-ap-south { background: rgba(240, 136, 62, 0.15); color: var(--accent-orange); }
+.region-us-west  { background: rgba(163, 113, 247, 0.15); color: var(--accent-purple); }
+
+/* Row animations */
+@keyframes row-flash {
+  0% { background: rgba(88, 166, 255, 0.2); }
+  100% { background: transparent; }
+}
+
+.row-updated {
+  animation: row-flash 1.2s ease-out;
+}
+
+@keyframes row-enter {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.row-new {
+  animation: row-enter 0.4s ease-out;
+}
+
+/* ===== Callout Box ===== */
+.callout {
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.25);
+  border-left: 4px solid var(--accent-blue);
+  border-radius: 8px;
+  padding: 18px 22px;
+  margin-bottom: 28px;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.callout strong {
+  color: var(--accent-blue);
+}
+
+/* ===== Demo Commands ===== */
+.demo-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 28px;
+  overflow: hidden;
+}
+
+.demo-toggle {
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-bright);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 16px 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.2s;
+}
+
+.demo-toggle:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.demo-toggle .arrow {
+  transition: transform 0.3s ease;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.demo-toggle.open .arrow {
+  transform: rotate(180deg);
+}
+
+.demo-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.4s ease;
+}
+
+.demo-content.open {
+  max-height: 600px;
+}
+
+.demo-content pre {
+  margin: 0;
+  padding: 16px 22px 22px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.demo-content code {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.demo-content .comment { color: var(--text-muted); }
+.demo-content .keyword { color: #ff7b72; }
+.demo-content .string { color: #a5d6ff; }
+.demo-content .number { color: #79c0ff; }
+
+/* ===== Empty State ===== */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+</style>
+<script src="../config.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="example-tag">pg_reactive Example 3 -- GROUP BY + SUM</div>
+    <h1>Revenue Dashboard</h1>
+    <div class="subtitle">Aggregate revenue updates in real-time as orders are placed</div>
+  </div>
+  <div class="header-right">
+    <span id="status-text">Disconnected</span>
+    <div class="status-dot" id="status-dot"></div>
+  </div>
+</header>
+
+<main>
+  <div class="chart-container">
+    <h2>Revenue by Customer</h2>
+    <div class="chart-wrapper">
+      <canvas id="revenue-chart"></canvas>
+    </div>
+  </div>
+
+  <div class="table-container">
+    <h2>Customer Revenue Details</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Customer</th>
+          <th>Region</th>
+          <th>Revenue</th>
+          <th>Orders</th>
+        </tr>
+      </thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    This query uses <strong>LEFT JOIN + GROUP BY + SUM</strong> -- aggregate functions that
+    CDC tools (Debezium, Supabase, ElectricSQL) and Hasura cannot express.
+    pg_reactive recomputes the aggregate on every DML and delivers the exact delta.
+    Customers with zero orders still appear thanks to the LEFT JOIN.
+  </div>
+
+  <div class="demo-section">
+    <button class="demo-toggle" id="demo-toggle" onclick="toggleDemo()">
+      Demo Commands (run in psql)
+      <span class="arrow">&#9660;</span>
+    </button>
+    <div class="demo-content" id="demo-content">
+      <pre><code><span class="comment">-- Connect to the database</span>
+<span class="comment">-- docker compose exec -T db psql -U postgres -d pg_reactive_test</span>
+
+<span class="comment">-- Big order for Alice (her bar grows)</span>
+<span class="keyword">INSERT INTO</span> orders (customer_id, product_id, qty, total)
+  <span class="keyword">VALUES</span> (<span class="number">1</span>, <span class="number">3</span>, <span class="number">5</span>, <span class="number">1749.95</span>);
+
+<span class="comment">-- First order for Dave (bar appears from zero)</span>
+<span class="keyword">INSERT INTO</span> orders (customer_id, product_id, qty, total)
+  <span class="keyword">VALUES</span> (<span class="number">4</span>, <span class="number">1</span>, <span class="number">10</span>, <span class="number">799.90</span>);
+
+<span class="comment">-- New customer appears with $0 (LEFT JOIN)</span>
+<span class="keyword">INSERT INTO</span> customers (name, region)
+  <span class="keyword">VALUES</span> (<span class="string">'Eve'</span>, <span class="string">'eu-west'</span>);
+
+<span class="comment">-- Delete an order (revenue decreases)</span>
+<span class="keyword">DELETE FROM</span> orders
+  <span class="keyword">WHERE</span> customer_id = <span class="number">3</span> <span class="keyword">AND</span> total = <span class="number">349.99</span>;</code></pre>
+    </div>
+  </div>
+</main>
+
+<!-- SDK equivalent -->
+<!--
+  import { useLiveQuery } from 'pg-reactive/react';
+
+  function RevenueDashboard() {
+    const { rows, status } = useLiveQuery('revenue_by_customer', {
+      url: 'ws://127.0.0.1:8080'
+    });
+
+    return (
+      <BarChart
+        data={rows.map(r => ({ name: r.name, revenue: r.revenue }))}
+        xKey="revenue"
+        yKey="name"
+      />
+    );
+  }
+-->
+
+<script>
+(function() {
+  'use strict';
+
+  // ===== State =====
+  var rows = [];
+  var chart = null;
+  var ws = null;
+  var reconnectTimer = null;
+
+  var QUERY_ID = 'revenue_by_customer';
+  var WS_URL = PGR.wsBase + '/' + QUERY_ID;
+
+  var REGION_COLORS = {
+    'us-east':  '#58a6ff',
+    'eu-west':  '#39d353',
+    'ap-south': '#f0883e',
+    'us-west':  '#a371f7'
+  };
+
+  var DEFAULT_COLOR = '#8b949e';
+
+  // ===== Utility =====
+  function escapeHtml(str) {
+    var el = document.createElement('span');
+    el.textContent = str;
+    return el.textContent;
+  }
+
+  function formatCurrency(value) {
+    return parseFloat(value).toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    });
+  }
+
+  function regionColorFor(region) {
+    return REGION_COLORS[region] || DEFAULT_COLOR;
+  }
+
+  function regionClass(region) {
+    return 'region-' + (region || '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  }
+
+  // ===== Chart Setup =====
+  function initChart() {
+    var ctx = document.getElementById('revenue-chart').getContext('2d');
+    chart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Revenue ($)',
+          data: [],
+          backgroundColor: [],
+          borderColor: [],
+          borderWidth: 1,
+          borderRadius: 4,
+          barPercentage: 0.7
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: {
+          duration: 600,
+          easing: 'easeOutQuart'
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            grid: { color: 'rgba(48, 54, 61, 0.6)' },
+            ticks: {
+              color: '#8b949e',
+              font: { family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" },
+              callback: function(value) {
+                return '$' + value.toLocaleString();
+              }
+            }
+          },
+          y: {
+            grid: { display: false },
+            ticks: {
+              color: '#c9d1d9',
+              font: {
+                family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+                weight: '500'
+              }
+            }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#161b22',
+            borderColor: '#30363d',
+            borderWidth: 1,
+            titleColor: '#f0f6fc',
+            bodyColor: '#c9d1d9',
+            padding: 12,
+            callbacks: {
+              label: function(context) {
+                var sorted = getSorted();
+                var row = sorted[context.dataIndex];
+                if (!row) return '';
+                var rev = formatCurrency(row.revenue);
+                return 'Revenue: ' + rev + ' (' + row.order_count + ' orders)';
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function getSorted() {
+    return rows.slice().sort(function(a, b) {
+      return parseFloat(b.revenue) - parseFloat(a.revenue);
+    });
+  }
+
+  function updateChart() {
+    if (!chart) return;
+    var sorted = getSorted();
+
+    chart.data.labels = sorted.map(function(r) { return r.name; });
+    chart.data.datasets[0].data = sorted.map(function(r) { return parseFloat(r.revenue); });
+    chart.data.datasets[0].backgroundColor = sorted.map(function(r) {
+      return regionColorFor(r.region) + '99';
+    });
+    chart.data.datasets[0].borderColor = sorted.map(function(r) {
+      return regionColorFor(r.region);
+    });
+
+    chart.update('default');
+  }
+
+  // ===== Table Rendering =====
+  function renderTable(changedIds) {
+    var tbody = document.getElementById('table-body');
+    var sorted = getSorted();
+
+    // Clear existing rows
+    while (tbody.firstChild) {
+      tbody.removeChild(tbody.firstChild);
+    }
+
+    if (sorted.length === 0) {
+      var emptyRow = document.createElement('tr');
+      var emptyCell = document.createElement('td');
+      emptyCell.setAttribute('colspan', '5');
+      emptyCell.className = 'empty-state';
+      emptyCell.textContent = 'Waiting for data...';
+      emptyRow.appendChild(emptyCell);
+      tbody.appendChild(emptyRow);
+      return;
+    }
+
+    sorted.forEach(function(r) {
+      var changed = changedIds && changedIds.has(String(r.id));
+      var tr = document.createElement('tr');
+      if (changed) tr.className = 'row-updated';
+
+      var tdId = document.createElement('td');
+      tdId.textContent = r.id;
+      tr.appendChild(tdId);
+
+      var tdName = document.createElement('td');
+      tdName.style.fontWeight = '500';
+      tdName.style.color = 'var(--text-bright)';
+      tdName.textContent = r.name;
+      tr.appendChild(tdName);
+
+      var tdRegion = document.createElement('td');
+      var badge = document.createElement('span');
+      badge.className = 'region-badge ' + regionClass(r.region);
+      badge.textContent = r.region;
+      tdRegion.appendChild(badge);
+      tr.appendChild(tdRegion);
+
+      var tdRevenue = document.createElement('td');
+      tdRevenue.className = 'revenue-cell';
+      tdRevenue.textContent = formatCurrency(r.revenue);
+      tr.appendChild(tdRevenue);
+
+      var tdOrders = document.createElement('td');
+      tdOrders.textContent = r.order_count;
+      tr.appendChild(tdOrders);
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ===== Delta Processing =====
+  function applyDelta(msg) {
+    var deleted = msg.deleted || [];
+    var inserted = msg.inserted || [];
+    var changedIds = new Set();
+
+    // Remove deleted rows (match by id)
+    deleted.forEach(function(del) {
+      var idx = rows.findIndex(function(r) { return String(r.id) === String(del.id); });
+      if (idx !== -1) {
+        rows.splice(idx, 1);
+      }
+    });
+
+    // Add inserted rows (or update if id already present)
+    inserted.forEach(function(ins) {
+      changedIds.add(String(ins.id));
+      var idx = rows.findIndex(function(r) { return String(r.id) === String(ins.id); });
+      if (idx !== -1) {
+        rows[idx] = ins;
+      } else {
+        rows.push(ins);
+      }
+    });
+
+    updateChart();
+    renderTable(changedIds);
+  }
+
+  // ===== WebSocket =====
+  function setStatus(connected) {
+    var dot = document.getElementById('status-dot');
+    var text = document.getElementById('status-text');
+    if (connected) {
+      dot.classList.add('connected');
+      text.textContent = 'Connected';
+    } else {
+      dot.classList.remove('connected');
+      text.textContent = 'Disconnected';
+    }
+  }
+
+  function connect() {
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = function() {
+      setStatus(true);
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    ws.onmessage = function(event) {
+      var msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {
+        console.warn('Invalid JSON:', event.data);
+        return;
+      }
+
+      if (msg.type === 'subscribed') {
+        console.log('Subscribed to', msg.query_id);
+        return;
+      }
+
+      if (msg.type === 'overflow') {
+        console.warn('Overflow for', msg.query_id, '-- full refresh needed');
+        return;
+      }
+
+      // Delta message
+      if (msg.query_id === QUERY_ID && (msg.inserted || msg.deleted)) {
+        applyDelta(msg);
+      }
+    };
+
+    ws.onclose = function() {
+      setStatus(false);
+      scheduleReconnect();
+    };
+
+    ws.onerror = function() {
+      setStatus(false);
+    };
+  }
+
+  function scheduleReconnect() {
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(function() {
+        reconnectTimer = null;
+        connect();
+      }, 2000);
+    }
+  }
+
+  // ===== Demo Toggle =====
+  window.toggleDemo = function() {
+    var btn = document.getElementById('demo-toggle');
+    var content = document.getElementById('demo-content');
+    btn.classList.toggle('open');
+    content.classList.toggle('open');
+  };
+
+  // ===== Init =====
+  document.addEventListener('DOMContentLoaded', function() {
+    initChart();
+    renderTable(null);
+    // Guest JWT before WS — same discipline as 01-live-products.
+    PGR.signInAnonymously().catch(function () {}).then(connect);
+  });
+
+})();
+</script>
+
+<script>
+window.DEMO_ACTIONS = [
+  { action: 'insert_order', label: 'Place Order' },
+  { action: 'insert_customer', label: 'Add Customer' },
+  { action: 'delete_demo_customer', label: 'Remove Demo Customer' },
+];
+</script>
+<script src="../demo-panel.js"></script>
+</body>
+</html>

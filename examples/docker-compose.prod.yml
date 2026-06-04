@@ -47,6 +47,14 @@ services:
       # Production marker: when set, the proxy fail-fasts on empty / dev
       # JWT secrets, permissive CORS, and other "demo-only" combinations.
       PGSTACK_ENV: production
+      # Public-read example pages mint a short-lived role=anon JWT per
+      # session via /auth/v1/anonymous instead of sending the raw anon-key
+      # as a fake credential. Lets REQUIRE_AUTHENTICATED_WS=true stay on
+      # for the demo without breaking the public lessons. Default-deny is
+      # preserved upstream; the gate is enabled here intentionally for the
+      # public demo deployment only.
+      ALLOW_ANONYMOUS_SIGNIN: "true"
+      ANONYMOUS_JWT_TTL: ${ANONYMOUS_JWT_TTL:-3600}
       # Fail-fast secrets — `:?` aborts startup if the env var is unset.
       # Generate with `openssl rand -base64 32` (32+ bytes each).
       JWT_SECRET:        ${JWT_SECRET:?JWT_SECRET required (32+ chars, not dev-only)}

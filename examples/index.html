@@ -2,163 +2,185 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>pgStack — Live Examples</title>
+<title>pg_reactive Examples</title>
 <style>
   :root {
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
-    --green: #3fb950; --orange: #d29922; --purple: #bc8cff; --red: #f85149;
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
   }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:var(--bg); color:var(--text); font:14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height:100vh; }
-  header { max-width:880px; margin:0 auto; padding:48px 20px 24px; text-align:center; }
-  header h1 { font-size:32px; margin-bottom:8px; }
-  header h1 span { color:var(--accent); }
-  header p { color:var(--muted); font-size:15px; max-width:640px; margin:0 auto; line-height:1.5; }
-  .principles { max-width:880px; margin:24px auto; padding:0 20px; }
-  .principles ul { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:8px; list-style:none; }
-  .principles li { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:13px; color:var(--muted); }
-  .principles li b { color:var(--text); font-weight:600; }
-  h2.section { max-width:880px; margin:32px auto 12px; padding:0 20px; font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em; }
-  .grid { max-width:880px; margin:0 auto; padding:0 20px 24px; display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; }
-  .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px; text-decoration:none; color:inherit; transition:border-color 0.2s, transform 0.2s; display:block; }
-  .card:hover { border-color:var(--accent); transform:translateY(-2px); }
-  .card-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-  .card-num { background:var(--accent); color:var(--bg); width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; flex-shrink:0; }
-  .card.app .card-num { background:var(--purple); }
-  .card-title { font-size:15px; font-weight:600; flex:1; }
-  .card-badge { font-size:10px; padding:2px 8px; border-radius:10px; font-weight:600; }
-  .badge-basic    { background:#1f6feb33; color:var(--accent); }
-  .badge-flagship { background:#f8514933; color:var(--red); }
-  .badge-rls      { background:#3fb95033; color:var(--green); }
-  .badge-mode     { background:#d2992233; color:var(--orange); }
-  .badge-edge     { background:#bc8cff33; color:var(--purple); }
-  .card-desc { color:var(--muted); font-size:13px; line-height:1.5; }
-  .card-sql { display:inline-block; margin-top:10px; font-family:ui-monospace,Consolas,monospace; font-size:11px; color:var(--accent); background:var(--bg); padding:4px 8px; border-radius:5px; word-break:break-all; }
-  footer { text-align:center; padding:24px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); margin-top:24px; }
-  code { background:var(--bg); padding:1px 5px; border-radius:4px; font-family:ui-monospace,Consolas,monospace; font-size:12px; color:var(--accent); }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+  header { text-align: center; padding: 48px 20px 32px; }
+  header h1 { font-size: 32px; margin-bottom: 8px; }
+  header h1 span { color: var(--accent); }
+  header p { color: var(--text-muted); font-size: 16px; max-width: 600px; margin: 0 auto; }
+  .examples { max-width: 800px; margin: 0 auto; padding: 0 20px 48px; display: flex; flex-direction: column; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; text-decoration: none; color: inherit; transition: border-color 0.2s, transform 0.2s; display: block; }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .card-num { background: var(--accent); color: var(--bg); width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
+  .card-title { font-size: 18px; font-weight: 600; }
+  .card-badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600; margin-left: auto; }
+  .badge-basic { background: #1f6feb33; color: #58a6ff; }
+  .badge-intermediate { background: #3fb95033; color: #3fb950; }
+  .badge-advanced { background: #d2a82833; color: #d2a828; }
+  .badge-expert { background: #f8514933; color: #f85149; }
+  .badge-fullstack { background: #bc8cff33; color: #bc8cff; }
+  .card-desc { color: var(--text-muted); font-size: 14px; line-height: 1.5; margin-bottom: 12px; }
+  .card-sql { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; color: var(--accent); background: var(--bg); padding: 6px 10px; border-radius: 6px; display: inline-block; }
+  .prereqs { max-width: 800px; margin: 0 auto; padding: 0 20px 48px; }
+  .prereqs h2 { font-size: 18px; margin-bottom: 12px; }
+  .prereqs pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-size: 13px; overflow-x: auto; color: var(--green); }
+  footer { text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px; border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
 
 <header>
-  <h1><span>pgStack</span> · Live Examples</h1>
-  <p>Seven concentrated lessons + two full apps. Each is the canonical "do it right" shape — no demo-only shortcuts, no patterns we'd later teach you to un-learn.</p>
+  <h1><span>pg_reactive</span> Examples</h1>
+  <p>12 live applications showing real-time SQL subscriptions — from simple filters to an interactive tutorial console.</p>
 </header>
 
-<section class="principles">
-  <ul>
-    <li><b>RLS first.</b> Per-user data is gated at the row, not at the proxy.</li>
-    <li><b>Audience-bound subscriptions.</b> <code>query_id</code> ≠ secret. JWT claims authorise the WS.</li>
-    <li><b>Server-derived ids.</b> The client never invents a per-user <code>query_id</code> — a SECURITY DEFINER function does, from <code>auth.uid()</code>.</li>
-    <li><b>Explicit grants.</b> Each table grants only what its policies need.</li>
-  </ul>
-</section>
-
-<h2 class="section">Examples — concepts</h2>
-<div class="grid">
-
-  <a class="card" href="01-live-public/app.html">
-    <div class="card-head">
+<div class="examples">
+  <a class="card" href="01-live-products/app.html">
+    <div class="card-header">
       <div class="card-num">1</div>
-      <div class="card-title">Live Public Data</div>
-      <span class="card-badge badge-basic">basic</span>
+      <div class="card-title">Live Product Catalog</div>
+      <span class="card-badge badge-basic">Basic</span>
     </div>
-    <div class="card-desc">Public live SELECT — the smallest pg_reactive can be. Useful for status pages, leaderboards, world tickers.</div>
-    <span class="card-sql">SELECT … FROM products WHERE in_stock</span>
+    <div class="card-desc">Real-time product grid filtered by category. Cards animate in and out as you INSERT, UPDATE, or DELETE products in psql.</div>
+    <span class="card-sql">SELECT ... FROM products WHERE category = 'electronics'</span>
   </a>
 
-  <a class="card" href="02-joins-aggregates/app.html">
-    <div class="card-head">
+  <a class="card" href="02-order-feed/app.html">
+    <div class="card-header">
       <div class="card-num">2</div>
-      <div class="card-title">Joins + Aggregates</div>
-      <span class="card-badge badge-basic">basic</span>
+      <div class="card-title">Order Feed</div>
+      <span class="card-badge badge-intermediate">Intermediate</span>
     </div>
-    <div class="card-desc">LEFT JOIN, GROUP BY, HAVING, RANK() — pg_reactive computes the diff so subscribers never recompute.</div>
-    <span class="card-sql">RANK() OVER (PARTITION BY region)</span>
+    <div class="card-desc">Live order feed with customer and product names resolved via 3-table JOIN. Changing a customer name updates all their orders instantly.</div>
+    <span class="card-sql">SELECT ... FROM orders JOIN customers JOIN products</span>
   </a>
 
-  <a class="card" href="03-per-user-inventory/app.html">
-    <div class="card-head">
+  <a class="card" href="03-revenue-dashboard/app.html">
+    <div class="card-header">
       <div class="card-num">3</div>
-      <div class="card-title">Per-user Inventory</div>
-      <span class="card-badge badge-flagship">flagship</span>
+      <div class="card-title">Revenue Dashboard</div>
+      <span class="card-badge badge-advanced">Advanced</span>
     </div>
-    <div class="card-desc">The deep authz pattern: <code>SECURITY DEFINER</code> binds <code>query_id</code> + audience to <code>auth.uid()</code>. Leak-proof channel names.</div>
-    <span class="card-sql">pgr.subscribe(…, '{"sub":"…"}'::jsonb)</span>
+    <div class="card-desc">Animated bar chart of revenue per customer using LEFT JOIN + GROUP BY + SUM. Bars grow in real-time as orders are placed.</div>
+    <span class="card-sql">SELECT ... COALESCE(SUM(total), 0) ... GROUP BY customer</span>
   </a>
 
-  <a class="card" href="04-rls-shopping-list/app.html">
-    <div class="card-head">
+  <a class="card" href="04-category-leaderboard/app.html">
+    <div class="card-header">
       <div class="card-num">4</div>
-      <div class="card-title">RLS Shopping List</div>
-      <span class="card-badge badge-rls">RLS</span>
+      <div class="card-title">Category Leaderboard</div>
+      <span class="card-badge badge-expert">Expert</span>
     </div>
-    <div class="card-desc">Multi-tenant: share lists by code. RLS gates the rows; per-member audience gates the WS. Both layers shown.</div>
-    <span class="card-sql">USING (member OR owner = auth.uid())</span>
+    <div class="card-desc">Two simultaneous subscriptions: HAVING-filtered categories and RANK() window function product rankings. Categories appear/disappear as averages cross the threshold.</div>
+    <span class="card-sql">HAVING AVG(price) > 50 &nbsp;+&nbsp; RANK() OVER (PARTITION BY ...)</span>
   </a>
 
-  <a class="card" href="05-notify-mode/app.html">
-    <div class="card-head">
+  <a class="card" href="05-realtime-crm/app.html">
+    <div class="card-header">
       <div class="card-num">5</div>
-      <div class="card-title">Notify vs Delta</div>
-      <span class="card-badge badge-mode">mode</span>
+      <div class="card-title">Real-Time CRM Dashboard</div>
+      <span class="card-badge badge-fullstack">Full-Stack</span>
     </div>
-    <div class="card-desc">Same data, two subscriptions: one ships row deltas, the other just signals "something changed". Pick by your write rate.</div>
-    <span class="card-sql">pgr.subscribe(…, 'notify')</span>
+    <div class="card-desc">Three live queries: CTE-based top customers, LIMIT-constrained recent orders, and regional revenue rollup. A single INSERT updates all three panels simultaneously.</div>
+    <span class="card-sql">WITH cte AS (...) &nbsp;+&nbsp; LIMIT 10 &nbsp;+&nbsp; GROUP BY region</span>
   </a>
 
-  <a class="card" href="06-presence-broadcast/app.html">
-    <div class="card-head">
+  <a class="card" href="06-inventory-monitor/app.html">
+    <div class="card-header">
       <div class="card-num">6</div>
-      <div class="card-title">Presence + Broadcast</div>
-      <span class="card-badge badge-basic">channel</span>
+      <div class="card-title">Inventory Monitor</div>
+      <span class="card-badge badge-intermediate">Intermediate</span>
     </div>
-    <div class="card-desc">Peer-to-peer chat with presence. Server wraps each broadcast as a typed envelope — peers cannot forge server deltas.</div>
-    <span class="card-sql">{"type":"broadcast","from":…,"payload":…}</span>
+    <div class="card-desc">Stock-level dashboard with color-coded alerts. Uses CASE expressions to classify inventory status and JOIN to combine product and stock data.</div>
+    <span class="card-sql">CASE WHEN stock_qty &lt;= 0 THEN 'out_of_stock' ... END</span>
   </a>
 
-  <a class="card" href="07-edge-function/app.html">
-    <div class="card-head">
+  <a class="card" href="07-multi-filter/app.html">
+    <div class="card-header">
       <div class="card-num">7</div>
-      <div class="card-title">Edge Function (http)</div>
-      <span class="card-badge badge-edge">edge</span>
+      <div class="card-title">Multi-Filter Dashboard</div>
+      <span class="card-badge badge-advanced">Advanced</span>
     </div>
-    <div class="card-desc">A separate container in any language. Proxy injects <code>X-Pgstack-Role</code>/<code>-Sub</code>/<code>-Claims</code>; verify_jwt flag gates anon.</div>
-    <span class="card-sql">POST /functions/v1/hello-go</span>
+    <div class="card-desc">Three simultaneous subscriptions on the same table with different WHERE filters. Products visually "jump" between price tiers as prices change.</div>
+    <span class="card-sql">WHERE price &lt; 50 &nbsp;+&nbsp; WHERE price &gt;= 50 AND &lt; 200 &nbsp;+&nbsp; WHERE price &gt;= 200</span>
   </a>
 
+  <a class="card" href="08-order-analytics/app.html">
+    <div class="card-header">
+      <div class="card-num">8</div>
+      <div class="card-title">Order Analytics</div>
+      <span class="card-badge badge-advanced">Advanced</span>
+    </div>
+    <div class="card-desc">Time-series chart of orders bucketed by hour. Uses date_trunc for temporal grouping with live-updating bar heights as new orders arrive.</div>
+    <span class="card-sql">GROUP BY date_trunc('hour', created_at)</span>
+  </a>
+
+  <a class="card" href="09-price-comparison/app.html">
+    <div class="card-header">
+      <div class="card-num">9</div>
+      <div class="card-title">Price Comparison</div>
+      <span class="card-badge badge-expert">Expert</span>
+    </div>
+    <div class="card-desc">Rich comparison matrix with four window functions: overall rank, quartile placement, ratio to average, and percentage of max price. Rankings shift live.</div>
+    <span class="card-sql">RANK() + NTILE(4) + price/AVG() OVER () + price/MAX() OVER ()</span>
+  </a>
+
+  <a class="card" href="10-executive-scorecard/app.html">
+    <div class="card-header">
+      <div class="card-num" style="background:#bc8cff;">10</div>
+      <div class="card-title">Executive Scorecard</div>
+      <span class="card-badge badge-fullstack">Full-Stack</span>
+    </div>
+    <div class="card-desc">Single-row aggregate KPI dashboard with 6 computed metrics. Every order updates all cards simultaneously: revenue, customers, avg value, and more.</div>
+    <span class="card-sql">COUNT(DISTINCT ...) + SUM/AVG + NULLIF ratio</span>
+  </a>
+
+  <a class="card" href="11-notify-mode/app.html" style="border-color: #d29922;">
+    <div class="card-header">
+      <div class="card-num" style="background:#d29922;">11</div>
+      <div class="card-title">Notify Mode vs Delta Mode</div>
+      <span class="card-badge" style="background:#d2992233;color:#d29922;">New</span>
+    </div>
+    <div class="card-desc">Side-by-side comparison of notify mode (lightweight invalidation) vs delta mode (full row diffs). Watch the byte difference — notify sends ~50B per event vs hundreds for deltas.</div>
+    <span class="card-sql">pgr.subscribe('q', 'SELECT ...', 'notify')</span>
+  </a>
+
+  <a class="card" href="12-tutorial/app.html" style="border-color: #58a6ff;">
+    <div class="card-header">
+      <div class="card-num" style="background:#58a6ff;">12</div>
+      <div class="card-title">Interactive Tutorial Console</div>
+      <span class="card-badge badge-basic">Tutorial</span>
+    </div>
+    <div class="card-desc">15-step walkthrough of every pg_reactive feature: subscribe, INSERT/UPDATE/DELETE deltas, JOINs, aggregates, window functions, notify mode, and introspection. Copy-paste SQL into psql and follow along.</div>
+    <span class="card-sql">Step 1/15 &rarr; Step 2/15 &rarr; ... &rarr; Feature Summary</span>
+  </a>
 </div>
 
-<h2 class="section">Apps — full demos</h2>
-<div class="grid">
+<div class="prereqs">
+  <h2>Quick Start</h2>
+  <pre>cd examples
+docker compose up --build
 
-  <a class="card app" href="apps/todo/index.html">
-    <div class="card-head">
-      <div class="card-num">·</div>
-      <div class="card-title">Todos</div>
-      <span class="card-badge badge-rls">app</span>
-    </div>
-    <div class="card-desc">Per-user task tracker. Priority, due dates, soft-delete. Same audience pattern as example 3, fuller UX.</div>
-  </a>
-
-  <a class="card app" href="apps/expenses/index.html">
-    <div class="card-head">
-      <div class="card-num">·</div>
-      <div class="card-title">Expenses</div>
-      <span class="card-badge badge-rls">app</span>
-    </div>
-    <div class="card-desc">Two live subscriptions on the same user: per-row history + running monthly totals by category. Both stay in lockstep.</div>
-  </a>
-
+# Open http://127.0.0.1:3000 in your browser
+# Then run demo SQL commands in psql:
+docker compose exec db psql -U postgres -d pg_reactive_test</pre>
 </div>
 
-<footer>
-  Run <code>docker compose -f examples/docker-compose.yml up -d --build</code> to bring up the stack.
-  PG on <code>:15432</code>, proxy on <code>:8080</code>, this page on <code>:3000</code>.
-</footer>
+<footer>pg_reactive &mdash; SQL SELECTs as live queries with real-time delta notifications</footer>
 
 </body>
 </html>

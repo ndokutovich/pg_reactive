@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_reactive Example 6 — Inventory Monitor</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --text-bright: #f0f6fc;
+  --accent-blue: #58a6ff;
+  --accent-green: #39d353;
+  --accent-red: #f85149;
+  --accent-orange: #f0883e;
+  --accent-purple: #a371f7;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  min-height: 100vh;
+  padding: 0;
+}
+
+/* ===== Header ===== */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.header-left h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.header-left .subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.header-left .example-tag {
+  font-size: 0.75rem;
+  color: var(--accent-blue);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  transition: background 0.3s ease;
+  flex-shrink: 0;
+}
+
+.status-dot.connected {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px rgba(57, 211, 83, 0.4);
+}
+
+/* ===== Main Content ===== */
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+/* ===== Summary Stats ===== */
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+@media (max-width: 700px) {
+  .stats-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.stat-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.stat-value.green { color: var(--accent-green); }
+.stat-value.orange { color: var(--accent-orange); }
+.stat-value.red { color: var(--accent-red); }
+
+/* ===== Table Panel ===== */
+.table-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 28px;
+}
+
+.table-panel-header {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.table-panel-header h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.table-badge {
+  font-size: 0.7rem;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(163, 113, 247, 0.15);
+  color: var(--accent-purple);
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.inv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.inv-table th {
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  white-space: nowrap;
+}
+
+.inv-table th.right,
+.inv-table td.right {
+  text-align: right;
+}
+
+.inv-table td {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.inv-table tbody tr {
+  transition: background 0.3s ease;
+}
+
+.inv-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Row flash animation */
+@keyframes row-flash {
+  0%   { background: rgba(88, 166, 255, 0.15); }
+  100% { background: transparent; }
+}
+
+.row-updated {
+  animation: row-flash 1.2s ease-out;
+}
+
+/* Product name */
+.product-name {
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+/* Category pill */
+.category-pill {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(88, 166, 255, 0.1);
+  color: var(--accent-blue);
+  font-weight: 500;
+  display: inline-block;
+}
+
+/* Warehouse */
+.warehouse-text {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+/* Price */
+.price-text {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+/* Stock cell: number + progress bar */
+.stock-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 140px;
+}
+
+.stock-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-width: 32px;
+  text-align: right;
+}
+
+.stock-bar-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.stock-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease, background 0.4s ease;
+}
+
+.stock-bar-fill.green { background: var(--accent-green); }
+.stock-bar-fill.orange { background: var(--accent-orange); }
+.stock-bar-fill.red { background: var(--accent-red); }
+
+/* Reorder point */
+.reorder-text {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Status badge */
+.status-badge {
+  display: inline-block;
+  font-size: 0.73rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 12px;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.status-badge.in-stock {
+  background: rgba(57, 211, 83, 0.15);
+  color: var(--accent-green);
+}
+
+.status-badge.low-stock {
+  background: rgba(240, 136, 62, 0.15);
+  color: var(--accent-orange);
+}
+
+.status-badge.out-of-stock {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--accent-red);
+}
+
+/* ===== Empty State ===== */
+.empty-state {
+  text-align: center;
+  padding: 48px 16px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* ===== Callout Box ===== */
+.callout {
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.25);
+  border-left: 4px solid var(--accent-blue);
+  border-radius: 8px;
+  padding: 18px 22px;
+  margin-bottom: 28px;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.callout strong {
+  color: var(--accent-blue);
+}
+
+/* ===== Demo Commands ===== */
+.demo-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 28px;
+  overflow: hidden;
+}
+
+.demo-toggle {
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-bright);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 16px 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.2s;
+}
+
+.demo-toggle:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.demo-toggle .arrow {
+  transition: transform 0.3s ease;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.demo-toggle.open .arrow {
+  transform: rotate(180deg);
+}
+
+.demo-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.4s ease;
+}
+
+.demo-content.open {
+  max-height: 600px;
+}
+
+.demo-content pre {
+  margin: 0;
+  padding: 16px 22px 22px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.demo-content code {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.demo-content .comment { color: var(--text-muted); }
+.demo-content .keyword { color: #ff7b72; }
+.demo-content .string { color: #a5d6ff; }
+.demo-content .number { color: #79c0ff; }
+
+/* ===== Footer ===== */
+footer {
+  padding: 24px 32px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+</style>
+<script src="../config.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="example-tag">pg_reactive Example 6 -- CASE + JOIN</div>
+    <h1>Inventory Monitor</h1>
+    <div class="subtitle">Stock levels with CASE-based status classification</div>
+  </div>
+  <div class="header-right">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">Disconnected</span>
+  </div>
+</header>
+
+<main>
+  <!-- Summary Stats -->
+  <div class="stats-bar">
+    <div class="stat-card">
+      <span class="stat-label">Total Products</span>
+      <span class="stat-value" id="stat-total">0</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">In Stock</span>
+      <span class="stat-value green" id="stat-in-stock">0</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Low Stock</span>
+      <span class="stat-value orange" id="stat-low-stock">0</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Out of Stock</span>
+      <span class="stat-value red" id="stat-out-of-stock">0</span>
+    </div>
+  </div>
+
+  <!-- Inventory Table -->
+  <div class="table-panel">
+    <div class="table-panel-header">
+      <h2>Inventory Status</h2>
+      <span class="table-badge">CASE + JOIN</span>
+    </div>
+    <div class="table-scroll">
+      <table class="inv-table">
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th>Category</th>
+            <th>Warehouse</th>
+            <th class="right">Price</th>
+            <th>Stock</th>
+            <th class="right">Reorder Pt</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="inv-body">
+          <tr><td colspan="7" class="empty-state">Connecting...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Callout -->
+  <div class="callout">
+    This query uses <strong>CASE</strong> expressions to classify inventory status dynamically.
+    The status changes in real-time as stock levels cross the reorder threshold.
+    When <strong>stock_qty</strong> drops to zero the row flips to "out of stock"; when it rises
+    above <strong>reorder_point</strong> it returns to "in stock" -- all computed server-side
+    and delivered as a delta over WebSocket.
+  </div>
+
+  <!-- Demo Commands -->
+  <div class="demo-section">
+    <button class="demo-toggle" id="demo-toggle">
+      Demo Commands (run in psql)
+      <span class="arrow">&#9660;</span>
+    </button>
+    <div class="demo-content" id="demo-content">
+      <pre><code><span class="comment">-- Connect to the database</span>
+<span class="comment">-- docker compose exec -T db psql -U postgres -d pg_reactive_test</span>
+
+<span class="comment">-- Reduce stock below reorder point (triggers low_stock)</span>
+<span class="keyword">UPDATE</span> inventory <span class="keyword">SET</span> stock_qty = <span class="number">3</span>
+  <span class="keyword">WHERE</span> product_id = <span class="number">1</span>;
+
+<span class="comment">-- Drain stock completely (triggers out_of_stock)</span>
+<span class="keyword">UPDATE</span> inventory <span class="keyword">SET</span> stock_qty = <span class="number">0</span>
+  <span class="keyword">WHERE</span> product_id = <span class="number">2</span>;
+
+<span class="comment">-- Restock an item (back to in_stock)</span>
+<span class="keyword">UPDATE</span> inventory <span class="keyword">SET</span> stock_qty = <span class="number">50</span>
+  <span class="keyword">WHERE</span> product_id = <span class="number">2</span>;
+
+<span class="comment">-- Add a new product + inventory</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+  <span class="keyword">VALUES</span> (<span class="string">'Wireless Charger'</span>, <span class="number">29.99</span>, <span class="string">'electronics'</span>);
+<span class="keyword">INSERT INTO</span> inventory (product_id, stock_qty, reorder_point, warehouse)
+  <span class="keyword">VALUES</span> (currval(<span class="string">'products_id_seq'</span>), <span class="number">25</span>, <span class="number">10</span>, <span class="string">'warehouse-a'</span>);
+
+<span class="comment">-- Bulk restock everything</span>
+<span class="keyword">UPDATE</span> inventory <span class="keyword">SET</span> stock_qty = stock_qty + <span class="number">20</span>;</code></pre>
+    </div>
+  </div>
+</main>
+
+<footer>pg_reactive -- SQL SELECTs as live queries</footer>
+
+<script>
+(function() {
+  'use strict';
+
+  // ===== Configuration =====
+  var QUERY_ID = 'inventory_status';
+  var WS_URL = PGR.wsBase + '/' + QUERY_ID;
+
+  // ===== State =====
+  var rows = [];
+  var ws = null;
+  var reconnectDelay = 1000;
+  var reconnectTimer = null;
+  var isInitialSnapshot = true;
+
+  // ===== DOM References =====
+  var dotEl = document.getElementById('status-dot');
+  var statusTextEl = document.getElementById('status-text');
+  var bodyEl = document.getElementById('inv-body');
+  var statTotal = document.getElementById('stat-total');
+  var statInStock = document.getElementById('stat-in-stock');
+  var statLowStock = document.getElementById('stat-low-stock');
+  var statOutOfStock = document.getElementById('stat-out-of-stock');
+
+  // ===== Helpers =====
+  function formatCurrency(value) {
+    return parseFloat(value).toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    });
+  }
+
+  function clearElement(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  function setConnected(connected) {
+    if (connected) {
+      dotEl.classList.add('connected');
+      statusTextEl.textContent = 'Connected';
+    } else {
+      dotEl.classList.remove('connected');
+      statusTextEl.textContent = 'Disconnected';
+    }
+  }
+
+  function statusClass(status) {
+    if (status === 'in_stock') return 'in-stock';
+    if (status === 'low_stock') return 'low-stock';
+    if (status === 'out_of_stock') return 'out-of-stock';
+    return '';
+  }
+
+  function statusLabel(status) {
+    if (status === 'in_stock') return 'In Stock';
+    if (status === 'low_stock') return 'Low Stock';
+    if (status === 'out_of_stock') return 'Out of Stock';
+    return String(status);
+  }
+
+  function stockBarColor(status) {
+    if (status === 'in_stock') return 'green';
+    if (status === 'low_stock') return 'orange';
+    return 'red';
+  }
+
+  // ===== Stats =====
+  function updateStats() {
+    var total = rows.length;
+    var inStock = 0;
+    var lowStock = 0;
+    var outOfStock = 0;
+
+    for (var i = 0; i < rows.length; i++) {
+      var s = rows[i].status;
+      if (s === 'in_stock') inStock++;
+      else if (s === 'low_stock') lowStock++;
+      else if (s === 'out_of_stock') outOfStock++;
+    }
+
+    statTotal.textContent = String(total);
+    statInStock.textContent = String(inStock);
+    statLowStock.textContent = String(lowStock);
+    statOutOfStock.textContent = String(outOfStock);
+  }
+
+  // ===== Render =====
+  function renderAll(changedIds) {
+    clearElement(bodyEl);
+
+    if (rows.length === 0) {
+      var tr = document.createElement('tr');
+      var td = document.createElement('td');
+      td.setAttribute('colspan', '7');
+      td.className = 'empty-state';
+      td.textContent = 'No inventory data';
+      tr.appendChild(td);
+      bodyEl.appendChild(tr);
+      updateStats();
+      return;
+    }
+
+    // Sort by stock_qty ascending (critical items first)
+    var sorted = rows.slice().sort(function(a, b) {
+      return parseInt(a.stock_qty) - parseInt(b.stock_qty);
+    });
+
+    for (var i = 0; i < sorted.length; i++) {
+      var row = sorted[i];
+      var isChanged = changedIds && changedIds[String(row.id)];
+
+      var tr = document.createElement('tr');
+      if (isChanged) tr.className = 'row-updated';
+
+      // Product
+      var tdName = document.createElement('td');
+      var nameSpan = document.createElement('span');
+      nameSpan.className = 'product-name';
+      nameSpan.textContent = row.name;
+      tdName.appendChild(nameSpan);
+      tr.appendChild(tdName);
+
+      // Category
+      var tdCat = document.createElement('td');
+      var catSpan = document.createElement('span');
+      catSpan.className = 'category-pill';
+      catSpan.textContent = row.category;
+      tdCat.appendChild(catSpan);
+      tr.appendChild(tdCat);
+
+      // Warehouse
+      var tdWh = document.createElement('td');
+      var whSpan = document.createElement('span');
+      whSpan.className = 'warehouse-text';
+      whSpan.textContent = row.warehouse;
+      tdWh.appendChild(whSpan);
+      tr.appendChild(tdWh);
+
+      // Price
+      var tdPrice = document.createElement('td');
+      tdPrice.className = 'right';
+      var priceSpan = document.createElement('span');
+      priceSpan.className = 'price-text';
+      priceSpan.textContent = formatCurrency(row.price);
+      tdPrice.appendChild(priceSpan);
+      tr.appendChild(tdPrice);
+
+      // Stock (number + progress bar)
+      var tdStock = document.createElement('td');
+      var stockDiv = document.createElement('div');
+      stockDiv.className = 'stock-cell';
+
+      var numSpan = document.createElement('span');
+      numSpan.className = 'stock-num';
+      numSpan.textContent = String(parseInt(row.stock_qty));
+      stockDiv.appendChild(numSpan);
+
+      var barTrack = document.createElement('div');
+      barTrack.className = 'stock-bar-track';
+      var barFill = document.createElement('div');
+      barFill.className = 'stock-bar-fill ' + stockBarColor(row.status);
+      var maxStock = parseInt(row.reorder_point) * 3;
+      var pct = maxStock > 0 ? Math.min(100, Math.round((parseInt(row.stock_qty) / maxStock) * 100)) : 0;
+      barFill.style.width = pct + '%';
+      barTrack.appendChild(barFill);
+      stockDiv.appendChild(barTrack);
+
+      tdStock.appendChild(stockDiv);
+      tr.appendChild(tdStock);
+
+      // Reorder Point
+      var tdReorder = document.createElement('td');
+      tdReorder.className = 'right';
+      var reorderSpan = document.createElement('span');
+      reorderSpan.className = 'reorder-text';
+      reorderSpan.textContent = String(parseInt(row.reorder_point));
+      tdReorder.appendChild(reorderSpan);
+      tr.appendChild(tdReorder);
+
+      // Status
+      var tdStatus = document.createElement('td');
+      var badge = document.createElement('span');
+      badge.className = 'status-badge ' + statusClass(row.status);
+      badge.textContent = statusLabel(row.status);
+      tdStatus.appendChild(badge);
+      tr.appendChild(tdStatus);
+
+      bodyEl.appendChild(tr);
+    }
+
+    updateStats();
+  }
+
+  // ===== Delta Application =====
+  function applyDelta(msg) {
+    var deleted = msg.deleted || [];
+    var inserted = msg.inserted || [];
+    var changedIds = {};
+
+    // Remove deleted rows by id
+    if (deleted.length > 0) {
+      var delIds = {};
+      for (var d = 0; d < deleted.length; d++) {
+        delIds[String(deleted[d].id)] = true;
+      }
+      rows = rows.filter(function(r) { return !delIds[String(r.id)]; });
+    }
+
+    // Add/replace inserted rows
+    for (var n = 0; n < inserted.length; n++) {
+      var ins = inserted[n];
+      changedIds[String(ins.id)] = true;
+      var found = false;
+      for (var j = 0; j < rows.length; j++) {
+        if (String(rows[j].id) === String(ins.id)) {
+          rows[j] = ins;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        rows.push(ins);
+      }
+    }
+
+    return changedIds;
+  }
+
+  // ===== WebSocket =====
+  function connect() {
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = function() {
+      setConnected(true);
+      reconnectDelay = 1000;
+      isInitialSnapshot = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    ws.onmessage = function(event) {
+      var msg;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+
+      // Welcome / subscribed confirmation
+      if (msg.type === 'subscribed') {
+        return;
+      }
+
+      // Overflow -- ignore for now
+      if (msg.type === 'overflow') {
+        return;
+      }
+
+      // Delta message
+      if (msg.query_id === QUERY_ID && (msg.inserted || msg.deleted)) {
+        var inserted = msg.inserted || [];
+        var deleted = msg.deleted || [];
+
+        // First message with only inserts and no deletes = initial snapshot
+        if (isInitialSnapshot && inserted.length > 0 && deleted.length === 0) {
+          isInitialSnapshot = false;
+          rows = inserted.slice();
+          renderAll(null);
+          return;
+        }
+
+        isInitialSnapshot = false;
+        var changedIds = applyDelta(msg);
+        renderAll(changedIds);
+      }
+    };
+
+    ws.onclose = function() {
+      setConnected(false);
+      scheduleReconnect();
+    };
+
+    ws.onerror = function() {
+      setConnected(false);
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(function() {
+      reconnectTimer = null;
+      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+      connect();
+    }, reconnectDelay);
+  }
+
+  // ===== Demo Toggle =====
+  var demoToggle = document.getElementById('demo-toggle');
+  var demoContent = document.getElementById('demo-content');
+
+  demoToggle.addEventListener('click', function() {
+    demoToggle.classList.toggle('open');
+    demoContent.classList.toggle('open');
+  });
+
+  // ===== Init =====
+  // Guest JWT before WS — same discipline as 01-live-products.
+  PGR.signInAnonymously().catch(function () {}).then(connect);
+
+})();
+</script>
+
+<script>
+window.DEMO_ACTIONS = [
+  { action: 'reduce_stock', label: 'Reduce Stock' },
+  { action: 'restock', label: 'Restock' },
+  { action: 'insert_product', label: 'Add Product' },
+];
+</script>
+<script src="../demo-panel.js"></script>
+</body>
+</html>

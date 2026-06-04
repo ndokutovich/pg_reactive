@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_reactive - Category Leaderboard</title>
+<style>
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --text-bright: #f0f6fc;
+  --accent-blue: #58a6ff;
+  --accent-green: #39d353;
+  --accent-red: #f85149;
+  --accent-orange: #f0883e;
+  --accent-purple: #a371f7;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  min-height: 100vh;
+  padding: 0;
+}
+
+/* ===== Header ===== */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.header-left h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.header-left .subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.header-left .example-tag {
+  font-size: 0.75rem;
+  color: var(--accent-blue);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.status-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  transition: background 0.3s ease;
+  flex-shrink: 0;
+}
+
+.status-dot.connected {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px rgba(57, 211, 83, 0.4);
+}
+
+.status-label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* ===== Main Content ===== */
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+/* ===== Split Panel ===== */
+.split-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+
+@media (max-width: 800px) {
+  .split-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  min-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-header h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.panel-badge {
+  font-size: 0.7rem;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.badge-having {
+  background: rgba(163, 113, 247, 0.15);
+  color: var(--accent-purple);
+}
+
+.badge-window {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent-blue);
+}
+
+.panel-note {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ===== Category Cards (Left Panel) ===== */
+.categories-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+
+.category-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: transform 0.3s ease, opacity 0.3s ease, border-color 0.3s ease;
+}
+
+.category-card:hover {
+  border-color: rgba(88, 166, 255, 0.3);
+}
+
+.category-card .cat-name {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  text-transform: capitalize;
+}
+
+.category-card .cat-stats {
+  text-align: right;
+}
+
+.category-card .cat-avg {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  font-variant-numeric: tabular-nums;
+}
+
+.category-card .cat-count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.card-enter {
+  animation: card-enter 0.4s ease-out;
+}
+
+@keyframes card-flash {
+  0%   { border-color: var(--accent-blue); box-shadow: 0 0 12px rgba(88, 166, 255, 0.2); }
+  100% { border-color: var(--border); box-shadow: none; }
+}
+
+.card-updated {
+  animation: card-flash 1.2s ease-out;
+}
+
+/* ===== Rankings (Right Panel) ===== */
+.rankings-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.rank-group {
+  margin-bottom: 18px;
+}
+
+.rank-group-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+}
+
+.rank-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  transition: background 0.3s ease, transform 0.3s ease;
+}
+
+.rank-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.rank-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  border: 2px solid var(--border);
+  color: var(--text-muted);
+  background: var(--bg);
+}
+
+.rank-1 {
+  border-color: #d4a017;
+  color: #f5d251;
+  background: rgba(212, 160, 23, 0.12);
+}
+
+.rank-2 {
+  border-color: #8b949e;
+  color: #c9d1d9;
+  background: rgba(139, 148, 158, 0.1);
+}
+
+.rank-3 {
+  border-color: #a0604a;
+  color: #d4886e;
+  background: rgba(160, 96, 74, 0.1);
+}
+
+.rank-name {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-bright);
+  font-size: 0.9rem;
+}
+
+.rank-price {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+@keyframes rank-flash {
+  0%   { background: rgba(88, 166, 255, 0.15); }
+  100% { background: transparent; }
+}
+
+.rank-updated {
+  animation: rank-flash 1s ease-out;
+}
+
+/* ===== Callout Box ===== */
+.callout {
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.25);
+  border-left: 4px solid var(--accent-blue);
+  border-radius: 8px;
+  padding: 18px 22px;
+  margin-bottom: 28px;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.callout strong {
+  color: var(--accent-blue);
+}
+
+/* ===== Demo Commands ===== */
+.demo-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 28px;
+  overflow: hidden;
+}
+
+.demo-toggle {
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-bright);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 16px 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.2s;
+}
+
+.demo-toggle:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.demo-toggle .arrow {
+  transition: transform 0.3s ease;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.demo-toggle.open .arrow {
+  transform: rotate(180deg);
+}
+
+.demo-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.4s ease;
+}
+
+.demo-content.open {
+  max-height: 600px;
+}
+
+.demo-content pre {
+  margin: 0;
+  padding: 16px 22px 22px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.demo-content code {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.demo-content .comment { color: var(--text-muted); }
+.demo-content .keyword { color: #ff7b72; }
+.demo-content .string { color: #a5d6ff; }
+.demo-content .number { color: #79c0ff; }
+
+/* ===== Empty State ===== */
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  padding: 32px 16px;
+  text-align: center;
+}
+</style>
+<script src="../config.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="example-tag">pg_reactive Example 4 -- HAVING + Window Functions</div>
+    <h1>Category Leaderboard</h1>
+    <div class="subtitle">Two simultaneous live queries with advanced SQL constructs</div>
+  </div>
+  <div class="header-right">
+    <div class="status-group">
+      <div class="status-dot" id="dot-categories"></div>
+      <span class="status-label">categories</span>
+    </div>
+    <div class="status-group">
+      <div class="status-dot" id="dot-rankings"></div>
+      <span class="status-label">rankings</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="split-panel">
+    <!-- Left Panel: Premium Categories -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Premium Categories</h2>
+        <span class="panel-badge badge-having">HAVING</span>
+      </div>
+      <div class="categories-grid" id="categories-container">
+        <div class="empty-state">Waiting for data...</div>
+      </div>
+      <div class="panel-note">
+        Only shows categories where AVG(price) &gt; $50.
+        pg_ivm cannot handle HAVING clauses.
+      </div>
+    </div>
+
+    <!-- Right Panel: Product Rankings -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Product Rankings</h2>
+        <span class="panel-badge badge-window">RANK() OVER</span>
+      </div>
+      <div class="rankings-content" id="rankings-container">
+        <div class="empty-state">Waiting for data...</div>
+      </div>
+      <div class="panel-note">
+        Uses RANK() OVER (PARTITION BY category ORDER BY price DESC).
+        pg_ivm cannot handle window functions.
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    This example uses <strong>HAVING</strong> and <strong>RANK() OVER</strong> -- SQL constructs
+    that pg_ivm, Hasura, Debezium, Supabase, and ElectricSQL all fail on.
+    Only pg_reactive delivers live deltas for these queries.
+    When the average price drops below $50 for a category, it disappears from the left panel.
+    Rankings re-sort automatically when prices change.
+  </div>
+
+  <div class="demo-section">
+    <button class="demo-toggle" id="demo-toggle" onclick="toggleDemo()">
+      Demo Commands (run in psql)
+      <span class="arrow">&#9660;</span>
+    </button>
+    <div class="demo-content" id="demo-content">
+      <pre><code><span class="comment">-- Connect to the database</span>
+<span class="comment">-- docker compose exec -T db psql -U postgres -d pg_reactive_test</span>
+
+<span class="comment">-- Expensive product pushes electronics avg higher, shifts rankings</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+  <span class="keyword">VALUES</span> (<span class="string">'Gaming Laptop'</span>, <span class="number">1299.99</span>, <span class="string">'electronics'</span>);
+
+<span class="comment">-- Cheap product might push a category below $50 threshold</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+  <span class="keyword">VALUES</span> (<span class="string">'USB Cable'</span>, <span class="number">4.99</span>, <span class="string">'electronics'</span>);
+
+<span class="comment">-- New category appears in both panels</span>
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+  <span class="keyword">VALUES</span> (<span class="string">'Standing Desk'</span>, <span class="number">599.99</span>, <span class="string">'furniture'</span>);
+<span class="keyword">INSERT INTO</span> products (name, price, category)
+  <span class="keyword">VALUES</span> (<span class="string">'Ergonomic Chair'</span>, <span class="number">299.99</span>, <span class="string">'furniture'</span>);
+
+<span class="comment">-- Price update shifts rankings</span>
+<span class="keyword">UPDATE</span> products <span class="keyword">SET</span> price = <span class="number">199.99</span>
+  <span class="keyword">WHERE</span> name = <span class="string">'Headphones'</span>;</code></pre>
+    </div>
+  </div>
+</main>
+
+<!-- SDK equivalent -->
+<!--
+  import { useLiveQuery } from 'pg-reactive/react';
+
+  function CategoryLeaderboard() {
+    const categories = useLiveQuery('premium_categories', {
+      url: 'ws://127.0.0.1:8080'
+    });
+    const rankings = useLiveQuery('product_rankings', {
+      url: 'ws://127.0.0.1:8080'
+    });
+
+    return (
+      <SplitPanel>
+        <PremiumCategories rows={categories.rows} />
+        <ProductRankings rows={rankings.rows} />
+      </SplitPanel>
+    );
+  }
+-->
+
+<script>
+(function() {
+  'use strict';
+
+  // ===== State =====
+  var categoriesRows = [];
+  var rankingsRows = [];
+  var wsCat = null;
+  var wsRank = null;
+  var reconnectCatTimer = null;
+  var reconnectRankTimer = null;
+
+  var CATEGORIES_ID = 'premium_categories';
+  var RANKINGS_ID = 'product_rankings';
+  var _wsBase = PGR.wsBase.slice(0, PGR.wsBase.lastIndexOf('/ws'));
+  var WS_CAT_URL = _wsBase + '/ws/' + CATEGORIES_ID;
+  var WS_RANK_URL = _wsBase + '/ws/' + RANKINGS_ID;
+
+  // ===== Utility =====
+  function formatCurrency(value) {
+    return parseFloat(value).toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    });
+  }
+
+  // ===== Status Dots =====
+  function setDotStatus(dotId, connected) {
+    var dot = document.getElementById(dotId);
+    if (connected) {
+      dot.classList.add('connected');
+    } else {
+      dot.classList.remove('connected');
+    }
+  }
+
+  // ===== Categories Panel =====
+  function renderCategories(changedCategories) {
+    var container = document.getElementById('categories-container');
+
+    // Clear
+    while (container.firstChild) {
+      container.removeChild(container.firstChild);
+    }
+
+    if (categoriesRows.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = 'No categories above $50 threshold';
+      container.appendChild(empty);
+      return;
+    }
+
+    // Sort by avg_price descending
+    var sorted = categoriesRows.slice().sort(function(a, b) {
+      return parseFloat(b.avg_price) - parseFloat(a.avg_price);
+    });
+
+    sorted.forEach(function(row) {
+      var changed = changedCategories && changedCategories.has(row.category);
+      var card = document.createElement('div');
+      card.className = 'category-card';
+      if (changed) card.className += ' card-updated';
+
+      var left = document.createElement('div');
+      var catName = document.createElement('div');
+      catName.className = 'cat-name';
+      catName.textContent = row.category;
+      left.appendChild(catName);
+
+      var right = document.createElement('div');
+      right.className = 'cat-stats';
+
+      var avgEl = document.createElement('div');
+      avgEl.className = 'cat-avg';
+      avgEl.textContent = formatCurrency(row.avg_price);
+      right.appendChild(avgEl);
+
+      var countEl = document.createElement('div');
+      countEl.className = 'cat-count';
+      countEl.textContent = row.product_count + ' product' + (parseInt(row.product_count) !== 1 ? 's' : '');
+      right.appendChild(countEl);
+
+      card.appendChild(left);
+      card.appendChild(right);
+      container.appendChild(card);
+    });
+  }
+
+  // ===== Rankings Panel =====
+  function renderRankings(changedIds) {
+    var container = document.getElementById('rankings-container');
+
+    // Clear
+    while (container.firstChild) {
+      container.removeChild(container.firstChild);
+    }
+
+    if (rankingsRows.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = 'Waiting for data...';
+      container.appendChild(empty);
+      return;
+    }
+
+    // Group by category
+    var groups = {};
+    var groupOrder = [];
+    rankingsRows.forEach(function(r) {
+      if (!groups[r.category]) {
+        groups[r.category] = [];
+        groupOrder.push(r.category);
+      }
+      groups[r.category].push(r);
+    });
+
+    // Sort categories alphabetically
+    groupOrder.sort();
+
+    groupOrder.forEach(function(cat) {
+      var items = groups[cat].slice().sort(function(a, b) {
+        return parseInt(a.rank) - parseInt(b.rank);
+      });
+
+      var groupDiv = document.createElement('div');
+      groupDiv.className = 'rank-group';
+
+      var headerDiv = document.createElement('div');
+      headerDiv.className = 'rank-group-header';
+      headerDiv.textContent = cat;
+      groupDiv.appendChild(headerDiv);
+
+      items.forEach(function(item) {
+        var changed = changedIds && changedIds.has(String(item.id));
+        var row = document.createElement('div');
+        row.className = 'rank-item';
+        if (changed) row.className += ' rank-updated';
+
+        var badge = document.createElement('div');
+        var rank = parseInt(item.rank);
+        badge.className = 'rank-badge';
+        if (rank === 1) badge.className += ' rank-1';
+        else if (rank === 2) badge.className += ' rank-2';
+        else if (rank === 3) badge.className += ' rank-3';
+        badge.textContent = '#' + rank;
+        row.appendChild(badge);
+
+        var nameEl = document.createElement('div');
+        nameEl.className = 'rank-name';
+        nameEl.textContent = item.name;
+        row.appendChild(nameEl);
+
+        var priceEl = document.createElement('div');
+        priceEl.className = 'rank-price';
+        priceEl.textContent = formatCurrency(item.price);
+        row.appendChild(priceEl);
+
+        groupDiv.appendChild(row);
+      });
+
+      container.appendChild(groupDiv);
+    });
+  }
+
+  // ===== Delta Processing =====
+  function applyCategoriesDelta(msg) {
+    var deleted = msg.deleted || [];
+    var inserted = msg.inserted || [];
+    var changed = new Set();
+
+    deleted.forEach(function(del) {
+      var idx = categoriesRows.findIndex(function(r) { return r.category === del.category; });
+      if (idx !== -1) categoriesRows.splice(idx, 1);
+    });
+
+    inserted.forEach(function(ins) {
+      changed.add(ins.category);
+      var idx = categoriesRows.findIndex(function(r) { return r.category === ins.category; });
+      if (idx !== -1) {
+        categoriesRows[idx] = ins;
+      } else {
+        categoriesRows.push(ins);
+      }
+    });
+
+    renderCategories(changed);
+  }
+
+  function applyRankingsDelta(msg) {
+    var deleted = msg.deleted || [];
+    var inserted = msg.inserted || [];
+    var changed = new Set();
+
+    deleted.forEach(function(del) {
+      var idx = rankingsRows.findIndex(function(r) { return String(r.id) === String(del.id); });
+      if (idx !== -1) rankingsRows.splice(idx, 1);
+    });
+
+    inserted.forEach(function(ins) {
+      changed.add(String(ins.id));
+      var idx = rankingsRows.findIndex(function(r) { return String(r.id) === String(ins.id); });
+      if (idx !== -1) {
+        rankingsRows[idx] = ins;
+      } else {
+        rankingsRows.push(ins);
+      }
+    });
+
+    renderRankings(changed);
+  }
+
+  // ===== WebSocket: Categories =====
+  function connectCategories() {
+    if (wsCat && (wsCat.readyState === WebSocket.CONNECTING || wsCat.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
+    wsCat = new WebSocket(WS_CAT_URL);
+
+    wsCat.onopen = function() {
+      setDotStatus('dot-categories', true);
+      if (reconnectCatTimer) {
+        clearTimeout(reconnectCatTimer);
+        reconnectCatTimer = null;
+      }
+    };
+
+    wsCat.onmessage = function(event) {
+      var msg;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+
+      if (msg.type === 'subscribed') {
+        console.log('Subscribed to', msg.query_id);
+        return;
+      }
+      if (msg.type === 'overflow') {
+        console.warn('Overflow for', msg.query_id);
+        return;
+      }
+      if (msg.query_id === CATEGORIES_ID && (msg.inserted || msg.deleted)) {
+        applyCategoriesDelta(msg);
+      }
+    };
+
+    wsCat.onclose = function() {
+      setDotStatus('dot-categories', false);
+      if (!reconnectCatTimer) {
+        reconnectCatTimer = setTimeout(function() {
+          reconnectCatTimer = null;
+          connectCategories();
+        }, 2000);
+      }
+    };
+
+    wsCat.onerror = function() {
+      setDotStatus('dot-categories', false);
+    };
+  }
+
+  // ===== WebSocket: Rankings =====
+  function connectRankings() {
+    if (wsRank && (wsRank.readyState === WebSocket.CONNECTING || wsRank.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
+    wsRank = new WebSocket(WS_RANK_URL);
+
+    wsRank.onopen = function() {
+      setDotStatus('dot-rankings', true);
+      if (reconnectRankTimer) {
+        clearTimeout(reconnectRankTimer);
+        reconnectRankTimer = null;
+      }
+    };
+
+    wsRank.onmessage = function(event) {
+      var msg;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+
+      if (msg.type === 'subscribed') {
+        console.log('Subscribed to', msg.query_id);
+        return;
+      }
+      if (msg.type === 'overflow') {
+        console.warn('Overflow for', msg.query_id);
+        return;
+      }
+      if (msg.query_id === RANKINGS_ID && (msg.inserted || msg.deleted)) {
+        applyRankingsDelta(msg);
+      }
+    };
+
+    wsRank.onclose = function() {
+      setDotStatus('dot-rankings', false);
+      if (!reconnectRankTimer) {
+        reconnectRankTimer = setTimeout(function() {
+          reconnectRankTimer = null;
+          connectRankings();
+        }, 2000);
+      }
+    };
+
+    wsRank.onerror = function() {
+      setDotStatus('dot-rankings', false);
+    };
+  }
+
+  // ===== Demo Toggle =====
+  window.toggleDemo = function() {
+    var btn = document.getElementById('demo-toggle');
+    var content = document.getElementById('demo-content');
+    btn.classList.toggle('open');
+    content.classList.toggle('open');
+  };
+
+  // ===== Init =====
+  document.addEventListener('DOMContentLoaded', function() {
+    renderCategories(null);
+    renderRankings(null);
+    // Guest JWT before WS — same discipline as 01-live-products.
+    PGR.signInAnonymously().catch(function () {}).then(function () {
+      connectCategories();
+      connectRankings();
+    });
+  });
+
+})();
+</script>
+
+<script>
+window.DEMO_ACTIONS = [
+  { action: 'insert_product', label: 'Add Product' },
+  { action: 'update_price', label: 'Update Price' },
+  { action: 'delete_demo_product', label: 'Remove Demo Product' },
+];
+</script>
+<script src="../demo-panel.js"></script>
+</body>
+</html>
