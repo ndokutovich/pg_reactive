@@ -99,6 +99,7 @@ type Config struct {
 	// Feature flags
 	EnableSQLEndpoint   bool
 	EnableDemoEndpoint  bool // mount POST /api/demo (mutates demo tables; off by default)
+	PublicDemoSite      bool // explicit opt-in: this deployment IS the public pg_reactive demo, so the prod validator tolerates ENABLE_DEMO_ENDPOINT=true
 	EmbeddedFunctions   bool // enable goja embedded JS functions (always true in embedded runtime)
 	AllowPermissiveCORS    bool // when AllowedOrigins is empty, reflect any Origin (DEV ONLY)
 	RequireAuthenticatedWS bool // when true, anon-key WS subscriptions are rejected (JWT required)
@@ -239,6 +240,7 @@ func FromEnv() Config {
 
 	cfg.EnableSQLEndpoint = envBoolOrDefault("ENABLE_SQL_ENDPOINT", false)
 	cfg.EnableDemoEndpoint = envBoolOrDefault("ENABLE_DEMO_ENDPOINT", false)
+	cfg.PublicDemoSite     = envBoolOrDefault("PUBLIC_DEMO_SITE", false)
 	cfg.EmbeddedFunctions = envBoolOrDefault("EMBEDDED_FUNCTIONS", true)
 	cfg.AllowPermissiveCORS = envBoolOrDefault("ALLOW_PERMISSIVE_CORS", false)
 	cfg.RequireAuthenticatedWS = envBoolOrDefault("REQUIRE_AUTHENTICATED_WS", false)
@@ -389,8 +391,8 @@ func (c Config) Validate() []string {
 		if c.EnableSQLEndpoint {
 			errs = append(errs, "PGSTACK_ENV=production: ENABLE_SQL_ENDPOINT=true is unsafe — raw SQL execution must not be reachable from the network")
 		}
-		if c.EnableDemoEndpoint {
-			errs = append(errs, "PGSTACK_ENV=production: ENABLE_DEMO_ENDPOINT=true exposes a public demo-table mutator — disable it")
+		if c.EnableDemoEndpoint && !c.PublicDemoSite {
+			errs = append(errs, "PGSTACK_ENV=production: ENABLE_DEMO_ENDPOINT=true exposes a public demo-table mutator — disable it (or set PUBLIC_DEMO_SITE=true if this IS the public pg_reactive demo deployment)")
 		}
 		if c.AllowPermissiveCORS {
 			errs = append(errs, "PGSTACK_ENV=production: ALLOW_PERMISSIVE_CORS=true reflects any Origin with credentials — set ALLOWED_ORIGINS instead")

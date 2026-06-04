@@ -55,6 +55,12 @@ services:
       # tables. Treat this line as the marker that distinguishes "public
       # demo of pg_reactive" from "real customer product built on it".
       ENABLE_DEMO_ENDPOINT: "true"
+      # Companion to ENABLE_DEMO_ENDPOINT above. The prod validator
+      # rejects ENABLE_DEMO_ENDPOINT=true outright UNLESS this flag is
+      # also set — operators copying this compose for a real product
+      # deployment cannot accidentally inherit the demo mutator just by
+      # forgetting one line.
+      PUBLIC_DEMO_SITE: "true"
       # Production marker: when set, the proxy fail-fasts on empty / dev
       # JWT secrets, permissive CORS, and other "demo-only" combinations.
       PGSTACK_ENV: production
