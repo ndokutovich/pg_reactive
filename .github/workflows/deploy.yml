@@ -78,28 +78,13 @@ jobs:
               -f examples/docker-compose.prod.yml \
               up -d
 
-            # Install every tracked umbrella nginx conf — one file per
-            # subdomain — into /opt/proxy/nginx/conf.d/, then `nginx -t`
-            # the lot and reload on success. Tracked here so the contract
-            # cannot rot away from a separate ops repo's checkout. The
-            # original gap this closes is round 34: umbrella had no
-            # server_name match for reactive.pgstack.org, every request
-            # fell to the default server and served a stale baked-in
-            # landing. Each app subdomain (polyglot.pgstack.org etc) gets
-            # its own conf in deploy/umbrella/.
-            CHANGED=0
-            for SRC in deploy/umbrella/*.conf; do
-              [ -f "$SRC" ] || continue
-              DST=/opt/proxy/nginx/conf.d/$(basename "$SRC")
-              if ! sudo cmp -s "$SRC" "$DST" 2>/dev/null; then
-                sudo cp "$SRC" "$DST"
-                CHANGED=1
-              fi
-            done
-            if [ "$CHANGED" = "1" ]; then
-              sudo docker exec umbrella-proxy nginx -t \
-                && sudo docker exec umbrella-proxy nginx -s reload \
-                || { echo "::error::umbrella nginx -t failed after copy"; exit 1; }
-            fi
+            # Umbrella nginx routes are owned by the umbrella repo
+            # (vps-12gb-pgstack) — single source of truth. Adding a new
+            # subdomain = PR to that repo's nginx/conf.d/, not here.
+            # The previous in-place copy from deploy/umbrella/ silently
+            # masked the umbrella's own app-reactive.conf because both
+            # had server_name reactive.pgstack.org and nginx took the
+            # first by alphabetical filename — see umbrella commit
+            # 178ca7f for the takeover.
 
             docker image prune -f
