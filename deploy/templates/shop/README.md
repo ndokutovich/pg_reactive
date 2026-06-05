@@ -12,7 +12,11 @@ variable.
 | `docker-compose.yml`                | `pgstack` + one-shot migration + frontend + Inbucket |
 | `.env.example`                      | Required secrets (regenerate yours, never reuse the example) |
 | `migration.sql`                     | Schema + RLS + SECURITY DEFINER functions, applied once at first up |
-| `umbrella/app-shop.conf.template`   | nginx server block — edit `server_name`, copy to umbrella conf.d |
+
+The umbrella nginx route for `shop.pgstack.org` is owned by the
+**vps-12gb-pgstack** repo (`nginx/conf.d/app-shop.conf` there), not
+this one. A different subdomain = PR against that repo or hand-edit
+the conf there before reload.
 
 `migration.sql` is a bundled copy of `apps/shopping/shared/migration.sql` from
 the repo. Keep them in sync if you patch one — there is an intentional CI
@@ -39,11 +43,14 @@ done
 docker network create gateway 2>/dev/null || true
 docker compose up -d
 
-# 4. Wire the umbrella subdomain
-sudo cp umbrella/app-shop.conf.template /opt/proxy/nginx/conf.d/app-shop.conf
-sudo sed -i 's|shop.example.com|YOUR_SUBDOMAIN.your.tld|' /opt/proxy/nginx/conf.d/app-shop.conf
+# 4. Umbrella nginx route already lives in the vps-12gb-pgstack repo
+#    at nginx/conf.d/app-shop.conf (server_name shop.pgstack.org).
+#    On the VPS:
+cd /opt/proxy && git pull
 docker exec umbrella-proxy nginx -t \
   && docker exec umbrella-proxy nginx -s reload
+# If you need a different subdomain — edit that file in the umbrella
+# repo before pulling.
 
 # 5. Verify
 curl -sI -X POST https://YOUR_SUBDOMAIN.your.tld/auth/v1/anonymous \

@@ -15,8 +15,9 @@
 #   3. (optional) export FRONTEND_IMAGE=pgstack/shopping-react:latest
 #      Default is vanilla. Override before `up -d` to swap framework.
 #   4. docker compose up -d
-#   5. cp umbrella/app-shop.conf.template /opt/proxy/nginx/conf.d/app-shop.conf
-#      Edit server_name to your subdomain, then nginx -t && reload.
+#   5. Umbrella nginx route lives in the vps-12gb-pgstack repo at
+#      nginx/conf.d/app-shop.conf — already in the running umbrella's
+#      conf.d/ after `cd /opt/proxy && git pull && nginx -s reload`.
 
 services:
   pgstack:

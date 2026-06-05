@@ -210,8 +210,8 @@ toggled on for ambient activity (configurable rate).
 `deploy/templates/polyglot-showcase/` — a separate template mirroring
 `deploy/templates/shop/`. Same network topology (gateway alias `polyglot-web`),
 same one-shot migration container, plus six engine sidecars and one order
-generator. Umbrella nginx routes `polyglot.pgstack.org` to it via tracked
-`deploy/umbrella/app-polyglot.conf`.
+generator. Umbrella nginx routes `polyglot.pgstack.org` to it via
+`nginx/conf.d/app-polyglot.conf` in the vps-12gb-pgstack repo.
 
 ## Implementation order
 

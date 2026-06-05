@@ -11,8 +11,8 @@
 # All on a private default network; only polyglot-web and polyglot-pgstack
 # are aliased on the external `gateway` so the umbrella nginx routes one
 # subdomain to web (`/`) and proxies pgstack endpoints (/auth/, /rest/,
-# /ws/, /api/, /functions/) to the proxy. See umbrella/app-polyglot.conf
-# in this directory.
+# /ws/, /api/, /functions/) to the proxy. The umbrella nginx route
+# lives in the vps-12gb-pgstack repo at nginx/conf.d/app-polyglot.conf.
 
 services:
   pgstack:

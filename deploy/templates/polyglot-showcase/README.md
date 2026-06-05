@@ -16,12 +16,10 @@ architecture and the engine contract.
 | `docker-compose.yml`                | pgstack + one-shot migration + generator + 6 engines + static web + Inbucket |
 | `.env.example`                      | Required secrets and image pins |
 | `migration.sql`                     | Schema + roles + RLS + RPC + `pgr.subscribe` registrations |
-| `umbrella/app-polyglot.conf.template` | Manual-setup variant of the umbrella server-name block |
 
-The repo also tracks the canonical umbrella conf at
-[`deploy/umbrella/app-polyglot.conf`](../../umbrella/app-polyglot.conf),
-which the `deploy.yml` workflow auto-installs on every push for
-`polyglot.pgstack.org`.
+The umbrella nginx route for `polyglot.pgstack.org` is owned by the
+**vps-12gb-pgstack** repo (`nginx/conf.d/app-polyglot.conf` there), not
+this one. Adding a new variant subdomain = PR against that repo.
 
 ## Build the 8 images on a Docker host
 
@@ -78,16 +76,17 @@ The first up will be slow — `polyglot-migration` runs once against the
 freshly-booted pgstack, then the six engines connect, LISTEN, and start
 consuming whatever the generator emits.
 
-The umbrella nginx config installs itself automatically via the
-deploy.yml pipeline. Until that runs, drop the manual variant:
+The umbrella nginx route lives in the vps-12gb-pgstack repo at
+`nginx/conf.d/app-polyglot.conf` (server_name `polyglot.pgstack.org`).
+On the VPS:
 
 ```bash
-sudo cp umbrella/app-polyglot.conf.template /opt/proxy/nginx/conf.d/app-polyglot.conf
-sudo sed -i 's|polyglot\.example\.com|YOUR_SUBDOMAIN.your.tld|' \
-  /opt/proxy/nginx/conf.d/app-polyglot.conf
+cd /opt/proxy && git pull
 docker exec umbrella-proxy nginx -t \
   && docker exec umbrella-proxy nginx -s reload
 ```
+
+A different subdomain → edit that file in the umbrella repo first.
 
 ## Knobs
 
