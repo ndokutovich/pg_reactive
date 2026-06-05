@@ -1,0 +1,35 @@
+# Drop this file into the umbrella nginx's conf.d (typically
+# /opt/proxy/nginx/conf.d/app-shop.conf), edit the server_name, then
+#
+#   docker exec umbrella-proxy nginx -t  \
+#     &&  docker exec umbrella-proxy nginx -s reload
+#
+# The deploy/umbrella/app-pg-reactive.conf in the repo is the canonical
+# example; this is the same shape pointed at the shop's gateway alias.
+
+server {
+    listen 443 ssl;
+    http2 on;
+    listen [::]:443 ssl;
+
+    # CHANGE ME — the subdomain that resolves to your VPS.
+    server_name shop.example.com;
+
+    include /etc/nginx/snippets/ssl.conf;
+    include /etc/nginx/snippets/cloudflare-realip.conf;
+
+    location / {
+        set $shop_upstream http://shop-web:80;
+        proxy_pass $shop_upstream;
+        include /etc/nginx/snippets/proxy-headers.conf;
+    }
+
+    # /auth/, /rest/, /ws/, /api/ all live on the pgstack container.
+    # shop-web's nginx (the variant image is a static-only nginx) does
+    # NOT proxy these — umbrella has to route them directly to pgstack.
+    location ~ ^/(auth|rest|ws|api|functions)/ {
+        set $shop_pgstack http://shop-pgstack:8080;
+        proxy_pass $shop_pgstack;
+        include /etc/nginx/snippets/proxy-headers.conf;
+    }
+}

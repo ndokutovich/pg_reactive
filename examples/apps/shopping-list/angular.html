@@ -1,0 +1,1977 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>What to Buy (Angular)</title>
+<link rel="icon" type="image/svg+xml" href="../../favicon.svg">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#d97706">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="config.js"></script>
+<style>
+  /* ── Variables ── */
+  :root {
+    --amber-50: #fffbeb;
+    --amber-100: #fef3c7;
+    --amber-200: #fde68a;
+    --amber-300: #fcd34d;
+    --amber-400: #fbbf24;
+    --amber-500: #f59e0b;
+    --amber-600: #d97706;
+    --amber-700: #b45309;
+    --amber-800: #92400e;
+    --green-500: #10b981;
+    --green-600: #059669;
+    --green-50: #ecfdf5;
+    --red-500: #ef4444;
+    --red-50: #fef2f2;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-xs: 6px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --transition: 0.2s ease;
+  }
+
+  /* ── Reset ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font);
+    background: var(--amber-50);
+    color: var(--gray-800);
+    line-height: 1.6;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .screen { display: none; }
+  .screen.active { display: block; animation: fadeIn 0.25s ease; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 20px; border: none; border-radius: var(--radius-sm);
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all var(--transition); font-family: var(--font);
+  }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-primary { background: var(--amber-600); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--amber-700); }
+  .btn-secondary { background: var(--gray-100); color: var(--gray-700); }
+  .btn-secondary:hover:not(:disabled) { background: var(--gray-200); }
+  .btn-ghost { background: transparent; color: var(--gray-500); padding: 8px 12px; font-size: 13px; }
+  .btn-ghost:hover { background: var(--gray-100); color: var(--gray-700); }
+  .btn-danger { background: transparent; color: var(--gray-400); padding: 4px 8px; }
+  .btn-danger:hover { color: var(--red-500); }
+  .btn-icon { padding: 8px; border-radius: 50%; min-width: 36px; min-height: 36px; }
+  .btn-full { width: 100%; }
+
+  /* ── Inputs ── */
+  .input {
+    width: 100%; padding: 10px 14px;
+    border: 1.5px solid var(--gray-200); border-radius: var(--radius-sm);
+    font-size: 14px; color: var(--gray-800); background: #fff;
+    transition: border-color var(--transition), box-shadow var(--transition);
+    outline: none; font-family: var(--font);
+  }
+  .input:focus { border-color: var(--amber-500); box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
+  .input::placeholder { color: var(--gray-400); }
+
+  /* ── Cards ── */
+  .card {
+    background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .card-body { padding: 20px; }
+
+  /* ── Alerts ── */
+  .alert {
+    padding: 10px 14px; border-radius: var(--radius-xs);
+    font-size: 13px; font-weight: 500; margin-bottom: 16px; display: none;
+  }
+  .alert.visible { display: block; }
+  .alert-error { background: var(--red-50); color: var(--red-500); border: 1px solid #fecaca; }
+  .alert-success { background: var(--green-50); color: var(--green-600); border: 1px solid #bbf7d0; }
+
+  /* ── Spinner ── */
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid var(--gray-200); border-top-color: var(--amber-600);
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ═══════ SETUP SCREEN ═══════ */
+  .setup-hero {
+    max-width: 480px; margin: 80px auto; padding: 40px 24px; text-align: center;
+  }
+  .setup-icon { font-size: 56px; margin-bottom: 16px; }
+  .setup-hero h1 { font-size: 26px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px; }
+  .setup-hero p { color: var(--gray-500); font-size: 15px; margin-bottom: 28px; max-width: 360px; margin-left: auto; margin-right: auto; }
+  .setup-log {
+    background: var(--gray-900); color: #a5f3ab;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+    padding: 16px; border-radius: var(--radius-sm);
+    max-height: 200px; overflow-y: auto; text-align: left;
+    margin-top: 20px; display: none; line-height: 1.8;
+  }
+  .setup-log.visible { display: block; }
+  .setup-log .error { color: #fca5a5; }
+  .setup-log .ok { color: #a5f3ab; }
+  .setup-skip { margin-top: 12px; }
+
+  /* ═══════ AUTH SCREEN ═══════ */
+  .auth-wrap { max-width: 400px; margin: 80px auto; padding: 0 16px; }
+  .auth-header { text-align: center; margin-bottom: 24px; }
+  .auth-header h2 { font-size: 22px; color: var(--gray-900); margin-bottom: 4px; }
+  .auth-header .subtitle { color: var(--gray-500); font-size: 14px; }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px; }
+  .auth-toggle { text-align: center; margin-top: 16px; font-size: 14px; color: var(--gray-500); }
+  .auth-toggle a { color: var(--amber-600); cursor: pointer; font-weight: 600; text-decoration: none; }
+  .auth-toggle a:hover { text-decoration: underline; }
+
+  /* ═══════ LISTS SCREEN ═══════ */
+  .app-bar {
+    background: #fff; border-bottom: 1px solid var(--gray-200);
+    padding: 0 16px; height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow);
+  }
+  .app-bar h1 { font-size: 18px; font-weight: 700; color: var(--amber-700); }
+  .app-bar-right { display: flex; align-items: center; gap: 12px; }
+  .app-bar .user-email { font-size: 12px; color: var(--gray-400); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .main-pad { max-width: 560px; margin: 0 auto; padding: 16px; }
+
+  .section-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--gray-400); margin-bottom: 10px; margin-top: 20px;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  .action-row {
+    display: flex; gap: 8px; margin-bottom: 16px;
+  }
+  .action-row .input { flex: 1; }
+
+  /* List cards */
+  .list-card {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 16px; background: #fff; border-radius: var(--radius);
+    box-shadow: var(--shadow); margin-bottom: 10px; cursor: pointer;
+    transition: box-shadow var(--transition), transform var(--transition);
+    border-left: 4px solid var(--amber-400);
+  }
+  .list-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+  .list-card:active { transform: scale(0.98); }
+
+  .list-card-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--amber-100); color: var(--amber-700);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+  }
+  .list-card-info { flex: 1; min-width: 0; }
+  .list-card-name { font-size: 15px; font-weight: 600; color: var(--gray-800); }
+  .list-card-meta { font-size: 12px; color: var(--gray-400); display: flex; gap: 10px; margin-top: 2px; }
+  .list-card-progress {
+    width: 48px; text-align: right; font-size: 13px; font-weight: 700; color: var(--amber-600);
+  }
+
+  .empty-lists { text-align: center; padding: 40px 20px; color: var(--gray-400); }
+  .empty-lists p { font-size: 14px; margin-top: 8px; }
+
+  /* ═══════ DETAIL SCREEN ═══════ */
+  .detail-bar {
+    background: #fff; border-bottom: 1px solid var(--gray-200);
+    padding: 0 8px; height: 56px;
+    display: flex; align-items: center; gap: 8px;
+    position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow);
+  }
+  .detail-bar h1 { font-size: 17px; font-weight: 700; color: var(--gray-800); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail-bar .btn-icon svg { width: 20px; height: 20px; }
+
+  .progress-strip {
+    background: var(--amber-100); padding: 12px 16px; display: flex;
+    align-items: center; gap: 12px;
+  }
+  .progress-bar-wrap {
+    flex: 1; background: var(--amber-200); border-radius: 10px; height: 8px; overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%; background: var(--green-500); border-radius: 10px;
+    transition: width 0.4s ease;
+  }
+  .progress-text { font-size: 13px; font-weight: 600; color: var(--amber-700); white-space: nowrap; }
+
+  .add-item-row {
+    display: flex; gap: 8px; padding: 12px 16px; background: #fff;
+    border-bottom: 1px solid var(--gray-100); position: sticky; top: 56px; z-index: 90;
+  }
+  .add-item-row .input { flex: 1; }
+  .qty-input { width: 56px !important; flex: none !important; text-align: center; }
+
+  /* Item list */
+  .item-list { list-style: none; }
+
+  .item-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; border-bottom: 1px solid var(--gray-50);
+    transition: background var(--transition);
+  }
+  .item-row:active { background: var(--gray-50); }
+
+  .item-checkbox {
+    appearance: none; width: 24px; height: 24px;
+    border: 2px solid var(--gray-300); border-radius: 50%;
+    cursor: pointer; transition: all var(--transition); flex-shrink: 0;
+    position: relative; background: #fff;
+  }
+  .item-checkbox:checked {
+    background: var(--green-500); border-color: var(--green-500);
+  }
+  .item-checkbox:checked::after {
+    content: ''; position: absolute; top: 4px; left: 7px;
+    width: 6px; height: 10px; border: solid #fff; border-width: 0 2.5px 2.5px 0;
+    transform: rotate(45deg);
+  }
+
+  .item-info { flex: 1; min-width: 0; }
+  .item-name { font-size: 15px; color: var(--gray-800); transition: all var(--transition); }
+  .item-row.checked .item-name { text-decoration: line-through; color: var(--gray-400); }
+
+  .item-qty {
+    font-size: 12px; color: var(--amber-600); background: var(--amber-100);
+    padding: 2px 8px; border-radius: 10px; font-weight: 600; flex-shrink: 0;
+  }
+  .item-row.checked .item-qty { color: var(--gray-400); background: var(--gray-100); }
+
+  .item-delete { opacity: 0; transition: opacity var(--transition); }
+  .item-row:hover .item-delete { opacity: 1; }
+
+  .item-separator {
+    padding: 8px 16px; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--gray-400); background: var(--gray-50);
+  }
+
+  .empty-items { text-align: center; padding: 48px 20px; color: var(--gray-400); }
+  .empty-items p { font-size: 14px; margin-top: 8px; }
+
+  /* ═══════ SHARE MODAL ═══════ */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: none; align-items: center; justify-content: center;
+    z-index: 200; padding: 24px;
+  }
+  .modal-overlay.visible { display: flex; }
+  .modal-box {
+    background: #fff; border-radius: var(--radius); padding: 28px;
+    max-width: 360px; width: 100%; box-shadow: var(--shadow-lg);
+    text-align: center; animation: fadeIn 0.2s ease;
+  }
+  .modal-box h3 { font-size: 18px; color: var(--gray-900); margin-bottom: 8px; }
+  .modal-box p { font-size: 14px; color: var(--gray-500); margin-bottom: 20px; }
+  .share-code-display {
+    font-size: 28px; font-weight: 800; letter-spacing: 0.15em;
+    color: var(--amber-700); background: var(--amber-100);
+    padding: 12px 20px; border-radius: var(--radius-sm);
+    margin-bottom: 16px; font-family: 'SF Mono', 'Fira Code', monospace;
+    user-select: all;
+  }
+  .copy-feedback {
+    font-size: 13px; color: var(--green-600); font-weight: 600;
+    margin-bottom: 12px; min-height: 20px;
+  }
+
+  /* ═══════ TOAST ═══════ */
+  .toast-area {
+    position: fixed; top: 64px; right: 16px; z-index: 300;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .toast {
+    padding: 10px 16px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500; box-shadow: var(--shadow-lg);
+    animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+    max-width: 300px;
+  }
+  .toast-info { background: var(--amber-600); color: #fff; }
+  .toast-success { background: var(--green-500); color: #fff; }
+  .toast-error { background: var(--red-500); color: #fff; }
+  @keyframes toastIn { from { opacity:0; transform:translateX(30px); } to { opacity:1; transform:translateX(0); } }
+  @keyframes toastOut { to { opacity:0; transform:translateX(30px); } }
+
+  /* ═══════ FOOTER ═══════ */
+  .app-footer {
+    text-align: center; padding: 24px 16px; font-size: 12px; color: var(--gray-400);
+  }
+
+  /* ═══════ RESPONSIVE ═══════ */
+  @media (max-width: 480px) {
+    .setup-hero { margin: 40px 16px; padding: 28px 20px; }
+    .auth-wrap { margin: 40px auto; }
+    .app-bar .user-email { display: none; }
+    .item-delete { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Toast area -->
+<div class="toast-area" id="toasts"></div>
+
+<!-- ═══════ SETUP SCREEN ═══════ -->
+<div id="screen-setup" class="screen">
+  <div class="setup-hero card">
+    <div class="card-body">
+      <div class="setup-icon">&#x1F6D2;</div>
+      <h1>What to Buy (Angular)</h1>
+      <p>A shared shopping list for couples. Set up the database to get started.</p>
+      <button id="btn-setup" class="btn btn-primary btn-full">Setup Database</button>
+      <button id="btn-skip-setup" class="btn btn-ghost btn-full setup-skip">Skip (already set up)</button>
+      <div id="setup-log" class="setup-log"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ AUTH SCREEN ═══════ -->
+<div id="screen-auth" class="screen">
+  <div class="auth-wrap">
+    <div class="card">
+      <div class="card-body">
+        <div class="auth-header">
+          <h2 id="auth-title">Sign Up</h2>
+          <p class="subtitle" id="auth-subtitle">Create your account to start shopping together</p>
+        </div>
+        <div id="auth-alert" class="alert alert-error"></div>
+        <form id="auth-form">
+          <div class="form-group">
+            <label for="auth-email">Email</label>
+            <input type="email" id="auth-email" class="input" placeholder="you@example.com" required autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label for="auth-password">Password</label>
+            <input type="password" id="auth-password" class="input" placeholder="At least 6 characters" required minlength="6" autocomplete="current-password">
+          </div>
+          <button type="submit" id="auth-submit" class="btn btn-primary btn-full">Sign Up</button>
+        </form>
+        <div class="auth-toggle">
+          <span id="auth-toggle-text">Already have an account?</span>
+          <a id="auth-toggle-link">Log In</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ LISTS SCREEN ═══════ -->
+<div id="screen-lists" class="screen">
+  <div class="app-bar">
+    <h1>&#x1F6D2; What to Buy</h1>
+    <div class="app-bar-right">
+      <span class="user-email" id="lists-email"></span>
+      <button class="btn btn-ghost" id="btn-logout">Log out</button>
+    </div>
+  </div>
+  <div class="main-pad">
+    <div class="section-label">Create New List</div>
+    <form class="action-row" id="form-create-list">
+      <input type="text" id="input-list-name" class="input" placeholder="e.g. Weekly groceries" required maxlength="100">
+      <button type="submit" class="btn btn-primary" id="btn-create-list">Create</button>
+    </form>
+
+    <div class="section-label">Join a List</div>
+    <form class="action-row" id="form-join-list">
+      <input type="text" id="input-share-code" class="input" placeholder="Enter share code" required maxlength="10" style="text-transform:uppercase; letter-spacing:0.1em; font-weight:600;">
+      <button type="submit" class="btn btn-secondary" id="btn-join-list">Join</button>
+    </form>
+
+    <div class="section-label">My Lists</div>
+    <div id="lists-container"></div>
+
+    <div class="app-footer">
+      Built with pgStack &mdash; PostgreSQL + Rust + Row Level Security
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ DETAIL SCREEN ═══════ -->
+<div id="screen-detail" class="screen">
+  <div class="detail-bar">
+    <button class="btn btn-icon btn-ghost" id="btn-back" title="Back">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <h1 id="detail-title">List</h1>
+    <button class="btn btn-icon btn-ghost" id="btn-share" title="Share">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+    </button>
+    <button class="btn btn-icon btn-danger" id="btn-delete-list" title="Delete list">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+    </button>
+  </div>
+
+  <div class="progress-strip">
+    <div class="progress-bar-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
+    <div class="progress-text" id="progress-text">0 / 0</div>
+  </div>
+
+  <form class="add-item-row" id="form-add-item">
+    <input type="text" id="input-item-name" class="input" placeholder="Add item..." required maxlength="200">
+    <input type="text" id="input-item-qty" class="input qty-input" value="1" placeholder="Qty" maxlength="10">
+    <button type="submit" class="btn btn-primary btn-icon" title="Add">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+  </form>
+
+  <div id="items-container">
+    <ul id="item-list" class="item-list"></ul>
+    <div id="items-empty" class="empty-items" style="display:none;">
+      <div style="font-size:40px; opacity:0.4;">&#x1F6D2;</div>
+      <p>List is empty. Add items above!</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ SHARE MODAL ═══════ -->
+<div class="modal-overlay" id="modal-share">
+  <div class="modal-box">
+    <h3>Share This List</h3>
+    <p>Give this code to your partner so they can join the list.</p>
+    <div class="share-code-display" id="share-code-display">------</div>
+    <div class="copy-feedback" id="copy-feedback"></div>
+    <button class="btn btn-primary btn-full" id="btn-copy-code">Copy Code</button>
+    <button class="btn btn-ghost btn-full" id="btn-native-share" style="margin-top:8px; display:none;">Share via...</button>
+    <button class="btn btn-ghost btn-full" id="btn-close-modal" style="margin-top:8px;">Close</button>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ═══════════════════════════════════════════════════════════════
+  // ANGULAR-INSPIRED FRAMEWORK LAYER
+  // ═══════════════════════════════════════════════════════════════
+
+  // ── EventEmitter (Observable-like pub/sub) ──
+  // Simulates RxJS Subject for reactive state propagation
+  // between services and components.
+
+  function EventEmitter() {
+    this._listeners = [];
+  }
+
+  EventEmitter.prototype.subscribe = function(fn) {
+    this._listeners.push(fn);
+    var self = this;
+    // Return a subscription object with unsubscribe (like RxJS)
+    return {
+      unsubscribe: function() {
+        var idx = self._listeners.indexOf(fn);
+        if (idx !== -1) self._listeners.splice(idx, 1);
+      }
+    };
+  };
+
+  EventEmitter.prototype.emit = function(value) {
+    for (var i = 0; i < this._listeners.length; i++) {
+      this._listeners[i](value);
+    }
+  };
+
+  // ── BehaviorSubject (stateful observable) ──
+  // Holds a current value and emits it to new subscribers immediately.
+
+  function BehaviorSubject(initialValue) {
+    EventEmitter.call(this);
+    this._value = initialValue;
+  }
+
+  BehaviorSubject.prototype = Object.create(EventEmitter.prototype);
+  BehaviorSubject.prototype.constructor = BehaviorSubject;
+
+  BehaviorSubject.prototype.getValue = function() {
+    return this._value;
+  };
+
+  BehaviorSubject.prototype.next = function(value) {
+    this._value = value;
+    this.emit(value);
+  };
+
+  BehaviorSubject.prototype.subscribe = function(fn) {
+    var sub = EventEmitter.prototype.subscribe.call(this, fn);
+    // Emit current value immediately (BehaviorSubject semantics)
+    fn(this._value);
+    return sub;
+  };
+
+  // ── Injector (Dependency Injection container) ──
+  // Simple DI container that Angular components receive services from.
+
+  function Injector() {
+    this._providers = {};
+  }
+
+  Injector.prototype.register = function(token, instance) {
+    this._providers[token] = instance;
+  };
+
+  Injector.prototype.get = function(token) {
+    if (!this._providers[token]) {
+      throw new Error('No provider for ' + token);
+    }
+    return this._providers[token];
+  };
+
+  // ── ChangeDetector (Zone-like change detection) ──
+  // Triggers re-rendering after state mutations, similar to
+  // Angular's Zone.js automatic change detection.
+
+  function ChangeDetector() {
+    this._components = [];
+    this._scheduled = false;
+  }
+
+  ChangeDetector.prototype.registerComponent = function(component) {
+    this._components.push(component);
+  };
+
+  ChangeDetector.prototype.detectChanges = function() {
+    if (this._scheduled) return;
+    this._scheduled = true;
+    var self = this;
+    requestAnimationFrame(function() {
+      self._scheduled = false;
+      for (var i = 0; i < self._components.length; i++) {
+        var comp = self._components[i];
+        if (comp._active && comp.render) {
+          comp.render();
+        }
+      }
+    });
+  };
+
+  ChangeDetector.prototype.markForCheck = function(component) {
+    if (component._active && component.render) {
+      component.render();
+    }
+  };
+
+  // ── Component base class ──
+  // All components extend this, gaining lifecycle hooks and
+  // rendering capabilities similar to Angular components.
+
+  function Component(injector) {
+    this._injector = injector;
+    this._subscriptions = [];
+    this._active = false;
+    this._changeDetector = injector.get('ChangeDetector');
+  }
+
+  Component.prototype.onInit = function() {};
+  Component.prototype.onDestroy = function() {};
+  Component.prototype.render = function() {};
+
+  Component.prototype.activate = function() {
+    this._active = true;
+    this.onInit();
+    this.render();
+  };
+
+  Component.prototype.deactivate = function() {
+    this._active = false;
+    this.onDestroy();
+    // Unsubscribe all reactive subscriptions (prevents memory leaks)
+    for (var i = 0; i < this._subscriptions.length; i++) {
+      this._subscriptions[i].unsubscribe();
+    }
+    this._subscriptions = [];
+  };
+
+  Component.prototype.addSubscription = function(sub) {
+    this._subscriptions.push(sub);
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // CONFIG
+  // ═══════════════════════════════════════════════════════════════
+  var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
+  var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
+  var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
+  var SERVICE_ROLE_KEY = 'dev-only-service-role-key-do-not-use-in-production';
+  var SESSION_KEY = 'wtb-session';
+
+  // ═══════════════════════════════════════════════════════════════
+  // UTILITIES
+  // ═══════════════════════════════════════════════════════════════
+  function parseJwt(token) {
+    try {
+      var b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(atob(b64 + '=='.slice(0, (4 - b64.length % 4) % 4)));
+    } catch (e) { return null; }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SESSION PERSISTENCE
+  // ═══════════════════════════════════════════════════════════════
+  function saveSessionData(data) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+
+  function loadSessionData() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+  }
+
+  function clearSessionData() {
+    localStorage.removeItem(SESSION_KEY);
+  }
+
+  function tryRefresh() {
+    var session = loadSessionData();
+    if (!session || !session.refresh_token) return Promise.reject('no refresh token');
+    return fetch(API_BASE + '/auth/v1/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: session.refresh_token })
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || 'refresh failed');
+        saveSessionData({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user || session.user });
+        return data;
+      });
+    });
+  }
+
+  function isTokenExpiringSoon() {
+    var session = loadSessionData();
+    if (!session) return true;
+    var claims = parseJwt(session.access_token);
+    if (!claims || !claims.exp) return false;
+    return (claims.exp - Math.floor(Date.now() / 1000)) < 300;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SERVICES
+  // ═══════════════════════════════════════════════════════════════
+
+  // ── ApiService ──
+  // Handles all HTTP communication with the pgStack backend.
+  // Encapsulates REST, RPC, and raw SQL endpoints.
+
+  function ApiService(injector) {
+    this._injector = injector;
+  }
+
+  ApiService.prototype.getAuthHeaders = function() {
+    var authService = this._injector.get('AuthService');
+    var h = { 'Content-Type': 'application/json', 'apikey': ANON_KEY };
+    var token = authService.getAccessToken();
+    if (token) h['Authorization'] = 'Bearer ' + token;
+    return h;
+  };
+
+  ApiService.prototype.sql = function(sql) {
+    return fetch(API_BASE + '/api/sql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SERVICE_ROLE_KEY },
+      body: JSON.stringify({ sql: sql })
+    }).then(function(r) { return r.json(); });
+  };
+
+  ApiService.prototype.rest = function(method, path, body, _retry) {
+    var self = this;
+    var opts = { method: method, headers: this.getAuthHeaders() };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    return fetch(API_BASE + '/rest/v1/' + path, opts).then(function(res) {
+      if (res.status === 204) return null;
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function(data) {
+          var authService = self._injector.get('AuthService');
+          authService._setSession(data);
+          return self.rest(method, path, body, true);
+        }).catch(function() {
+          var authService = self._injector.get('AuthService');
+          authService.logout();
+          var router = self._injector.get('RouterService');
+          router.navigate('auth');
+          throw new Error('Session expired');
+        });
+      }
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
+        return data;
+      });
+    });
+  };
+
+  ApiService.prototype.rpc = function(fn, params, _retry) {
+    var self = this;
+    var headers = this.getAuthHeaders();
+    return fetch(API_BASE + '/rest/v1/rpc/' + fn, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(params || {})
+    }).then(function(res) {
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(function(data) {
+          var authService = self._injector.get('AuthService');
+          authService._setSession(data);
+          return self.rpc(fn, params, true);
+        }).catch(function() {
+          var authService = self._injector.get('AuthService');
+          authService.logout();
+          var router = self._injector.get('RouterService');
+          router.navigate('auth');
+          throw new Error('Session expired');
+        });
+      }
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
+        return data;
+      });
+    });
+  };
+
+  ApiService.prototype.authPost = function(endpoint, body) {
+    return fetch(API_BASE + endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || data.message || 'Request failed');
+        return data;
+      });
+    });
+  };
+
+  ApiService.prototype.authPostWithHeaders = function(endpoint, headers) {
+    return fetch(API_BASE + endpoint, {
+      method: 'POST',
+      headers: headers
+    }).catch(function() {});
+  };
+
+  // ── AuthService ──
+  // Manages authentication state, token storage, and user session.
+  // Exposes BehaviorSubjects for reactive state consumption.
+
+  function AuthService(injector) {
+    this._injector = injector;
+    this.user$ = new BehaviorSubject(null);
+    this.isAuthenticated$ = new BehaviorSubject(false);
+    this._accessToken = null;
+    this.currentWs = null;
+  }
+
+  AuthService.prototype.getAccessToken = function() {
+    return this._accessToken;
+  };
+
+  AuthService.prototype.getUserId = function() {
+    if (!this._accessToken) return null;
+    var claims = parseJwt(this._accessToken);
+    return claims ? claims.sub : null;
+  };
+
+  AuthService.prototype.signup = function(email, password) {
+    var self = this;
+    var api = this._injector.get('ApiService');
+    return api.authPost('/auth/v1/signup', { email: email, password: password })
+      .then(function(data) {
+        self._setSession(data);
+        saveSessionData({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
+        return data;
+      });
+  };
+
+  AuthService.prototype.login = function(email, password) {
+    var self = this;
+    var api = this._injector.get('ApiService');
+    return api.authPost('/auth/v1/token', { grant_type: 'password', email: email, password: password })
+      .then(function(data) {
+        self._setSession(data);
+        saveSessionData({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
+        return data;
+      });
+  };
+
+  AuthService.prototype.logout = function() {
+    var api = this._injector.get('ApiService');
+    api.authPostWithHeaders('/auth/v1/logout', this._injector.get('ApiService').getAuthHeaders());
+    if (this.currentWs) { this.currentWs.close(); this.currentWs = null; }
+    this._accessToken = null;
+    this.user$.next(null);
+    this.isAuthenticated$.next(false);
+    clearSessionData();
+  };
+
+  AuthService.prototype._setSession = function(data) {
+    this._accessToken = data.access_token;
+    this.user$.next(data.user);
+    this.isAuthenticated$.next(true);
+  };
+
+  // ── NotificationService ──
+  // Manages browser notifications and toast messages.
+  // Decouples notification logic from component code.
+
+  function NotificationService() {
+    this._toastContainer = null;
+  }
+
+  NotificationService.prototype.init = function() {
+    this._toastContainer = document.getElementById('toasts');
+  };
+
+  NotificationService.prototype.requestPermission = function() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  };
+
+  NotificationService.prototype.showNotification = function(title, body) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+        navigator.serviceWorker.ready.then(function(reg) {
+          reg.showNotification(title, { body: body, icon: 'icon.svg', tag: 'wtb-' + Date.now() });
+        }).catch(function() {});
+      } else {
+        try {
+          new Notification(title, { body: body, icon: 'icon.svg', tag: 'wtb-' + Date.now() });
+        } catch (e) { /* ignore */ }
+      }
+    }
+    this.toast(title + ': ' + body, 'info');
+  };
+
+  NotificationService.prototype.toast = function(msg, type) {
+    var el = document.createElement('div');
+    el.className = 'toast toast-' + (type || 'info');
+    el.textContent = msg;
+    this._toastContainer.appendChild(el);
+    setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 3200);
+  };
+
+  // ── ListService ──
+  // Business logic service for shopping lists and items.
+  // Exposes BehaviorSubjects for lists and items state,
+  // manages polling for real-time sync.
+
+  var POLL_INTERVAL = 2000;
+
+  function ListService(injector) {
+    this._injector = injector;
+    this.lists$ = new BehaviorSubject([]);
+    this.currentList$ = new BehaviorSubject(null);
+    this.items$ = new BehaviorSubject([]);
+    this._pollTimer = null;
+    this._suppressNotifications = false;
+    this._knownItemIds = new Set();
+  }
+
+  ListService.prototype.loadLists = function() {
+    var self = this;
+    var api = this._injector.get('ApiService');
+    return api.rpc('my_shopping_lists').then(function(data) {
+      self.lists$.next(Array.isArray(data) ? data : []);
+      return self.lists$.getValue();
+    });
+  };
+
+  ListService.prototype.createList = function(name) {
+    var api = this._injector.get('ApiService');
+    return api.rpc('create_shopping_list', { list_name: name });
+  };
+
+  ListService.prototype.joinList = function(code) {
+    var api = this._injector.get('ApiService');
+    return api.rpc('join_shopping_list', { code: code });
+  };
+
+  ListService.prototype.deleteList = function(listId) {
+    var api = this._injector.get('ApiService');
+    return api.rest('DELETE', 'shopping_lists?id=eq.' + listId);
+  };
+
+  ListService.prototype.openList = function(list) {
+    location.hash = '#/list/' + list.id;
+  };
+
+  ListService.prototype.openListDirect = function(list) {
+    this.currentList$.next(list);
+    this._knownItemIds.clear();
+    this.items$.next([]);
+    this.loadItems();
+    this.connectLiveQuery(list.id);
+  };
+
+  ListService.prototype.connectLiveQuery = function(listId) {
+    var self = this;
+    var authService = this._injector.get('AuthService');
+    var api = this._injector.get('ApiService');
+
+    api.rpc('subscribe_list_items', { p_list_id: listId }).then(function() {
+      var wsUrl = WS_BASE + '/ws/items-' + listId + '?token=' + encodeURIComponent(authService.getAccessToken());
+      var ws = new WebSocket(wsUrl);
+      authService.currentWs = ws;
+
+      ws.onmessage = function(e) {
+        var msg;
+        try { msg = JSON.parse(e.data); } catch (ex) { return; }
+
+        if (msg.type === 'subscribed') return;
+        if (msg.type === 'overflow') { self.loadItems(); return; }
+
+        var currentItems = self.items$.getValue().slice();
+        var changed = false;
+        var insertedIds = new Set((msg.inserted || []).map(function(r) { return r.id; }));
+
+        // Process inserted first (upsert)
+        if (msg.inserted && msg.inserted.length) {
+          msg.inserted.forEach(function(row) {
+            var idx = -1;
+            for (var i = 0; i < currentItems.length; i++) {
+              if (currentItems[i].id === row.id) { idx = i; break; }
+            }
+            if (idx >= 0) {
+              var old = currentItems[idx];
+              if (old.checked !== row.checked) self._detectItemChange(row);
+              currentItems[idx] = row;
+            } else {
+              self._detectNewItem(row);
+              currentItems.push(row);
+            }
+          });
+          changed = true;
+        }
+        // Process deleted (skip ids also in inserted — those are updates)
+        if (msg.deleted && msg.deleted.length) {
+          var delIds = msg.deleted.filter(function(d) { return !insertedIds.has(d.id); }).map(function(d) { return d.id; });
+          if (delIds.length > 0) {
+            var deletedIds = new Set(delIds);
+            currentItems = currentItems.filter(function(i) { return !deletedIds.has(i.id); });
+            changed = true;
+          }
+        }
+        if (changed) {
+          self.items$.next(currentItems);
+        }
+      };
+
+      ws.onerror = function() {
+        console.warn('WebSocket error, falling back to polling');
+        self.startPolling();
+      };
+
+      ws.onclose = function() { authService.currentWs = null; };
+    }).catch(function(err) {
+      console.warn('Live query unavailable, falling back to polling:', err.message || err);
+      self.startPolling();
+    });
+  };
+
+  ListService.prototype.closeList = function() {
+    var authService = this._injector.get('AuthService');
+    if (authService.currentWs) { authService.currentWs.close(); authService.currentWs = null; }
+    this.stopPolling();
+    this.currentList$.next(null);
+    this.items$.next([]);
+  };
+
+  ListService.prototype.loadItems = function() {
+    var self = this;
+    var currentList = this.currentList$.getValue();
+    if (!currentList) return Promise.resolve();
+
+    var api = this._injector.get('ApiService');
+    return api.rest('GET', 'shopping_items?list_id=eq.' + currentList.id + '&order=checked.asc,created_at.desc')
+      .then(function(data) {
+        var newItems = Array.isArray(data) ? data : [];
+        self._detectChanges(newItems);
+        self.items$.next(newItems);
+        return newItems;
+      })
+      .catch(function(err) {
+        console.error('Load items failed:', err);
+      });
+  };
+
+  ListService.prototype.addItem = function(name, quantity) {
+    var self = this;
+    var currentList = this.currentList$.getValue();
+    if (!currentList) return Promise.reject(new Error('No list selected'));
+
+    var authService = this._injector.get('AuthService');
+    var api = this._injector.get('ApiService');
+    var body = {
+      list_id: currentList.id,
+      name: name,
+      quantity: quantity,
+      checked: false,
+      added_by: authService.getUserId()
+    };
+
+    this._suppressNotifications = true;
+    setTimeout(function() { self._suppressNotifications = false; }, 3000);
+
+    return api.rest('POST', 'shopping_items', body).then(function(created) {
+      var currentItems = self.items$.getValue();
+      var exists = currentItems.some(function(i) { return i.id === created.id; });
+      if (!exists) currentItems.unshift(created);
+      self._knownItemIds.add(created.id);
+      self.items$.next(currentItems);
+      return created;
+    });
+  };
+
+  ListService.prototype.toggleItem = function(id, checked) {
+    var self = this;
+    var currentItems = this.items$.getValue();
+    var item = currentItems.find(function(i) { return i.id === id; });
+    if (!item) return;
+
+    var prev = item.checked;
+    item.checked = checked;
+    this.items$.next(currentItems);
+
+    this._suppressNotifications = true;
+    setTimeout(function() { self._suppressNotifications = false; }, 3000);
+
+    var api = this._injector.get('ApiService');
+    api.rest('PATCH', 'shopping_items?id=eq.' + id, { checked: checked }).catch(function(err) {
+      item.checked = prev;
+      self.items$.next(currentItems);
+      var notify = self._injector.get('NotificationService');
+      notify.toast('Update failed: ' + err.message, 'error');
+    });
+  };
+
+  ListService.prototype.deleteItem = function(id) {
+    var self = this;
+    var currentItems = this.items$.getValue();
+    var idx = -1;
+    for (var i = 0; i < currentItems.length; i++) {
+      if (currentItems[i].id === id) { idx = i; break; }
+    }
+    if (idx === -1) return;
+
+    var removed = currentItems.splice(idx, 1)[0];
+    this._knownItemIds.delete(id);
+    this.items$.next(currentItems);
+
+    var api = this._injector.get('ApiService');
+    api.rest('DELETE', 'shopping_items?id=eq.' + id).catch(function(err) {
+      currentItems.splice(idx, 0, removed);
+      self._knownItemIds.add(id);
+      self.items$.next(currentItems);
+      var notify = self._injector.get('NotificationService');
+      notify.toast('Delete failed: ' + err.message, 'error');
+    });
+  };
+
+  ListService.prototype._detectChanges = function(newItems) {
+    if (this._suppressNotifications || this._knownItemIds.size === 0) {
+      for (var i = 0; i < newItems.length; i++) {
+        this._knownItemIds.add(newItems[i].id);
+      }
+      return;
+    }
+
+    var oldItems = this.items$.getValue();
+
+    for (var j = 0; j < newItems.length; j++) {
+      var it = newItems[j];
+      if (!this._knownItemIds.has(it.id)) {
+        this._detectNewItem(it);
+        continue;
+      }
+      var old = oldItems.find(function(o) { return o.id === it.id; });
+      if (old && old.checked !== it.checked) {
+        this._detectItemChange(it);
+      }
+    }
+  };
+
+  ListService.prototype._detectNewItem = function(row) {
+    if (this._suppressNotifications || this._knownItemIds.has(row.id)) return;
+    this._knownItemIds.add(row.id);
+    if (this._knownItemIds.size <= 1) return; // first load
+    var authService = this._injector.get('AuthService');
+    var myUserId = authService.getUserId();
+    if (row.added_by !== myUserId) {
+      var notify = this._injector.get('NotificationService');
+      notify.showNotification('Item added', row.name + (row.quantity !== '1' ? ' x' + row.quantity : ''));
+    }
+  };
+
+  ListService.prototype._detectItemChange = function(row) {
+    if (this._suppressNotifications) return;
+    this._knownItemIds.add(row.id);
+    var authService = this._injector.get('AuthService');
+    var myUserId = authService.getUserId();
+    if (row.added_by !== myUserId && row.checked) {
+      var notify = this._injector.get('NotificationService');
+      notify.showNotification('Item checked off', row.name);
+    }
+  };
+
+  ListService.prototype.startPolling = function() {
+    this.stopPolling();
+    var self = this;
+    this._pollTimer = setInterval(function() { self.loadItems(); }, POLL_INTERVAL);
+  };
+
+  ListService.prototype.stopPolling = function() {
+    if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+  };
+
+  // ── RouterService ──
+  // Hash-based router, simulating Angular Router.
+  // Manages active screen state and navigation via location.hash.
+
+  function RouterService(injector) {
+    this._injector = injector;
+    this.activeScreen$ = new BehaviorSubject('');
+  }
+
+  RouterService.prototype.navigate = function(path) {
+    location.hash = '#/' + path;
+  };
+
+  RouterService.prototype.showScreen = function(screen) {
+    var screens = document.querySelectorAll('.screen');
+    for (var i = 0; i < screens.length; i++) screens[i].classList.remove('active');
+    var el = document.getElementById('screen-' + screen);
+    if (el) el.classList.add('active');
+    this.activeScreen$.next(screen);
+  };
+
+  RouterService.prototype.dispatch = function() {
+    var hash = location.hash.replace(/^#\/?/, '') || '';
+    var parts = hash.split('/');
+    var screen = parts[0];
+    var authService = this._injector.get('AuthService');
+    var listService = this._injector.get('ListService');
+    var self = this;
+
+    if (screen === 'list' && parts[1]) {
+      var listId = parseInt(parts[1], 10);
+      if (!authService.getAccessToken()) { self.navigate('auth'); return; }
+      var lists = listService.lists$.getValue();
+      var list = lists.find(function(l) { return l.id === listId; });
+      if (list) {
+        self.showScreen('detail');
+        listService.openListDirect(list);
+        return;
+      }
+      // List not in memory - load first
+      var api = this._injector.get('ApiService');
+      api.rpc('my_shopping_lists').then(function(data) {
+        var loaded = Array.isArray(data) ? data : [];
+        listService.lists$.next(loaded);
+        list = loaded.find(function(l) { return l.id === listId; });
+        if (list) {
+          self.showScreen('detail');
+          listService.openListDirect(list);
+        } else {
+          self.navigate('lists');
+        }
+      }).catch(function() { self.navigate('lists'); });
+      return;
+    }
+    if (screen === 'lists') {
+      if (!authService.getAccessToken()) { self.navigate('auth'); return; }
+      self.showScreen('lists');
+      return;
+    }
+    if (screen === 'auth') { self.showScreen('auth'); return; }
+    if (screen === 'setup') { self.showScreen('setup'); return; }
+    // Default: check session
+    if (authService.getAccessToken()) { self.navigate('lists'); }
+    else { self.navigate('setup'); }
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // COMPONENTS
+  // ═══════════════════════════════════════════════════════════════
+
+  // ── SetupComponent ──
+  // Handles database migration. Runs SQL statements sequentially
+  // and displays progress in a terminal-like log.
+
+  var MIGRATION_SQL = [
+    "CREATE TABLE IF NOT EXISTS shopping_lists (\n  id serial PRIMARY KEY,\n  name text NOT NULL,\n  owner_id uuid NOT NULL,\n  share_code text UNIQUE DEFAULT substr(md5(random()::text), 1, 6),\n  created_at timestamptz DEFAULT now()\n)",
+    "CREATE TABLE IF NOT EXISTS list_members (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  user_id uuid NOT NULL,\n  role text DEFAULT 'member',\n  joined_at timestamptz DEFAULT now(),\n  UNIQUE(list_id, user_id)\n)",
+    "CREATE TABLE IF NOT EXISTS shopping_items (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  name text NOT NULL,\n  quantity text DEFAULT '1',\n  checked boolean DEFAULT false,\n  added_by uuid,\n  created_at timestamptz DEFAULT now()\n)",
+    `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF; END $$`,
+    "GRANT ALL ON shopping_lists TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE shopping_lists_id_seq TO authenticated",
+    "GRANT ALL ON list_members TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE list_members_id_seq TO authenticated",
+    "GRANT ALL ON shopping_items TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE shopping_items_id_seq TO authenticated",
+    "ALTER TABLE shopping_lists ENABLE ROW LEVEL SECURITY",
+    "ALTER TABLE list_members ENABLE ROW LEVEL SECURITY",
+    "ALTER TABLE shopping_items ENABLE ROW LEVEL SECURITY",
+    "DROP POLICY IF EXISTS lists_select ON shopping_lists",
+    "CREATE POLICY lists_select ON shopping_lists FOR SELECT TO authenticated\n  USING (id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))",
+    "DROP POLICY IF EXISTS lists_insert ON shopping_lists",
+    "CREATE POLICY lists_insert ON shopping_lists FOR INSERT TO authenticated\n  WITH CHECK (owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS lists_delete ON shopping_lists",
+    "CREATE POLICY lists_delete ON shopping_lists FOR DELETE TO authenticated\n  USING (owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS members_own ON list_members",
+    "CREATE POLICY members_own ON list_members FOR SELECT TO authenticated\n  USING (user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS items_access ON shopping_items",
+    "CREATE POLICY items_access ON shopping_items FOR ALL TO authenticated\n  USING (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))\n  WITH CHECK (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))",
+    "CREATE OR REPLACE FUNCTION public.create_shopping_list(list_name text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; new_list record; BEGIN INSERT INTO shopping_lists (name, owner_id) VALUES (list_name, uid) RETURNING * INTO new_list; INSERT INTO list_members (list_id, user_id, role) VALUES (new_list.id, uid, 'owner'); RETURN row_to_json(new_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.create_shopping_list(text) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.subscribe_list_items(p_list_id integer) RETURNS jsonb AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; qid text := 'items-' || p_list_id::text; BEGIN IF NOT EXISTS (SELECT 1 FROM list_members WHERE list_id = p_list_id AND user_id = uid) THEN RAISE EXCEPTION 'not a member of this list'; END IF; RETURN pgr.subscribe(qid, 'SELECT id, list_id, name, quantity, checked, added_by, created_at FROM shopping_items WHERE list_id = ' || p_list_id || ' ORDER BY checked, created_at DESC'); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.subscribe_list_items(integer) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.unsubscribe_list_items(p_list_id integer) RETURNS boolean AS $$ SELECT pgr.unsubscribe('items-' || p_list_id::text) $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.unsubscribe_list_items(integer) TO authenticated"
+  ];
+
+  function SetupComponent(injector) {
+    Component.call(this, injector);
+    this._apiService = injector.get('ApiService');
+    this._router = injector.get('RouterService');
+  }
+
+  SetupComponent.prototype = Object.create(Component.prototype);
+  SetupComponent.prototype.constructor = SetupComponent;
+
+  SetupComponent.prototype.onInit = function() {
+    var self = this;
+    document.getElementById('btn-setup').addEventListener('click', function() {
+      self.runSetup();
+    });
+    document.getElementById('btn-skip-setup').addEventListener('click', function() {
+      location.hash = '#/auth';
+    });
+  };
+
+  SetupComponent.prototype.runSetup = function() {
+    var self = this;
+    var btn = document.getElementById('btn-setup');
+    var log = document.getElementById('setup-log');
+    btn.disabled = true;
+    btn.textContent = 'Setting up...';
+    log.classList.add('visible');
+    this._clearChildren(log);
+
+    var allOk = true;
+    var idx = 0;
+
+    function runNext() {
+      if (idx >= MIGRATION_SQL.length) {
+        if (allOk) {
+          self._appendLog(log, '\nSetup complete! Proceeding to sign in...', 'ok');
+          self._appendLog(log, 'NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
+          btn.textContent = 'Done!';
+          setTimeout(function() { location.hash = '#/auth'; }, 1200);
+        } else {
+          self._appendLog(log, '\nSetup finished with errors. You may retry.', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Retry Setup';
+        }
+        return;
+      }
+
+      var stmt = MIGRATION_SQL[idx];
+      var short = stmt.replace(/\n/g, ' ');
+      if (short.length > 60) short = short.substring(0, 60) + '...';
+      self._appendLog(log, '> ' + short);
+
+      self._apiService.sql(stmt).then(function(result) {
+        if (result.error) {
+          if (result.error.indexOf('already exists') !== -1 || result.error.indexOf('duplicate') !== -1) {
+            self._appendLog(log, '  (skipped)', 'ok');
+          } else {
+            self._appendLog(log, '  ERROR: ' + result.error, 'error');
+            allOk = false;
+          }
+        } else {
+          self._appendLog(log, '  OK', 'ok');
+        }
+        idx++;
+        runNext();
+      }).catch(function(err) {
+        self._appendLog(log, '  NETWORK ERROR: ' + err.message, 'error');
+        allOk = false;
+        idx++;
+        runNext();
+      });
+    }
+    runNext();
+  };
+
+  SetupComponent.prototype._appendLog = function(parent, text, cls) {
+    var line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    parent.appendChild(line);
+    parent.scrollTop = parent.scrollHeight;
+  };
+
+  SetupComponent.prototype._clearChildren = function(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  };
+
+  SetupComponent.prototype.render = function() {
+    // Setup screen is static HTML, no dynamic rendering needed
+  };
+
+  // ── AuthComponent ──
+  // Manages sign up / log in form, toggling between modes,
+  // and submitting credentials to AuthService.
+
+  function AuthComponent(injector) {
+    Component.call(this, injector);
+    this._authService = injector.get('AuthService');
+    this._router = injector.get('RouterService');
+    this._notify = injector.get('NotificationService');
+    this._isSignUp = true;
+  }
+
+  AuthComponent.prototype = Object.create(Component.prototype);
+  AuthComponent.prototype.constructor = AuthComponent;
+
+  AuthComponent.prototype.onInit = function() {
+    var self = this;
+
+    document.getElementById('auth-form').addEventListener('submit', function(e) {
+      self._handleSubmit(e);
+    });
+
+    document.getElementById('auth-toggle-link').addEventListener('click', function() {
+      self._toggleMode();
+    });
+  };
+
+  AuthComponent.prototype._toggleMode = function() {
+    this._isSignUp = !this._isSignUp;
+    document.getElementById('auth-title').textContent = this._isSignUp ? 'Sign Up' : 'Log In';
+    document.getElementById('auth-subtitle').textContent = this._isSignUp
+      ? 'Create your account to start shopping together'
+      : 'Welcome back!';
+    document.getElementById('auth-submit').textContent = this._isSignUp ? 'Sign Up' : 'Log In';
+    document.getElementById('auth-toggle-text').textContent = this._isSignUp ? 'Already have an account? ' : 'Need an account? ';
+    document.getElementById('auth-toggle-link').textContent = this._isSignUp ? 'Log In' : 'Sign Up';
+    this._hideAlert();
+  };
+
+  AuthComponent.prototype._handleSubmit = function(e) {
+    e.preventDefault();
+    var self = this;
+    var email = document.getElementById('auth-email').value.trim();
+    var password = document.getElementById('auth-password').value;
+    var btn = document.getElementById('auth-submit');
+
+    this._hideAlert();
+    btn.disabled = true;
+    var origText = btn.textContent;
+    btn.textContent = 'Please wait...';
+
+    var promise = this._isSignUp
+      ? this._authService.signup(email, password)
+      : this._authService.login(email, password);
+
+    promise.then(function() {
+      location.hash = '#/lists';
+    }).catch(function(err) {
+      self._showAlert(err.message, 'error');
+    }).finally(function() {
+      btn.disabled = false;
+      btn.textContent = origText;
+    });
+  };
+
+  AuthComponent.prototype._showAlert = function(msg, type) {
+    var el = document.getElementById('auth-alert');
+    el.textContent = msg;
+    el.className = 'alert visible alert-' + (type || 'error');
+  };
+
+  AuthComponent.prototype._hideAlert = function() {
+    document.getElementById('auth-alert').className = 'alert';
+  };
+
+  AuthComponent.prototype.render = function() {
+    // Auth screen uses static form elements, no dynamic rendering needed
+  };
+
+  // ── ListsComponent ──
+  // Displays all shopping lists. Subscribes to AuthService for
+  // user info and ListService for lists data.
+
+  function ListsComponent(injector) {
+    Component.call(this, injector);
+    this._authService = injector.get('AuthService');
+    this._listService = injector.get('ListService');
+    this._router = injector.get('RouterService');
+    this._notify = injector.get('NotificationService');
+  }
+
+  ListsComponent.prototype = Object.create(Component.prototype);
+  ListsComponent.prototype.constructor = ListsComponent;
+
+  ListsComponent.prototype.onInit = function() {
+    var self = this;
+
+    // Subscribe to reactive state (Angular-like subscription pattern)
+    this.addSubscription(
+      this._router.activeScreen$.subscribe(function(screen) {
+        if (screen === 'lists') {
+          self._onEnter();
+        }
+      })
+    );
+
+    this.addSubscription(
+      this._listService.lists$.subscribe(function() {
+        if (self._active) self.render();
+      })
+    );
+
+    // Event bindings (simulating Angular template event bindings)
+    document.getElementById('form-create-list').addEventListener('submit', function(e) {
+      self._handleCreateList(e);
+    });
+
+    document.getElementById('form-join-list').addEventListener('submit', function(e) {
+      self._handleJoinList(e);
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', function() {
+      self._handleLogout();
+    });
+  };
+
+  ListsComponent.prototype._onEnter = function() {
+    var user = this._authService.user$.getValue();
+    if (user) {
+      document.getElementById('lists-email').textContent = user.email;
+      this._notify.requestPermission();
+      this._loadLists();
+    }
+  };
+
+  ListsComponent.prototype._loadLists = function() {
+    var self = this;
+    var container = document.getElementById('lists-container');
+    this._clearChildren(container);
+
+    // Show spinner
+    var loadWrap = document.createElement('div');
+    loadWrap.style.cssText = 'text-align:center; padding:20px;';
+    var spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    loadWrap.appendChild(spinner);
+    container.appendChild(loadWrap);
+
+    this._listService.loadLists().catch(function(err) {
+      self._clearChildren(container);
+      self._notify.toast('Failed to load lists: ' + err.message, 'error');
+    });
+  };
+
+  ListsComponent.prototype._handleCreateList = function(e) {
+    e.preventDefault();
+    var self = this;
+    var input = document.getElementById('input-list-name');
+    var listName = input.value.trim();
+    if (!listName) return;
+
+    var btn = document.getElementById('btn-create-list');
+    btn.disabled = true;
+
+    this._listService.createList(listName).then(function() {
+      input.value = '';
+      self._notify.toast('List created!', 'success');
+      self._loadLists();
+    }).catch(function(err) {
+      self._notify.toast('Failed: ' + err.message, 'error');
+    }).finally(function() {
+      btn.disabled = false;
+    });
+  };
+
+  ListsComponent.prototype._handleJoinList = function(e) {
+    e.preventDefault();
+    var self = this;
+    var input = document.getElementById('input-share-code');
+    var code = input.value.trim();
+    if (!code) return;
+
+    var btn = document.getElementById('btn-join-list');
+    btn.disabled = true;
+
+    this._listService.joinList(code).then(function(data) {
+      input.value = '';
+      self._notify.toast('Joined list: ' + (data.name || 'Success'), 'success');
+      self._loadLists();
+    }).catch(function(err) {
+      self._notify.toast(err.message, 'error');
+    }).finally(function() {
+      btn.disabled = false;
+    });
+  };
+
+  ListsComponent.prototype._handleLogout = function() {
+    this._authService.logout();
+    this._listService.stopPolling();
+    this._listService.lists$.next([]);
+    this._listService.currentList$.next(null);
+    this._listService.items$.next([]);
+    location.hash = '#/auth';
+  };
+
+  ListsComponent.prototype._clearChildren = function(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  };
+
+  ListsComponent.prototype.render = function() {
+    var container = document.getElementById('lists-container');
+    var lists = this._listService.lists$.getValue();
+    var self = this;
+
+    this._clearChildren(container);
+
+    if (lists.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'empty-lists';
+      var emptyIcon = document.createElement('div');
+      emptyIcon.style.cssText = 'font-size:40px; opacity:0.4;';
+      emptyIcon.textContent = '\uD83D\uDCCB';
+      empty.appendChild(emptyIcon);
+      var p = document.createElement('p');
+      p.textContent = 'No lists yet. Create one or join with a share code!';
+      empty.appendChild(p);
+      container.appendChild(empty);
+      return;
+    }
+
+    lists.forEach(function(list) {
+      var card = document.createElement('div');
+      card.className = 'list-card';
+      card.addEventListener('click', function() { self._openList(list); });
+
+      var icon = document.createElement('div');
+      icon.className = 'list-card-icon';
+      icon.textContent = '\uD83D\uDED2';
+
+      var info = document.createElement('div');
+      info.className = 'list-card-info';
+
+      var name = document.createElement('div');
+      name.className = 'list-card-name';
+      name.textContent = list.name;
+
+      var meta = document.createElement('div');
+      meta.className = 'list-card-meta';
+
+      var members = document.createElement('span');
+      members.textContent = '\uD83D\uDC65 ' + list.member_count;
+
+      var code = document.createElement('span');
+      code.textContent = 'Code: ' + (list.share_code || '').toUpperCase();
+
+      meta.appendChild(members);
+      meta.appendChild(code);
+      info.appendChild(name);
+      info.appendChild(meta);
+
+      var progress = document.createElement('div');
+      progress.className = 'list-card-progress';
+      progress.textContent = list.checked_count + '/' + list.item_count;
+
+      card.appendChild(icon);
+      card.appendChild(info);
+      card.appendChild(progress);
+      container.appendChild(card);
+    });
+  };
+
+  ListsComponent.prototype._openList = function(list) {
+    this._listService.openList(list);
+  };
+
+  // ── DetailComponent ──
+  // Shopping list detail view with items. Subscribes to
+  // ListService items$ for reactive updates from polling.
+
+  function DetailComponent(injector) {
+    Component.call(this, injector);
+    this._listService = injector.get('ListService');
+    this._router = injector.get('RouterService');
+    this._notify = injector.get('NotificationService');
+  }
+
+  DetailComponent.prototype = Object.create(Component.prototype);
+  DetailComponent.prototype.constructor = DetailComponent;
+
+  DetailComponent.prototype.onInit = function() {
+    var self = this;
+
+    // Subscribe to items changes for reactive rendering
+    this.addSubscription(
+      this._listService.items$.subscribe(function() {
+        if (self._active) self.render();
+      })
+    );
+
+    // Subscribe to current list for title updates
+    this.addSubscription(
+      this._listService.currentList$.subscribe(function(list) {
+        if (list) {
+          document.getElementById('detail-title').textContent = list.name;
+          document.getElementById('share-code-display').textContent = (list.share_code || '').toUpperCase();
+        }
+      })
+    );
+
+    // Event bindings
+    document.getElementById('btn-back').addEventListener('click', function() {
+      self._goBack();
+    });
+
+    document.getElementById('form-add-item').addEventListener('submit', function(e) {
+      self._handleAddItem(e);
+    });
+
+    document.getElementById('btn-share').addEventListener('click', function() {
+      self._openShareModal();
+    });
+
+    document.getElementById('btn-delete-list').addEventListener('click', function() {
+      self._handleDeleteList();
+    });
+
+    // Share modal bindings
+    document.getElementById('btn-copy-code').addEventListener('click', function() {
+      self._copyShareCode();
+    });
+
+    document.getElementById('btn-native-share').addEventListener('click', function() {
+      self._nativeShare();
+    });
+
+    document.getElementById('btn-close-modal').addEventListener('click', function() {
+      self._closeShareModal();
+    });
+
+    document.getElementById('modal-share').addEventListener('click', function(e) {
+      if (e.target === document.getElementById('modal-share')) {
+        self._closeShareModal();
+      }
+    });
+  };
+
+  DetailComponent.prototype._goBack = function() {
+    this._listService.closeList();
+    location.hash = '#/lists';
+  };
+
+  DetailComponent.prototype._handleAddItem = function(e) {
+    e.preventDefault();
+    var nameInput = document.getElementById('input-item-name');
+    var qtyInput = document.getElementById('input-item-qty');
+    var name = nameInput.value.trim();
+    var qty = qtyInput.value.trim() || '1';
+    if (!name) return;
+
+    this._listService.addItem(name, qty).then(function() {
+      nameInput.value = '';
+      qtyInput.value = '1';
+      nameInput.focus();
+    }).catch(function(err) {
+      var notify = this._notify;
+      if (notify) notify.toast('Failed to add: ' + err.message, 'error');
+    }.bind(this));
+  };
+
+  DetailComponent.prototype._handleDeleteList = function() {
+    var self = this;
+    var currentList = this._listService.currentList$.getValue();
+    if (!currentList) return;
+    if (!confirm('Delete "' + currentList.name + '" and all its items?')) return;
+
+    this._listService.deleteList(currentList.id).then(function() {
+      self._notify.toast('List deleted', 'success');
+      self._goBack();
+    }).catch(function(err) {
+      self._notify.toast('Delete failed: ' + err.message, 'error');
+    });
+  };
+
+  DetailComponent.prototype._openShareModal = function() {
+    var currentList = this._listService.currentList$.getValue();
+    if (!currentList) return;
+    document.getElementById('share-code-display').textContent = (currentList.share_code || '').toUpperCase();
+    document.getElementById('copy-feedback').textContent = '';
+    document.getElementById('modal-share').classList.add('visible');
+    if (navigator.share) {
+      document.getElementById('btn-native-share').style.display = '';
+    }
+  };
+
+  DetailComponent.prototype._closeShareModal = function() {
+    document.getElementById('modal-share').classList.remove('visible');
+  };
+
+  DetailComponent.prototype._copyShareCode = function() {
+    var currentList = this._listService.currentList$.getValue();
+    var code = (currentList && currentList.share_code || '').toUpperCase();
+    navigator.clipboard.writeText(code).then(function() {
+      document.getElementById('copy-feedback').textContent = 'Copied!';
+    }).catch(function() {
+      document.getElementById('copy-feedback').textContent = 'Copy failed \u2014 select and copy manually';
+    });
+  };
+
+  DetailComponent.prototype._nativeShare = function() {
+    var currentList = this._listService.currentList$.getValue();
+    if (!currentList || !navigator.share) return;
+    navigator.share({
+      title: 'Join my shopping list: ' + currentList.name,
+      text: 'Use code ' + (currentList.share_code || '').toUpperCase() + ' to join my shopping list on What to Buy!'
+    }).catch(function() { /* user cancelled */ });
+  };
+
+  DetailComponent.prototype._clearChildren = function(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  };
+
+  DetailComponent.prototype.render = function() {
+    var items = this._listService.items$.getValue();
+    var list = document.getElementById('item-list');
+    var empty = document.getElementById('items-empty');
+    var self = this;
+
+    this._clearChildren(list);
+
+    var unchecked = items.filter(function(i) { return !i.checked; });
+    var checked = items.filter(function(i) { return i.checked; });
+
+    var total = items.length;
+    var done = checked.length;
+    var pct = total > 0 ? Math.round(done / total * 100) : 0;
+    document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-text').textContent = done + ' / ' + total;
+
+    if (total === 0) {
+      list.style.display = 'none';
+      empty.style.display = 'block';
+      return;
+    }
+
+    list.style.display = 'block';
+    empty.style.display = 'none';
+
+    if (unchecked.length > 0) {
+      var sep1 = document.createElement('li');
+      sep1.className = 'item-separator';
+      sep1.textContent = 'To buy (' + unchecked.length + ')';
+      list.appendChild(sep1);
+      unchecked.forEach(function(item) { list.appendChild(self._buildItemRow(item)); });
+    }
+
+    if (checked.length > 0) {
+      var sep2 = document.createElement('li');
+      sep2.className = 'item-separator';
+      sep2.textContent = 'In cart (' + checked.length + ')';
+      list.appendChild(sep2);
+      checked.forEach(function(item) { list.appendChild(self._buildItemRow(item)); });
+    }
+  };
+
+  DetailComponent.prototype._buildItemRow = function(item) {
+    var self = this;
+
+    var li = document.createElement('li');
+    li.className = 'item-row' + (item.checked ? ' checked' : '');
+
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'item-checkbox';
+    cb.checked = item.checked;
+    cb.addEventListener('change', function() {
+      self._listService.toggleItem(item.id, !item.checked);
+    });
+
+    var info = document.createElement('div');
+    info.className = 'item-info';
+    var nameEl = document.createElement('div');
+    nameEl.className = 'item-name';
+    nameEl.textContent = item.name;
+    info.appendChild(nameEl);
+
+    var qty = document.createElement('span');
+    qty.className = 'item-qty';
+    qty.textContent = 'x' + (item.quantity || '1');
+
+    var del = document.createElement('button');
+    del.className = 'btn btn-danger item-delete';
+    del.title = 'Remove';
+    del.textContent = '\u2715';
+    del.addEventListener('click', function(e) {
+      e.stopPropagation();
+      self._listService.deleteItem(item.id);
+    });
+
+    li.appendChild(cb);
+    li.appendChild(info);
+    li.appendChild(qty);
+    li.appendChild(del);
+    return li;
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // APP MODULE (Root NgModule equivalent)
+  // ═══════════════════════════════════════════════════════════════
+  // Bootstraps the entire application: creates the injector,
+  // registers all services, instantiates components, and
+  // wires up the change detection system.
+
+  function AppModule() {
+    this.injector = new Injector();
+    this.changeDetector = new ChangeDetector();
+    this.components = {};
+  }
+
+  AppModule.prototype.bootstrap = function() {
+    var self = this;
+
+    // Register infrastructure
+    this.injector.register('ChangeDetector', this.changeDetector);
+
+    // Register services (Angular-style provider registration)
+    var notificationService = new NotificationService();
+    notificationService.init();
+    this.injector.register('NotificationService', notificationService);
+
+    // AuthService must be registered before ApiService uses it
+    var authService = new AuthService(this.injector);
+    this.injector.register('AuthService', authService);
+
+    var apiService = new ApiService(this.injector);
+    this.injector.register('ApiService', apiService);
+
+    var listService = new ListService(this.injector);
+    this.injector.register('ListService', listService);
+
+    var routerService = new RouterService(this.injector);
+    this.injector.register('RouterService', routerService);
+
+    // Instantiate components (like Angular declarations + bootstrap)
+    this.components.setup = new SetupComponent(this.injector);
+    this.components.auth = new AuthComponent(this.injector);
+    this.components.lists = new ListsComponent(this.injector);
+    this.components.detail = new DetailComponent(this.injector);
+
+    // Register with change detector
+    this.changeDetector.registerComponent(this.components.setup);
+    this.changeDetector.registerComponent(this.components.auth);
+    this.changeDetector.registerComponent(this.components.lists);
+    this.changeDetector.registerComponent(this.components.detail);
+
+    // Activate all components (lifecycle: constructor -> onInit -> render)
+    this.components.setup.activate();
+    this.components.auth.activate();
+    this.components.lists.activate();
+    this.components.detail.activate();
+
+    // Wire up hash-based router
+    window.addEventListener('hashchange', function() { routerService.dispatch(); });
+
+    // Restore session from localStorage
+    var session = loadSessionData();
+    if (session && session.access_token) {
+      authService._setSession(session);
+      if (isTokenExpiringSoon()) {
+        tryRefresh().then(function(data) {
+          authService._setSession(data);
+          routerService.dispatch();
+        }).catch(function() {
+          authService.logout();
+          routerService.navigate('auth');
+        });
+      } else {
+        routerService.dispatch();
+      }
+    } else {
+      routerService.dispatch();
+    }
+
+    // Re-check token on tab focus (visibilitychange)
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && authService.getAccessToken()) {
+        if (isTokenExpiringSoon()) {
+          tryRefresh().then(function(data) {
+            authService._setSession(data);
+          }).catch(function() {
+            authService.logout();
+            routerService.navigate('auth');
+          });
+        }
+        // Re-sync items if on detail screen
+        if (listService.currentList$.getValue()) {
+          listService.loadItems();
+        }
+      }
+    });
+
+    // Register PWA service worker
+    this._registerServiceWorker();
+  };
+
+  AppModule.prototype._registerServiceWorker = function() {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(function(err) {
+        console.log('SW registration failed:', err);
+      });
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // BOOTSTRAP (platformBrowserDynamic().bootstrapModule equivalent)
+  // ═══════════════════════════════════════════════════════════════
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var app = new AppModule();
+    app.bootstrap();
+  });
+
+})();
+</script>
+
+</body>
+</html>

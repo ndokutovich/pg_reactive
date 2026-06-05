@@ -1,0 +1,1589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>What to Buy (React)</title>
+<link rel="icon" type="image/svg+xml" href="../../favicon.svg">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#d97706">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script src="config.js"></script>
+<style>
+  /* ── Variables ── */
+  :root {
+    --amber-50: #fffbeb;
+    --amber-100: #fef3c7;
+    --amber-200: #fde68a;
+    --amber-300: #fcd34d;
+    --amber-400: #fbbf24;
+    --amber-500: #f59e0b;
+    --amber-600: #d97706;
+    --amber-700: #b45309;
+    --amber-800: #92400e;
+    --green-500: #10b981;
+    --green-600: #059669;
+    --green-50: #ecfdf5;
+    --red-500: #ef4444;
+    --red-50: #fef2f2;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-xs: 6px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --transition: 0.2s ease;
+  }
+
+  /* ── Reset ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font);
+    background: var(--amber-50);
+    color: var(--gray-800);
+    line-height: 1.6;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .screen { animation: fadeIn 0.25s ease; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 20px; border: none; border-radius: var(--radius-sm);
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all var(--transition); font-family: var(--font);
+  }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-primary { background: var(--amber-600); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--amber-700); }
+  .btn-secondary { background: var(--gray-100); color: var(--gray-700); }
+  .btn-secondary:hover:not(:disabled) { background: var(--gray-200); }
+  .btn-ghost { background: transparent; color: var(--gray-500); padding: 8px 12px; font-size: 13px; }
+  .btn-ghost:hover { background: var(--gray-100); color: var(--gray-700); }
+  .btn-danger { background: transparent; color: var(--gray-400); padding: 4px 8px; }
+  .btn-danger:hover { color: var(--red-500); }
+  .btn-icon { padding: 8px; border-radius: 50%; min-width: 36px; min-height: 36px; }
+  .btn-full { width: 100%; }
+
+  /* ── Inputs ── */
+  .input {
+    width: 100%; padding: 10px 14px;
+    border: 1.5px solid var(--gray-200); border-radius: var(--radius-sm);
+    font-size: 14px; color: var(--gray-800); background: #fff;
+    transition: border-color var(--transition), box-shadow var(--transition);
+    outline: none; font-family: var(--font);
+  }
+  .input:focus { border-color: var(--amber-500); box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
+  .input::placeholder { color: var(--gray-400); }
+
+  /* ── Cards ── */
+  .card {
+    background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .card-body { padding: 20px; }
+
+  /* ── Alerts ── */
+  .alert {
+    padding: 10px 14px; border-radius: var(--radius-xs);
+    font-size: 13px; font-weight: 500; margin-bottom: 16px;
+  }
+  .alert-error { background: var(--red-50); color: var(--red-500); border: 1px solid #fecaca; }
+  .alert-success { background: var(--green-50); color: var(--green-600); border: 1px solid #bbf7d0; }
+
+  /* ── Spinner ── */
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid var(--gray-200); border-top-color: var(--amber-600);
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ═══════ SETUP SCREEN ═══════ */
+  .setup-hero {
+    max-width: 480px; margin: 80px auto; padding: 40px 24px; text-align: center;
+  }
+  .setup-icon { font-size: 56px; margin-bottom: 16px; }
+  .setup-hero h1 { font-size: 26px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px; }
+  .setup-hero p { color: var(--gray-500); font-size: 15px; margin-bottom: 28px; max-width: 360px; margin-left: auto; margin-right: auto; }
+  .setup-log {
+    background: var(--gray-900); color: #a5f3ab;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+    padding: 16px; border-radius: var(--radius-sm);
+    max-height: 200px; overflow-y: auto; text-align: left;
+    margin-top: 20px; line-height: 1.8;
+  }
+  .setup-log .error { color: #fca5a5; }
+  .setup-log .ok { color: #a5f3ab; }
+  .setup-skip { margin-top: 12px; }
+
+  /* ═══════ AUTH SCREEN ═══════ */
+  .auth-wrap { max-width: 400px; margin: 80px auto; padding: 0 16px; }
+  .auth-header { text-align: center; margin-bottom: 24px; }
+  .auth-header h2 { font-size: 22px; color: var(--gray-900); margin-bottom: 4px; }
+  .auth-header .subtitle { color: var(--gray-500); font-size: 14px; }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px; }
+  .auth-toggle { text-align: center; margin-top: 16px; font-size: 14px; color: var(--gray-500); }
+  .auth-toggle a { color: var(--amber-600); cursor: pointer; font-weight: 600; text-decoration: none; }
+  .auth-toggle a:hover { text-decoration: underline; }
+
+  /* ═══════ LISTS SCREEN ═══════ */
+  .app-bar {
+    background: #fff; border-bottom: 1px solid var(--gray-200);
+    padding: 0 16px; height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow);
+  }
+  .app-bar h1 { font-size: 18px; font-weight: 700; color: var(--amber-700); }
+  .app-bar-right { display: flex; align-items: center; gap: 12px; }
+  .app-bar .user-email { font-size: 12px; color: var(--gray-400); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .main-pad { max-width: 560px; margin: 0 auto; padding: 16px; }
+
+  .section-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--gray-400); margin-bottom: 10px; margin-top: 20px;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  .action-row {
+    display: flex; gap: 8px; margin-bottom: 16px;
+  }
+  .action-row .input { flex: 1; }
+
+  /* List cards */
+  .list-card {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 16px; background: #fff; border-radius: var(--radius);
+    box-shadow: var(--shadow); margin-bottom: 10px; cursor: pointer;
+    transition: box-shadow var(--transition), transform var(--transition);
+    border-left: 4px solid var(--amber-400);
+  }
+  .list-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+  .list-card:active { transform: scale(0.98); }
+
+  .list-card-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--amber-100); color: var(--amber-700);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+  }
+  .list-card-info { flex: 1; min-width: 0; }
+  .list-card-name { font-size: 15px; font-weight: 600; color: var(--gray-800); }
+  .list-card-meta { font-size: 12px; color: var(--gray-400); display: flex; gap: 10px; margin-top: 2px; }
+  .list-card-progress {
+    width: 48px; text-align: right; font-size: 13px; font-weight: 700; color: var(--amber-600);
+  }
+
+  .empty-lists { text-align: center; padding: 40px 20px; color: var(--gray-400); }
+  .empty-lists p { font-size: 14px; margin-top: 8px; }
+
+  /* ═══════ DETAIL SCREEN ═══════ */
+  .detail-bar {
+    background: #fff; border-bottom: 1px solid var(--gray-200);
+    padding: 0 8px; height: 56px;
+    display: flex; align-items: center; gap: 8px;
+    position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow);
+  }
+  .detail-bar h1 { font-size: 17px; font-weight: 700; color: var(--gray-800); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail-bar .btn-icon svg { width: 20px; height: 20px; }
+
+  .progress-strip {
+    background: var(--amber-100); padding: 12px 16px; display: flex;
+    align-items: center; gap: 12px;
+  }
+  .progress-bar-wrap {
+    flex: 1; background: var(--amber-200); border-radius: 10px; height: 8px; overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%; background: var(--green-500); border-radius: 10px;
+    transition: width 0.4s ease;
+  }
+  .progress-text { font-size: 13px; font-weight: 600; color: var(--amber-700); white-space: nowrap; }
+
+  .add-item-row {
+    display: flex; gap: 8px; padding: 12px 16px; background: #fff;
+    border-bottom: 1px solid var(--gray-100); position: sticky; top: 56px; z-index: 90;
+  }
+  .add-item-row .input { flex: 1; }
+  .qty-input { width: 56px !important; flex: none !important; text-align: center; }
+
+  /* Item list */
+  .item-list { list-style: none; }
+
+  .item-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; border-bottom: 1px solid var(--gray-50);
+    transition: background var(--transition);
+  }
+  .item-row:active { background: var(--gray-50); }
+
+  .item-checkbox {
+    appearance: none; width: 24px; height: 24px;
+    border: 2px solid var(--gray-300); border-radius: 50%;
+    cursor: pointer; transition: all var(--transition); flex-shrink: 0;
+    position: relative; background: #fff;
+  }
+  .item-checkbox:checked {
+    background: var(--green-500); border-color: var(--green-500);
+  }
+  .item-checkbox:checked::after {
+    content: ''; position: absolute; top: 4px; left: 7px;
+    width: 6px; height: 10px; border: solid #fff; border-width: 0 2.5px 2.5px 0;
+    transform: rotate(45deg);
+  }
+
+  .item-info { flex: 1; min-width: 0; }
+  .item-name { font-size: 15px; color: var(--gray-800); transition: all var(--transition); }
+  .item-row.checked .item-name { text-decoration: line-through; color: var(--gray-400); }
+
+  .item-qty {
+    font-size: 12px; color: var(--amber-600); background: var(--amber-100);
+    padding: 2px 8px; border-radius: 10px; font-weight: 600; flex-shrink: 0;
+  }
+  .item-row.checked .item-qty { color: var(--gray-400); background: var(--gray-100); }
+
+  .item-delete { opacity: 0; transition: opacity var(--transition); }
+  .item-row:hover .item-delete { opacity: 1; }
+
+  .item-separator {
+    padding: 8px 16px; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--gray-400); background: var(--gray-50);
+  }
+
+  .empty-items { text-align: center; padding: 48px 20px; color: var(--gray-400); }
+  .empty-items p { font-size: 14px; margin-top: 8px; }
+
+  /* ═══════ SHARE MODAL ═══════ */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 200; padding: 24px;
+  }
+  .modal-box {
+    background: #fff; border-radius: var(--radius); padding: 28px;
+    max-width: 360px; width: 100%; box-shadow: var(--shadow-lg);
+    text-align: center; animation: fadeIn 0.2s ease;
+  }
+  .modal-box h3 { font-size: 18px; color: var(--gray-900); margin-bottom: 8px; }
+  .modal-box p { font-size: 14px; color: var(--gray-500); margin-bottom: 20px; }
+  .share-code-display {
+    font-size: 28px; font-weight: 800; letter-spacing: 0.15em;
+    color: var(--amber-700); background: var(--amber-100);
+    padding: 12px 20px; border-radius: var(--radius-sm);
+    margin-bottom: 16px; font-family: 'SF Mono', 'Fira Code', monospace;
+    user-select: all;
+  }
+  .copy-feedback {
+    font-size: 13px; color: var(--green-600); font-weight: 600;
+    margin-bottom: 12px; min-height: 20px;
+  }
+
+  /* ═══════ TOAST ═══════ */
+  .toast-area {
+    position: fixed; top: 64px; right: 16px; z-index: 300;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .toast {
+    padding: 10px 16px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500; box-shadow: var(--shadow-lg);
+    animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+    max-width: 300px;
+  }
+  .toast-info { background: var(--amber-600); color: #fff; }
+  .toast-success { background: var(--green-500); color: #fff; }
+  .toast-error { background: var(--red-500); color: #fff; }
+  @keyframes toastIn { from { opacity:0; transform:translateX(30px); } to { opacity:1; transform:translateX(0); } }
+  @keyframes toastOut { to { opacity:0; transform:translateX(30px); } }
+
+  /* ═══════ FOOTER ═══════ */
+  .app-footer {
+    text-align: center; padding: 24px 16px; font-size: 12px; color: var(--gray-400);
+  }
+
+  /* ═══════ RESPONSIVE ═══════ */
+  @media (max-width: 480px) {
+    .setup-hero { margin: 40px 16px; padding: 28px 20px; }
+    .auth-wrap { margin: 40px auto; }
+    .app-bar .user-email { display: none; }
+    .item-delete { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+(function() {
+  'use strict';
+
+  const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+  // ═══════════════════════════════════════════════════════════════
+  // CONFIG
+  // ═══════════════════════════════════════════════════════════════
+  var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
+  var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
+  var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
+  var SERVICE_ROLE_KEY = 'dev-only-service-role-key-do-not-use-in-production';
+  const POLL_INTERVAL = 2000;
+  var SESSION_KEY = 'wtb-session';
+
+  // ═══════════════════════════════════════════════════════════════
+  // MIGRATION SQL
+  // ═══════════════════════════════════════════════════════════════
+  const MIGRATION_SQL = [
+    "CREATE TABLE IF NOT EXISTS shopping_lists (\n  id serial PRIMARY KEY,\n  name text NOT NULL,\n  owner_id uuid NOT NULL,\n  share_code text UNIQUE DEFAULT substr(md5(random()::text), 1, 6),\n  created_at timestamptz DEFAULT now()\n)",
+    "CREATE TABLE IF NOT EXISTS list_members (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  user_id uuid NOT NULL,\n  role text DEFAULT 'member',\n  joined_at timestamptz DEFAULT now(),\n  UNIQUE(list_id, user_id)\n)",
+    "CREATE TABLE IF NOT EXISTS shopping_items (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  name text NOT NULL,\n  quantity text DEFAULT '1',\n  checked boolean DEFAULT false,\n  added_by uuid,\n  created_at timestamptz DEFAULT now()\n)",
+    `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF; END $$`,
+    "GRANT ALL ON shopping_lists TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE shopping_lists_id_seq TO authenticated",
+    "GRANT ALL ON list_members TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE list_members_id_seq TO authenticated",
+    "GRANT ALL ON shopping_items TO authenticated",
+    "GRANT USAGE, SELECT ON SEQUENCE shopping_items_id_seq TO authenticated",
+    "ALTER TABLE shopping_lists ENABLE ROW LEVEL SECURITY",
+    "ALTER TABLE list_members ENABLE ROW LEVEL SECURITY",
+    "ALTER TABLE shopping_items ENABLE ROW LEVEL SECURITY",
+    "DROP POLICY IF EXISTS lists_select ON shopping_lists",
+    "CREATE POLICY lists_select ON shopping_lists FOR SELECT TO authenticated\n  USING (id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))",
+    "DROP POLICY IF EXISTS lists_insert ON shopping_lists",
+    "CREATE POLICY lists_insert ON shopping_lists FOR INSERT TO authenticated\n  WITH CHECK (owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS lists_delete ON shopping_lists",
+    "CREATE POLICY lists_delete ON shopping_lists FOR DELETE TO authenticated\n  USING (owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS members_own ON list_members",
+    "CREATE POLICY members_own ON list_members FOR SELECT TO authenticated\n  USING (user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
+    "DROP POLICY IF EXISTS items_access ON shopping_items",
+    "CREATE POLICY items_access ON shopping_items FOR ALL TO authenticated\n  USING (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))\n  WITH CHECK (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))",
+    "CREATE OR REPLACE FUNCTION public.create_shopping_list(list_name text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; new_list record; BEGIN INSERT INTO shopping_lists (name, owner_id) VALUES (list_name, uid) RETURNING * INTO new_list; INSERT INTO list_members (list_id, user_id, role) VALUES (new_list.id, uid, 'owner'); RETURN row_to_json(new_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.create_shopping_list(text) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.subscribe_list_items(p_list_id integer) RETURNS jsonb AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; qid text := 'items-' || p_list_id::text; BEGIN IF NOT EXISTS (SELECT 1 FROM list_members WHERE list_id = p_list_id AND user_id = uid) THEN RAISE EXCEPTION 'not a member of this list'; END IF; RETURN pgr.subscribe(qid, 'SELECT id, list_id, name, quantity, checked, added_by, created_at FROM shopping_items WHERE list_id = ' || p_list_id || ' ORDER BY checked, created_at DESC'); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.subscribe_list_items(integer) TO authenticated",
+    "CREATE OR REPLACE FUNCTION public.unsubscribe_list_items(p_list_id integer) RETURNS boolean AS $$ SELECT pgr.unsubscribe('items-' || p_list_id::text) $$ LANGUAGE sql SECURITY DEFINER",
+    "GRANT EXECUTE ON FUNCTION public.unsubscribe_list_items(integer) TO authenticated"
+  ];
+
+  // ═══════════════════════════════════════════════════════════════
+  // UTILITIES
+  // ═══════════════════════════════════════════════════════════════
+  function parseJwt(token) {
+    try {
+      const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(atob(b64 + '=='.slice(0, (4 - b64.length % 4) % 4)));
+    } catch (e) { return null; }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SESSION PERSISTENCE
+  // ═══════════════════════════════════════════════════════════════
+  function saveSession(data) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+  function loadSession() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+  }
+  function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+  }
+  function tryRefresh() {
+    var session = loadSession();
+    if (!session || !session.refresh_token) return Promise.reject('no refresh token');
+    return fetch(API_BASE + '/auth/v1/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: session.refresh_token })
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || 'refresh failed');
+        saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user || session.user });
+        return data;
+      });
+    });
+  }
+  function isTokenExpiringSoon() {
+    var session = loadSession();
+    if (!session) return true;
+    var claims = parseJwt(session.access_token);
+    if (!claims || !claims.exp) return false;
+    return (claims.exp - Math.floor(Date.now() / 1000)) < 300;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // API HELPERS
+  // ═══════════════════════════════════════════════════════════════
+  function authHeaders(token) {
+    const h = { 'Content-Type': 'application/json', 'apikey': ANON_KEY };
+    if (token) h['Authorization'] = 'Bearer ' + token;
+    return h;
+  }
+
+  function apiSql(sql) {
+    return fetch(API_BASE + '/api/sql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SERVICE_ROLE_KEY },
+      body: JSON.stringify({ sql })
+    }).then(r => r.json());
+  }
+
+  function apiRest(method, path, body, token, _retry) {
+    const opts = { method, headers: authHeaders(token) };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    return fetch(API_BASE + '/rest/v1/' + path, opts).then(res => {
+      if (res.status === 204) return null;
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(data => {
+          return apiRest(method, path, body, data.access_token, true);
+        }).catch(() => {
+          clearSession();
+          location.hash = '#/auth';
+          throw new Error('Session expired');
+        });
+      }
+      return res.json().then(data => {
+        if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
+        return data;
+      });
+    });
+  }
+
+  function apiRpc(fn, params, token, _retry) {
+    return fetch(API_BASE + '/rest/v1/rpc/' + fn, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify(params || {})
+    }).then(res => {
+      if (res.status === 401 && !_retry) {
+        return tryRefresh().then(data => {
+          return apiRpc(fn, params, data.access_token, true);
+        }).catch(() => {
+          clearSession();
+          location.hash = '#/auth';
+          throw new Error('Session expired');
+        });
+      }
+      return res.json().then(data => {
+        if (!res.ok) throw new Error(data.error || data.message || JSON.stringify(data));
+        return data;
+      });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // NOTIFICATIONS
+  // ═══════════════════════════════════════════════════════════════
+  function requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }
+
+  function showNotification(title, body, addToast) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+        navigator.serviceWorker.ready.then(function(reg) {
+          reg.showNotification(title, { body, icon: 'icon.svg', tag: 'wtb-' + Date.now() });
+        }).catch(function() {});
+      } else {
+        try {
+          new Notification(title, { body, icon: 'icon.svg', tag: 'wtb-' + Date.now() });
+        } catch (e) { /* ignore */ }
+      }
+    }
+    if (addToast) addToast(title + ': ' + body, 'info');
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // PWA
+  // ═══════════════════════════════════════════════════════════════
+  function registerServiceWorker() {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(err => {
+        console.log('SW registration failed:', err);
+      });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SVG ICONS (as safe React components)
+  // ═══════════════════════════════════════════════════════════════
+  function BackIcon() {
+    return (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M15 18l-6-6 6-6" />
+      </svg>
+    );
+  }
+
+  function ShareIcon() {
+    return (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="18" cy="5" r="3" />
+        <circle cx="6" cy="12" r="3" />
+        <circle cx="18" cy="19" r="3" />
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+      </svg>
+    );
+  }
+
+  function TrashIcon() {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="3 6 5 6 21 6" />
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      </svg>
+    );
+  }
+
+  function PlusIcon() {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // TOAST HOOK + COMPONENT
+  // ═══════════════════════════════════════════════════════════════
+  function useToasts() {
+    const [toasts, setToasts] = useState([]);
+    const nextId = useRef(0);
+
+    const addToast = useCallback((msg, type) => {
+      const id = ++nextId.current;
+      setToasts(prev => [...prev, { id, msg, type: type || 'info' }]);
+      setTimeout(() => {
+        setToasts(prev => prev.filter(t => t.id !== id));
+      }, 3200);
+    }, []);
+
+    return { toasts, addToast };
+  }
+
+  function ToastArea({ toasts }) {
+    return (
+      <div className="toast-area">
+        {toasts.map(t => (
+          <div key={t.id} className={'toast toast-' + t.type}>{t.msg}</div>
+        ))}
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SETUP SCREEN
+  // ═══════════════════════════════════════════════════════════════
+  function SetupScreen({ onComplete, addToast }) {
+    const [running, setRunning] = useState(false);
+    const [logs, setLogs] = useState([]);
+    const [done, setDone] = useState(false);
+    const logRef = useRef(null);
+
+    const addLog = useCallback((text, cls) => {
+      setLogs(prev => [...prev, { text, cls, id: Date.now() + Math.random() }]);
+    }, []);
+
+    useEffect(() => {
+      if (logRef.current) {
+        logRef.current.scrollTop = logRef.current.scrollHeight;
+      }
+    }, [logs]);
+
+    const runSetup = useCallback(async () => {
+      setRunning(true);
+      setLogs([]);
+      let allOk = true;
+
+      for (let i = 0; i < MIGRATION_SQL.length; i++) {
+        const stmt = MIGRATION_SQL[i];
+        let short = stmt.replace(/\n/g, ' ');
+        if (short.length > 60) short = short.substring(0, 60) + '...';
+        addLog('> ' + short);
+
+        try {
+          const result = await apiSql(stmt);
+          if (result.error) {
+            if (result.error.indexOf('already exists') !== -1 || result.error.indexOf('duplicate') !== -1) {
+              addLog('  (skipped)', 'ok');
+            } else {
+              addLog('  ERROR: ' + result.error, 'error');
+              allOk = false;
+            }
+          } else {
+            addLog('  OK', 'ok');
+          }
+        } catch (err) {
+          addLog('  NETWORK ERROR: ' + err.message, 'error');
+          allOk = false;
+        }
+      }
+
+      if (allOk) {
+        addLog('\nSetup complete! Proceeding to sign in...', 'ok');
+        addLog('NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
+        setDone(true);
+        setTimeout(() => onComplete(), 1200);
+      } else {
+        addLog('\nSetup finished with errors. You may retry.', 'error');
+        setRunning(false);
+      }
+    }, [onComplete, addLog]);
+
+    return (
+      <div className="screen">
+        <div className="setup-hero card">
+          <div className="card-body">
+            <div className="setup-icon">{'\uD83D\uDED2'}</div>
+            <h1>What to Buy (React)</h1>
+            <p>A shared shopping list for couples. Set up the database to get started.</p>
+            <button
+              className="btn btn-primary btn-full"
+              onClick={runSetup}
+              disabled={running}
+            >
+              {done ? 'Done!' : running ? 'Setting up...' : 'Setup Database'}
+            </button>
+            <button
+              className="btn btn-ghost btn-full setup-skip"
+              onClick={onComplete}
+              disabled={running}
+            >
+              Skip (already set up)
+            </button>
+            {logs.length > 0 && (
+              <div className="setup-log" ref={logRef}>
+                {logs.map(log => (
+                  <div key={log.id} className={log.cls || ''}>{log.text}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // AUTH SCREEN
+  // ═══════════════════════════════════════════════════════════════
+  function AuthScreen({ onAuth, addToast }) {
+    const [isSignUp, setIsSignUp] = useState(true);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+
+    const handleSubmit = useCallback(async (e) => {
+      e.preventDefault();
+      setError('');
+      setSubmitting(true);
+
+      const url = isSignUp
+        ? API_BASE + '/auth/v1/signup'
+        : API_BASE + '/auth/v1/token';
+      const body = isSignUp
+        ? { email: email.trim(), password }
+        : { grant_type: 'password', email: email.trim(), password };
+
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || data.message || 'Auth failed');
+        saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
+        onAuth(data.access_token, data.user);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setSubmitting(false);
+      }
+    }, [isSignUp, email, password, onAuth]);
+
+    const toggleMode = useCallback(() => {
+      setIsSignUp(prev => !prev);
+      setError('');
+    }, []);
+
+    return (
+      <div className="screen">
+        <div className="auth-wrap">
+          <div className="card">
+            <div className="card-body">
+              <div className="auth-header">
+                <h2>{isSignUp ? 'Sign Up' : 'Log In'}</h2>
+                <p className="subtitle">
+                  {isSignUp ? 'Create your account to start shopping together' : 'Welcome back!'}
+                </p>
+              </div>
+              {error && (
+                <div className="alert alert-error">{error}</div>
+              )}
+              <form onSubmit={handleSubmit}>
+                <div className="form-group">
+                  <label htmlFor="auth-email">Email</label>
+                  <input
+                    type="email"
+                    id="auth-email"
+                    className="input"
+                    placeholder="you@example.com"
+                    required
+                    autoComplete="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="auth-password">Password</label>
+                  <input
+                    type="password"
+                    id="auth-password"
+                    className="input"
+                    placeholder="At least 6 characters"
+                    required
+                    minLength={6}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-full"
+                  disabled={submitting}
+                >
+                  {submitting ? 'Please wait...' : (isSignUp ? 'Sign Up' : 'Log In')}
+                </button>
+              </form>
+              <div className="auth-toggle">
+                <span>{isSignUp ? 'Already have an account? ' : 'Need an account? '}</span>
+                <a onClick={toggleMode}>{isSignUp ? 'Log In' : 'Sign Up'}</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SHARE MODAL
+  // ═══════════════════════════════════════════════════════════════
+  function ShareModal({ list, onClose }) {
+    const [feedback, setFeedback] = useState('');
+    const code = (list && list.share_code || '').toUpperCase();
+
+    const handleCopy = useCallback(() => {
+      navigator.clipboard.writeText(code).then(() => {
+        setFeedback('Copied!');
+      }).catch(() => {
+        setFeedback('Copy failed \u2014 select and copy manually');
+      });
+    }, [code]);
+
+    const handleNativeShare = useCallback(() => {
+      if (!list || !navigator.share) return;
+      navigator.share({
+        title: 'Join my shopping list: ' + list.name,
+        text: 'Use code ' + code + ' to join my shopping list on What to Buy!'
+      }).catch(() => { /* user cancelled */ });
+    }, [list, code]);
+
+    const handleOverlayClick = useCallback((e) => {
+      if (e.target === e.currentTarget) onClose();
+    }, [onClose]);
+
+    const hasNativeShare = typeof navigator !== 'undefined' && !!navigator.share;
+
+    return (
+      <div className="modal-overlay" onClick={handleOverlayClick}>
+        <div className="modal-box">
+          <h3>Share This List</h3>
+          <p>Give this code to your partner so they can join the list.</p>
+          <div className="share-code-display">{code || '------'}</div>
+          <div className="copy-feedback">{feedback}</div>
+          <button className="btn btn-primary btn-full" onClick={handleCopy}>
+            Copy Code
+          </button>
+          {hasNativeShare && (
+            <button
+              className="btn btn-ghost btn-full"
+              style={{ marginTop: 8 }}
+              onClick={handleNativeShare}
+            >
+              Share via...
+            </button>
+          )}
+          <button
+            className="btn btn-ghost btn-full"
+            style={{ marginTop: 8 }}
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // LISTS SCREEN
+  // ═══════════════════════════════════════════════════════════════
+  function ListsScreen({ accessToken, user, onOpenList, onLogout, addToast }) {
+    const [lists, setLists] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [newListName, setNewListName] = useState('');
+    const [shareCode, setShareCode] = useState('');
+    const [creating, setCreating] = useState(false);
+    const [joining, setJoining] = useState(false);
+
+    const loadLists = useCallback(() => {
+      setLoading(true);
+      apiRpc('my_shopping_lists', {}, accessToken).then(data => {
+        setLists(Array.isArray(data) ? data : []);
+      }).catch(err => {
+        addToast('Failed to load lists: ' + err.message, 'error');
+      }).finally(() => {
+        setLoading(false);
+      });
+    }, [accessToken, addToast]);
+
+    useEffect(() => {
+      loadLists();
+    }, [loadLists]);
+
+    const handleCreate = useCallback((e) => {
+      e.preventDefault();
+      const name = newListName.trim();
+      if (!name) return;
+      setCreating(true);
+      apiRpc('create_shopping_list', { list_name: name }, accessToken).then(() => {
+        setNewListName('');
+        addToast('List created!', 'success');
+        loadLists();
+      }).catch(err => {
+        addToast('Failed: ' + err.message, 'error');
+      }).finally(() => {
+        setCreating(false);
+      });
+    }, [newListName, accessToken, addToast, loadLists]);
+
+    const handleJoin = useCallback((e) => {
+      e.preventDefault();
+      const code = shareCode.trim();
+      if (!code) return;
+      setJoining(true);
+      apiRpc('join_shopping_list', { code }, accessToken).then(data => {
+        setShareCode('');
+        addToast('Joined list: ' + (data.name || 'Success'), 'success');
+        loadLists();
+      }).catch(err => {
+        addToast(err.message, 'error');
+      }).finally(() => {
+        setJoining(false);
+      });
+    }, [shareCode, accessToken, addToast, loadLists]);
+
+    return (
+      <div className="screen">
+        <div className="app-bar">
+          <h1>{'\uD83D\uDED2'} What to Buy</h1>
+          <div className="app-bar-right">
+            <span className="user-email">{user && user.email}</span>
+            <button className="btn btn-ghost" onClick={onLogout}>Log out</button>
+          </div>
+        </div>
+        <div className="main-pad">
+          <div className="section-label">Create New List</div>
+          <form className="action-row" onSubmit={handleCreate}>
+            <input
+              type="text"
+              className="input"
+              placeholder="e.g. Weekly groceries"
+              required
+              maxLength={100}
+              value={newListName}
+              onChange={e => setNewListName(e.target.value)}
+            />
+            <button type="submit" className="btn btn-primary" disabled={creating}>
+              Create
+            </button>
+          </form>
+
+          <div className="section-label">Join a List</div>
+          <form className="action-row" onSubmit={handleJoin}>
+            <input
+              type="text"
+              className="input"
+              placeholder="Enter share code"
+              required
+              maxLength={10}
+              style={{ textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600 }}
+              value={shareCode}
+              onChange={e => setShareCode(e.target.value)}
+            />
+            <button type="submit" className="btn btn-secondary" disabled={joining}>
+              Join
+            </button>
+          </form>
+
+          <div className="section-label">My Lists</div>
+          <div>
+            {loading ? (
+              <div style={{ textAlign: 'center', padding: 20 }}>
+                <div className="spinner" />
+              </div>
+            ) : lists.length === 0 ? (
+              <div className="empty-lists">
+                <div style={{ fontSize: 40, opacity: 0.4 }}>{'\uD83D\uDCCB'}</div>
+                <p>No lists yet. Create one or join with a share code!</p>
+              </div>
+            ) : (
+              lists.map(list => (
+                <div key={list.id} className="list-card" onClick={() => onOpenList(list)}>
+                  <div className="list-card-icon">{'\uD83D\uDED2'}</div>
+                  <div className="list-card-info">
+                    <div className="list-card-name">{list.name}</div>
+                    <div className="list-card-meta">
+                      <span>{'\uD83D\uDC65'} {list.member_count}</span>
+                      <span>{'Code: ' + (list.share_code || '').toUpperCase()}</span>
+                    </div>
+                  </div>
+                  <div className="list-card-progress">
+                    {list.checked_count}/{list.item_count}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="app-footer">
+            {'Built with pgStack \u2014 PostgreSQL + Rust + Row Level Security'}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ITEM ROW (memoized for performance)
+  // ═══════════════════════════════════════════════════════════════
+  const ItemRow = React.memo(function ItemRow({ item, onToggle, onDelete }) {
+    const handleToggle = useCallback(() => {
+      onToggle(item.id, !item.checked);
+    }, [item.id, item.checked, onToggle]);
+
+    const handleDelete = useCallback((e) => {
+      e.stopPropagation();
+      onDelete(item.id);
+    }, [item.id, onDelete]);
+
+    return (
+      <li className={'item-row' + (item.checked ? ' checked' : '')}>
+        <input
+          type="checkbox"
+          className="item-checkbox"
+          checked={item.checked}
+          onChange={handleToggle}
+        />
+        <div className="item-info">
+          <div className="item-name">{item.name}</div>
+        </div>
+        <span className="item-qty">{'x' + (item.quantity || '1')}</span>
+        <button
+          className="btn btn-danger item-delete"
+          title="Remove"
+          onClick={handleDelete}
+        >
+          {'\u2715'}
+        </button>
+      </li>
+    );
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // DETAIL SCREEN
+  // ═══════════════════════════════════════════════════════════════
+  function DetailScreen({ list, accessToken, onBack, addToast }) {
+    const [items, setItems] = useState([]);
+    const [showShareModal, setShowShareModal] = useState(false);
+    const [itemName, setItemName] = useState('');
+    const [itemQty, setItemQty] = useState('1');
+    const itemNameRef = useRef(null);
+    const knownItemIdsRef = useRef(new Set());
+    const suppressRef = useRef(false);
+    const itemsRef = useRef([]);
+    const wsRef = useRef(null);
+
+    // Keep itemsRef in sync with state
+    useEffect(() => {
+      itemsRef.current = items;
+    }, [items]);
+
+    const detectNewItem = useCallback((row) => {
+      if (suppressRef.current || knownItemIdsRef.current.has(row.id)) return;
+      knownItemIdsRef.current.add(row.id);
+      if (knownItemIdsRef.current.size <= 1) return; // first load
+      const claims = parseJwt(accessToken);
+      const myUserId = claims ? claims.sub : null;
+      if (row.added_by !== myUserId) {
+        showNotification('Item added', row.name + (row.quantity !== '1' ? ' x' + row.quantity : ''), addToast);
+      }
+    }, [accessToken, addToast]);
+
+    const detectItemChange = useCallback((row) => {
+      if (suppressRef.current) return;
+      knownItemIdsRef.current.add(row.id);
+      const claims = parseJwt(accessToken);
+      const myUserId = claims ? claims.sub : null;
+      if (row.added_by !== myUserId && row.checked) {
+        showNotification('Item checked off', row.name, addToast);
+      }
+    }, [accessToken, addToast]);
+
+    const detectChanges = useCallback((newItems) => {
+      if (suppressRef.current || knownItemIdsRef.current.size === 0) {
+        newItems.forEach(it => knownItemIdsRef.current.add(it.id));
+        return;
+      }
+
+      const oldItems = itemsRef.current;
+
+      newItems.forEach(it => {
+        if (!knownItemIdsRef.current.has(it.id)) {
+          detectNewItem(it);
+          return;
+        }
+        const old = oldItems.find(o => o.id === it.id);
+        if (old && old.checked !== it.checked) {
+          detectItemChange(it);
+        }
+      });
+    }, [detectNewItem, detectItemChange]);
+
+    const loadItems = useCallback(() => {
+      if (!list) return;
+      return apiRest('GET', 'shopping_items?list_id=eq.' + list.id + '&order=checked.asc,created_at.desc', undefined, accessToken)
+        .then(data => {
+          const newItems = Array.isArray(data) ? data : [];
+          detectChanges(newItems);
+          setItems(newItems);
+        })
+        .catch(err => {
+          console.error('Load items failed:', err);
+        });
+    }, [list, accessToken, detectChanges]);
+
+    // Initial load + live query WebSocket
+    useEffect(() => {
+      knownItemIdsRef.current.clear();
+      loadItems();
+
+      // Try to connect live query
+      let ws = null;
+      let fallbackTimer = null;
+
+      apiRpc('subscribe_list_items', { p_list_id: list.id }, accessToken).then(() => {
+        const wsUrl = WS_BASE + '/ws/items-' + list.id + '?token=' + encodeURIComponent(accessToken);
+        ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onmessage = function(e) {
+          let msg;
+          try { msg = JSON.parse(e.data); } catch (ex) { return; }
+
+          if (msg.type === 'subscribed') return;
+          if (msg.type === 'overflow') { loadItems(); return; }
+
+          // Apply delta
+          setItems(prev => {
+            let next = [...prev];
+            let changed = false;
+            const insertedIds = new Set((msg.inserted || []).map(r => r.id));
+
+            // Process inserted first (upsert)
+            if (msg.inserted && msg.inserted.length) {
+              msg.inserted.forEach(row => {
+                const idx = next.findIndex(i => i.id === row.id);
+                if (idx >= 0) {
+                  const old = next[idx];
+                  if (old.checked !== row.checked) detectItemChange(row);
+                  next[idx] = row;
+                } else {
+                  detectNewItem(row);
+                  next.push(row);
+                }
+              });
+              changed = true;
+            }
+            // Process deleted (skip ids also in inserted — those are updates)
+            if (msg.deleted && msg.deleted.length) {
+              const delIds = msg.deleted.filter(d => !insertedIds.has(d.id)).map(d => d.id);
+              if (delIds.length > 0) {
+                const deletedIdSet = new Set(delIds);
+                next = next.filter(i => !deletedIdSet.has(i.id));
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+        };
+
+        ws.onerror = function() {
+          console.warn('WebSocket error, falling back to polling');
+          fallbackTimer = setInterval(() => { loadItems(); }, POLL_INTERVAL);
+        };
+
+        ws.onclose = function() {
+          wsRef.current = null;
+        };
+      }).catch(err => {
+        console.warn('Live query unavailable, falling back to polling:', err.message || err);
+        fallbackTimer = setInterval(() => { loadItems(); }, POLL_INTERVAL);
+      });
+
+      return () => {
+        if (ws) { ws.close(); wsRef.current = null; }
+        if (fallbackTimer) clearInterval(fallbackTimer);
+      };
+    }, [list.id]);
+
+    // Polling fallback only when no WS
+    useEffect(() => {
+      if (wsRef.current) return;
+      const timer = setInterval(() => { loadItems(); }, POLL_INTERVAL);
+      return () => clearInterval(timer);
+    }, [loadItems]);
+
+    // Request notification permission on mount
+    useEffect(() => {
+      requestNotificationPermission();
+    }, []);
+
+    const handleAddItem = useCallback((e) => {
+      e.preventDefault();
+      if (!list) return;
+      const name = itemName.trim();
+      const qty = itemQty.trim() || '1';
+      if (!name) return;
+
+      const claims = parseJwt(accessToken);
+      const body = {
+        list_id: list.id,
+        name,
+        quantity: qty,
+        checked: false,
+        added_by: claims ? claims.sub : null
+      };
+
+      suppressRef.current = true;
+      setTimeout(() => { suppressRef.current = false; }, 3000);
+
+      apiRest('POST', 'shopping_items', body, accessToken).then(created => {
+        knownItemIdsRef.current.add(created.id);
+        setItems(prev => prev.some(i => i.id === created.id) ? prev : [created, ...prev]);
+        setItemName('');
+        setItemQty('1');
+        if (itemNameRef.current) itemNameRef.current.focus();
+      }).catch(err => {
+        addToast('Failed to add: ' + err.message, 'error');
+      });
+    }, [list, itemName, itemQty, accessToken, addToast]);
+
+    const toggleItem = useCallback((id, checked) => {
+      setItems(prev => {
+        const idx = prev.findIndex(i => i.id === id);
+        if (idx === -1) return prev;
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], checked };
+        return updated;
+      });
+
+      suppressRef.current = true;
+      setTimeout(() => { suppressRef.current = false; }, 3000);
+
+      apiRest('PATCH', 'shopping_items?id=eq.' + id, { checked }, accessToken).catch(err => {
+        setItems(prev => {
+          const idx = prev.findIndex(i => i.id === id);
+          if (idx === -1) return prev;
+          const reverted = [...prev];
+          reverted[idx] = { ...reverted[idx], checked: !checked };
+          return reverted;
+        });
+        addToast('Update failed: ' + err.message, 'error');
+      });
+    }, [accessToken, addToast]);
+
+    const deleteItem = useCallback((id) => {
+      let removedItem = null;
+      let removedIdx = -1;
+
+      setItems(prev => {
+        const idx = prev.findIndex(i => i.id === id);
+        if (idx === -1) return prev;
+        removedItem = prev[idx];
+        removedIdx = idx;
+        const next = [...prev];
+        next.splice(idx, 1);
+        return next;
+      });
+
+      knownItemIdsRef.current.delete(id);
+
+      apiRest('DELETE', 'shopping_items?id=eq.' + id, undefined, accessToken).catch(err => {
+        if (removedItem) {
+          setItems(prev => {
+            const next = [...prev];
+            next.splice(removedIdx, 0, removedItem);
+            return next;
+          });
+          knownItemIdsRef.current.add(id);
+        }
+        addToast('Delete failed: ' + err.message, 'error');
+      });
+    }, [accessToken, addToast]);
+
+    const handleDeleteList = useCallback(() => {
+      if (!list) return;
+      if (!confirm('Delete "' + list.name + '" and all its items?')) return;
+      apiRest('DELETE', 'shopping_lists?id=eq.' + list.id, undefined, accessToken).then(() => {
+        addToast('List deleted', 'success');
+        onBack();
+      }).catch(err => {
+        addToast('Delete failed: ' + err.message, 'error');
+      });
+    }, [list, accessToken, addToast, onBack]);
+
+    const unchecked = useMemo(() => items.filter(i => !i.checked), [items]);
+    const checked = useMemo(() => items.filter(i => i.checked), [items]);
+    const total = items.length;
+    const done = checked.length;
+    const pct = total > 0 ? Math.round(done / total * 100) : 0;
+
+    return (
+      <div className="screen">
+        <div className="detail-bar">
+          <button className="btn btn-icon btn-ghost" onClick={() => {
+            if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+            onBack();
+          }} title="Back">
+            <BackIcon />
+          </button>
+          <h1>{list.name}</h1>
+          <button className="btn btn-icon btn-ghost" onClick={() => setShowShareModal(true)} title="Share">
+            <ShareIcon />
+          </button>
+          <button className="btn btn-icon btn-danger" onClick={handleDeleteList} title="Delete list">
+            <TrashIcon />
+          </button>
+        </div>
+
+        <div className="progress-strip">
+          <div className="progress-bar-wrap">
+            <div className="progress-bar" style={{ width: pct + '%' }} />
+          </div>
+          <div className="progress-text">{done + ' / ' + total}</div>
+        </div>
+
+        <form className="add-item-row" onSubmit={handleAddItem}>
+          <input
+            type="text"
+            className="input"
+            placeholder="Add item..."
+            required
+            maxLength={200}
+            value={itemName}
+            onChange={e => setItemName(e.target.value)}
+            ref={itemNameRef}
+          />
+          <input
+            type="text"
+            className="input qty-input"
+            placeholder="Qty"
+            maxLength={10}
+            value={itemQty}
+            onChange={e => setItemQty(e.target.value)}
+          />
+          <button type="submit" className="btn btn-primary btn-icon" title="Add">
+            <PlusIcon />
+          </button>
+        </form>
+
+        <div>
+          {total === 0 ? (
+            <div className="empty-items">
+              <div style={{ fontSize: 40, opacity: 0.4 }}>{'\uD83D\uDED2'}</div>
+              <p>List is empty. Add items above!</p>
+            </div>
+          ) : (
+            <ul className="item-list">
+              {unchecked.length > 0 && (
+                <React.Fragment>
+                  <li className="item-separator">{'To buy (' + unchecked.length + ')'}</li>
+                  {unchecked.map(item => (
+                    <ItemRow
+                      key={item.id}
+                      item={item}
+                      onToggle={toggleItem}
+                      onDelete={deleteItem}
+                    />
+                  ))}
+                </React.Fragment>
+              )}
+              {checked.length > 0 && (
+                <React.Fragment>
+                  <li className="item-separator">{'In cart (' + checked.length + ')'}</li>
+                  {checked.map(item => (
+                    <ItemRow
+                      key={item.id}
+                      item={item}
+                      onToggle={toggleItem}
+                      onDelete={deleteItem}
+                    />
+                  ))}
+                </React.Fragment>
+              )}
+            </ul>
+          )}
+        </div>
+
+        {showShareModal && (
+          <ShareModal list={list} onClose={() => setShowShareModal(false)} />
+        )}
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // APP (ROOT COMPONENT)
+  // ═══════════════════════════════════════════════════════════════
+  function App() {
+    const [screen, setScreen] = useState('');
+    const [accessToken, setAccessToken] = useState(null);
+    const [user, setUser] = useState(null);
+    const [currentList, setCurrentList] = useState(null);
+    const [listsCache, setListsCache] = useState([]);
+    const { toasts, addToast } = useToasts();
+    const wsRef = React.useRef(null);
+
+    // Hash router dispatch
+    const dispatch = useCallback(() => {
+      const hash = location.hash.replace(/^#\/?/, '') || '';
+      const parts = hash.split('/');
+      const route = parts[0];
+
+      if (route === 'list' && parts[1]) {
+        const listId = parseInt(parts[1], 10);
+        const session = loadSession();
+        const token = session ? session.access_token : accessToken;
+        if (!token) { location.hash = '#/auth'; return; }
+
+        // Check listsCache first
+        const cached = listsCache.find(l => l.id === listId);
+        if (cached) {
+          setCurrentList(cached);
+          setScreen('detail');
+          return;
+        }
+
+        // Load lists then find
+        apiRpc('my_shopping_lists', {}, token).then(data => {
+          const allLists = Array.isArray(data) ? data : [];
+          setListsCache(allLists);
+          const found = allLists.find(l => l.id === listId);
+          if (found) {
+            setCurrentList(found);
+            setScreen('detail');
+          } else {
+            location.hash = '#/lists';
+          }
+        }).catch(() => { location.hash = '#/lists'; });
+        return;
+      }
+      if (route === 'lists') {
+        const session = loadSession();
+        const token = session ? session.access_token : accessToken;
+        if (!token) { location.hash = '#/auth'; return; }
+        setCurrentList(null);
+        setScreen('lists');
+        return;
+      }
+      if (route === 'auth') { setScreen('auth'); return; }
+      if (route === 'setup') { setScreen('setup'); return; }
+
+      // Default: check session
+      const session = loadSession();
+      if (session && session.access_token) {
+        location.hash = '#/lists';
+      } else {
+        location.hash = '#/setup';
+      }
+    }, [accessToken, listsCache]);
+
+    // Register service worker + restore session + listen to hash changes
+    useEffect(() => {
+      registerServiceWorker();
+
+      // Restore session from localStorage
+      const session = loadSession();
+      if (session && session.access_token) {
+        setAccessToken(session.access_token);
+        setUser(session.user);
+
+        if (isTokenExpiringSoon()) {
+          tryRefresh().then(data => {
+            setAccessToken(data.access_token);
+            setUser(data.user || session.user);
+            dispatch();
+          }).catch(() => {
+            clearSession();
+            location.hash = '#/auth';
+          });
+        } else {
+          dispatch();
+        }
+      } else {
+        dispatch();
+      }
+
+      const onHashChange = () => dispatch();
+      window.addEventListener('hashchange', onHashChange);
+      return () => window.removeEventListener('hashchange', onHashChange);
+    }, []);
+
+    // Visibility handler for token refresh + item re-sync
+    useEffect(() => {
+      const handleVisibility = () => {
+        if (!document.hidden && accessToken) {
+          if (isTokenExpiringSoon()) {
+            tryRefresh().then(data => {
+              setAccessToken(data.access_token);
+            }).catch(() => {
+              clearSession();
+              location.hash = '#/auth';
+            });
+          }
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibility);
+      return () => document.removeEventListener('visibilitychange', handleVisibility);
+    }, [accessToken]);
+
+    const handleSetupComplete = useCallback(() => {
+      location.hash = '#/auth';
+    }, []);
+
+    const handleAuth = useCallback((token, userData) => {
+      setAccessToken(token);
+      setUser(userData);
+      requestNotificationPermission();
+      location.hash = '#/lists';
+    }, []);
+
+    const handleOpenList = useCallback((list) => {
+      setListsCache(prev => {
+        const exists = prev.find(l => l.id === list.id);
+        return exists ? prev : [...prev, list];
+      });
+      location.hash = '#/list/' + list.id;
+    }, []);
+
+    const handleBackToLists = useCallback(() => {
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      location.hash = '#/lists';
+    }, []);
+
+    const handleLogout = useCallback(() => {
+      if (accessToken) {
+        fetch(API_BASE + '/auth/v1/logout', {
+          method: 'POST', headers: authHeaders(accessToken)
+        }).catch(() => {});
+      }
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      clearSession();
+      setAccessToken(null);
+      setUser(null);
+      setCurrentList(null);
+      setListsCache([]);
+      location.hash = '#/auth';
+    }, [accessToken]);
+
+    return (
+      <React.Fragment>
+        <ToastArea toasts={toasts} />
+        {screen === 'setup' && (
+          <SetupScreen onComplete={handleSetupComplete} addToast={addToast} />
+        )}
+        {screen === 'auth' && (
+          <AuthScreen onAuth={handleAuth} addToast={addToast} />
+        )}
+        {screen === 'lists' && (
+          <ListsScreen
+            accessToken={accessToken}
+            user={user}
+            onOpenList={handleOpenList}
+            onLogout={handleLogout}
+            addToast={addToast}
+          />
+        )}
+        {screen === 'detail' && currentList && (
+          <DetailScreen
+            key={currentList.id}
+            list={currentList}
+            accessToken={accessToken}
+            onBack={handleBackToLists}
+            addToast={addToast}
+          />
+        )}
+      </React.Fragment>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MOUNT
+  // ═══════════════════════════════════════════════════════════════
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(React.createElement(App));
+
+})();
+</script>
+
+</body>
+</html>

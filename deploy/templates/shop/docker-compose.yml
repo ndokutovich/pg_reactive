@@ -1,0 +1,99 @@
+# Phone-deployable "What to Buy" shopping cart.
+#
+# Three containers:
+#   pgstack         — all-in-one (PG + pg_reactive + Go proxy)
+#   shop-migration  — one-shot psql that applies migration.sql then exits
+#   shopping        — static frontend (vanilla / react / vue / svelte / angular)
+#
+# Wired to the umbrella nginx via the external `gateway` network as alias
+# `shop-web`. The umbrella's app-shop.conf (see umbrella/) routes the
+# subdomain you pick to that alias.
+#
+# Usage on the VPS:
+#   1. cp -r deploy/templates/shop  /opt/apps/shop
+#   2. cd /opt/apps/shop  &&  cp .env.example .env  &&  edit secrets
+#   3. (optional) export FRONTEND_IMAGE=pgstack/shopping-react:latest
+#      Default is vanilla. Override before `up -d` to swap framework.
+#   4. docker compose up -d
+#   5. cp umbrella/app-shop.conf.template /opt/proxy/nginx/conf.d/app-shop.conf
+#      Edit server_name to your subdomain, then nginx -t && reload.
+
+services:
+  pgstack:
+    image: ${PGSTACK_IMAGE:-pgstack/pgstack:latest}
+    container_name: shop-pgstack
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD:      ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      JWT_SECRET:             ${JWT_SECRET:?JWT_SECRET required (32+ chars)}
+      ANON_KEY:               ${ANON_KEY:?ANON_KEY required (32+ chars)}
+      SERVICE_ROLE_KEY:       ${SERVICE_ROLE_KEY:?SERVICE_ROLE_KEY required (32+ chars)}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?SECRETS_ENCRYPTION_KEY required (32+ chars)}
+      PGSTACK_ENV:            production
+      REQUIRE_AUTHENTICATED_WS: "true"
+      ENABLE_SQL_ENDPOINT:    "false"
+      ENABLE_DEMO_ENDPOINT:   "false"
+      ALLOW_ANONYMOUS_SIGNIN: "false"
+      ALLOWED_ORIGINS:        ${ALLOWED_ORIGINS:-}
+      SITE_URL:               ${SITE_URL:-https://shop.example.com}
+      SMTP_HOST:              ${SMTP_HOST:-inbucket}
+      SMTP_PORT:              ${SMTP_PORT:-2500}
+      SMTP_USER:              ${SMTP_USER:-shop}
+      SMTP_PASS:              ${SMTP_PASS:-shop}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      default:
+      gateway:
+        aliases: [shop-pgstack]
+
+  shop-migration:
+    image: postgres:16-alpine
+    container_name: shop-migration
+    restart: "no"
+    depends_on:
+      pgstack:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./migration.sql:/migration.sql:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "applying migration.sql..."
+        psql -h shop-pgstack -U postgres -d pg_reactive_test \
+             -v ON_ERROR_STOP=1 -f /migration.sql
+        echo "migration complete"
+    networks: [default]
+
+  shopping:
+    image: ${FRONTEND_IMAGE:-pgstack/shopping-vanilla:latest}
+    container_name: shop-web
+    restart: unless-stopped
+    depends_on:
+      shop-migration:
+        condition: service_completed_successfully
+    networks:
+      default:
+      gateway:
+        aliases: [shop-web]
+
+  # Inbucket catches transactional mail so the prod gate (round 26 F5)
+  # is satisfied without shipping real SMTP credentials. Reachable on
+  # http://inbucket:9000 inside the stack — expose via umbrella if you
+  # need the web UI from the host.
+  inbucket:
+    image: inbucket/inbucket:edge
+    container_name: shop-inbucket
+    restart: unless-stopped
+    networks: [default]
+
+networks:
+  default:
+    name: shop_default
+  gateway:
+    external: true
