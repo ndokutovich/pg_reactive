@@ -72,10 +72,10 @@ services:
     networks: [default]
 
   # ── 6 matching engines ──
-  # Each consumes the same order stream and writes per-engine results.
-  # Image refs override-able so you can pin published tags or local dev
-  # builds independently. For now `go` is the only one implemented; the
-  # other five panels in the dashboard stay empty until each ships.
+  # Each consumes the same order stream (LISTEN order_event_added + drain
+  # public.order_events) and writes per-engine fills/book/stats. Wire
+  # contract documented in apps/polyglot/SPEC.md. Image refs override-able
+  # so you can pin published tags or local dev builds per engine.
 
   polyglot-engine-go:
     image: ${ENGINE_GO_IMAGE:-pgstack/polyglot-engine-go:latest}
@@ -84,17 +84,70 @@ services:
     depends_on:
       polyglot-migration:
         condition: service_completed_successfully
-    environment:
+    environment: &engine_env
       DATABASE_URL: postgres://polyglot_engine:${POLYGLOT_ENGINE_PASSWORD}@polyglot-pgstack:5432/pg_reactive_test
       ENGINE_NAME:  go
     networks: [default]
 
-  # Add me when shipped:
-  # polyglot-engine-spring   — pgstack/polyglot-engine-spring:latest
-  # polyglot-engine-fastapi  — pgstack/polyglot-engine-fastapi:latest
-  # polyglot-engine-rust     — pgstack/polyglot-engine-rust:latest
-  # polyglot-engine-dotnet   — pgstack/polyglot-engine-dotnet:latest
-  # polyglot-engine-node     — pgstack/polyglot-engine-node:latest
+  polyglot-engine-node:
+    image: ${ENGINE_NODE_IMAGE:-pgstack/polyglot-engine-node:latest}
+    container_name: polyglot-engine-node
+    restart: unless-stopped
+    depends_on:
+      polyglot-migration:
+        condition: service_completed_successfully
+    environment:
+      <<: *engine_env
+      ENGINE_NAME: node
+    networks: [default]
+
+  polyglot-engine-fastapi:
+    image: ${ENGINE_FASTAPI_IMAGE:-pgstack/polyglot-engine-fastapi:latest}
+    container_name: polyglot-engine-fastapi
+    restart: unless-stopped
+    depends_on:
+      polyglot-migration:
+        condition: service_completed_successfully
+    environment:
+      <<: *engine_env
+      ENGINE_NAME: fastapi
+    networks: [default]
+
+  polyglot-engine-rust:
+    image: ${ENGINE_RUST_IMAGE:-pgstack/polyglot-engine-rust:latest}
+    container_name: polyglot-engine-rust
+    restart: unless-stopped
+    depends_on:
+      polyglot-migration:
+        condition: service_completed_successfully
+    environment:
+      <<: *engine_env
+      ENGINE_NAME: rust
+    networks: [default]
+
+  polyglot-engine-dotnet:
+    image: ${ENGINE_DOTNET_IMAGE:-pgstack/polyglot-engine-dotnet:latest}
+    container_name: polyglot-engine-dotnet
+    restart: unless-stopped
+    depends_on:
+      polyglot-migration:
+        condition: service_completed_successfully
+    environment:
+      <<: *engine_env
+      ENGINE_NAME: dotnet
+    networks: [default]
+
+  polyglot-engine-spring:
+    image: ${ENGINE_SPRING_IMAGE:-pgstack/polyglot-engine-spring:latest}
+    container_name: polyglot-engine-spring
+    restart: unless-stopped
+    depends_on:
+      polyglot-migration:
+        condition: service_completed_successfully
+    environment:
+      <<: *engine_env
+      ENGINE_NAME: spring
+    networks: [default]
 
   polyglot-generator:
     image: ${GENERATOR_IMAGE:-pgstack/polyglot-generator:latest}

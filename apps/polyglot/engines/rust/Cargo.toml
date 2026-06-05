@@ -1,0 +1,18 @@
+[package]
+name    = "pgstack-polyglot-engine-rust"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "engine"
+path = "src/main.rs"
+
+[dependencies]
+tokio          = { version = "1.40", features = ["macros", "rt-multi-thread", "sync"] }
+tokio-postgres = "0.7"
+futures-util   = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

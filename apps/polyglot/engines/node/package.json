@@ -1,0 +1,10 @@
+{
+  "name": "pgstack-polyglot-engine-node",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}
