@@ -1,0 +1,138 @@
+# Polyglot matching-engines showcase — full deployment template.
+#
+# Containers:
+#   pgstack             — all-in-one (PG + pg_reactive + Go proxy)
+#   polyglot-migration  — one-shot psql applies migration.sql
+#   polyglot-generator  — synthetic order producer
+#   polyglot-engine-{go,spring,fastapi,rust,dotnet,node}  — 6 workers
+#   polyglot-web        — static dashboard
+#   inbucket            — fake SMTP (prod gate, round 26 F5)
+#
+# All on a private default network; only polyglot-web and polyglot-pgstack
+# are aliased on the external `gateway` so the umbrella nginx routes one
+# subdomain to web (`/`) and proxies pgstack endpoints (/auth/, /rest/,
+# /ws/, /api/, /functions/) to the proxy. See umbrella/app-polyglot.conf
+# in this directory.
+
+services:
+  pgstack:
+    image: ${PGSTACK_IMAGE:-pgstack/pgstack:latest}
+    container_name: polyglot-pgstack
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD:      ${POSTGRES_PASSWORD:?required}
+      JWT_SECRET:             ${JWT_SECRET:?required}
+      ANON_KEY:               ${ANON_KEY:?required}
+      SERVICE_ROLE_KEY:       ${SERVICE_ROLE_KEY:?required}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?required}
+      PGSTACK_ENV:            production
+      REQUIRE_AUTHENTICATED_WS: "true"
+      ENABLE_SQL_ENDPOINT:    "false"
+      ENABLE_DEMO_ENDPOINT:   "false"
+      ALLOW_ANONYMOUS_SIGNIN: "true"
+      ANONYMOUS_JWT_TTL:      "3600"
+      ALLOWED_ORIGINS:        ${ALLOWED_ORIGINS:-}
+      SITE_URL:               ${SITE_URL:-https://polyglot.example.com}
+      SMTP_HOST:              ${SMTP_HOST:-inbucket}
+      SMTP_PORT:              ${SMTP_PORT:-2500}
+      SMTP_USER:              ${SMTP_USER:-polyglot}
+      SMTP_PASS:              ${SMTP_PASS:-polyglot}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      default:
+      gateway:
+        aliases: [polyglot-pgstack]
+
+  polyglot-migration:
+    image: postgres:16-alpine
+    container_name: polyglot-migration
+    restart: "no"
+    depends_on:
+      pgstack:
+        condition: service_healthy
+    environment:
+      PGPASSWORD:        ${POSTGRES_PASSWORD}
+      POLYGLOT_ENGINE_PASSWORD: ${POLYGLOT_ENGINE_PASSWORD:?required}
+    volumes:
+      - ./migration.sql:/migration.sql:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "applying polyglot migration.sql..."
+        psql -h polyglot-pgstack -U postgres -d pg_reactive_test \
+             -v ON_ERROR_STOP=1 -f /migration.sql
+        # Rotate the engine role password to the operator-chosen value.
+        psql -h polyglot-pgstack -U postgres -d pg_reactive_test -c \
+          "ALTER ROLE polyglot_engine PASSWORD '$$POLYGLOT_ENGINE_PASSWORD'"
+        echo "migration complete"
+    networks: [default]
+
+  # ── 6 matching engines ──
+  # Each consumes the same order stream and writes per-engine results.
+  # Image refs override-able so you can pin published tags or local dev
+  # builds independently. For now `go` is the only one implemented; the
+  # other five panels in the dashboard stay empty until each ships.
+
+  polyglot-engine-go:
+    image: ${ENGINE_GO_IMAGE:-pgstack/polyglot-engine-go:latest}
+    container_name: polyglot-engine-go
+    restart: unless-stopped
+    depends_on:
+      polyglot-migration:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://polyglot_engine:${POLYGLOT_ENGINE_PASSWORD}@polyglot-pgstack:5432/pg_reactive_test
+      ENGINE_NAME:  go
+    networks: [default]
+
+  # Add me when shipped:
+  # polyglot-engine-spring   — pgstack/polyglot-engine-spring:latest
+  # polyglot-engine-fastapi  — pgstack/polyglot-engine-fastapi:latest
+  # polyglot-engine-rust     — pgstack/polyglot-engine-rust:latest
+  # polyglot-engine-dotnet   — pgstack/polyglot-engine-dotnet:latest
+  # polyglot-engine-node     — pgstack/polyglot-engine-node:latest
+
+  polyglot-generator:
+    image: ${GENERATOR_IMAGE:-pgstack/polyglot-generator:latest}
+    container_name: polyglot-generator
+    restart: unless-stopped
+    depends_on:
+      polyglot-migration:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL:   postgres://polyglot_engine:${POLYGLOT_ENGINE_PASSWORD}@polyglot-pgstack:5432/pg_reactive_test
+      SYMBOL:         BTC-USD
+      MID_PRICE:      ${MID_PRICE:-50000}
+      SPREAD:         ${SPREAD:-25}
+      ORDERS_PER_SEC: ${ORDERS_PER_SEC:-4}
+      MAX_QTY:        ${MAX_QTY:-1.5}
+      CANCEL_RATE:    ${CANCEL_RATE:-0.05}
+    networks: [default]
+
+  polyglot-web:
+    image: ${WEB_IMAGE:-pgstack/polyglot-web:latest}
+    container_name: polyglot-web
+    restart: unless-stopped
+    depends_on:
+      polyglot-migration:
+        condition: service_completed_successfully
+    networks:
+      default:
+      gateway:
+        aliases: [polyglot-web]
+
+  inbucket:
+    image: inbucket/inbucket:edge
+    container_name: polyglot-inbucket
+    restart: unless-stopped
+    networks: [default]
+
+networks:
+  default:
+    name: polyglot_default
+  gateway:
+    external: true

@@ -78,22 +78,28 @@ jobs:
               -f examples/docker-compose.prod.yml \
               up -d
 
-            # Install umbrella nginx routing for reactive.pgstack.org —
-            # tracked at deploy/umbrella/ in this repo so the contract
+            # Install every tracked umbrella nginx conf — one file per
+            # subdomain — into /opt/proxy/nginx/conf.d/, then `nginx -t`
+            # the lot and reload on success. Tracked here so the contract
             # cannot rot away from a separate ops repo's checkout. The
-            # gap this closes is exactly round 34: umbrella had no
-            # server_name match, every request fell to the default
-            # server and served a months-stale baked-in landing.
-            UMBRELLA_CONF=/opt/proxy/nginx/conf.d/app-pg-reactive.conf
-            SRC=deploy/umbrella/app-pg-reactive.conf
-            if [ -f "$SRC" ]; then
-              if ! sudo cmp -s "$SRC" "$UMBRELLA_CONF" 2>/dev/null; then
-                sudo cp "$SRC" "$UMBRELLA_CONF"
-                sudo docker exec umbrella-proxy nginx -t \
-                  && sudo docker exec umbrella-proxy nginx -s reload \
-                  || { echo "::error::umbrella nginx -t failed, reverting"; \
-                       sudo rm "$UMBRELLA_CONF"; exit 1; }
+            # original gap this closes is round 34: umbrella had no
+            # server_name match for reactive.pgstack.org, every request
+            # fell to the default server and served a stale baked-in
+            # landing. Each app subdomain (polyglot.pgstack.org etc) gets
+            # its own conf in deploy/umbrella/.
+            CHANGED=0
+            for SRC in deploy/umbrella/*.conf; do
+              [ -f "$SRC" ] || continue
+              DST=/opt/proxy/nginx/conf.d/$(basename "$SRC")
+              if ! sudo cmp -s "$SRC" "$DST" 2>/dev/null; then
+                sudo cp "$SRC" "$DST"
+                CHANGED=1
               fi
+            done
+            if [ "$CHANGED" = "1" ]; then
+              sudo docker exec umbrella-proxy nginx -t \
+                && sudo docker exec umbrella-proxy nginx -s reload \
+                || { echo "::error::umbrella nginx -t failed after copy"; exit 1; }
             fi
 
             docker image prune -f
