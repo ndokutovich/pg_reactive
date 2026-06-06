@@ -210,50 +210,60 @@ GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,big
 
 -- Per-engine subscriptions: each engine touches only its own snap
 -- tables, no cross-engine contention.
+--
+-- Each pgr.subscribe call is wrapped in its own BEGIN/EXCEPTION block.
+-- A single block-level EXCEPTION on the outer DO aborts the entire
+-- FOR loop on the first error (e.g. a duplicate query_id from a
+-- partial previous run), leaving subsequent engines unsubscribed —
+-- which then explodes downstream because cross-engine triggers expect
+-- every _snap_<query_id> to exist. Per-statement nesting makes the
+-- migration truly idempotent.
 DO $$
 DECLARE
   e text;
 BEGIN
   FOR e IN SELECT unnest(ARRAY['go','spring','fastapi','rust','dotnet','node']) LOOP
-    PERFORM pgr.subscribe(
-      'engine_perf_' || e,
-      format($sql$
-        SELECT engine, total_orders, total_matches, total_volume,
-               ROUND(avg_latency_us::numeric, 1) AS avg_latency_us,
-               p99_latency_us, last_updated
-        FROM public.engine_stats
-        WHERE engine = %L
-      $sql$, e),
-      'delta',
-      NULL
-    );
-    PERFORM pgr.subscribe(
-      'recent_fills_' || e,
-      format($sql$
-        SELECT id, order_id, matched_qty, fill_price, latency_us, taker_side, ts
-        FROM public.engine_fills
-        WHERE engine = %L
-        ORDER BY ts DESC
-        LIMIT 20
-      $sql$, e),
-      'delta',
-      NULL
-    );
-    PERFORM pgr.subscribe(
-      'engine_book_' || e || '_BTCUSD',
-      format($sql$
-        SELECT side, price, total_qty, order_count
-        FROM public.engine_book
-        WHERE engine = %L AND symbol = 'BTC-USD'
-        ORDER BY side, CASE WHEN side='buy' THEN -price ELSE price END
-        LIMIT 10
-      $sql$, e),
-      'delta',
-      NULL
-    );
+    BEGIN
+      PERFORM pgr.subscribe(
+        'engine_perf_' || e,
+        format($sql$
+          SELECT engine, total_orders, total_matches, total_volume,
+                 ROUND(avg_latency_us::numeric, 1) AS avg_latency_us,
+                 p99_latency_us, last_updated
+          FROM public.engine_stats
+          WHERE engine = %L
+        $sql$, e),
+        'delta', NULL);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'subscribe engine_perf_%: %', e, SQLERRM;
+    END;
+    BEGIN
+      PERFORM pgr.subscribe(
+        'recent_fills_' || e,
+        format($sql$
+          SELECT id, order_id, matched_qty, fill_price, latency_us, taker_side, ts
+          FROM public.engine_fills
+          WHERE engine = %L
+          ORDER BY ts DESC
+          LIMIT 20
+        $sql$, e),
+        'delta', NULL);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'subscribe recent_fills_%: %', e, SQLERRM;
+    END;
+    BEGIN
+      PERFORM pgr.subscribe(
+        'engine_book_' || e || '_BTCUSD',
+        format($sql$
+          SELECT side, price, total_qty, order_count
+          FROM public.engine_book
+          WHERE engine = %L AND symbol = 'BTC-USD'
+          ORDER BY side, CASE WHEN side='buy' THEN -price ELSE price END
+          LIMIT 10
+        $sql$, e),
+        'delta', NULL);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'subscribe engine_book_%_BTCUSD: %', e, SQLERRM;
+    END;
   END LOOP;
-EXCEPTION WHEN OTHERS THEN
-  -- subscribe is idempotent on the proxy side but pgr.subscribe itself
-  -- raises if the query_id is already present. swallow the duplicate.
-  NULL;
 END $$;
