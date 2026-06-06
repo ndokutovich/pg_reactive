@@ -196,48 +196,37 @@ GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,big
 -- DO blocks with EXCEPTION so re-running migration.sql on an already-
 -- bootstrapped DB doesn't abort the file. (SELECT ... ON CONFLICT is
 -- INSERT syntax — not valid here.)
-DO $$
-BEGIN
-  PERFORM pgr.subscribe(
-    'top_of_book_BTCUSD',
-    $sql$
-      SELECT side, price, SUM(total_qty) AS total_qty, SUM(order_count) AS order_count
-      FROM public.engine_book
-      WHERE symbol = 'BTC-USD'
-      GROUP BY side, price
-      ORDER BY side, CASE WHEN side='buy' THEN -price ELSE price END
-      LIMIT 20
-    $sql$,
-    'delta',
-    NULL
-  );
-EXCEPTION WHEN OTHERS THEN NULL;
-END $$;
+-- Aggregate-across-engines subscriptions (top_of_book over engine_book
+-- and engine_perf_summary over engine_stats) are deliberately NOT
+-- registered server-side. Six concurrent engines all writing to the
+-- same _snap_<aggregate> table is a textbook deadlock generator —
+-- recompute fires under each engine's role on every fill, all six try
+-- to UPDATE the single snap → 40P01 storm. Per-engine subscriptions
+-- are isolated by construction (each engine writes only its own
+-- _snap_recent_fills_<e> and _snap_engine_book_<e>_BTCUSD), so
+-- everything below is deadlock-free. The frontend computes the
+-- aggregated top-of-book and the perf summary client-side by union'ing
+-- the six per-engine streams it already has open.
 
-DO $$
-BEGIN
-  PERFORM pgr.subscribe(
-    'engine_perf_summary',
-    $sql$
-      SELECT engine, total_orders, total_matches, total_volume,
-             ROUND(avg_latency_us::numeric, 1) AS avg_latency_us,
-             p99_latency_us, last_updated
-      FROM public.engine_stats
-      ORDER BY engine
-    $sql$,
-    'delta',
-    NULL
-  );
-EXCEPTION WHEN OTHERS THEN NULL;
-END $$;
-
--- Per-engine subscriptions are registered in a loop because the engine
--- list is small and stable.
+-- Per-engine subscriptions: each engine touches only its own snap
+-- tables, no cross-engine contention.
 DO $$
 DECLARE
   e text;
 BEGIN
   FOR e IN SELECT unnest(ARRAY['go','spring','fastapi','rust','dotnet','node']) LOOP
+    PERFORM pgr.subscribe(
+      'engine_perf_' || e,
+      format($sql$
+        SELECT engine, total_orders, total_matches, total_volume,
+               ROUND(avg_latency_us::numeric, 1) AS avg_latency_us,
+               p99_latency_us, last_updated
+        FROM public.engine_stats
+        WHERE engine = %L
+      $sql$, e),
+      'delta',
+      NULL
+    );
     PERFORM pgr.subscribe(
       'recent_fills_' || e,
       format($sql$

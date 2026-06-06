@@ -275,44 +275,46 @@ function openSubscription(queryId, onSnapshot, onDelta) {
   return ws;
 }
 
+// Aggregated top-of-book is recomputed client-side by unioning every
+// engine's engine_book stream into one (side, price) → totals map and
+// summing across engines. The server-side aggregate subscription was
+// removed because all six engines writing to the same _snap_top_of_book
+// table deadlock under any meaningful order flow (40P01 storm).
+function recomputeTopOfBook() {
+  const merged = new Map();   // side|price -> {side, price, total_qty, order_count}
+  state.engineBook.forEach(function(perEngine) {
+    perEngine.forEach(function(r) {
+      const k = r.side + '|' + Number(r.price);
+      const cur = merged.get(k);
+      if (cur) {
+        cur.total_qty   = Number(cur.total_qty)   + Number(r.total_qty);
+        cur.order_count = Number(cur.order_count) + Number(r.order_count);
+      } else {
+        merged.set(k, { side: r.side, price: r.price,
+                        total_qty: Number(r.total_qty),
+                        order_count: Number(r.order_count) });
+      }
+    });
+  });
+  state.topOfBook = merged;
+  renderTopOfBook(rebuildTopOfBook());
+}
+
 PGR.signInAnonymously().catch(function(){}).then(function() {
-  // Aggregated top-of-book
-  openSubscription('top_of_book_BTCUSD',
-    function(rows) {
-      state.topOfBook.clear();
-      rows.forEach(function(r) { state.topOfBook.set(r.side + '|' + r.price, r); });
-      renderTopOfBook(rebuildTopOfBook());
-    },
-    function(msg) {
-      deltaApply('top', msg, state.topOfBook, function(r){ return r.side + '|' + r.price; });
-      renderTopOfBook(rebuildTopOfBook());
-    }
-  );
 
-  // Perf summary
-  openSubscription('engine_perf_summary',
-    function(rows) {
-      state.perfSummary.clear();
-      rows.forEach(function(r) { state.perfSummary.set(r.engine, r); });
-      renderPerfSummary(rebuildPerfRows());
-    },
-    function(msg) {
-      deltaApply('perf', msg, state.perfSummary, function(r){ return r.engine; });
-      renderPerfSummary(rebuildPerfRows());
-    }
-  );
-
-  // Per-engine book + fills
+  // Per-engine book + fills + perf
   ENGINES.forEach(function(eng) {
     openSubscription('engine_book_' + eng + '_BTCUSD',
       function(rows) {
         const bm = state.engineBook.get(eng); bm.clear();
         rows.forEach(function(r) { bm.set(r.side + '|' + r.price, r); });
         renderEngineBook(eng, rebuildEngineBook(eng));
+        recomputeTopOfBook();
       },
       function(msg) {
         deltaApply('book', msg, state.engineBook.get(eng), function(r){ return r.side + '|' + r.price; });
         renderEngineBook(eng, rebuildEngineBook(eng));
+        recomputeTopOfBook();
       }
     );
     openSubscription('recent_fills_' + eng,
@@ -325,6 +327,19 @@ PGR.signInAnonymously().catch(function(){}).then(function() {
         const next = [].concat(msg.inserted || [], cur).slice(0, 30);
         state.engineFills.set(eng, next);
         renderEngineFills(eng, next);
+      }
+    );
+    // Per-engine perf — server-side aggregate subscription was removed
+    // (deadlocks); we feed one row per engine into state.perfSummary and
+    // re-render the table on every change.
+    openSubscription('engine_perf_' + eng,
+      function(rows) {
+        rows.forEach(function(r) { state.perfSummary.set(r.engine, r); });
+        renderPerfSummary(rebuildPerfRows());
+      },
+      function(msg) {
+        deltaApply('perf', msg, state.perfSummary, function(r){ return r.engine; });
+        renderPerfSummary(rebuildPerfRows());
       }
     );
   });
