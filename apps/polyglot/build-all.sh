@@ -9,6 +9,12 @@
 
 set -euo pipefail
 
+# BuildKit features (COPY --chmod, secret/ssh mounts, parallel stages)
+# are used by docker/Dockerfile.all-in-one and may be used by future
+# engine Dockerfiles. Enable it globally for the script so a classic-
+# builder host doesn't fail mid-build on a single step.
+export DOCKER_BUILDKIT=1
+
 cd "$(dirname "$0")"
 
 ALL=(go node fastapi rust dotnet spring generator web pgstack)
