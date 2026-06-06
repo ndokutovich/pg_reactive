@@ -168,7 +168,12 @@ END;
 $fn$;
 
 REVOKE EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) FROM PUBLIC;
-GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) TO authenticated;
+GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) TO authenticated, anon;
+-- anon = the guest-JWT path used by signInAnonymously — without this the
+-- "Send order" button on the public dashboard returns "insufficient
+-- privileges" because the proxy runs the RPC under the JWT's role and
+-- the guest token never escalates above anon. Real per-user RPC would
+-- of course keep this restricted to authenticated only.
 
 -- ─── pgr.subscribe live queries ───────────────────────────────────
 -- All read-only public — no audience binding because the matching state
