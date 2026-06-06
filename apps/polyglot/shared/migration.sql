@@ -87,6 +87,19 @@ ON CONFLICT (engine) DO NOTHING;
 -- The authenticated role (frontend viewers): read everything live; only
 -- placing orders is privileged and goes through the place_order RPC.
 
+-- pg_reactive's per-query UNLOGGED snapshots (pgr._snap_<query_id>) are
+-- created by whichever role calls pgr.subscribe — in our case postgres,
+-- via this migration. The engines INSERT/UPDATE/DELETE engine_fills /
+-- engine_book / engine_stats as polyglot_engine, which fires the
+-- pg_reactive AFTER-STATEMENT trigger; the trigger needs to read AND
+-- write _snap_* under the engine's identity to compute the delta. Grant
+-- the schema and a default-privilege so subscriptions registered now
+-- AND in the future are accessible.
+GRANT USAGE ON SCHEMA pgr TO polyglot_engine;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA pgr TO polyglot_engine;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA pgr
+  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO polyglot_engine;
+
 GRANT SELECT, INSERT                ON public.order_events     TO polyglot_engine;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.engine_fills    TO polyglot_engine;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.engine_book     TO polyglot_engine;
