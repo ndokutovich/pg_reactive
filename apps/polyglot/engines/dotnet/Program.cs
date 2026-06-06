@@ -9,8 +9,22 @@ using System.Text;
 using Npgsql;
 
 string engineName = Environment.GetEnvironmentVariable("ENGINE_NAME") ?? "dotnet";
-string dsn = Environment.GetEnvironmentVariable("DATABASE_URL")
+string url = Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? throw new InvalidOperationException("DATABASE_URL is required");
+
+// Npgsql wants Host=...;Port=...;Database=...;Username=...;Password=... —
+// not the postgres:// URL we receive via env. Translate once.
+string ToNpgsql(string pgUrl)
+{
+    var u = new Uri(pgUrl);
+    var userInfo = u.UserInfo.Split(':', 2);
+    var user = Uri.UnescapeDataString(userInfo[0]);
+    var pass = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "";
+    var db = u.AbsolutePath.TrimStart('/');
+    var port = u.Port == -1 ? 5432 : u.Port;
+    return $"Host={u.Host};Port={port};Database={db};Username={user};Password={pass};Pooling=true";
+}
+string dsn = ToNpgsql(url);
 
 var engine = new Engine(engineName);
 

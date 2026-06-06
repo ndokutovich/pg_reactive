@@ -10,12 +10,17 @@ import org.postgresql.PGConnection;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 
 import java.math.BigDecimal;
 import java.sql.*;
 import java.util.*;
 
-@SpringBootApplication
+// Engine talks to PG via raw JDBC (DriverManager + PGConnection) so the
+// LISTEN loop can call getNotifications(). Spring's DataSourceAutoConfig
+// otherwise demands spring.datasource.url and fails the context — we
+// disable it explicitly since we don't use a Spring-managed DataSource.
+@SpringBootApplication(exclude = DataSourceAutoConfiguration.class)
 public class Application implements CommandLineRunner {
 
     public static void main(String[] args) { SpringApplication.run(Application.class, args); }
