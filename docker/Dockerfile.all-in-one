@@ -41,7 +41,8 @@ RUN echo "listen_addresses = '*'" >> /usr/share/postgresql/postgresql.conf.sampl
 
 COPY --from=proxy-builder /app/pgstack-proxy /usr/local/bin/pgstack-proxy
 COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
-COPY --chmod=0755 docker/all-in-one-entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/all-in-one-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
