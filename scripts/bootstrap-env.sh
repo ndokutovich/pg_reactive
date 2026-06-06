@@ -53,10 +53,16 @@ rand_aes32_b64() {
 }
 
 # Load existing values so we know which keys to leave alone.
+# Empty placeholder values (`KEY=` with no value) are treated as MISSING,
+# not as "already configured" — otherwise a half-filled template (the
+# pattern shipped in deploy/templates/*/.env.example) would silently
+# poison the deploy with empty mandatory secrets, and compose would then
+# fail with "required variable POSTGRES_PASSWORD is missing".
 declare -A existing
 if [ -f "$ENV_FILE" ]; then
   while IFS='=' read -r k v; do
     [[ "$k" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
+    [ -n "$v" ] || continue
     existing["$k"]=1
   done < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$ENV_FILE" || true)
 fi
@@ -92,10 +98,13 @@ if [ "${#additions[@]}" -eq 0 ]; then
 fi
 
 # Atomic append: write to a temp file, then move into place.
+# Strip lines whose value is empty (e.g. `POSTGRES_PASSWORD=` placeholders
+# from .env.example) so the appended populated values aren't shadowed by
+# stale empty entries. Comments and non-secret lines pass through.
 tmp="${ENV_FILE}.tmp.$$"
 {
   if [ -f "$ENV_FILE" ]; then
-    cat "$ENV_FILE"
+    sed -E '/^[A-Z_][A-Z0-9_]*=$/d' "$ENV_FILE"
     # Make sure there is a trailing newline before we append.
     [ -z "$(tail -c1 "$ENV_FILE")" ] || printf '\n'
   else
