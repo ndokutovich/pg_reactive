@@ -42,6 +42,16 @@ rand_b64() {
   LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
 }
 
+# SECRETS_ENCRYPTION_KEY is special: the proxy parses it as base64-encoded
+# 32 raw bytes (AES-256 key, secrets.DecodeKey in proxy-go/secrets/
+# secretbox.go). 32 alphanumeric chars decodes to 24 bytes and fails the
+# length check — so we need actual base64-of-32-bytes here (44 chars
+# including padding). Lives in an env file only, never in a URL, so the
+# +/= alphabet is fine.
+rand_aes32_b64() {
+  openssl rand -base64 32 | tr -d '\n'
+}
+
 # Load existing values so we know which keys to leave alone.
 declare -A existing
 if [ -f "$ENV_FILE" ]; then
@@ -64,14 +74,15 @@ add() {
 }
 
 # Allow callers to override individual values via the environment.
-v_or_rand()  { local k="$1"; printf '%s' "${!k:-$(rand_b64)}"; }
-v_or_lit()   { local k="$1" def="$2"; printf '%s' "${!k:-$def}"; }
+v_or_rand()       { local k="$1"; printf '%s' "${!k:-$(rand_b64)}"; }
+v_or_rand_aes32() { local k="$1"; printf '%s' "${!k:-$(rand_aes32_b64)}"; }
+v_or_lit()        { local k="$1" def="$2"; printf '%s' "${!k:-$def}"; }
 
-add POSTGRES_PASSWORD       "$(v_or_rand POSTGRES_PASSWORD)"
-add JWT_SECRET              "$(v_or_rand JWT_SECRET)"
-add ANON_KEY                "$(v_or_rand ANON_KEY)"
-add SERVICE_ROLE_KEY        "$(v_or_rand SERVICE_ROLE_KEY)"
-add SECRETS_ENCRYPTION_KEY  "$(v_or_rand SECRETS_ENCRYPTION_KEY)"
+add POSTGRES_PASSWORD       "$(v_or_rand       POSTGRES_PASSWORD)"
+add JWT_SECRET              "$(v_or_rand       JWT_SECRET)"
+add ANON_KEY                "$(v_or_rand       ANON_KEY)"
+add SERVICE_ROLE_KEY        "$(v_or_rand       SERVICE_ROLE_KEY)"
+add SECRETS_ENCRYPTION_KEY  "$(v_or_rand_aes32 SECRETS_ENCRYPTION_KEY)"
 add SITE_URL                "$(v_or_lit  SITE_URL    'http://localhost')"
 add ALLOWED_ORIGINS         "$(v_or_lit  ALLOWED_ORIGINS '')"
 
