@@ -34,26 +34,32 @@ await drainConn.OpenAsync();
 await using var listenConn = new NpgsqlConnection(dsn);
 await listenConn.OpenAsync();
 
-try
-{
-    await engine.DrainOnceAsync(drainConn);
-}
-catch (Exception e)
-{
-    Console.Error.WriteLine($"initial drain: {e.Message}");
-}
+// Npgsql doesn't permit concurrent commands on the same connection;
+// two LISTEN notifications arriving back-to-back would otherwise race
+// inside DrainOnceAsync and the second call would error with "command
+// is already in progress". Serialise drains with a 1-permit semaphore.
+var drainLock = new SemaphoreSlim(1, 1);
 
-listenConn.Notification += async (_, _) =>
+async Task DrainSerialised(string label)
 {
+    await drainLock.WaitAsync();
     try
     {
         await engine.DrainOnceAsync(drainConn);
     }
     catch (Exception e)
     {
-        Console.Error.WriteLine($"drain: {e.Message}");
+        Console.Error.WriteLine($"{label}: {e.Message}");
     }
-};
+    finally
+    {
+        drainLock.Release();
+    }
+}
+
+await DrainSerialised("initial drain");
+
+listenConn.Notification += async (_, _) => await DrainSerialised("drain");
 
 await using (var cmd = new NpgsqlCommand("LISTEN order_event_added", listenConn))
     await cmd.ExecuteNonQueryAsync();
