@@ -235,19 +235,56 @@ async function drainOnce(client) {
   lastSeenId = BigInt(res.rows[res.rows.length - 1].id);
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Serialize drain so two notifications in-flight don't collide on the same
+// pg client (manifests as "client.query when already executing").
+let draining = false;
+let pending = false;
+async function safeDrain(client) {
+  if (draining) { pending = true; return; }
+  draining = true;
+  try {
+    do {
+      pending = false;
+      await drainOnce(client);
+    } while (pending);
+  } finally { draining = false; }
+}
+
+async function connectClient() {
+  const c = new Client({ connectionString: DATABASE_URL });
+  await c.connect();
+  return c;
+}
+
 async function main() {
-  const drainClient = new Client({ connectionString: DATABASE_URL });
-  const listenClient = new Client({ connectionString: DATABASE_URL });
-  await drainClient.connect();
-  await listenClient.connect();
+  let drainClient = null;
+  let listenClient = null;
 
-  try { await drainOnce(drainClient); } catch (e) { console.error('initial drain:', e.message); }
-
-  listenClient.on('notification', async () => {
-    try { await drainOnce(drainClient); } catch (e) { console.error('drain:', e.message); }
-  });
-  await listenClient.query('LISTEN order_event_added');
-  console.log(`engine ${ENGINE_NAME} listening on order_event_added`);
+  while (true) {
+    try {
+      drainClient = await connectClient();
+      listenClient = await connectClient();
+      listenClient.on('error', (e) => { console.error('listen err:', e.message); listenClient?.end().catch(()=>{}); listenClient = null; });
+      drainClient.on('error',  (e) => { console.error('drain err:',  e.message); drainClient?.end().catch(()=>{});  drainClient  = null; });
+      listenClient.on('notification', () => {
+        if (drainClient) safeDrain(drainClient).catch(e => console.error('drain:', e.message));
+      });
+      await listenClient.query('LISTEN order_event_added');
+      console.log(`engine ${ENGINE_NAME} listening on order_event_added`);
+      try { await safeDrain(drainClient); } catch (e) { console.error('initial drain:', e.message); }
+      // Block until either client dies.
+      while (drainClient && listenClient) await sleep(1000);
+      console.error('a client died — reconnecting in 2s');
+    } catch (e) {
+      console.error('connect error:', e.message);
+    }
+    try { await drainClient?.end(); } catch {}
+    try { await listenClient?.end(); } catch {}
+    drainClient = null; listenClient = null;
+    await sleep(2000);
+  }
 }
 
 main().catch(err => { console.error('fatal:', err); process.exit(1); });

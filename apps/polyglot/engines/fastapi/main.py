@@ -253,33 +253,63 @@ class Engine:
             self.last_seen_id = rows[-1]["id"]
 
 
-async def main() -> None:
-    pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=4)
-    engine = Engine(pool)
+async def run_session(engine: "Engine") -> None:
+    """One LISTEN+drain session. Returns/raises when the connection dies;
+    the outer reconnect loop in main() then sleeps and restarts the session.
+    Drain calls are serialised by an asyncio.Lock so two NOTIFY arrivals
+    can't enter Engine.drain_once concurrently on the shared pool."""
+    pool = engine.pool
     try:
         await engine.drain_once()
     except Exception as e:
         print(f"initial drain: {e}", flush=True)
 
-    # Dedicated LISTEN connection — pool owns it for the lifetime of the
-    # process, no acquire/release loop.
     listen_conn: asyncpg.Connection = await pool.acquire()
+    closed = asyncio.Event()
+    drain_lock = asyncio.Lock()
 
     async def on_notify(*_args) -> None:
         try:
-            await engine.drain_once()
+            async with drain_lock:
+                await engine.drain_once()
         except Exception as e:
             print(f"drain: {e}", flush=True)
+            closed.set()
 
+    def on_termination(*_args) -> None:
+        print("listen conn terminated by server", flush=True)
+        closed.set()
+
+    listen_conn.add_termination_listener(on_termination)
     await listen_conn.add_listener("order_event_added", on_notify)
     print(f"engine {ENGINE_NAME} listening on order_event_added", flush=True)
 
     try:
-        await asyncio.Event().wait()
+        await closed.wait()
     finally:
-        await listen_conn.remove_listener("order_event_added", on_notify)
-        await pool.release(listen_conn)
-        await pool.close()
+        try: await listen_conn.remove_listener("order_event_added", on_notify)
+        except Exception: pass
+        try: listen_conn.remove_termination_listener(on_termination)
+        except Exception: pass
+        try: await pool.release(listen_conn)
+        except Exception: pass
+
+
+async def main() -> None:
+    while True:
+        pool = None
+        try:
+            pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=4)
+            engine = Engine(pool)
+            await run_session(engine)
+            print("session ended cleanly — reconnecting in 2s", flush=True)
+        except Exception as e:
+            print(f"session error: {e} — reconnecting in 2s", flush=True)
+        finally:
+            if pool is not None:
+                try: await pool.close()
+                except Exception: pass
+        await asyncio.sleep(2)
 
 
 if __name__ == "__main__":

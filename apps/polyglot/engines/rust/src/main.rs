@@ -215,7 +215,7 @@ impl Engine {
             tx.execute(
                 "INSERT INTO public.engine_fills \
                    (engine, order_id, matched_qty, fill_price, latency_us, taker_side) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                 VALUES ($1, $2, $3::float8::numeric, $4::float8::numeric, $5, $6)",
                 &[&self.name, &f.order_id, &f.matched_qty, &f.fill_price, &f.latency_us, &f.taker_side],
             ).await?;
             if self.reservoir.len() >= RESERVOIR_MAX { self.reservoir.pop_front(); }
@@ -231,13 +231,13 @@ impl Engine {
                 let price = price_val(*k);
                 if total == 0.0 {
                     tx.execute(
-                        "DELETE FROM public.engine_book WHERE engine=$1 AND symbol=$2 AND side=$3 AND price=$4",
+                        "DELETE FROM public.engine_book WHERE engine=$1 AND symbol=$2 AND side=$3 AND price=$4::float8::numeric",
                         &[&self.name, symbol, side, &price],
                     ).await?;
                 } else {
                     tx.execute(
                         "INSERT INTO public.engine_book (engine, symbol, side, price, total_qty, order_count, updated_at) \
-                         VALUES ($1, $2, $3, $4, $5, $6, now()) \
+                         VALUES ($1, $2, $3, $4::float8::numeric, $5::float8::numeric, $6, now()) \
                          ON CONFLICT (engine, symbol, side, price) DO UPDATE \
                            SET total_qty = EXCLUDED.total_qty, \
                                order_count = EXCLUDED.order_count, \
@@ -248,7 +248,8 @@ impl Engine {
             }
         }
 
-        let (avg, p99) = self.stats();
+        let (avg, p99_i) = self.stats();
+        let p99: f64 = p99_i as f64;
         let total_orders = order_list.len() as i64;
         let total_matches = all_fills.len() as i64;
         let total_volume: f64 = all_fills.iter().map(|f| f.matched_qty).sum();
@@ -256,9 +257,9 @@ impl Engine {
             "UPDATE public.engine_stats SET \
                total_orders   = total_orders   + $2, \
                total_matches  = total_matches  + $3, \
-               total_volume   = total_volume   + $4, \
-               avg_latency_us = $5, \
-               p99_latency_us = $6, \
+               total_volume   = total_volume   + $4::float8::numeric, \
+               avg_latency_us = $5::float8::numeric, \
+               p99_latency_us = $6::float8::numeric, \
                last_updated   = now() \
              WHERE engine = $1",
             &[&self.name, &total_orders, &total_matches, &total_volume, &avg, &p99],
@@ -278,15 +279,31 @@ fn opposite_side(s: &str) -> String {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dsn = env::var("DATABASE_URL").expect("DATABASE_URL is required");
     let name = env::var("ENGINE_NAME").unwrap_or_else(|_| "rust".to_string());
+    let mut engine = Engine::new(name.clone());
 
-    let (mut drain_client, drain_conn) = tokio_postgres::connect(&dsn, NoTls).await?;
-    tokio::spawn(async move {
+    loop {
+        if let Err(e) = run_session(&dsn, &name, &mut engine).await {
+            eprintln!("session ended: {e} — reconnecting in 2s");
+        } else {
+            eprintln!("session ended cleanly — reconnecting in 2s");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+async fn run_session(
+    dsn: &str,
+    name: &str,
+    engine: &mut Engine,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (mut drain_client, drain_conn) = tokio_postgres::connect(dsn, NoTls).await?;
+    let drain_handle = tokio::spawn(async move {
         if let Err(e) = drain_conn.await { eprintln!("drain conn error: {e}"); }
     });
 
-    let (listen_client, mut listen_conn) = tokio_postgres::connect(&dsn, NoTls).await?;
+    let (listen_client, mut listen_conn) = tokio_postgres::connect(dsn, NoTls).await?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    tokio::spawn(async move {
+    let listen_handle = tokio::spawn(async move {
         let mut stream = futures_util::stream::poll_fn(move |cx| listen_conn.poll_message(cx));
         while let Some(msg) = stream.next().await {
             match msg {
@@ -300,12 +317,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     listen_client.batch_execute("LISTEN order_event_added").await?;
-    let mut engine = Engine::new(name.clone());
     if let Err(e) = engine.drain_once(&mut drain_client).await { eprintln!("initial drain: {e}"); }
     eprintln!("engine {name} listening on order_event_added");
 
     while let Some(_chan) = rx.recv().await {
-        if let Err(e) = engine.drain_once(&mut drain_client).await { eprintln!("drain: {e}"); }
+        if let Err(e) = engine.drain_once(&mut drain_client).await {
+            eprintln!("drain: {e}");
+            // bail out of session so the outer loop can reconnect
+            break;
+        }
     }
+    drain_handle.abort();
+    listen_handle.abort();
     Ok(())
 }

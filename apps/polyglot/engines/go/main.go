@@ -451,6 +451,25 @@ func main() {
 
 	eng := newEngine(pool, name)
 
+	// Outer reconnect loop. The LISTEN connection can die when pgstack
+	// restarts; without this, the engine ends up in a tight "notif error"
+	// retry loop on a dead conn that never reconnects. Each session opens
+	// a fresh LISTEN, drains initially, then loops until any error — then
+	// the outer loop sleeps and reopens.
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		err := runSession(ctx, eng, pool, name)
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("session ended (%v) — reconnecting in 2s", err)
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func runSession(ctx context.Context, eng *Engine, pool *pgxpool.Pool, name string) error {
 	// Best-effort initial drain — catches up anything missed while down.
 	if err := eng.drainOnce(ctx); err != nil {
 		log.Printf("initial drain: %v", err)
@@ -459,12 +478,12 @@ func main() {
 	// Dedicated LISTEN connection so the drain pool stays free for queries.
 	listenConn, err := pool.Acquire(ctx)
 	if err != nil {
-		log.Fatalf("acquire listen conn: %v", err)
+		return fmt.Errorf("acquire listen conn: %w", err)
 	}
 	defer listenConn.Release()
-	_, err = listenConn.Exec(ctx, "LISTEN order_event_added")
-	if err != nil {
-		log.Fatalf("LISTEN: %v", err)
+
+	if _, err := listenConn.Exec(ctx, "LISTEN order_event_added"); err != nil {
+		return fmt.Errorf("LISTEN: %w", err)
 	}
 	log.Printf("engine %s listening on order_event_added", name)
 
@@ -472,14 +491,11 @@ func main() {
 		notif, err := listenConn.Conn().WaitForNotification(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return ctx.Err()
 			}
-			log.Printf("notif error: %v — retrying in 1s", err)
-			time.Sleep(time.Second)
-			continue
+			// Bail out of the session — caller reconnects.
+			return fmt.Errorf("notif: %w", err)
 		}
-		// Pull the actual orders from the table (notif carries the id but
-		// we re-read to recover any orders we missed during reconnect).
 		_, _ = strconv.ParseInt(notif.Payload, 10, 64)
 		if err := eng.drainOnce(ctx); err != nil {
 			log.Printf("drain: %v", err)

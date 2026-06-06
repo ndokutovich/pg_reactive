@@ -38,6 +38,21 @@ public class Application implements CommandLineRunner {
     public void run(String... args) throws Exception {
         if (dsn == null) throw new IllegalStateException("DATABASE_URL is required");
 
+        // Reconnect loop: pgstack restart closes the JDBC connections and
+        // the inner getNotifications/keepalive throws. Without this the
+        // engine would die on first pgstack restart.
+        while (true) {
+            try {
+                runSession();
+                System.err.println("session ended cleanly — reconnecting in 2s");
+            } catch (Exception e) {
+                System.err.println("session error: " + e.getClass().getSimpleName() + ": " + e.getMessage() + " — reconnecting in 2s");
+            }
+            Thread.sleep(2000);
+        }
+    }
+
+    private void runSession() throws Exception {
         try (Connection drain = DriverManager.getConnection(dsn);
              Connection listen = DriverManager.getConnection(dsn)) {
             try { drainOnce(drain); } catch (Exception e) { System.err.println("initial drain: " + e.getMessage()); }
@@ -47,6 +62,9 @@ public class Application implements CommandLineRunner {
             System.err.println("engine " + engineName + " listening on order_event_added");
 
             while (true) {
+                // SELECT 1 keepalive + getNotifications timeout. Either op
+                // throws on a dead connection; the throw bubbles to the
+                // outer reconnect loop in run().
                 try (Statement st = listen.createStatement()) { st.execute("SELECT 1"); }
                 var notes = pg.getNotifications(60_000);
                 if (notes == null) continue;

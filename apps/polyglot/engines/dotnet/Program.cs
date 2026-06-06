@@ -28,47 +28,77 @@ string dsn = ToNpgsql(url);
 
 var engine = new Engine(engineName);
 
-await using var drainConn = new NpgsqlConnection(dsn);
-await drainConn.OpenAsync();
-
-await using var listenConn = new NpgsqlConnection(dsn);
-await listenConn.OpenAsync();
-
-// Npgsql doesn't permit concurrent commands on the same connection;
-// two LISTEN notifications arriving back-to-back would otherwise race
-// inside DrainOnceAsync and the second call would error with "command
-// is already in progress". Serialise drains with a 1-permit semaphore.
-var drainLock = new SemaphoreSlim(1, 1);
-
-async Task DrainSerialised(string label)
+// Reconnect loop: pgstack restart kills the LISTEN connection, and
+// Npgsql.WaitAsync would just throw forever without us reopening.
+// Each session opens both clients, runs until any error, then the outer
+// loop sleeps 2s and tries again.
+while (true)
 {
-    await drainLock.WaitAsync();
     try
     {
-        await engine.DrainOnceAsync(drainConn);
+        await RunSession();
+        Console.Error.WriteLine("session ended cleanly — reconnecting in 2s");
     }
     catch (Exception e)
     {
-        Console.Error.WriteLine($"{label}: {e.Message}");
+        Console.Error.WriteLine($"session error: {e.Message} — reconnecting in 2s");
     }
-    finally
-    {
-        drainLock.Release();
-    }
+    await Task.Delay(TimeSpan.FromSeconds(2));
 }
 
-await DrainSerialised("initial drain");
-
-listenConn.Notification += async (_, _) => await DrainSerialised("drain");
-
-await using (var cmd = new NpgsqlCommand("LISTEN order_event_added", listenConn))
-    await cmd.ExecuteNonQueryAsync();
-
-Console.Error.WriteLine($"engine {engineName} listening on order_event_added");
-
-while (true)
+async Task RunSession()
 {
-    await listenConn.WaitAsync();
+    await using var drainConn = new NpgsqlConnection(dsn);
+    await drainConn.OpenAsync();
+
+    await using var listenConn = new NpgsqlConnection(dsn);
+    await listenConn.OpenAsync();
+
+    // Npgsql doesn't permit concurrent commands on the same connection;
+    // two LISTEN notifications arriving back-to-back would otherwise race
+    // inside DrainOnceAsync and the second call would error with "command
+    // is already in progress". Serialise drains with a 1-permit semaphore.
+    var drainLock = new SemaphoreSlim(1, 1);
+    Exception? fatalError = null;
+
+    async Task DrainSerialised(string label)
+    {
+        await drainLock.WaitAsync();
+        try
+        {
+            await engine.DrainOnceAsync(drainConn);
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"{label}: {e.Message}");
+            // Conn-level errors should kill the session so the outer
+            // loop reconnects. Logical errors (bad SQL) repeat each
+            // notification but never escape, which is the same behavior
+            // as the engine-side errors in other languages.
+            if (drainConn.State != System.Data.ConnectionState.Open)
+                fatalError = e;
+        }
+        finally
+        {
+            drainLock.Release();
+        }
+    }
+
+    await DrainSerialised("initial drain");
+
+    listenConn.Notification += async (_, _) => await DrainSerialised("drain");
+
+    await using (var cmd = new NpgsqlCommand("LISTEN order_event_added", listenConn))
+        await cmd.ExecuteNonQueryAsync();
+
+    Console.Error.WriteLine($"engine {engineName} listening on order_event_added");
+
+    while (fatalError == null)
+    {
+        try { await listenConn.WaitAsync(); }
+        catch (Exception e) { fatalError = e; break; }
+    }
+    throw fatalError;
 }
 
 
