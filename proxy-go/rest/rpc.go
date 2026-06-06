@@ -190,13 +190,24 @@ func execRPC(w http.ResponseWriter, r *http.Request, d *RestDeps, fnName string,
 // lookupFunction fetches FunctionMeta from pg_proc.
 // Only looks in the 'public' schema.
 func lookupFunction(ctx context.Context, pool *pgxpool.Pool, fnName string) (*FunctionMeta, error) {
+	// WITH ORDINALITY + ORDER BY is mandatory — a plain JOIN against
+	// pg_type reorders the rows arbitrarily, and buildRPCCall then
+	// pairs parameter names with the WRONG type. For a function like
+	// place_order(p_symbol text, p_side text, p_type text, p_price
+	// numeric, p_qty numeric, p_parent bigint DEFAULT NULL) the unordered
+	// join returned {int8,text,text,text,numeric,numeric}, the proxy
+	// bound `p_symbol := 'BTC-USD'::int8`, and PG raised 42883 — which
+	// the REST layer surfaced as 400 "invalid request" without leaving
+	// a trace in the logs. Affects every function with non-homogeneous
+	// types or default args.
 	const q = `
 SELECT
     p.proargnames,
     ARRAY(
         SELECT t.typname
-        FROM unnest(p.proargtypes) AS type_oid
-        JOIN pg_type t ON t.oid = type_oid
+        FROM unnest(p.proargtypes) WITH ORDINALITY AS u(type_oid, ord)
+        JOIN pg_type t ON t.oid = u.type_oid
+        ORDER BY u.ord
     ) AS arg_types,
     p.proretset,
     p.provolatile::text
