@@ -165,34 +165,44 @@ GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,big
 -- All read-only public — no audience binding because the matching state
 -- is intentionally observable by every viewer (this is the showcase).
 
-SELECT pgr.subscribe(
-  'top_of_book_BTCUSD',
-  $sql$
-    SELECT side, price, SUM(total_qty) AS total_qty, SUM(order_count) AS order_count
-    FROM public.engine_book
-    WHERE symbol = 'BTC-USD'
-    GROUP BY side, price
-    ORDER BY side, CASE WHEN side='buy' THEN -price ELSE price END
-    LIMIT 20
-  $sql$,
-  'delta',
-  NULL
-)
-ON CONFLICT DO NOTHING;
+-- pgr.subscribe raises if the query_id is already registered. Wrap in
+-- DO blocks with EXCEPTION so re-running migration.sql on an already-
+-- bootstrapped DB doesn't abort the file. (SELECT ... ON CONFLICT is
+-- INSERT syntax — not valid here.)
+DO $$
+BEGIN
+  PERFORM pgr.subscribe(
+    'top_of_book_BTCUSD',
+    $sql$
+      SELECT side, price, SUM(total_qty) AS total_qty, SUM(order_count) AS order_count
+      FROM public.engine_book
+      WHERE symbol = 'BTC-USD'
+      GROUP BY side, price
+      ORDER BY side, CASE WHEN side='buy' THEN -price ELSE price END
+      LIMIT 20
+    $sql$,
+    'delta',
+    NULL
+  );
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
-SELECT pgr.subscribe(
-  'engine_perf_summary',
-  $sql$
-    SELECT engine, total_orders, total_matches, total_volume,
-           ROUND(avg_latency_us::numeric, 1) AS avg_latency_us,
-           p99_latency_us, last_updated
-    FROM public.engine_stats
-    ORDER BY engine
-  $sql$,
-  'delta',
-  NULL
-)
-ON CONFLICT DO NOTHING;
+DO $$
+BEGIN
+  PERFORM pgr.subscribe(
+    'engine_perf_summary',
+    $sql$
+      SELECT engine, total_orders, total_matches, total_volume,
+             ROUND(avg_latency_us::numeric, 1) AS avg_latency_us,
+             p99_latency_us, last_updated
+      FROM public.engine_stats
+      ORDER BY engine
+    $sql$,
+    'delta',
+    NULL
+  );
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
 -- Per-engine subscriptions are registered in a loop because the engine
 -- list is small and stable.
