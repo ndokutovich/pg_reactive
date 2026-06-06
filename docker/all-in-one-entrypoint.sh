@@ -64,6 +64,29 @@ until psql -c "SELECT 1" &>/dev/null; do
 done
 echo "==> PostgreSQL ready."
 
+# ── Restore pg_reactive subscriptions from durable catalog ──────────────────
+# pg_reactive 0.1.4+ persists every pgr.subscribe call into pgr.persisted_subscriptions
+# (a LOGGED table that survives restart). The in-shmem dependency hash is wiped
+# on every postmaster restart, so without this step every restart would lose
+# all live queries until clients manually re-subscribe.
+#
+# We iterate every database that has the pg_reactive extension installed and
+# call pgr.restore_subscriptions(). Catalog-empty DBs return 0 and cost
+# essentially nothing. Catalog-non-empty DBs get their shmem hash rebuilt
+# before the proxy starts serving WS upgrades — so the first delta after
+# restart is delivered correctly.
+echo "==> Restoring pg_reactive subscriptions..."
+DBLIST=$(psql -tAc "SELECT datname FROM pg_database WHERE datallowconn AND datname NOT IN ('template0','template1','postgres');" 2>/dev/null || true)
+# always include the default DB in case the catalog query above filtered it
+DBLIST="$DBLIST $PGDATABASE"
+for db in $(echo "$DBLIST" | tr ' ' '\n' | sort -u); do
+  [ -z "$db" ] && continue
+  has_ext=$(psql -d "$db" -tAc "SELECT 1 FROM pg_extension WHERE extname='pg_reactive';" 2>/dev/null || true)
+  [ "$has_ext" = "1" ] || continue
+  restored=$(psql -d "$db" -tAc "SELECT pgr.restore_subscriptions();" 2>/dev/null || echo "n/a")
+  echo "==>   $db: $restored subscriptions restored"
+done
+
 # ── Deployment-specific post-init hook (optional) ───────────────────────────
 if [ -x /app/post-init.sh ]; then
   echo "==> Running post-init hook..."
