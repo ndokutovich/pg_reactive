@@ -3,6 +3,15 @@
 -- Applied once at deploy via the polyglot-migration container. Idempotent.
 -- See apps/polyglot/SPEC.md for the architecture.
 
+-- ─── pg_reactive extension ────────────────────────────────────────
+-- The all-in-one image installs the extension files at /usr/lib but
+-- each database needs to CREATE EXTENSION to load it. Without this,
+-- every pgr.subscribe(...) call below fails with "schema pgr does not
+-- exist" — and because the DO blocks below swallow errors via
+-- EXCEPTION WHEN OTHERS, the migration falsely reports success while
+-- no subscriptions are actually registered.
+CREATE EXTENSION IF NOT EXISTS pg_reactive;
+
 -- ─── Engine worker role ───────────────────────────────────────────
 -- Engines connect as polyglot_engine — strictly less privileged than the
 -- postgres superuser. The connection still talks raw SQL (LISTEN/INSERT/
