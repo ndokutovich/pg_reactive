@@ -166,7 +166,7 @@ impl Engine {
         (avg, s[idx])
     }
 
-    async fn drain_once(&mut self, client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    async fn drain_once(&mut self, client: &mut Client) -> Result<(), Box<dyn std::error::Error>> {
         let rows = client.query(
             "SELECT id, symbol, side, order_type, COALESCE(price, 0)::float8, qty::float8, parent_order \
              FROM public.order_events WHERE id > $1 ORDER BY id LIMIT 256",
@@ -279,7 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dsn = env::var("DATABASE_URL").expect("DATABASE_URL is required");
     let name = env::var("ENGINE_NAME").unwrap_or_else(|_| "rust".to_string());
 
-    let (drain_client, drain_conn) = tokio_postgres::connect(&dsn, NoTls).await?;
+    let (mut drain_client, drain_conn) = tokio_postgres::connect(&dsn, NoTls).await?;
     tokio::spawn(async move {
         if let Err(e) = drain_conn.await { eprintln!("drain conn error: {e}"); }
     });
@@ -301,11 +301,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     listen_client.batch_execute("LISTEN order_event_added").await?;
     let mut engine = Engine::new(name.clone());
-    if let Err(e) = engine.drain_once(&drain_client).await { eprintln!("initial drain: {e}"); }
+    if let Err(e) = engine.drain_once(&mut drain_client).await { eprintln!("initial drain: {e}"); }
     eprintln!("engine {name} listening on order_event_added");
 
     while let Some(_chan) = rx.recv().await {
-        if let Err(e) = engine.drain_once(&drain_client).await { eprintln!("drain: {e}"); }
+        if let Err(e) = engine.drain_once(&mut drain_client).await { eprintln!("drain: {e}"); }
     }
     Ok(())
 }
