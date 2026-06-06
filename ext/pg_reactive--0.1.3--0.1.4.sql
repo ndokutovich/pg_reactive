@@ -49,23 +49,20 @@ REVOKE ALL ON pgr.persisted_subscriptions FROM PUBLIC;
 DROP FUNCTION pgr.subscribe(text, text, text, jsonb);
 DROP FUNCTION pgr.unsubscribe(text);
 
-CREATE FUNCTION pgr.subscribe(
+-- Internal SECURITY DEFINER helpers do the catalog DML against the locked-
+-- down pgr.persisted_subscriptions. Pinned search_path because they touch
+-- a sensitive internal table.
+CREATE FUNCTION pgr._persist_subscription(
     p_query_id text,
     p_query text,
-    p_mode text DEFAULT 'delta',
-    p_audience jsonb DEFAULT NULL
-) RETURNS jsonb
+    p_mode text,
+    p_audience jsonb
+) RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, pgr
 AS $fn$
-DECLARE result jsonb;
 BEGIN
-    -- Persist FIRST. The C call below mutates shmem out-of-transaction;
-    -- a failing INSERT after a successful shmem registration would leave
-    -- the shmem entry orphaned. Writing the catalog row first means a
-    -- subsequent failure leaves a persisted row that pgr.restore_subscriptions
-    -- can safely replay (it is idempotent on the shmem side).
     INSERT INTO pgr.persisted_subscriptions
         (query_id, query_text, mode, audience, owner_role, created_at, updated_at)
     VALUES
@@ -75,6 +72,45 @@ BEGIN
         mode       = EXCLUDED.mode,
         audience   = EXCLUDED.audience,
         updated_at = now();
+END
+$fn$;
+
+CREATE FUNCTION pgr._forget_subscription(
+    p_query_id text
+) RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgr
+AS $fn$
+BEGIN
+    DELETE FROM pgr.persisted_subscriptions WHERE query_id = p_query_id;
+END
+$fn$;
+
+REVOKE EXECUTE ON FUNCTION pgr._persist_subscription(text, text, text, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr._forget_subscription(text)                     FROM PUBLIC;
+
+-- Public subscribe / unsubscribe are SECURITY INVOKER so the caller's
+-- search_path is preserved for the C extract_deps parser — otherwise
+-- "SELECT * FROM my_table" would fail to resolve user tables that live
+-- outside pg_catalog/pgr (a SD wrapper with a pinned safe path would
+-- shadow the caller's path inside _subscribe_internal too).
+CREATE FUNCTION pgr.subscribe(
+    p_query_id text,
+    p_query text,
+    p_mode text DEFAULT 'delta',
+    p_audience jsonb DEFAULT NULL
+) RETURNS jsonb
+LANGUAGE plpgsql
+AS $fn$
+DECLARE result jsonb;
+BEGIN
+    -- Persist FIRST. The C call below mutates shmem out-of-transaction;
+    -- a failing INSERT after a successful shmem registration would leave
+    -- the shmem entry orphaned. Writing the catalog row first means a
+    -- subsequent failure leaves a persisted row that pgr.restore_subscriptions
+    -- can safely replay (it is idempotent on the shmem side).
+    PERFORM pgr._persist_subscription(p_query_id, p_query, p_mode, p_audience);
     result := pgr._subscribe_internal(p_query_id, p_query, p_mode, p_audience);
     RETURN result;
 END
@@ -84,8 +120,6 @@ CREATE FUNCTION pgr.unsubscribe(
     p_query_id text
 ) RETURNS boolean
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, pgr
 AS $fn$
 DECLARE result boolean;
 BEGIN
@@ -93,7 +127,7 @@ BEGIN
     -- shmem drop fails, the catalog row stays — pgr.restore_subscriptions
     -- would re-register it later, leaving the user in a consistent state.
     result := pgr._unsubscribe_internal(p_query_id);
-    DELETE FROM pgr.persisted_subscriptions WHERE query_id = p_query_id;
+    PERFORM pgr._forget_subscription(p_query_id);
     RETURN result;
 END
 $fn$;
