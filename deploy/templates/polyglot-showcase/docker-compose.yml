@@ -21,6 +21,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD:      ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB:            pg_reactive_test
       JWT_SECRET:             ${JWT_SECRET:?required}
       ANON_KEY:               ${ANON_KEY:?required}
       SERVICE_ROLE_KEY:       ${SERVICE_ROLE_KEY:?required}
