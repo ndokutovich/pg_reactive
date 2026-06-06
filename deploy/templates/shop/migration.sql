@@ -18,6 +18,13 @@
 --     a member cannot listen on another member's stream by guessing
 --     query_id (round 33 / audit F1).
 
+-- ─── pg_reactive extension ────────────────────────────────────────
+-- The all-in-one image installs the extension files at the OS level
+-- but each database needs to CREATE EXTENSION to load it. Without
+-- this, subscribe_list_items below fails with "schema pgr does not
+-- exist" and live shopping-list updates never reach the browser.
+CREATE EXTENSION IF NOT EXISTS pg_reactive;
+
 -- ─── Tables ────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS public.shopping_lists (
