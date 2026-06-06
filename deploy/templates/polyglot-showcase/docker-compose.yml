@@ -19,6 +19,11 @@ services:
     image: ${PGSTACK_IMAGE:-pgstack/pgstack:latest}
     container_name: polyglot-pgstack
     restart: unless-stopped
+    # The all-in-one entrypoint forwards `command:` verbatim to postgres,
+    # so this is how we pin shared_preload_libraries=pg_reactive — without
+    # it, _PG_init never runs, the extension's shmem hash and LWLock stay
+    # NULL, and the first pgr.subscribe() segfaults the backend (round 35).
+    command: ["-c", "shared_preload_libraries=pg_reactive"]
     environment:
       POSTGRES_PASSWORD:      ${POSTGRES_PASSWORD:?required}
       POSTGRES_DB:            pg_reactive_test

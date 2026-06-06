@@ -24,6 +24,10 @@ services:
     image: ${PGSTACK_IMAGE:-pgstack/pgstack:latest}
     container_name: shop-pgstack
     restart: unless-stopped
+    # Forwarded to postgres by the all-in-one entrypoint — pins
+    # shared_preload_libraries=pg_reactive so the extension's _PG_init
+    # runs and pgr.subscribe stops segfaulting (round 35).
+    command: ["-c", "shared_preload_libraries=pg_reactive"]
     environment:
       POSTGRES_PASSWORD:      ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
       POSTGRES_DB:            pg_reactive_test
