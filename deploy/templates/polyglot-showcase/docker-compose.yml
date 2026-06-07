@@ -39,6 +39,17 @@ services:
       ANONYMOUS_JWT_TTL:      "3600"
       ALLOWED_ORIGINS:        ${ALLOWED_ORIGINS:-}
       SITE_URL:               ${SITE_URL:-https://polyglot.example.com}
+      # Each viewer opens 18 WS subscriptions (3 per engine × 6 engines).
+      # Default WS_MAX_PER_IP=10 floors the last 8 with 429 → 4-of-6
+      # panels populate per page load. 50 leaves headroom for stale-slot
+      # decay during reconnect bursts (audit fix 2026-06-07).
+      WS_MAX_PER_IP:          ${WS_MAX_PER_IP:-50}
+      # Umbrella nginx terminates TLS one hop before pgstack — without
+      # TRUSTED_PROXIES it sees every viewer as the gateway's IP, so the
+      # per-IP cap becomes a per-deployment cap. Configure to the
+      # umbrella's docker-network IP range (or the loopback if running
+      # the umbrella in the same compose).
+      TRUSTED_PROXIES:        ${TRUSTED_PROXIES:-}
       SMTP_HOST:              ${SMTP_HOST:-inbucket}
       SMTP_PORT:              ${SMTP_PORT:-2500}
       SMTP_USER:              ${SMTP_USER:-polyglot}
