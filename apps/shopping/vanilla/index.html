@@ -523,6 +523,15 @@
     localStorage.removeItem(SESSION_KEY);
     accessToken = null;
     currentUser = null;
+    // Any session-bound background activity becomes a guaranteed 401
+    // spam-loop the moment the token is gone. Make this the single
+    // chokepoint that tears it down — anyone that calls clearSession()
+    // (logout, 401-from-REST, refresh failure) gets a clean shutdown.
+    if (typeof stopPolling === 'function') stopPolling();
+    if (typeof currentWs !== 'undefined' && currentWs) {
+      try { currentWs.close(); } catch (e) {}
+      currentWs = null;
+    }
   }
 
   function tryRefresh() {
