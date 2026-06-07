@@ -20,7 +20,7 @@ jobs:
 
       - name: Start PostgreSQL container
         run: |
-          docker compose up -d db
+          docker compose up -d --build db
           docker compose exec -T db bash -c 'until pg_isready -U postgres; do sleep 1; done'
 
       - name: Build extension
@@ -129,7 +129,7 @@ jobs:
 
       - name: Start PostgreSQL for integration tests
         run: |
-          docker compose up -d db
+          docker compose up -d --build db
           docker compose exec -T db bash -c 'until pg_isready -U postgres; do sleep 1; done'
           # Self-hosted: join the compose network so the runner can reach
           # `db:5432` directly without going through host port mapping
@@ -343,7 +343,7 @@ jobs:
           set +e
           # Bring up the db so the validator's downstream pool probe
           # doesn't masquerade as a validator failure.
-          docker compose up -d db
+          docker compose up -d --build db
           docker compose exec -T db bash -c 'until pg_isready -U postgres; do sleep 1; done'
 
           # The dev docker-compose.yml sets ENABLE_SQL_ENDPOINT=true
@@ -463,7 +463,7 @@ jobs:
 
       - name: Start PostgreSQL container
         run: |
-          docker compose up -d db
+          docker compose up -d --build db
           timeout 30 bash -c 'until docker compose exec -T db pg_isready -U postgres; do sleep 1; done'
 
       - name: Shared memory pressure test
