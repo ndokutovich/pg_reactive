@@ -943,7 +943,7 @@
 
   function connectLiveQuery(listId) {
     apiRpc('subscribe_list_items', { p_list_id: listId }).then(function() {
-      var wsUrl = WS_BASE + '/ws/items-' + listId + '?token=' + encodeURIComponent(accessToken.get());
+      var wsUrl = WS_BASE + '/ws/' + WTB.itemsQueryId(listId, accessToken.get()) + '?token=' + encodeURIComponent(accessToken.get());
       currentWs = new WebSocket(wsUrl);
 
       currentWs.onmessage = function(e) {

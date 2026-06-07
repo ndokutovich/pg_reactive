@@ -935,7 +935,7 @@
     var api = this._injector.get('ApiService');
 
     api.rpc('subscribe_list_items', { p_list_id: listId }).then(function() {
-      var wsUrl = WS_BASE + '/ws/items-' + listId + '?token=' + encodeURIComponent(authService.getAccessToken());
+      var wsUrl = WS_BASE + '/ws/' + WTB.itemsQueryId(listId, authService.getAccessToken()) + '?token=' + encodeURIComponent(authService.getAccessToken());
       var ws = new WebSocket(wsUrl);
       authService.currentWs = ws;
 

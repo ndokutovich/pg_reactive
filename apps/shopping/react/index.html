@@ -1121,7 +1121,7 @@
       let fallbackTimer = null;
 
       apiRpc('subscribe_list_items', { p_list_id: list.id }, accessToken).then(() => {
-        const wsUrl = WS_BASE + '/ws/items-' + list.id + '?token=' + encodeURIComponent(accessToken);
+        const wsUrl = WS_BASE + '/ws/' + WTB.itemsQueryId(list.id, accessToken) + '?token=' + encodeURIComponent(accessToken);
         ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 

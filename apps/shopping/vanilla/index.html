@@ -987,7 +987,7 @@
   function connectLiveQuery(listId) {
     // Try to subscribe via SECURITY DEFINER RPC
     apiRpc('subscribe_list_items', { p_list_id: listId }).then(function() {
-      var wsUrl = WS_BASE + '/ws/items-' + listId + '?token=' + encodeURIComponent(accessToken);
+      var wsUrl = WS_BASE + '/ws/' + WTB.itemsQueryId(listId, accessToken) + '?token=' + encodeURIComponent(accessToken);
       currentWs = new WebSocket(wsUrl);
 
       currentWs.onmessage = function(e) {
