@@ -42,6 +42,16 @@ services:
       ALLOW_ANONYMOUS_SIGNIN: "false"
       ALLOWED_ORIGINS:        ${ALLOWED_ORIGINS:-}
       SITE_URL:               ${SITE_URL:-https://shop.example.com}
+      # Each viewer opens 1-2 WS subscriptions (one per open shopping
+      # list). Default WS_MAX_PER_IP=10 is fine for a single user but
+      # behind the umbrella nginx every viewer's source IP collapses to
+      # the gateway IP — TRUSTED_PROXIES lifts the cap to per-user.
+      # Headroom of 20 absorbs stale-slot decay during reconnect.
+      WS_MAX_PER_IP:          ${WS_MAX_PER_IP:-20}
+      # See deploy/templates/polyglot-showcase/docker-compose.yml for the
+      # rationale on TRUSTED_PROXIES — same pattern, set to the umbrella's
+      # docker-network IP range to honour X-Forwarded-For per-viewer.
+      TRUSTED_PROXIES:        ${TRUSTED_PROXIES:-}
       SMTP_HOST:              ${SMTP_HOST:-inbucket}
       SMTP_PORT:              ${SMTP_PORT:-2500}
       SMTP_USER:              ${SMTP_USER:-shop}
