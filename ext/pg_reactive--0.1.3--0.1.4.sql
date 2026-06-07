@@ -35,12 +35,13 @@ REVOKE EXECUTE ON FUNCTION pgr._unsubscribe_internal(text)                  FROM
 CREATE TABLE pgr.persisted_subscriptions (
     query_id    text PRIMARY KEY,
     query_text  text NOT NULL,
-    mode        text NOT NULL CHECK (mode IN ('delta','notify')),
+    mode        text NOT NULL,
     audience    jsonb,
     owner_role  text NOT NULL DEFAULT current_user,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
+-- No CHECK on mode: validation lives in pgr._subscribe_internal (C).
 REVOKE ALL ON pgr.persisted_subscriptions FROM PUBLIC;
 
 -- ── Replace public subscribe / unsubscribe with persisting wrappers ──────

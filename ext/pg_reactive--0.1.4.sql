@@ -47,12 +47,18 @@ CREATE VIEW pgr.subscriptions AS
 CREATE TABLE pgr.persisted_subscriptions (
     query_id    text PRIMARY KEY,
     query_text  text NOT NULL,
-    mode        text NOT NULL CHECK (mode IN ('delta','notify')),
+    mode        text NOT NULL,
     audience    jsonb,
     owner_role  text NOT NULL DEFAULT current_user,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
+-- NB: no CHECK on mode here. Validation lives in pgr._subscribe_internal
+-- (C) — replicating it as a table CHECK would create two sources of
+-- truth, and because the wrapper writes the catalog row BEFORE calling
+-- the C path (for atomic rollback semantics), a stricter CHECK would
+-- raise with a different message and intercept errors the C-side test
+-- harness asserts on.
 
 REVOKE ALL ON pgr.persisted_subscriptions FROM PUBLIC;
 

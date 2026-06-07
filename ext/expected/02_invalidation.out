@@ -180,6 +180,7 @@ SELECT pgr.unsubscribe('inv_q4');
 SELECT pgr.subscribe('inv_toolong', repeat('SELECT id FROM t1 UNION ALL ', 100));
 ERROR:  query text too long (2800 bytes, max 2047)
 HINT:  Simplify the query or recompile with a larger PGR_QUERY_TEXT_LEN.
+CONTEXT:  PL/pgSQL function pgr.subscribe(text,text,text,jsonb) line 10 at assignment
 -- Cleanup
 DROP TABLE t2;
 DROP TABLE t1;

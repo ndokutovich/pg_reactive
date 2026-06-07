@@ -92,6 +92,7 @@ SELECT pgr.subscribe(
   ('{"k":"' || repeat('x', 600) || '"}')::jsonb);
 ERROR:  audience too long (609 bytes, max 511)
 HINT:  audience must be a small JSON object of claim predicates.
+CONTEXT:  PL/pgSQL function pgr.subscribe(text,text,text,jsonb) line 10 at assignment
 -- 7. List all subscriptions sorted.
 SELECT query_id, mode, audience FROM pgr.get_subscriptions() ORDER BY query_id;
   query_id  |  mode  |           audience           
