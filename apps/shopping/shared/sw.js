@@ -1,7 +1,7 @@
 // What to Buy — Service Worker
 // Provides offline caching for the PWA shell
 
-var CACHE_NAME = 'wtb-v6';
+var CACHE_NAME = 'wtb-v7';
 var SHELL_FILES = [
   './',
   './index.html',
