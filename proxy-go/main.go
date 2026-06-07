@@ -98,6 +98,7 @@ func main() {
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
 	defer cleanupCancel()
 	go state.RateLimiter.StartCleanup(cleanupCtx)
+	go state.AnonymousLimiter.StartCleanup(cleanupCtx)
 
 	// Start expired-token reaper for pgstack.email_tokens and
 	// pgstack.refresh_tokens (L3: stale rows would accumulate forever).
@@ -427,6 +428,10 @@ func buildRouter(state *AppState) http.Handler {
 
 		// ── Auth routes ───────────────────────────────────────────────────
 		// Rate-limited auth endpoints (brute-force and email-bombing targets).
+		// /auth/v1/anonymous lives in its own bucket because it mints a
+		// stateless throw-away JWT with no DB write and no email send —
+		// the threat model allows generous limits for public guest-token
+		// demos. See state.AnonymousLimiter / ANONYMOUS_RATE_LIMIT.
 		r.Group(func(r chi.Router) {
 			r.Use(state.RateLimiter.Middleware)
 			r.Post("/auth/v1/signup", auth.Signup(authDeps))
@@ -434,6 +439,9 @@ func buildRouter(state *AppState) http.Handler {
 			r.Post("/auth/v1/recover", auth.Recover(authDeps))
 			r.Post("/auth/v1/recover/confirm", auth.RecoverConfirm(authDeps))
 			r.Post("/auth/v1/magiclink", auth.Magiclink(authDeps))
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(state.AnonymousLimiter.Middleware)
 			r.Post("/auth/v1/anonymous", auth.Anonymous(authDeps))
 		})
 

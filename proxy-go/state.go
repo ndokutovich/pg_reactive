@@ -26,8 +26,17 @@ type AppState struct {
 	// Each subscriber gets its own channel; Broadcast sends to all of them.
 	Hub *realtime.Hub
 
-	// RateLimiter for auth endpoints (/auth/v1/signup, /auth/v1/token).
+	// RateLimiter for auth endpoints (/auth/v1/signup, /auth/v1/token,
+	// /auth/v1/recover, /auth/v1/magiclink) — the brute-force / email-
+	// bombing targets that incur real DB writes or outbound mail.
 	RateLimiter *middleware.RateLimiter
+
+	// AnonymousLimiter is a separate (typically more generous) bucket for
+	// /auth/v1/anonymous because that endpoint only mints a stateless
+	// JWT — no DB write, no email, no real cost — so the threat model
+	// allows much higher request rates without bundling guest-token
+	// dashboards into the same cap as signup brute-forcing.
+	AnonymousLimiter *middleware.RateLimiter
 
 	// WSSemaphore limits concurrent WebSocket connections.
 	// Acquire: non-blocking send. Release: receive.
@@ -57,7 +66,8 @@ func NewAppState(cfg Config, pool *pgxpool.Pool, secretBox *secrets.Box) *AppSta
 		Config:         cfg,
 		Pool:           pool,
 		Hub:            realtime.NewHub(),
-		RateLimiter:    middleware.NewRateLimiterWithProxies(cfg.AuthRateLimit, cfg.AuthRateWindow, cfg.TrustedProxies),
+		RateLimiter:      middleware.NewRateLimiterWithProxies(cfg.AuthRateLimit, cfg.AuthRateWindow, cfg.TrustedProxies),
+		AnonymousLimiter: middleware.NewRateLimiterWithProxies(cfg.AnonymousRateLimit, cfg.AnonymousRateWindow, cfg.TrustedProxies),
 		WSSemaphore:    make(chan struct{}, cfg.MaxConnections),
 		Mailer:         NewMailer(cfg),
 		Catalog:        rest.NewCatalog(),

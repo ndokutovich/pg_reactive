@@ -54,8 +54,14 @@ type Config struct {
 	OIDCIssuerURL    string
 
 	// Rate limiting
-	AuthRateLimit  int
-	AuthRateWindow time.Duration
+	AuthRateLimit       int
+	AuthRateWindow      time.Duration
+	// AnonymousRateLimit gates /auth/v1/anonymous separately. Default is
+	// 10× AuthRateLimit because the endpoint mints a stateless throw-away
+	// JWT (~50μs CPU, zero DB writes) — bundling it in the same bucket as
+	// signup/token caps public guest-token demos at one tab per 2 seconds.
+	AnonymousRateLimit  int
+	AnonymousRateWindow time.Duration
 
 	// Token expiry
 	AccessTokenExpirySecs  int
@@ -211,6 +217,8 @@ func FromEnv() Config {
 
 	cfg.AuthRateLimit = envIntOrDefault("AUTH_RATE_LIMIT", 30)
 	cfg.AuthRateWindow = time.Duration(envIntOrDefault("AUTH_RATE_WINDOW", 60)) * time.Second
+	cfg.AnonymousRateLimit = envIntOrDefault("ANONYMOUS_RATE_LIMIT", cfg.AuthRateLimit*10)
+	cfg.AnonymousRateWindow = time.Duration(envIntOrDefault("ANONYMOUS_RATE_WINDOW", 60)) * time.Second
 
 	cfg.AccessTokenExpirySecs = envIntOrDefault("ACCESS_TOKEN_EXPIRY_SECS", 3600)
 	cfg.RefreshTokenExpiryDays = envIntOrDefault("REFRESH_TOKEN_EXPIRY_DAYS", 30)
