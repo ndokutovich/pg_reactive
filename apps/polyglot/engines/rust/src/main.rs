@@ -13,9 +13,6 @@ use tokio_postgres::{AsyncMessage, Client, NoTls};
 
 const RESERVOIR_MAX: usize = 1024;
 
-#[derive(Debug, Clone, Copy)]
-struct OrderId(i64);
-
 #[derive(Debug)]
 struct RestingOrder {
     id: i64,
