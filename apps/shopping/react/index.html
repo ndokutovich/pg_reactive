@@ -560,7 +560,7 @@
   // AUTH SCREEN
   // ═══════════════════════════════════════════════════════════════
   function AuthScreen({ onAuth, addToast }) {
-    const [isSignUp, setIsSignUp] = useState(true);
+    const [isSignUp, setIsSignUp] = useState(false);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
@@ -726,7 +726,7 @@
   // ═══════════════════════════════════════════════════════════════
   function ListsScreen({ accessToken, user, onOpenList, onLogout, addToast }) {
     const [lists, setLists] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [newListName, setNewListName] = useState('');
     const [shareCode, setShareCode] = useState('');
     const [creating, setCreating] = useState(false);

@@ -349,8 +349,8 @@
     <div class="card">
       <div class="card-body">
         <div class="auth-header">
-          <h2 id="auth-title">Sign Up</h2>
-          <p class="subtitle" id="auth-subtitle">Create your account to start shopping together</p>
+          <h2 id="auth-title">Log In</h2>
+          <p class="subtitle" id="auth-subtitle">Sign in to your shopping list</p>
         </div>
         <div id="auth-alert" class="alert alert-error"></div>
         <form id="auth-form">
@@ -362,11 +362,11 @@
             <label for="auth-password">Password</label>
             <input type="password" id="auth-password" class="input" placeholder="At least 6 characters" required minlength="6" autocomplete="current-password">
           </div>
-          <button type="submit" id="auth-submit" class="btn btn-primary btn-full">Sign Up</button>
+          <button type="submit" id="auth-submit" class="btn btn-primary btn-full">Log In</button>
         </form>
         <div class="auth-toggle">
-          <span id="auth-toggle-text">Already have an account?</span>
-          <a id="auth-toggle-link">Log In</a>
+          <span id="auth-toggle-text">Need an account? </span>
+          <a id="auth-toggle-link">Sign Up</a>
         </div>
       </div>
     </div>
@@ -472,7 +472,7 @@
   // ═══════════════════════════════════════════════════════════════
   var accessToken = null;
   var currentUser = null;
-  var isSignUp = true;
+  var isSignUp = false;
   var lists = [];
   var currentList = null;
   var items = [];
