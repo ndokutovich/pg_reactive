@@ -343,19 +343,6 @@
 <div class="toast-area" id="toasts"></div>
 
 <!-- ═══════ SETUP SCREEN ═══════ -->
-<div id="screen-setup" class="screen">
-  <div class="setup-hero card">
-    <div class="card-body">
-      <div class="setup-icon">&#x1F6D2;</div>
-      <h1>What to Buy</h1>
-      <p>A shared shopping list for couples. Set up the database to get started.</p>
-      <button id="btn-setup" class="btn btn-primary btn-full">Setup Database</button>
-      <button id="btn-skip-setup" class="btn btn-ghost btn-full setup-skip">Skip (already set up)</button>
-      <div id="setup-log" class="setup-log"></div>
-    </div>
-  </div>
-</div>
-
 <!-- ═══════ AUTH SCREEN ═══════ -->
 <div id="screen-auth" class="screen">
   <div class="auth-wrap">
@@ -477,7 +464,6 @@
   var API_BASE = window.WTB ? window.WTB.apiBase : location.origin;
   var WS_BASE  = window.WTB ? window.WTB.wsBase  : 'ws://' + location.host;
   var ANON_KEY = window.WTB ? window.WTB.anonKey  : 'anon-key-12345';
-  var SERVICE_ROLE_KEY = 'dev-only-service-role-key-do-not-use-in-production';
   var POLL_INTERVAL = 2000;
   var SESSION_KEY = 'wtb-session';
 
@@ -596,10 +582,11 @@
         return;
       }
       if (screen === 'auth') { showScreen('auth'); return; }
-      if (screen === 'setup') { showScreen('setup'); return; }
+      // Legacy /setup route — redirect any old PWA installs.
+      if (screen === 'setup') { router.navigate('auth'); return; }
       // Default: check session
       if (accessToken) { router.navigate('lists'); }
-      else { router.navigate('setup'); }
+      else { router.navigate('auth'); }
     }
   };
 
@@ -621,14 +608,6 @@
     setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 3200);
   }
 
-  function appendLog(parent, text, cls) {
-    var line = document.createElement('div');
-    if (cls) line.className = cls;
-    line.textContent = text;
-    parent.appendChild(line);
-    parent.scrollTop = parent.scrollHeight;
-  }
-
   // ═══════════════════════════════════════════════════════════════
   // API HELPERS
   // ═══════════════════════════════════════════════════════════════
@@ -636,14 +615,6 @@
     var h = { 'Content-Type': 'application/json', 'apikey': ANON_KEY };
     if (accessToken) h['Authorization'] = 'Bearer ' + accessToken;
     return h;
-  }
-
-  function apiSql(sql) {
-    return fetch(API_BASE + '/api/sql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SERVICE_ROLE_KEY },
-      body: JSON.stringify({ sql: sql })
-    }).then(function(r) { return r.json(); });
   }
 
   function apiRest(method, path, body, _retry) {
@@ -687,98 +658,13 @@
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SETUP
-  // ═══════════════════════════════════════════════════════════════
-  var MIGRATION_SQL = [
-    "CREATE TABLE IF NOT EXISTS shopping_lists (\n  id serial PRIMARY KEY,\n  name text NOT NULL,\n  owner_id uuid NOT NULL,\n  share_code text UNIQUE DEFAULT substr(md5(random()::text), 1, 6),\n  created_at timestamptz DEFAULT now()\n)",
-    "CREATE TABLE IF NOT EXISTS list_members (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  user_id uuid NOT NULL,\n  role text DEFAULT 'member',\n  joined_at timestamptz DEFAULT now(),\n  UNIQUE(list_id, user_id)\n)",
-    "CREATE TABLE IF NOT EXISTS shopping_items (\n  id serial PRIMARY KEY,\n  list_id integer NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,\n  name text NOT NULL,\n  quantity text DEFAULT '1',\n  checked boolean DEFAULT false,\n  added_by uuid,\n  created_at timestamptz DEFAULT now()\n)",
-    `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF; END $$`,
-    "GRANT ALL ON shopping_lists TO authenticated",
-    "GRANT USAGE, SELECT ON SEQUENCE shopping_lists_id_seq TO authenticated",
-    "GRANT ALL ON list_members TO authenticated",
-    "GRANT USAGE, SELECT ON SEQUENCE list_members_id_seq TO authenticated",
-    "GRANT ALL ON shopping_items TO authenticated",
-    "GRANT USAGE, SELECT ON SEQUENCE shopping_items_id_seq TO authenticated",
-    "ALTER TABLE shopping_lists ENABLE ROW LEVEL SECURITY",
-    "ALTER TABLE list_members ENABLE ROW LEVEL SECURITY",
-    "ALTER TABLE shopping_items ENABLE ROW LEVEL SECURITY",
-    "DROP POLICY IF EXISTS lists_select ON shopping_lists",
-    "CREATE POLICY lists_select ON shopping_lists FOR SELECT TO authenticated\n  USING (id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))",
-    "DROP POLICY IF EXISTS lists_insert ON shopping_lists",
-    "CREATE POLICY lists_insert ON shopping_lists FOR INSERT TO authenticated\n  WITH CHECK (owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
-    "DROP POLICY IF EXISTS lists_delete ON shopping_lists",
-    "CREATE POLICY lists_delete ON shopping_lists FOR DELETE TO authenticated\n  USING (owner_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
-    "DROP POLICY IF EXISTS members_own ON list_members",
-    "CREATE POLICY members_own ON list_members FOR SELECT TO authenticated\n  USING (user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid)",
-    "DROP POLICY IF EXISTS items_access ON shopping_items",
-    "CREATE POLICY items_access ON shopping_items FOR ALL TO authenticated\n  USING (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))\n  WITH CHECK (list_id IN (SELECT list_id FROM list_members WHERE user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid))",
-    "CREATE OR REPLACE FUNCTION public.create_shopping_list(list_name text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; new_list record; BEGIN INSERT INTO shopping_lists (name, owner_id) VALUES (list_name, uid) RETURNING * INTO new_list; INSERT INTO list_members (list_id, user_id, role) VALUES (new_list.id, uid, 'owner'); RETURN row_to_json(new_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.create_shopping_list(text) TO authenticated",
-    "CREATE OR REPLACE FUNCTION public.join_shopping_list(code text) RETURNS json AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; found_list record; BEGIN SELECT * INTO found_list FROM shopping_lists WHERE share_code = lower(code); IF NOT FOUND THEN RAISE EXCEPTION 'List not found. Check the share code and try again.'; END IF; INSERT INTO list_members (list_id, user_id, role) VALUES (found_list.id, uid, 'member') ON CONFLICT (list_id, user_id) DO NOTHING; RETURN row_to_json(found_list); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.join_shopping_list(text) TO authenticated",
-    "CREATE OR REPLACE FUNCTION public.my_shopping_lists() RETURNS TABLE(id integer, name text, share_code text, owner_id uuid, member_count bigint, item_count bigint, checked_count bigint, created_at timestamptz) AS $$ SELECT sl.id, sl.name, sl.share_code, sl.owner_id, (SELECT COUNT(*) FROM list_members WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id), (SELECT COUNT(*) FROM shopping_items WHERE list_id = sl.id AND checked = true), sl.created_at FROM shopping_lists sl INNER JOIN list_members lm ON lm.list_id = sl.id WHERE lm.user_id = (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid ORDER BY sl.created_at DESC $$ LANGUAGE sql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.my_shopping_lists() TO authenticated",
-    "CREATE OR REPLACE FUNCTION public.subscribe_list_items(p_list_id integer) RETURNS jsonb AS $$ DECLARE uid uuid := (current_setting('request.jwt.claims', true)::jsonb->>'sub')::uuid; qid text := 'items-' || p_list_id::text; BEGIN IF NOT EXISTS (SELECT 1 FROM list_members WHERE list_id = p_list_id AND user_id = uid) THEN RAISE EXCEPTION 'not a member of this list'; END IF; RETURN pgr.subscribe(qid, 'SELECT id, list_id, name, quantity, checked, added_by, created_at FROM shopping_items WHERE list_id = ' || p_list_id || ' ORDER BY checked, created_at DESC'); END; $$ LANGUAGE plpgsql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.subscribe_list_items(integer) TO authenticated",
-    "CREATE OR REPLACE FUNCTION public.unsubscribe_list_items(p_list_id integer) RETURNS boolean AS $$ SELECT pgr.unsubscribe('items-' || p_list_id::text) $$ LANGUAGE sql SECURITY DEFINER",
-    "GRANT EXECUTE ON FUNCTION public.unsubscribe_list_items(integer) TO authenticated"
-  ];
-
-  function runSetup() {
-    var btn = $('btn-setup');
-    var log = $('setup-log');
-    btn.disabled = true;
-    btn.textContent = 'Setting up...';
-    log.classList.add('visible');
-    clearChildren(log);
-
-    var allOk = true;
-    var idx = 0;
-
-    function runNext() {
-      if (idx >= MIGRATION_SQL.length) {
-        if (allOk) {
-          appendLog(log, '\nSetup complete! Proceeding to sign in...', 'ok');
-          appendLog(log, 'NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
-          btn.textContent = 'Done!';
-          setTimeout(function() { router.navigate('auth'); }, 1200);
-        } else {
-          appendLog(log, '\nSetup finished with errors. You may retry.', 'error');
-          btn.disabled = false;
-          btn.textContent = 'Retry Setup';
-        }
-        return;
-      }
-
-      var stmt = MIGRATION_SQL[idx];
-      var short = stmt.replace(/\n/g, ' ');
-      if (short.length > 60) short = short.substring(0, 60) + '...';
-      appendLog(log, '> ' + short);
-
-      apiSql(stmt).then(function(result) {
-        if (result.error) {
-          if (result.error.indexOf('already exists') !== -1 || result.error.indexOf('duplicate') !== -1) {
-            appendLog(log, '  (skipped)', 'ok');
-          } else {
-            appendLog(log, '  ERROR: ' + result.error, 'error');
-            allOk = false;
-          }
-        } else {
-          appendLog(log, '  OK', 'ok');
-        }
-        idx++;
-        runNext();
-      }).catch(function(err) {
-        appendLog(log, '  NETWORK ERROR: ' + err.message, 'error');
-        allOk = false;
-        idx++;
-        runNext();
-      });
-    }
-    runNext();
-  }
+  // Schema setup happens server-side via the shop-migration container
+  // at deploy time — see deploy/templates/shop/migration.sql. The
+  // single-source-of-truth is the .sql file; the frontend has no
+  // business holding a parallel SQL copy (the prior in-browser setup
+  // wizard's embedded MIGRATION_SQL drifted from the deployed schema —
+  // it registered live-query ids without the per-user UID suffix —
+  // and caused the WS handshake 404s that polling silently masked).
 
   // ═══════════════════════════════════════════════════════════════
   // AUTH
@@ -1367,8 +1253,6 @@
     registerServiceWorker();
 
     // Setup
-    $('btn-setup').addEventListener('click', runSetup);
-    $('btn-skip-setup').addEventListener('click', function() { router.navigate('auth'); });
 
     // Auth
     $('auth-form').addEventListener('submit', handleAuth);
