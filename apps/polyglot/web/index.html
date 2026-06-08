@@ -259,7 +259,7 @@ function openSubscription(queryId, onSnapshot, onDelta) {
   const ws = new WebSocket(PGR.wsBase + '/' + queryId);
   let firstDelta = true;
   ws.addEventListener('open',  function() { markConn(true); });
-  ws.addEventListener('close', function() { markConn(false); setTimeout(function(){ openSubscription(queryId, onSnapshot, onDelta); }, 2000); });
+  ws.addEventListener('close', function() { markConn(false); setTimeout(function(){ PGR.signInAnonymously().catch(function(){}).then(function(){ openSubscription(queryId, onSnapshot, onDelta); }); }, 2000); });
   ws.addEventListener('error', function() {});
   ws.addEventListener('message', function(e) {
     let msg; try { msg = JSON.parse(e.data); } catch (err) { return; }
@@ -352,6 +352,7 @@ document.getElementById('form-send').addEventListener('click', async function() 
   const price = parseFloat(document.getElementById('form-price').value);
   const qty   = parseFloat(document.getElementById('form-qty').value);
   try {
+    await PGR.signInAnonymously().catch(function(){});   // re-mint if the session JWT expired
     const res = await fetch(location.origin + '/rest/v1/rpc/place_order', {
       method: 'POST',
       headers: {

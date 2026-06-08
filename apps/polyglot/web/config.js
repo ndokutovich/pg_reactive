@@ -12,8 +12,9 @@
  *   PGR.token              — current session JWT, or null
  *   PGR.signInAnonymously() — async; mints a short-lived role=anon JWT via
  *                             POST /auth/v1/anonymous and stores it in
- *                             sessionStorage. Subsequent calls return the
- *                             cached token until a reload.
+ *                             sessionStorage. Re-mints automatically when the
+ *                             token nears its exp (proactive timer) or when a
+ *                             caller awaits it after the token has expired.
  *
  * Discipline (audit round 34): the WS gate refuses raw anon-key in
  * production (REQUIRE_AUTHENTICATED_WS=true). Public-read demo pages
@@ -59,6 +60,7 @@
   // instead, or use Studio (which prompts for the key once per session).
 
   var tokenPromise = null;
+  var refreshTimer = null;
 
   function loadCachedToken() {
     try { return sessionStorage.getItem(STORAGE_KEY) || null; } catch (e) { return null; }
@@ -90,22 +92,32 @@
     }
   }
 
-  function signInAnonymously() {
-    if (tokenPromise) return tokenPromise;
-    var cached = loadCachedToken();
-    if (cached && tokenStillValid(cached)) {
-      window.PGR.token = cached;
-      tokenPromise = Promise.resolve(cached);
-      return tokenPromise;
-    }
-    if (cached) {
-      // Expired or unparseable — drop it before minting a fresh one so
-      // a botched mint doesn't leave the stale token lingering for the
-      // next page load.
-      clearCachedToken();
-      window.PGR.token = null;
-    }
-    tokenPromise = fetch(authBase + '/anonymous', {
+  // The anon endpoint issues NO refresh token (proxy-go/auth/anonymous.go):
+  // the client must re-mint when the access token expires. Schedule a
+  // proactive re-mint ~60s before exp so PGR.token is always fresh for the
+  // next WS reconnect or REST call. Background tabs throttle timers, so
+  // callers that can await (REST, the WS reconnect path) still go through
+  // signInAnonymously(), which re-mints on demand if the timer was starved.
+  function scheduleRefresh(token) {
+    if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+    try {
+      var parts = token.split('.');
+      var b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      var payload = JSON.parse(atob(b64));
+      if (!payload.exp) return;
+      var ms = (payload.exp - 60) * 1000 - Date.now();
+      if (ms < 5000) ms = 5000;
+      refreshTimer = setTimeout(function () {
+        tokenPromise = null;       // force a fresh mint
+        clearCachedToken();
+        signInAnonymously().catch(function () {});
+      }, ms);
+    } catch (e) { /* unparseable — leave on-demand refresh to recover */ }
+  }
+
+  function mintToken() {
+    return fetch(authBase + '/anonymous', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apikey': anonKey },
       body: '{}'
@@ -122,6 +134,7 @@
       if (token) {
         window.PGR.token = token;
         saveCachedToken(token);
+        scheduleRefresh(token);
       }
       return token;
     }).catch(function (err) {
@@ -129,6 +142,35 @@
       console.warn('signInAnonymously failed:', err);
       throw err;
     });
+  }
+
+  function signInAnonymously() {
+    // Reuse an in-flight/resolved mint only while its token is still valid;
+    // a stale memoized promise is what caused the 401-after-an-hour bug.
+    if (tokenPromise) {
+      return tokenPromise.then(function (tok) {
+        if (tok && tokenStillValid(tok)) return tok;
+        tokenPromise = null;     // expired — drop and re-mint
+        clearCachedToken();
+        window.PGR.token = null;
+        return signInAnonymously();
+      });
+    }
+    var cached = loadCachedToken();
+    if (cached && tokenStillValid(cached)) {
+      window.PGR.token = cached;
+      scheduleRefresh(cached);
+      tokenPromise = Promise.resolve(cached);
+      return tokenPromise;
+    }
+    if (cached) {
+      // Expired or unparseable — drop it before minting a fresh one so
+      // a botched mint doesn't leave the stale token lingering for the
+      // next page load.
+      clearCachedToken();
+      window.PGR.token = null;
+    }
+    tokenPromise = mintToken();
     return tokenPromise;
   }
 
