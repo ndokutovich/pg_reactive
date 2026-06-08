@@ -98,6 +98,15 @@ services:
       gateway:
         aliases:
           - pgr-proxy
+          # Historical alias used by the umbrella nginx
+          # (app-reactive.conf: set $pgr_upstream http://pgr-stack:8080).
+          # Earlier deploys had a separate /opt/apps/pg-reactive/ compose
+          # stack whose container was literally named pgr-stack; the
+          # umbrella was written against that hostname. Carrying the
+          # alias here lets the umbrella keep its config while the
+          # canonical deploy moves into /opt/apps/pg-reactive-src/
+          # (managed by .github/workflows/deploy.yml).
+          - pgr-stack
 
   hello-go:
     restart: unless-stopped
