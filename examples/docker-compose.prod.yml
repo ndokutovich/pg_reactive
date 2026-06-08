@@ -112,21 +112,8 @@ services:
   web:
     restart: unless-stopped
     ports: !reset []
-    networks:
-      default:
-      gateway:
-        aliases:
-          - pgr-web
-          # Historical alias used by the umbrella nginx
-          # (vps-12gb-pgstack repo, app-reactive.conf:
-          #   set $pgr_upstream http://pgr-stack:8080).
-          # Earlier deploys used a single nginx container literally
-          # named `pgr-stack` that served examples/ and reverse-proxied
-          # /api, /ws, /auth, /rest, /docs, /studio to the Go proxy.
-          # The new compose splits that into `web` (nginx, this service)
-          # + `proxy` (Go) — the umbrella keeps targeting `pgr-stack`,
-          # so carry the alias here so app-reactive.conf keeps working
-          # without a cross-repo edit.
+    # gateway aliases (pgr-web + pgr-stack) live in the base compose so
+    # they don't depend on an override merge — see docker-compose.yml.
 
   # Fake SMTP catcher. Satisfies the PGSTACK_ENV=production SMTP gate
   # without shipping real credentials. Listens on :2500 (SMTP) and :9000

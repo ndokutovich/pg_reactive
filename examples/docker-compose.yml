@@ -113,6 +113,12 @@ services:
       gateway:
         aliases:
           - pgr-web
+          # Umbrella nginx (vps-12gb-pgstack/app-reactive.conf) targets
+          # http://pgr-stack:8080 — the hostname of the old monolithic
+          # deploy. This service now plays that role (static landing +
+          # reverse-proxy to the Go proxy), so own the alias here in the
+          # base file rather than relying on a prod-override merge.
+          - pgr-stack
 
 volumes:
   pgdata:
