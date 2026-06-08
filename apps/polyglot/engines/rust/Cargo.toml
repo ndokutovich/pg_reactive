@@ -11,6 +11,7 @@ path = "src/main.rs"
 tokio          = { version = "1.40", features = ["macros", "rt-multi-thread", "sync"] }
 tokio-postgres = "0.7"
 futures-util   = "0.3"
+rust_decimal   = { version = "1", features = ["db-tokio-postgres"] }
 
 [profile.release]
 opt-level = 3

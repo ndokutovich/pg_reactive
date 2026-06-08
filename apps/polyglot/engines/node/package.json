@@ -5,6 +5,8 @@
   "main": "main.js",
   "engines": { "node": ">=20" },
   "dependencies": {
+    "decimal.js": "^10.4.3",
+    "js-sdsl": "^4.4.2",
     "pg": "^8.13.0"
   }
 }

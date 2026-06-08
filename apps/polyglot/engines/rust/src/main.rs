@@ -9,6 +9,7 @@ use std::env;
 use std::time::Instant;
 
 use futures_util::stream::StreamExt;
+use rust_decimal::Decimal;
 use tokio_postgres::{AsyncMessage, Client, NoTls};
 
 const RESERVOIR_MAX: usize = 1024;
@@ -16,25 +17,23 @@ const RESERVOIR_MAX: usize = 1024;
 #[derive(Debug)]
 struct RestingOrder {
     id: i64,
-    qty: f64,
+    qty: Decimal,
 }
 
 struct Book {
     side: &'static str, // "buy" or "sell"
-    /// Price levels. For bids we read in reverse; for asks ascending.
-    levels: BTreeMap<u64, VecDeque<RestingOrder>>, // key = price * 1e8 as int for total ordering
-    by_id: HashMap<i64, u64>, // order id -> price key
+    /// Price levels keyed directly on the decimal price (Decimal: Ord).
+    /// For bids we read in reverse; for asks ascending.
+    levels: BTreeMap<Decimal, VecDeque<RestingOrder>>,
+    by_id: HashMap<i64, Decimal>, // order id -> price
 }
-
-fn price_key(p: f64) -> u64 { (p * 1e8).round() as u64 }
-fn price_val(k: u64) -> f64 { (k as f64) / 1e8 }
 
 impl Book {
     fn new(side: &'static str) -> Self {
         Self { side, levels: BTreeMap::new(), by_id: HashMap::new() }
     }
 
-    fn best(&self) -> Option<u64> {
+    fn best(&self) -> Option<Decimal> {
         if self.side == "buy" {
             self.levels.keys().next_back().copied()
         } else {
@@ -42,28 +41,27 @@ impl Book {
         }
     }
 
-    fn total_qty_at(&self, k: u64) -> f64 {
-        self.levels.get(&k).map(|q| q.iter().map(|o| o.qty).sum()).unwrap_or(0.0)
+    fn total_qty_at(&self, price: Decimal) -> Decimal {
+        self.levels.get(&price).map(|q| q.iter().map(|o| o.qty).sum()).unwrap_or(Decimal::ZERO)
     }
 
-    fn order_count_at(&self, k: u64) -> usize {
-        self.levels.get(&k).map(|q| q.len()).unwrap_or(0)
+    fn order_count_at(&self, price: Decimal) -> usize {
+        self.levels.get(&price).map(|q| q.len()).unwrap_or(0)
     }
 
-    fn add(&mut self, id: i64, price: f64, qty: f64) {
-        let k = price_key(price);
-        self.levels.entry(k).or_default().push_back(RestingOrder { id, qty });
-        self.by_id.insert(id, k);
+    fn add(&mut self, id: i64, price: Decimal, qty: Decimal) {
+        self.levels.entry(price).or_default().push_back(RestingOrder { id, qty });
+        self.by_id.insert(id, price);
     }
 
     fn cancel(&mut self, id: i64) {
-        if let Some(k) = self.by_id.remove(&id) {
-            if let Some(q) = self.levels.get_mut(&k) {
+        if let Some(price) = self.by_id.remove(&id) {
+            if let Some(q) = self.levels.get_mut(&price) {
                 if let Some(pos) = q.iter().position(|o| o.id == id) {
                     q.remove(pos);
                 }
                 if q.is_empty() {
-                    self.levels.remove(&k);
+                    self.levels.remove(&price);
                 }
             }
         }
@@ -83,28 +81,28 @@ impl SymbolState {
             _      => return fills,
         };
         let mut remaining = order.qty;
-        let limit_key = if order.order_type == "limit" { Some(price_key(order.price)) } else { None };
+        let limit_price = if order.order_type == "limit" { Some(order.price) } else { None };
 
-        while remaining > 0.0 {
+        while remaining > Decimal::ZERO {
             let Some(best) = opposite.best() else { break };
-            if let Some(lk) = limit_key {
-                let crosses = if mine_side_is_buy { best <= lk } else { best >= lk };
+            if let Some(lp) = limit_price {
+                let crosses = if mine_side_is_buy { best <= lp } else { best >= lp };
                 if !crosses { break; }
             }
             let queue = opposite.levels.get_mut(&best).unwrap();
             while let Some(head) = queue.front_mut() {
-                if remaining <= 0.0 { break; }
+                if remaining <= Decimal::ZERO { break; }
                 let matched = head.qty.min(remaining);
                 fills.push(Fill {
                     order_id: order.id,
                     matched_qty: matched,
-                    fill_price: price_val(best),
+                    fill_price: best,
                     latency_us: (started.elapsed().as_micros() as i64).max(1) as i32,
                     taker_side: order.side.clone(),
                 });
                 head.qty -= matched;
                 remaining -= matched;
-                if head.qty <= 0.0 {
+                if head.qty <= Decimal::ZERO {
                     let popped = queue.pop_front().unwrap();
                     opposite.by_id.remove(&popped.id);
                 }
@@ -113,7 +111,7 @@ impl SymbolState {
                 opposite.levels.remove(&best);
             }
         }
-        if order.order_type == "limit" && remaining > 0.0 {
+        if order.order_type == "limit" && remaining > Decimal::ZERO {
             let mine = if mine_side_is_buy { &mut self.bids } else { &mut self.asks };
             mine.add(order.id, order.price, remaining);
         }
@@ -127,16 +125,16 @@ struct OrderRow {
     symbol: String,
     side: String,
     order_type: String,
-    price: f64,
-    qty: f64,
+    price: Decimal,
+    qty: Decimal,
     parent_order: Option<i64>,
 }
 
 #[derive(Debug)]
 struct Fill {
     order_id: i64,
-    matched_qty: f64,
-    fill_price: f64,
+    matched_qty: Decimal,
+    fill_price: Decimal,
     latency_us: i32,
     taker_side: String,
 }
@@ -165,14 +163,14 @@ impl Engine {
 
     async fn drain_once(&mut self, client: &mut Client) -> Result<(), Box<dyn std::error::Error>> {
         let rows = client.query(
-            "SELECT id, symbol, side, order_type, COALESCE(price, 0)::float8, qty::float8, parent_order \
+            "SELECT id, symbol, side, order_type, COALESCE(price, 0), qty, parent_order \
              FROM public.order_events WHERE id > $1 ORDER BY id LIMIT 256",
             &[&self.last_seen_id],
         ).await?;
         if rows.is_empty() { return Ok(()); }
 
         let mut all_fills: Vec<Fill> = Vec::new();
-        let mut touched: HashMap<String, HashSet<(String, u64)>> = HashMap::new();
+        let mut touched: HashMap<String, HashSet<(String, Decimal)>> = HashMap::new();
         let mut order_list: Vec<OrderRow> = Vec::with_capacity(rows.len());
 
         for r in &rows {
@@ -200,11 +198,11 @@ impl Engine {
             let fills = st.match_order(o, started);
             all_fills.extend(fills.into_iter().inspect(|f| {
                 touched.entry(o.symbol.clone()).or_default()
-                    .insert((opposite_side(&o.side), price_key(f.fill_price)));
+                    .insert((opposite_side(&o.side), f.fill_price));
             }));
             let ts = touched.entry(o.symbol.clone()).or_default();
-            ts.insert((opposite_side(&o.side), price_key(o.price)));
-            ts.insert((o.side.clone(), price_key(o.price)));
+            ts.insert((opposite_side(&o.side), o.price));
+            ts.insert((o.side.clone(), o.price));
         }
 
         let tx = client.build_transaction().start().await?;
@@ -212,7 +210,7 @@ impl Engine {
             tx.execute(
                 "INSERT INTO public.engine_fills \
                    (engine, order_id, matched_qty, fill_price, latency_us, taker_side) \
-                 VALUES ($1, $2, $3::float8::numeric, $4::float8::numeric, $5, $6)",
+                 VALUES ($1, $2, $3, $4, $5, $6)",
                 &[&self.name, &f.order_id, &f.matched_qty, &f.fill_price, &f.latency_us, &f.taker_side],
             ).await?;
             if self.reservoir.len() >= RESERVOIR_MAX { self.reservoir.pop_front(); }
@@ -221,25 +219,24 @@ impl Engine {
 
         for (symbol, levels) in &touched {
             let st = self.state.get(symbol).unwrap();
-            for (side, k) in levels {
+            for (side, price) in levels {
                 let book = if side == "buy" { &st.bids } else { &st.asks };
-                let total = book.total_qty_at(*k);
-                let count = book.order_count_at(*k) as i32;
-                let price = price_val(*k);
-                if total == 0.0 {
+                let total = book.total_qty_at(*price);
+                let count = book.order_count_at(*price) as i32;
+                if total == Decimal::ZERO {
                     tx.execute(
-                        "DELETE FROM public.engine_book WHERE engine=$1 AND symbol=$2 AND side=$3 AND price=$4::float8::numeric",
-                        &[&self.name, symbol, side, &price],
+                        "DELETE FROM public.engine_book WHERE engine=$1 AND symbol=$2 AND side=$3 AND price=$4",
+                        &[&self.name, symbol, side, price],
                     ).await?;
                 } else {
                     tx.execute(
                         "INSERT INTO public.engine_book (engine, symbol, side, price, total_qty, order_count, updated_at) \
-                         VALUES ($1, $2, $3, $4::float8::numeric, $5::float8::numeric, $6, now()) \
+                         VALUES ($1, $2, $3, $4, $5, $6, now()) \
                          ON CONFLICT (engine, symbol, side, price) DO UPDATE \
                            SET total_qty = EXCLUDED.total_qty, \
                                order_count = EXCLUDED.order_count, \
                                updated_at = now()",
-                        &[&self.name, symbol, side, &price, &total, &count],
+                        &[&self.name, symbol, side, price, &total, &count],
                     ).await?;
                 }
             }
@@ -249,12 +246,12 @@ impl Engine {
         let p99: f64 = p99_i as f64;
         let total_orders = order_list.len() as i64;
         let total_matches = all_fills.len() as i64;
-        let total_volume: f64 = all_fills.iter().map(|f| f.matched_qty).sum();
+        let total_volume: Decimal = all_fills.iter().map(|f| f.matched_qty).sum();
         tx.execute(
             "UPDATE public.engine_stats SET \
                total_orders   = total_orders   + $2, \
                total_matches  = total_matches  + $3, \
-               total_volume   = total_volume   + $4::float8::numeric, \
+               total_volume   = total_volume   + $4, \
                avg_latency_us = $5::float8::numeric, \
                p99_latency_us = $6::float8::numeric, \
                last_updated   = now() \

@@ -17,7 +17,9 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from collections import deque
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Optional
 
 import asyncpg
@@ -32,16 +34,20 @@ RESERVOIR_MAX = 1024
 @dataclass
 class RestingOrder:
     id: int
-    qty: float
+    qty: Decimal
 
 
 @dataclass
 class Level:
-    price: float
-    orders: list[RestingOrder] = field(default_factory=list)
+    price: Decimal
+    # O(1)-amortized FIFO: deque popleft() avoids the per-fill list shift.
+    orders: deque[RestingOrder] = field(default_factory=deque)
 
-    def total_qty(self) -> float:
-        return sum(o.qty for o in self.orders)
+    def total_qty(self) -> Decimal:
+        t = Decimal(0)
+        for o in self.orders:
+            t += o.qty
+        return t
 
 
 class Book:
@@ -50,23 +56,23 @@ class Book:
     def __init__(self, side: str) -> None:
         self.side = side
         # SortedDict ordered ascending; we read best via index trick.
-        self.levels: SortedDict[float, Level] = SortedDict()
-        self.by_id: dict[int, tuple[float, RestingOrder]] = {}
+        self.levels: SortedDict[Decimal, Level] = SortedDict()
+        self.by_id: dict[int, tuple[Decimal, RestingOrder]] = {}
 
-    def best(self) -> Optional[float]:
+    def best(self) -> Optional[Decimal]:
         if not self.levels:
             return None
         return self.levels.peekitem(-1 if self.side == "buy" else 0)[0]
 
-    def total_qty_at(self, price: float) -> float:
+    def total_qty_at(self, price: Decimal) -> Decimal:
         lv = self.levels.get(price)
-        return lv.total_qty() if lv else 0.0
+        return lv.total_qty() if lv else Decimal(0)
 
-    def order_count_at(self, price: float) -> int:
+    def order_count_at(self, price: Decimal) -> int:
         lv = self.levels.get(price)
         return len(lv.orders) if lv else 0
 
-    def add(self, order_id: int, price: float, qty: float) -> None:
+    def add(self, order_id: int, price: Decimal, qty: Decimal) -> None:
         lv = self.levels.get(price)
         if lv is None:
             lv = Level(price=price)
@@ -99,14 +105,14 @@ class SymbolState:
     def match(self, order: asyncpg.Record, started: int) -> list[dict]:
         fills: list[dict] = []
         opposite = self.asks if order["side"] == "buy" else self.bids
-        remaining = float(order["qty"])
+        remaining: Decimal = order["qty"]
 
         while remaining > 0:
             best = opposite.best()
             if best is None:
                 break
             if order["order_type"] == "limit":
-                limit_price = float(order["price"])
+                limit_price: Decimal = order["price"]
                 if order["side"] == "buy" and best > limit_price:
                     break
                 if order["side"] == "sell" and best < limit_price:
@@ -126,13 +132,13 @@ class SymbolState:
                 remaining -= matched
                 if head.qty <= 0:
                     opposite.by_id.pop(head.id, None)
-                    lv.orders.pop(0)
+                    lv.orders.popleft()
             if not lv.orders:
                 del opposite.levels[best]
 
         if order["order_type"] == "limit" and remaining > 0:
             mine = self.bids if order["side"] == "buy" else self.asks
-            mine.add(order["id"], float(order["price"]), remaining)
+            mine.add(order["id"], order["price"], remaining)
         return fills
 
 
@@ -141,7 +147,8 @@ class Engine:
         self.pool = pool
         self.last_seen_id = 0
         self.state: dict[str, SymbolState] = {}
-        self.reservoir: list[int] = []
+        # Fixed-size reservoir: maxlen auto-evicts the oldest on append (O(1)).
+        self.reservoir: deque[int] = deque(maxlen=RESERVOIR_MAX)
 
     def get_state(self, symbol: str) -> SymbolState:
         st = self.state.get(symbol)
@@ -153,8 +160,9 @@ class Engine:
     def stats(self) -> tuple[float, int]:
         if not self.reservoir:
             return 0.0, 0
-        avg = sum(self.reservoir) / len(self.reservoir)
-        s = sorted(self.reservoir)
+        snap = list(self.reservoir)
+        avg = sum(snap) / len(snap)
+        s = sorted(snap)
         idx = min(len(s) - 1, int(len(s) * 0.99))
         return avg, s[idx]
 
@@ -175,7 +183,7 @@ class Engine:
                 return
 
             all_fills: list[dict] = []
-            touched: dict[str, set[tuple[str, float]]] = {}
+            touched: dict[str, set[tuple[str, Decimal]]] = {}
 
             for row in rows:
                 started = time.monotonic_ns()
@@ -188,8 +196,8 @@ class Engine:
                 all_fills.extend(fills)
                 ts = touched.setdefault(row["symbol"], set())
                 opp_side = "sell" if row["side"] == "buy" else "buy"
-                ts.add((opp_side, float(row["price"])))
-                ts.add((row["side"], float(row["price"])))
+                ts.add((opp_side, row["price"]))
+                ts.add((row["side"], row["price"]))
                 for f in fills:
                     ts.add((opp_side, f["fill_price"]))
 
@@ -205,8 +213,6 @@ class Engine:
                         int(f["latency_us"]), f["taker_side"],
                     )
                     self.reservoir.append(int(f["latency_us"]))
-                    if len(self.reservoir) > RESERVOIR_MAX:
-                        del self.reservoir[: len(self.reservoir) - RESERVOIR_MAX]
 
                 for symbol, levels in touched.items():
                     st = self.get_state(symbol)
@@ -235,7 +241,7 @@ class Engine:
                             )
 
                 avg, p99 = self.stats()
-                total_volume = sum(float(f["matched_qty"]) for f in all_fills)
+                total_volume = sum((f["matched_qty"] for f in all_fills), Decimal(0))
                 await conn.execute(
                     """
                     UPDATE public.engine_stats

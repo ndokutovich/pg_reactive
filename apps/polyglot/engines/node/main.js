@@ -4,15 +4,22 @@
 // price-time priority limit matching in memory, write fills + book
 // snapshots + stats in one transaction per batch.
 //
-// Implementation differs from the Go reference in the book data
-// structure — Node has no sorted-map primitive in stdlib, so the
-// price levels are a plain object keyed by price and we re-sort the
-// price array when levels are added/removed. Same asymptotic shape
-// as the Go version, just expressed in JS idiom.
+// Normalized profile (shared by all six engines so the leaderboard
+// reflects the language, not the implementation): decimal money math
+// (decimal.js), an O(log n) sorted price ladder (js-sdsl OrderedMap, a
+// red-black tree), O(1)-amortized FIFO at each level, O(1) cancel via
+// id→price, a fixed-size latency ring, and a max(1)µs floor on the
+// reported latency. Mirrors the Go reference's choices in JS idiom.
 
 'use strict';
 
 const { Client } = require('pg');
+const Decimal = require('decimal.js');
+const { OrderedMap } = require('js-sdsl');
+
+const ZERO = new Decimal(0);
+// OrderedMap comparator: numeric ordering over Decimal keys.
+const cmpDecimal = (a, b) => a.cmp(b);
 
 const ENGINE_NAME = process.env.ENGINE_NAME || 'node';
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -21,121 +28,170 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
+// A price level: FIFO queue of resting orders. `head` advances on pop so
+// front removal is O(1) amortized — no per-fill array shift. Mirrors the
+// Go reference's level.popFront.
+function newLevel(price) {
+  return { price, orders: [], head: 0 };
+}
+function levelLen(lv) { return lv.orders.length - lv.head; }
+function levelFront(lv) { return lv.orders[lv.head]; }
+function levelPopFront(lv) {
+  lv.orders[lv.head] = null;
+  lv.head++;
+  // Compact when the dead prefix dominates, so a hot level doesn't grow
+  // its backing array without bound.
+  if (lv.head > 8 && lv.head * 2 >= lv.orders.length) {
+    lv.orders = lv.orders.slice(lv.head);
+    lv.head = 0;
+  }
+}
+function levelTotalQty(lv) {
+  let t = ZERO;
+  for (let i = lv.head; i < lv.orders.length; i++) t = t.add(lv.orders[i].qty);
+  return t;
+}
+
+// book is one side of one symbol — a red-black-tree price ladder (O(log n)
+// insert, peek, delete) plus an id→price index for O(1) cancel location.
 class Book {
   constructor(side) {
-    this.side = side;           // 'buy' or 'sell'
-    this.levels = Object.create(null);   // price -> { price, orders: [] }
-    this.prices = [];           // sorted prices; best first
-    this.byId = new Map();      // orderId -> { price, qty }
+    this.side = side;                                 // 'buy' or 'sell'
+    this.tree = new OrderedMap([], cmpDecimal);       // Decimal price -> level
+    this.byId = new Map();                            // orderId -> Decimal price
   }
 
-  resort() {
-    this.prices = Object.keys(this.levels).map(Number);
-    if (this.side === 'buy') {
-      this.prices.sort((a, b) => b - a);
-    } else {
-      this.prices.sort((a, b) => a - b);
-    }
-  }
-
+  // best returns the level at the top of book: highest bid, lowest ask.
   best() {
-    return this.prices.length > 0 ? this.prices[0] : null;
+    if (this.tree.size() === 0) return null;
+    const entry = this.side === 'buy' ? this.tree.back() : this.tree.front();
+    return entry[1];
   }
 
-  totalQtyAt(price) {
-    const lv = this.levels[price];
-    if (!lv) return 0;
-    let t = 0;
-    for (const o of lv.orders) t += o.qty;
-    return t;
+  levelAt(price) {
+    return this.tree.getElementByKey(price); // level or undefined
   }
 
   add(orderId, price, qty) {
-    let lv = this.levels[price];
-    if (!lv) {
-      lv = { price, orders: [] };
-      this.levels[price] = lv;
-      this.resort();
+    let lv = this.tree.getElementByKey(price);
+    if (lv === undefined) {
+      lv = newLevel(price);
+      this.tree.setElement(price, lv);
     }
-    const ro = { id: orderId, qty };
-    lv.orders.push(ro);
-    this.byId.set(orderId, { price, ro });
+    lv.orders.push({ id: orderId, qty });
+    this.byId.set(orderId, price);
+  }
+
+  removeLevel(price) {
+    this.tree.eraseElementByKey(price);
   }
 
   cancel(orderId) {
-    const ref = this.byId.get(orderId);
-    if (!ref) return;
+    const price = this.byId.get(orderId);
+    if (price === undefined) return;
     this.byId.delete(orderId);
-    const lv = this.levels[ref.price];
-    if (!lv) return;
-    const i = lv.orders.indexOf(ref.ro);
-    if (i >= 0) lv.orders.splice(i, 1);
-    if (lv.orders.length === 0) {
-      delete this.levels[ref.price];
-      this.resort();
+    const lv = this.levelAt(price);
+    if (lv === undefined) return;
+    for (let i = lv.head; i < lv.orders.length; i++) {
+      if (lv.orders[i] != null && lv.orders[i].id === orderId) {
+        lv.orders.splice(i, 1);
+        break;
+      }
     }
+    if (levelLen(lv) === 0) this.removeLevel(price);
   }
 }
 
 class SymbolState {
   constructor() { this.bids = new Book('buy'); this.asks = new Book('sell'); }
+
   match(order, startHrtime) {
     const fills = [];
-    const opposite = order.side === 'buy' ? this.asks : this.bids;
-    let remaining = Number(order.qty);
+    const takerSide = order.side;
+    const opposite = takerSide === 'buy' ? this.asks : this.bids;
+    let remaining = new Decimal(order.qty);
 
-    while (remaining > 0) {
-      const bestPrice = opposite.best();
-      if (bestPrice == null) break;
+    while (remaining.gt(ZERO)) {
+      const lv = opposite.best();
+      if (lv == null) break;
+      // limit order: stop matching when the price no longer crosses.
       if (order.order_type === 'limit') {
-        if (order.side === 'buy'  && bestPrice > Number(order.price)) break;
-        if (order.side === 'sell' && bestPrice < Number(order.price)) break;
+        if (takerSide === 'buy' && lv.price.gt(order.price)) break;
+        if (takerSide === 'sell' && lv.price.lt(order.price)) break;
       }
-      const lv = opposite.levels[bestPrice];
-      while (lv.orders.length > 0 && remaining > 0) {
-        const head = lv.orders[0];
-        const matched = Math.min(head.qty, remaining);
+      while (levelLen(lv) > 0 && remaining.gt(ZERO)) {
+        const head = levelFront(lv);
+        const matched = Decimal.min(head.qty, remaining);
         const ns = process.hrtime.bigint() - startHrtime;
         fills.push({
           orderId: order.id,
           matchedQty: matched,
-          fillPrice: bestPrice,
+          fillPrice: lv.price,
           latencyUs: Math.max(1, Number(ns) / 1000) | 0,
-          takerSide: order.side,
+          takerSide,
         });
-        head.qty -= matched;
-        remaining -= matched;
-        if (head.qty <= 0) {
+        head.qty = head.qty.sub(matched);
+        remaining = remaining.sub(matched);
+        if (head.qty.lte(ZERO)) {
           opposite.byId.delete(head.id);
-          lv.orders.shift();
+          levelPopFront(lv);
         }
       }
-      if (lv.orders.length === 0) {
-        delete opposite.levels[bestPrice];
-        opposite.resort();
-      }
+      if (levelLen(lv) === 0) opposite.removeLevel(lv.price);
     }
-    if (order.order_type === 'limit' && remaining > 0) {
-      const mine = order.side === 'buy' ? this.bids : this.asks;
-      mine.add(order.id, Number(order.price), remaining);
+
+    // Rest a remaining limit order on our side.
+    if (order.order_type === 'limit' && remaining.gt(ZERO)) {
+      const mine = takerSide === 'buy' ? this.bids : this.asks;
+      mine.add(order.id, order.price, remaining);
     }
     return fills;
+  }
+
+  // snapshotLevels resolves the touched (side, priceString) keys to current
+  // book rows. Mirrors the Go reference's snapshotLevels.
+  snapshotLevels(levelKeys) {
+    const rows = [];
+    for (const key of levelKeys.keys()) {
+      const sep = key.indexOf('|');
+      const side = key.slice(0, sep);
+      const price = new Decimal(key.slice(sep + 1));
+      const src = side === 'buy' ? this.bids : this.asks;
+      const lv = src.levelAt(price);
+      if (lv !== undefined) {
+        rows.push({ side, price, totalQty: levelTotalQty(lv), orderCount: levelLen(lv) });
+      } else {
+        rows.push({ side, price, totalQty: ZERO, orderCount: 0 });
+      }
+    }
+    return rows;
   }
 }
 
 const state = new Map();      // symbol -> SymbolState
-const latencyReservoir = [];  // capped at 1024
 let lastSeenId = 0n;
 
-function statsFor(reservoir) {
-  if (reservoir.length === 0) return [0, 0];
+// Fixed-size ring buffer for the latency reservoir — no slice grow/shift.
+const LAT_RING_SIZE = 1024;
+const latRing = new Array(LAT_RING_SIZE).fill(0);
+let latIdx = 0;
+let latCount = 0;
+function recordLatency(us) {
+  latRing[latIdx] = us;
+  latIdx = (latIdx + 1) % LAT_RING_SIZE;
+  if (latCount < LAT_RING_SIZE) latCount++;
+}
+function stats() {
+  if (latCount === 0) return [0, 0];
   let sum = 0;
-  for (const v of reservoir) sum += v;
-  const avg = sum / reservoir.length;
-  const sorted = reservoir.slice().sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99));
+  for (let i = 0; i < latCount; i++) sum += latRing[i];
+  const avg = sum / latCount;
+  const sorted = latRing.slice(0, latCount).sort((a, b) => a - b);
+  const idx = Math.min(latCount - 1, Math.floor(latCount * 0.99));
   return [avg, sorted[idx]];
 }
+
+function oppositeSide(side) { return side === 'buy' ? 'sell' : 'buy'; }
 
 async function drainOnce(client) {
   const res = await client.query(
@@ -149,7 +205,7 @@ async function drainOnce(client) {
   if (res.rows.length === 0) return;
 
   const allFills = [];
-  const touched = new Map(); // symbol -> Map((side,price) -> true)
+  const touched = new Map(); // symbol -> Map(side|priceString -> true)
 
   for (const row of res.rows) {
     const start = process.hrtime.bigint();
@@ -161,15 +217,25 @@ async function drainOnce(client) {
       st.asks.cancel(Number(row.parent_order));
       continue;
     }
-    const fills = st.match(row, start);
+
+    // node-postgres returns NUMERIC columns as strings; parse to Decimal.
+    const order = {
+      id: row.id,
+      side: row.side,
+      order_type: row.order_type,
+      price: new Decimal(row.price),
+      qty: new Decimal(row.qty),
+    };
+    const fills = st.match(order, start);
     allFills.push(...fills);
 
     let t = touched.get(row.symbol);
     if (!t) { t = new Map(); touched.set(row.symbol, t); }
-    t.set(row.side === 'buy' ? 'sell|' + Number(row.price) : 'buy|' + Number(row.price), true);
-    t.set(row.side + '|' + Number(row.price), true);
+    const priceKey = order.price.toString();
+    t.set(oppositeSide(row.side) + '|' + priceKey, true);
+    t.set(row.side + '|' + priceKey, true);
     for (const f of fills) {
-      t.set((row.side === 'buy' ? 'sell|' : 'buy|') + f.fillPrice, true);
+      t.set(oppositeSide(row.side) + '|' + f.fillPrice.toString(), true);
     }
   }
 
@@ -178,52 +244,46 @@ async function drainOnce(client) {
     for (const f of allFills) {
       await client.query(
         `INSERT INTO public.engine_fills (engine, order_id, matched_qty, fill_price, latency_us, taker_side)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [ENGINE_NAME, f.orderId, f.matchedQty, f.fillPrice, f.latencyUs, f.takerSide]
+         VALUES ($1, $2, $3::numeric, $4::numeric, $5, $6)`,
+        [ENGINE_NAME, f.orderId, f.matchedQty.toString(), f.fillPrice.toString(), f.latencyUs, f.takerSide]
       );
-      latencyReservoir.push(f.latencyUs);
-      while (latencyReservoir.length > 1024) latencyReservoir.shift();
+      recordLatency(f.latencyUs);
     }
 
-    for (const [symbol, levels] of touched) {
+    for (const [symbol, levelKeys] of touched) {
       const st = state.get(symbol);
-      for (const key of levels.keys()) {
-        const [side, priceStr] = key.split('|');
-        const price = Number(priceStr);
-        const book = side === 'buy' ? st.bids : st.asks;
-        const total = book.totalQtyAt(price);
-        const count = book.levels[price] ? book.levels[price].orders.length : 0;
-        if (total === 0) {
+      for (const row of st.snapshotLevels(levelKeys)) {
+        if (row.totalQty.lte(ZERO)) {
           await client.query(
-            `DELETE FROM public.engine_book WHERE engine=$1 AND symbol=$2 AND side=$3 AND price=$4`,
-            [ENGINE_NAME, symbol, side, price]
+            `DELETE FROM public.engine_book WHERE engine=$1 AND symbol=$2 AND side=$3 AND price=$4::numeric`,
+            [ENGINE_NAME, symbol, row.side, row.price.toString()]
           );
         } else {
           await client.query(
             `INSERT INTO public.engine_book (engine, symbol, side, price, total_qty, order_count, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, now())
+             VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6, now())
              ON CONFLICT (engine, symbol, side, price) DO UPDATE
                SET total_qty = EXCLUDED.total_qty,
                    order_count = EXCLUDED.order_count,
                    updated_at = now()`,
-            [ENGINE_NAME, symbol, side, price, total, count]
+            [ENGINE_NAME, symbol, row.side, row.price.toString(), row.totalQty.toString(), row.orderCount]
           );
         }
       }
     }
 
-    const [avg, p99] = statsFor(latencyReservoir);
-    const totalVolume = allFills.reduce((s, f) => s + Number(f.matchedQty), 0);
+    const [avg, p99] = stats();
+    const totalVolume = allFills.reduce((s, f) => s.add(f.matchedQty), ZERO);
     await client.query(
       `UPDATE public.engine_stats
           SET total_orders   = total_orders + $2,
               total_matches  = total_matches + $3,
-              total_volume   = total_volume  + $4,
+              total_volume   = total_volume  + $4::numeric,
               avg_latency_us = $5,
               p99_latency_us = $6,
               last_updated   = now()
         WHERE engine = $1`,
-      [ENGINE_NAME, res.rows.length, allFills.length, totalVolume, avg, p99 | 0]
+      [ENGINE_NAME, res.rows.length, allFills.length, totalVolume.toString(), avg, p99 | 0]
     );
 
     await client.query('COMMIT');
@@ -287,4 +347,8 @@ async function main() {
   }
 }
 
-main().catch(err => { console.error('fatal:', err); process.exit(1); });
+if (require.main === module) {
+  main().catch(err => { console.error('fatal:', err); process.exit(1); });
+}
+
+module.exports = { Book, SymbolState, Decimal };

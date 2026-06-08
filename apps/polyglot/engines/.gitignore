@@ -1,0 +1,8 @@
+# Build artifacts and resolver lockfiles. The engine Dockerfiles copy only
+# the manifests (go.mod/go.sum, package.json, Cargo.toml) and re-resolve at
+# build time, so committed lockfiles would drift unused. go.sum IS tracked
+# (Go convention; supply-chain integrity for `go mod tidy`).
+rust/target/
+**/node_modules/
+node/package-lock.json
+rust/Cargo.lock

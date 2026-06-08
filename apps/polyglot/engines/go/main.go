@@ -5,10 +5,13 @@
 // book in memory. On every order: match, write fills, update book rows
 // for the affected price levels, update the engine's stats row.
 //
-// Designed as the template for the other five engines — Spring, FastAPI,
-// Rust, .NET, Node. Each port keeps the same loop shape and SQL but
-// re-implements the matching in its language's idiom (a Java TreeMap, a
-// Python sortedcontainers.SortedList, a Rust BTreeMap, etc).
+// Normalized profile (shared by all six engines so the leaderboard reflects
+// the language, not the implementation): decimal money math, an O(log n)
+// sorted price ladder (google/btree), O(1)-amortized FIFO at each level,
+// O(1) cancel via id→price, a fixed-size latency ring, and a max(1)µs floor
+// on the reported latency. The other five ports mirror these choices in
+// their language's idiom (Java TreeMap, Python SortedDict, Rust BTreeMap,
+// .NET SortedDictionary, Node js-sdsl OrderedMap).
 package main
 
 import (
@@ -22,112 +25,132 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/btree"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 )
+
+var zero = decimal.Zero
 
 type orderEvent struct {
 	id          int64
 	symbol      string
 	side        string
 	orderType   string
-	price       float64
-	qty         float64
+	price       decimal.Decimal
+	qty         decimal.Decimal
 	parentOrder sql.NullInt64
 }
 
 // restingOrder tracks a single open limit order in the book.
 type restingOrder struct {
-	id        int64
-	qty       float64
-	timestamp int64 // for time priority — order.id is enough; redundant but explicit
+	id  int64
+	qty decimal.Decimal
 }
 
-// level is a price level: FIFO queue of resting orders.
+// level is a price level: FIFO queue of resting orders. head advances on
+// pop so the front removal is O(1) amortized — no per-fill array shift.
 type level struct {
-	price  float64
+	price  decimal.Decimal
 	orders []*restingOrder
+	head   int
 }
 
-func (l *level) totalQty() float64 {
-	t := 0.0
-	for _, o := range l.orders {
-		t += o.qty
+func (l *level) len() int          { return len(l.orders) - l.head }
+func (l *level) front() *restingOrder { return l.orders[l.head] }
+
+func (l *level) popFront() {
+	l.orders[l.head] = nil
+	l.head++
+	// Compact when the dead prefix dominates, so a hot level doesn't grow
+	// its backing array without bound.
+	if l.head > 8 && l.head*2 >= len(l.orders) {
+		l.orders = append(l.orders[:0], l.orders[l.head:]...)
+		l.head = 0
+	}
+}
+
+func (l *level) totalQty() decimal.Decimal {
+	t := zero
+	for _, o := range l.orders[l.head:] {
+		t = t.Add(o.qty)
 	}
 	return t
 }
 
-// book is one side of one symbol — sorted price levels.
+// book is one side of one symbol — a B-tree price ladder (O(log n) insert,
+// peek, delete) plus an id→price index for O(1) cancel location.
 type book struct {
-	side   string                 // "buy" or "sell"
-	levels map[float64]*level     // price → level (mutated)
-	order  []float64              // sorted prices (best first: bids desc, asks asc)
-	byID   map[int64]*restingOrder // for O(1) cancel
+	side string // "buy" or "sell"
+	tree *btree.BTreeG[*level]
+	byID map[int64]decimal.Decimal
 }
+
+func priceLess(a, b *level) bool { return a.price.LessThan(b.price) }
 
 func newBook(side string) *book {
 	return &book{
-		side:   side,
-		levels: map[float64]*level{},
-		byID:   map[int64]*restingOrder{},
+		side: side,
+		tree: btree.NewG[*level](8, priceLess),
+		byID: map[int64]decimal.Decimal{},
 	}
 }
 
-func (b *book) best() (float64, bool) {
-	if len(b.order) == 0 {
-		return 0, false
-	}
-	return b.order[0], true
-}
-
-// resort regenerates the price list. Called when a level is added/removed.
-func (b *book) resort() {
-	b.order = b.order[:0]
-	for p := range b.levels {
-		b.order = append(b.order, p)
+// best returns the level at the top of book: highest bid, lowest ask.
+func (b *book) best() (*level, bool) {
+	if b.tree.Len() == 0 {
+		return nil, false
 	}
 	if b.side == "buy" {
-		sort.Slice(b.order, func(i, j int) bool { return b.order[i] > b.order[j] })
-	} else {
-		sort.Sort(sort.Float64Slice(b.order))
+		return b.tree.Max()
 	}
+	return b.tree.Min()
 }
 
-func (b *book) add(o *restingOrder, price float64) {
-	lv, ok := b.levels[price]
+func (b *book) levelAt(price decimal.Decimal) (*level, bool) {
+	return b.tree.Get(&level{price: price})
+}
+
+func (b *book) add(o *restingOrder, price decimal.Decimal) {
+	lv, ok := b.tree.Get(&level{price: price})
 	if !ok {
 		lv = &level{price: price}
-		b.levels[price] = lv
-		b.resort()
+		b.tree.ReplaceOrInsert(lv)
 	}
 	lv.orders = append(lv.orders, o)
-	b.byID[o.id] = o
+	b.byID[o.id] = price
+}
+
+func (b *book) removeLevel(price decimal.Decimal) {
+	b.tree.Delete(&level{price: price})
 }
 
 func (b *book) cancel(id int64) {
-	o, ok := b.byID[id]
+	price, ok := b.byID[id]
 	if !ok {
 		return
 	}
 	delete(b.byID, id)
-	for price, lv := range b.levels {
-		for i, ro := range lv.orders {
-			if ro == o {
-				lv.orders = append(lv.orders[:i], lv.orders[i+1:]...)
-				if len(lv.orders) == 0 {
-					delete(b.levels, price)
-					b.resort()
-				}
-				return
-			}
+	lv, ok := b.levelAt(price)
+	if !ok {
+		return
+	}
+	for i := lv.head; i < len(lv.orders); i++ {
+		if lv.orders[i] != nil && lv.orders[i].id == id {
+			lv.orders = append(lv.orders[:i], lv.orders[i+1:]...)
+			break
 		}
+	}
+	if lv.len() == 0 {
+		b.removeLevel(price)
 	}
 }
 
 // fill represents one match output by the engine.
 type fill struct {
 	orderID    int64
-	matchedQty float64
-	fillPrice  float64
+	matchedQty decimal.Decimal
+	fillPrice  decimal.Decimal
 	latencyUs  int
 	takerSide  string
 }
@@ -138,9 +161,8 @@ type symbolState struct {
 	asks *book
 }
 
-// match appends fills into *dest instead of returning a fresh slice. The
-// caller (drainOnce) owns the buffer and reuses it across drains, so the
-// matching hot path allocates nothing per order under steady state.
+// match appends fills into *dest. The caller owns the buffer and reuses it
+// across drains, so the matching hot path allocates little per order.
 func (s *symbolState) match(o *orderEvent, latencyStart time.Time, dest *[]fill) {
 	takerSide := o.side
 
@@ -153,49 +175,51 @@ func (s *symbolState) match(o *orderEvent, latencyStart time.Time, dest *[]fill)
 
 	remaining := o.qty
 
-	for remaining > 0 {
-		bestPrice, ok := opposite.best()
+	for remaining.GreaterThan(zero) {
+		lv, ok := opposite.best()
 		if !ok {
 			break
 		}
 		// limit order: stop matching when the price no longer crosses
 		if o.orderType == "limit" {
-			if takerSide == "buy" && bestPrice > o.price {
+			if takerSide == "buy" && lv.price.GreaterThan(o.price) {
 				break
 			}
-			if takerSide == "sell" && bestPrice < o.price {
+			if takerSide == "sell" && lv.price.LessThan(o.price) {
 				break
 			}
 		}
-		lv := opposite.levels[bestPrice]
-		for len(lv.orders) > 0 && remaining > 0 {
-			head := lv.orders[0]
+		for lv.len() > 0 && remaining.GreaterThan(zero) {
+			head := lv.front()
 			matched := head.qty
-			if matched > remaining {
+			if matched.GreaterThan(remaining) {
 				matched = remaining
+			}
+			lat := int(time.Since(latencyStart).Microseconds())
+			if lat < 1 {
+				lat = 1
 			}
 			*dest = append(*dest, fill{
 				orderID:    o.id,
 				matchedQty: matched,
-				fillPrice:  bestPrice,
-				latencyUs:  int(time.Since(latencyStart).Microseconds()),
+				fillPrice:  lv.price,
+				latencyUs:  lat,
 				takerSide:  takerSide,
 			})
-			head.qty -= matched
-			remaining -= matched
-			if head.qty <= 0 {
+			head.qty = head.qty.Sub(matched)
+			remaining = remaining.Sub(matched)
+			if head.qty.LessThanOrEqual(zero) {
 				delete(opposite.byID, head.id)
-				lv.orders = lv.orders[1:]
+				lv.popFront()
 			}
 		}
-		if len(lv.orders) == 0 {
-			delete(opposite.levels, bestPrice)
-			opposite.resort()
+		if lv.len() == 0 {
+			opposite.removeLevel(lv.price)
 		}
 	}
 
 	// Rest a remaining limit order on our side.
-	if o.orderType == "limit" && remaining > 0 {
+	if o.orderType == "limit" && remaining.GreaterThan(zero) {
 		var mine *book
 		if o.side == "buy" {
 			mine = s.bids
@@ -206,47 +230,46 @@ func (s *symbolState) match(o *orderEvent, latencyStart time.Time, dest *[]fill)
 	}
 }
 
-// touchedLevels returns the set of (side, price) tuples the engine
-// touched during matching — used to rebuild engine_book rows.
-type touched struct{ side string; price float64 }
+// touchedKey identifies a (side, price) level the engine touched. Price is
+// the canonical decimal string so equal values collapse to one key.
+type touchedKey struct {
+	side  string
+	price string
+}
 
-func (s *symbolState) snapshotLevels(touched map[touched]struct{}) []bookRow {
+type bookRow struct {
+	side       string
+	price      decimal.Decimal
+	totalQty   decimal.Decimal
+	orderCount int
+}
+
+func (s *symbolState) snapshotLevels(touched map[touchedKey]struct{}) []bookRow {
 	rows := []bookRow{}
-	for tp := range touched {
+	for tk := range touched {
+		price := decimal.RequireFromString(tk.price)
 		var src *book
-		if tp.side == "buy" {
+		if tk.side == "buy" {
 			src = s.bids
 		} else {
 			src = s.asks
 		}
-		if lv, ok := src.levels[tp.price]; ok {
+		if lv, ok := src.levelAt(price); ok {
 			rows = append(rows, bookRow{
-				side:       tp.side,
-				price:      tp.price,
+				side:       tk.side,
+				price:      price,
 				totalQty:   lv.totalQty(),
-				orderCount: len(lv.orders),
+				orderCount: lv.len(),
 			})
 		} else {
-			rows = append(rows, bookRow{side: tp.side, price: tp.price, totalQty: 0, orderCount: 0})
+			rows = append(rows, bookRow{side: tk.side, price: price, totalQty: zero, orderCount: 0})
 		}
 	}
 	return rows
 }
 
-type bookRow struct {
-	side       string
-	price      float64
-	totalQty   float64
-	orderCount int
-}
-
-// Engine wraps a pool + per-symbol state + watermark.
-//
-// Hot-path buffers (batch, allFillsBuf, touchedBuf, latRing) are reused
-// across drains. Under steady state this drops Go-GC pressure to
-// effectively zero in the match loop — the p99 tail used to be ~60x the
-// avg because GC pauses landed inside time.Since() measurements; with
-// pre-allocated reusable buffers the ratio drops to single digits.
+// Engine wraps a pool + per-symbol state + watermark. Hot-path buffers are
+// reused across drains to keep GC pressure off the match loop.
 type Engine struct {
 	pool       *pgxpool.Pool
 	name       string
@@ -254,18 +277,15 @@ type Engine struct {
 	lastSeenID int64
 	state      map[string]*symbolState
 
-	// Reusable drain buffers. Reset (truncate-to-zero / clear-map) at the
-	// top of every drainOnce, NEVER re-allocated under steady state.
-	batchBuf     []*orderEvent
-	allFillsBuf  []fill
-	touchedBuf   map[string]map[touched]struct{}
+	batchBuf    []*orderEvent
+	allFillsBuf []fill
+	touchedBuf  map[string]map[touchedKey]struct{}
 
-	// Fixed-size ring buffer for latency reservoir. Indexing is mod 1024
-	// — no slice grow, no slice realloc, no GC trigger.
+	// Fixed-size ring buffer for the latency reservoir — no slice grow.
 	latRing  [1024]int
-	latIdx   int  // next write position
-	latCount int  // number of entries written (caps at len(latRing))
-	sortBuf  []int // reusable scratch for p99 sort
+	latIdx   int
+	latCount int
+	sortBuf  []int
 }
 
 func newEngine(pool *pgxpool.Pool, name string) *Engine {
@@ -275,11 +295,10 @@ func newEngine(pool *pgxpool.Pool, name string) *Engine {
 		state:       map[string]*symbolState{},
 		batchBuf:    make([]*orderEvent, 0, 256),
 		allFillsBuf: make([]fill, 0, 1024),
-		touchedBuf:  map[string]map[touched]struct{}{},
+		touchedBuf:  map[string]map[touchedKey]struct{}{},
 	}
 }
 
-// recordLatency writes one sample into the fixed-size ring.
 func (e *Engine) recordLatency(us int) {
 	e.latRing[e.latIdx] = us
 	e.latIdx = (e.latIdx + 1) % len(e.latRing)
@@ -303,7 +322,8 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 	e.mu.Unlock()
 
 	rows, err := e.pool.Query(ctx, `
-		SELECT id, symbol, side, order_type, COALESCE(price, 0), qty, parent_order
+		SELECT id, symbol, side, order_type,
+		       COALESCE(price, 0)::text, qty::text, parent_order
 		FROM public.order_events
 		WHERE id > $1
 		ORDER BY id
@@ -314,7 +334,6 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	// Reset reusable buffers — keep capacity, drop length.
 	batch := e.batchBuf[:0]
 	allFills := e.allFillsBuf[:0]
 	for k := range e.touchedBuf {
@@ -323,9 +342,12 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 
 	for rows.Next() {
 		o := &orderEvent{}
-		if err := rows.Scan(&o.id, &o.symbol, &o.side, &o.orderType, &o.price, &o.qty, &o.parentOrder); err != nil {
+		var priceStr, qtyStr string
+		if err := rows.Scan(&o.id, &o.symbol, &o.side, &o.orderType, &priceStr, &qtyStr, &o.parentOrder); err != nil {
 			return fmt.Errorf("scan: %w", err)
 		}
+		o.price = decimal.RequireFromString(priceStr)
+		o.qty = decimal.RequireFromString(qtyStr)
 		batch = append(batch, o)
 	}
 	rows.Close()
@@ -345,16 +367,15 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 		st.match(o, start, &allFills)
 		t := e.touchedBuf[o.symbol]
 		if t == nil {
-			t = make(map[touched]struct{}, 8)
+			t = make(map[touchedKey]struct{}, 8)
 			e.touchedBuf[o.symbol] = t
 		}
-		t[touched{side: oppositeSide(o.side), price: o.price}] = struct{}{}
-		t[touched{side: o.side, price: o.price}] = struct{}{}
+		t[touchedKey{side: oppositeSide(o.side), price: o.price.String()}] = struct{}{}
+		t[touchedKey{side: o.side, price: o.price.String()}] = struct{}{}
 		for _, f := range allFills[before:] {
-			t[touched{side: oppositeSide(o.side), price: f.fillPrice}] = struct{}{}
+			t[touchedKey{side: oppositeSide(o.side), price: f.fillPrice.String()}] = struct{}{}
 		}
 	}
-	// Persist buffer growth (if any happened this drain) for next call.
 	e.batchBuf = batch
 	e.allFillsBuf = allFills
 	touchedBy := e.touchedBuf
@@ -368,8 +389,8 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 	for _, f := range allFills {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO public.engine_fills (engine, order_id, matched_qty, fill_price, latency_us, taker_side)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, e.name, f.orderID, f.matchedQty, f.fillPrice, f.latencyUs, f.takerSide)
+			VALUES ($1, $2, $3::numeric, $4::numeric, $5, $6)
+		`, e.name, f.orderID, f.matchedQty.String(), f.fillPrice.String(), f.latencyUs, f.takerSide)
 		if err != nil {
 			return fmt.Errorf("insert fill: %w", err)
 		}
@@ -379,11 +400,11 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 	for symbol, levels := range touchedBy {
 		st := e.getState(symbol)
 		for _, row := range st.snapshotLevels(levels) {
-			if row.totalQty == 0 {
+			if row.totalQty.LessThanOrEqual(zero) {
 				_, err := tx.Exec(ctx, `
 					DELETE FROM public.engine_book
-					WHERE engine = $1 AND symbol = $2 AND side = $3 AND price = $4
-				`, e.name, symbol, row.side, row.price)
+					WHERE engine = $1 AND symbol = $2 AND side = $3 AND price = $4::numeric
+				`, e.name, symbol, row.side, row.price.String())
 				if err != nil {
 					return fmt.Errorf("delete book level: %w", err)
 				}
@@ -391,12 +412,12 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 			}
 			_, err := tx.Exec(ctx, `
 				INSERT INTO public.engine_book (engine, symbol, side, price, total_qty, order_count, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, now())
+				VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6, now())
 				ON CONFLICT (engine, symbol, side, price) DO UPDATE
 				SET total_qty = EXCLUDED.total_qty,
 				    order_count = EXCLUDED.order_count,
 				    updated_at = now()
-			`, e.name, symbol, row.side, row.price, row.totalQty, row.orderCount)
+			`, e.name, symbol, row.side, row.price.String(), row.totalQty.String(), row.orderCount)
 			if err != nil {
 				return fmt.Errorf("upsert book level: %w", err)
 			}
@@ -408,12 +429,12 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 		UPDATE public.engine_stats
 		SET total_orders   = total_orders + $2,
 		    total_matches  = total_matches + $3,
-		    total_volume   = total_volume  + $4,
+		    total_volume   = total_volume  + $4::numeric,
 		    avg_latency_us = $5,
 		    p99_latency_us = $6,
 		    last_updated   = now()
 		WHERE engine = $1
-	`, e.name, int64(len(batch)), int64(len(allFills)), totalVolume(allFills), avg, p99)
+	`, e.name, int64(len(batch)), int64(len(allFills)), totalVolume(allFills).String(), avg, p99)
 	if err != nil {
 		return fmt.Errorf("update stats: %w", err)
 	}
@@ -428,16 +449,14 @@ func (e *Engine) drainOnce(ctx context.Context) error {
 	return nil
 }
 
-func totalVolume(fills []fill) float64 {
-	t := 0.0
+func totalVolume(fills []fill) decimal.Decimal {
+	t := zero
 	for _, f := range fills {
-		t += f.matchedQty
+		t = t.Add(f.matchedQty)
 	}
 	return t
 }
 
-// stats reads avg + p99 out of the engine's fixed-size ring without
-// allocating per call. The sort scratch is reused via Engine.sortBuf.
 func (e *Engine) stats() (avg float64, p99 int) {
 	n := e.latCount
 	if n == 0 {
@@ -490,11 +509,6 @@ func main() {
 
 	eng := newEngine(pool, name)
 
-	// Outer reconnect loop. The LISTEN connection can die when pgstack
-	// restarts; without this, the engine ends up in a tight "notif error"
-	// retry loop on a dead conn that never reconnects. Each session opens
-	// a fresh LISTEN, drains initially, then loops until any error — then
-	// the outer loop sleeps and reopens.
 	for {
 		if ctx.Err() != nil {
 			return
@@ -509,12 +523,10 @@ func main() {
 }
 
 func runSession(ctx context.Context, eng *Engine, pool *pgxpool.Pool, name string) error {
-	// Best-effort initial drain — catches up anything missed while down.
 	if err := eng.drainOnce(ctx); err != nil {
 		log.Printf("initial drain: %v", err)
 	}
 
-	// Dedicated LISTEN connection so the drain pool stays free for queries.
 	listenConn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire listen conn: %w", err)
@@ -532,7 +544,6 @@ func runSession(ctx context.Context, eng *Engine, pool *pgxpool.Pool, name strin
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			// Bail out of the session — caller reconnects.
 			return fmt.Errorf("notif: %w", err)
 		}
 		_, _ = strconv.ParseInt(notif.Payload, 10, 64)
@@ -541,4 +552,3 @@ func runSession(ctx context.Context, eng *Engine, pool *pgxpool.Pool, name strin
 		}
 	}
 }
-
