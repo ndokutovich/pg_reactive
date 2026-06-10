@@ -29,12 +29,14 @@ INSERT INTO sensor_readings (sensor_id, temperature, humidity) VALUES
 
 -- Notify mode: lightweight invalidation (no snapshot, no query re-execution)
 -- Client receives {"type":"invalidated","query_id":"sensor_notify"}
+SELECT pgr.unsubscribe('sensor_notify');
 SELECT pgr.subscribe('sensor_notify',
   'SELECT * FROM sensor_readings ORDER BY recorded_at DESC',
   'notify');
 
 -- Delta mode on same table for comparison
 -- Client receives full {"inserted":[...],"deleted":[...]} diffs
+SELECT pgr.unsubscribe('sensor_delta');
 SELECT pgr.subscribe('sensor_delta',
   'SELECT * FROM sensor_readings ORDER BY recorded_at DESC',
   'delta');

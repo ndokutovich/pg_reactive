@@ -45,6 +45,7 @@ INSERT INTO orders (customer_id, product_id, qty, total) VALUES
   (4, 5, 3, 209.97);
 
 -- Subscribe to JOIN query
+SELECT pgr.unsubscribe('order_feed');
 SELECT pgr.subscribe('order_feed',
   'SELECT o.id, c.name AS customer, c.region, p.name AS product, o.qty, o.total, o.created_at
    FROM orders o

@@ -19,6 +19,7 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 
+SELECT pgr.unsubscribe('exec_kpis');
 SELECT pgr.subscribe('exec_kpis',
   'SELECT COUNT(DISTINCT o.customer_id) AS active_customers,
           COUNT(o.id) AS total_orders,

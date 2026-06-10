@@ -28,6 +28,7 @@ SELECT p.id,
 FROM products p
 WHERE NOT EXISTS (SELECT 1 FROM inventory WHERE product_id = p.id);
 
+SELECT pgr.unsubscribe('inventory_status');
 SELECT pgr.subscribe('inventory_status',
   'SELECT p.id, p.name, p.price, p.category,
           i.stock_qty, i.reorder_point, i.warehouse,

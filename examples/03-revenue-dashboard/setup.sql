@@ -15,6 +15,7 @@ INSERT INTO orders (customer_id, product_id, qty, total) VALUES
   (3, 3, 1, 349.99);
 
 -- Subscribe: revenue per customer with LEFT JOIN (includes $0 customers)
+SELECT pgr.unsubscribe('revenue_by_customer');
 SELECT pgr.subscribe('revenue_by_customer',
   'SELECT c.id, c.name, c.region,
           COALESCE(SUM(o.total), 0) AS revenue,

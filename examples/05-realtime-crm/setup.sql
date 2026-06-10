@@ -35,9 +35,13 @@ SELECT
   (random() * 6 + 1)::int,
   (random() * 5 + 1)::int,
   round((random() * 500 + 10)::numeric, 2)
-FROM generate_series(1, 20);
+FROM generate_series(1, 20)
+-- Idempotent: only top up when orders are sparse, so re-running this
+-- file does not pile on 20 more random orders every time.
+WHERE (SELECT count(*) FROM orders) < 15;
 
 -- Query 1: Top customers by total spend (CTE + JOIN)
+SELECT pgr.unsubscribe('top_customers');
 SELECT pgr.subscribe('top_customers',
   'WITH customer_stats AS (
      SELECT customer_id,
@@ -53,6 +57,7 @@ SELECT pgr.subscribe('top_customers',
 );
 
 -- Query 2: Latest 10 orders (ORDER BY + LIMIT + JOIN)
+SELECT pgr.unsubscribe('recent_orders');
 SELECT pgr.subscribe('recent_orders',
   'SELECT o.id, c.name AS customer, p.name AS product, o.total, o.created_at
    FROM orders o
@@ -63,6 +68,7 @@ SELECT pgr.subscribe('recent_orders',
 );
 
 -- Query 3: Revenue by region (GROUP BY + LEFT JOIN)
+SELECT pgr.unsubscribe('revenue_by_region');
 SELECT pgr.subscribe('revenue_by_region',
   'SELECT c.region,
           COUNT(DISTINCT c.id) AS customers,

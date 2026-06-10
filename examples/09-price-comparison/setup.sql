@@ -3,6 +3,7 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 
+SELECT pgr.unsubscribe('price_matrix');
 SELECT pgr.subscribe('price_matrix',
   'SELECT id, name, category, price,
           RANK() OVER (ORDER BY price DESC) AS overall_rank,

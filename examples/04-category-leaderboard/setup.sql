@@ -15,6 +15,7 @@ INSERT INTO products (name, price, category) VALUES
   ('Textbook', 59.99, 'books');
 
 -- Subscription 1: Premium categories (avg price > $50)
+SELECT pgr.unsubscribe('premium_categories');
 SELECT pgr.subscribe('premium_categories',
   'SELECT category,
           ROUND(AVG(price)::numeric, 2) AS avg_price,
@@ -25,6 +26,7 @@ SELECT pgr.subscribe('premium_categories',
 );
 
 -- Subscription 2: Product rankings within each category
+SELECT pgr.unsubscribe('product_rankings');
 SELECT pgr.subscribe('product_rankings',
   'SELECT id, name, category, price,
           RANK() OVER (PARTITION BY category ORDER BY price DESC) AS rank

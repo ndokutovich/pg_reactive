@@ -29,6 +29,7 @@ INSERT INTO products (name, price, category) VALUES
   ('Webcam HD', 69.99, 'electronics');
 
 -- Subscribe to filtered live query
+SELECT pgr.unsubscribe('electronics');
 SELECT pgr.subscribe('electronics',
   'SELECT id, name, price FROM products WHERE category = ''electronics'' ORDER BY price'
 );

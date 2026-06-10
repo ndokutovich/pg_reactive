@@ -3,11 +3,14 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 
+SELECT pgr.unsubscribe('budget_products');
 SELECT pgr.subscribe('budget_products',
   'SELECT id, name, price, category FROM products WHERE price < 50 ORDER BY price');
 
+SELECT pgr.unsubscribe('midrange_products');
 SELECT pgr.subscribe('midrange_products',
   'SELECT id, name, price, category FROM products WHERE price >= 50 AND price < 200 ORDER BY price');
 
+SELECT pgr.unsubscribe('premium_products');
 SELECT pgr.subscribe('premium_products',
   'SELECT id, name, price, category FROM products WHERE price >= 200 ORDER BY price');

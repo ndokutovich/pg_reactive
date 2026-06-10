@@ -11,8 +11,14 @@ SELECT
   floor(random() * 5 + 1)::int,
   round((random() * 200 + 20)::numeric, 2),
   NOW() - (interval '1 hour' * floor(random() * 12))
-FROM generate_series(1, 20);
+FROM generate_series(1, 20)
+-- Idempotent: seed the hour-spread batch only once. Re-running this file
+-- skips it when backfilled orders (older than ~30 min) already exist.
+WHERE NOT EXISTS (
+  SELECT 1 FROM orders WHERE created_at < now() - interval '30 minutes'
+);
 
+SELECT pgr.unsubscribe('hourly_orders');
 SELECT pgr.subscribe('hourly_orders',
   'SELECT date_trunc(''hour'', created_at)::text AS time_bucket,
           COUNT(*) AS order_count,
