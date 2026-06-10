@@ -1,6 +1,6 @@
 -- Example 5: Real-Time CRM Dashboard
 -- Run AFTER examples 1 and 2 setup.sql
--- docker compose exec -T db psql -U postgres -d pg_reactive_test -f /ext/examples/05-realtime-crm/setup.sql
+-- docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/05-realtime-crm/setup.sql
 --
 -- Production hardening note: the three subscriptions below are public —
 -- anyone with a WS session sees the same rows. For a real CRM that is

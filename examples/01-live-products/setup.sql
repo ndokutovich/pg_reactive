@@ -1,5 +1,5 @@
 -- Example 1: Live Product Catalog
--- Run: docker compose exec -T db psql -U postgres -d pg_reactive_test -f /ext/examples/01-live-products/setup.sql
+-- Run: docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/01-live-products/setup.sql
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 

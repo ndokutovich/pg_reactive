@@ -1,6 +1,6 @@
 -- Example 3: Revenue Dashboard (GROUP BY + SUM)
 -- Run AFTER examples 1 and 2 setup.sql
--- docker compose exec -T db psql -U postgres -d pg_reactive_test -f /ext/examples/03-revenue-dashboard/setup.sql
+-- docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/03-revenue-dashboard/setup.sql
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 

@@ -1,5 +1,5 @@
 -- Example 2: Order Feed (Multi-table JOIN)
--- Run: docker compose exec -T db psql -U postgres -d pg_reactive_test -f /ext/examples/02-order-feed/setup.sql
+-- Run: docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/02-order-feed/setup.sql
 -- Requires: Example 1 setup.sql already run (for products table)
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;

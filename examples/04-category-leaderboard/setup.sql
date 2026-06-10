@@ -1,6 +1,6 @@
 -- Example 4: Category Leaderboard (HAVING + Window Functions)
 -- Run AFTER examples 1 and 2 setup.sql
--- docker compose exec -T db psql -U postgres -d pg_reactive_test -f /ext/examples/04-category-leaderboard/setup.sql
+-- docker compose exec -T db psql -U postgres -d pg_reactive_test -f /examples/04-category-leaderboard/setup.sql
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 
