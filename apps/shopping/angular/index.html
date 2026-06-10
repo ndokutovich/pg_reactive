@@ -619,13 +619,11 @@
     return h;
   };
 
-  ApiService.prototype.sql = function(sql) {
-    return fetch(API_BASE + '/api/sql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SERVICE_ROLE_KEY },
-      body: JSON.stringify({ sql: sql })
-    }).then(function(r) { return r.json(); });
-  };
+  // The in-browser "Setup Database" wizard and its ApiService.sql() helper
+  // were removed (round 35 security). They posted raw SQL to /api/sql with a
+  // service_role bearer — an RLS-bypass primitive that must never live in a
+  // browser bundle. The schema is applied server-side by the shop-migration
+  // one-shot container (deploy/templates/shop). Mirrors the vanilla variant.
 
   ApiService.prototype.rest = function(method, path, body, _retry) {
     var self = this;
@@ -1145,99 +1143,10 @@
   // COMPONENTS
   // ═══════════════════════════════════════════════════════════════
 
-  // ── SetupComponent ──
-  // Handles database migration. Runs SQL statements sequentially
-  // and displays progress in a terminal-like log.
-
-  function SetupComponent(injector) {
-    Component.call(this, injector);
-    this._apiService = injector.get('ApiService');
-    this._router = injector.get('RouterService');
-  }
-
-  SetupComponent.prototype = Object.create(Component.prototype);
-  SetupComponent.prototype.constructor = SetupComponent;
-
-  SetupComponent.prototype.onInit = function() {
-    var self = this;
-    document.getElementById('btn-setup').addEventListener('click', function() {
-      self.runSetup();
-    });
-    document.getElementById('btn-skip-setup').addEventListener('click', function() {
-      location.hash = '#/auth';
-    });
-  };
-
-  SetupComponent.prototype.runSetup = function() {
-    var self = this;
-    var btn = document.getElementById('btn-setup');
-    var log = document.getElementById('setup-log');
-    btn.disabled = true;
-    btn.textContent = 'Setting up...';
-    log.classList.add('visible');
-    this._clearChildren(log);
-
-    var allOk = true;
-    var idx = 0;
-
-    function runNext() {
-      if (idx >= MIGRATION_SQL.length) {
-        if (allOk) {
-          self._appendLog(log, '\nSetup complete! Proceeding to sign in...', 'ok');
-          self._appendLog(log, 'NOTE: If REST calls fail, restart proxy: docker compose restart proxy', 'ok');
-          btn.textContent = 'Done!';
-          setTimeout(function() { location.hash = '#/auth'; }, 1200);
-        } else {
-          self._appendLog(log, '\nSetup finished with errors. You may retry.', 'error');
-          btn.disabled = false;
-          btn.textContent = 'Retry Setup';
-        }
-        return;
-      }
-
-      var stmt = MIGRATION_SQL[idx];
-      var short = stmt.replace(/\n/g, ' ');
-      if (short.length > 60) short = short.substring(0, 60) + '...';
-      self._appendLog(log, '> ' + short);
-
-      self._apiService.sql(stmt).then(function(result) {
-        if (result.error) {
-          if (result.error.indexOf('already exists') !== -1 || result.error.indexOf('duplicate') !== -1) {
-            self._appendLog(log, '  (skipped)', 'ok');
-          } else {
-            self._appendLog(log, '  ERROR: ' + result.error, 'error');
-            allOk = false;
-          }
-        } else {
-          self._appendLog(log, '  OK', 'ok');
-        }
-        idx++;
-        runNext();
-      }).catch(function(err) {
-        self._appendLog(log, '  NETWORK ERROR: ' + err.message, 'error');
-        allOk = false;
-        idx++;
-        runNext();
-      });
-    }
-    runNext();
-  };
-
-  SetupComponent.prototype._appendLog = function(parent, text, cls) {
-    var line = document.createElement('div');
-    if (cls) line.className = cls;
-    line.textContent = text;
-    parent.appendChild(line);
-    parent.scrollTop = parent.scrollHeight;
-  };
-
-  SetupComponent.prototype._clearChildren = function(el) {
-    while (el.firstChild) el.removeChild(el.firstChild);
-  };
-
-  SetupComponent.prototype.render = function() {
-    // Setup screen is static HTML, no dynamic rendering needed
-  };
+  // SetupComponent (in-browser DB migration wizard) removed — round 35
+  // security. It ran raw SQL via service_role from the browser; the schema
+  // is applied server-side by the shop-migration container. The router
+  // redirects any '#/setup' navigation to '#/auth' (see RouterService).
 
   // ── AuthComponent ──
   // Manages sign up / log in form, toggling between modes,
@@ -1782,19 +1691,16 @@
     this.injector.register('RouterService', routerService);
 
     // Instantiate components (like Angular declarations + bootstrap)
-    this.components.setup = new SetupComponent(this.injector);
     this.components.auth = new AuthComponent(this.injector);
     this.components.lists = new ListsComponent(this.injector);
     this.components.detail = new DetailComponent(this.injector);
 
     // Register with change detector
-    this.changeDetector.registerComponent(this.components.setup);
     this.changeDetector.registerComponent(this.components.auth);
     this.changeDetector.registerComponent(this.components.lists);
     this.changeDetector.registerComponent(this.components.detail);
 
     // Activate all components (lifecycle: constructor -> onInit -> render)
-    this.components.setup.activate();
     this.components.auth.activate();
     this.components.lists.activate();
     this.components.detail.activate();

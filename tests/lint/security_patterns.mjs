@@ -25,7 +25,7 @@ const ROOT = new URL("../..", import.meta.url).pathname
 const ROOTS = [
   "docker", "docs", "examples", "ext/sql", "ext/expected",
   "migrations", "cli/src", "cli/templates", "proxy-go", "tests",
-  "sdk/src", "studio/src",
+  "sdk/src", "studio/src", "apps",
 ];
 const SKIP_SEGMENTS = new Set([
   "node_modules", "build", "dist", "target", ".git", "__pycache__", ".cache",
@@ -200,6 +200,40 @@ function checkRawTokenGrant(file, text) {
   }
 }
 
+// Rule SEC-R13 — no service_role / raw-SQL endpoint in public app frontends
+//   SECURITY.md invariant #13. Round 35.
+//   The /api/sql endpoint and SERVICE_ROLE_KEY are server-only. A public
+//   app frontend (apps/*/.../index.html) that references either ships an
+//   RLS-bypass primitive to every visitor — exactly the in-browser
+//   "Setup Database" wizard that was removed from the vanilla shop variant
+//   but lingered in angular.
+//
+//   Scope: client bundles under apps/ (.html/.js/.mjs/.ts). Studio
+//   (studio/, NOT under apps/) is the legitimate admin SQL console and is
+//   intentionally out of scope. proxy-go is .go and excluded. Comment-only
+//   lines are skipped so the documentary "we deliberately do not surface
+//   service_role" note in apps/polyglot/web/config.js does not trip the rule.
+//   Override a verified-safe occurrence with `// lint:allow=SEC-R13`.
+function checkFrontendServiceRole(file, text) {
+  const norm = file.replace(/\\/g, "/");
+  if (!/\/apps\//.test(norm)) return;
+  if (!/\.(html|js|mjs|ts)$/.test(norm)) return;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/lint:allow=SEC-R13/.test(line)) continue;
+    if (/^\s*(\/\/|<!--|\*|--)/.test(line)) continue; // comment-only line
+    if (/\/api\/sql\b/.test(line)) {
+      report(file, i + 1, "SEC-R13",
+        "public app frontend references the /api/sql raw-SQL endpoint — server-only (SECURITY.md invariant 13)");
+    }
+    if (/\bSERVICE_ROLE\w*\b/.test(line)) {
+      report(file, i + 1, "SEC-R13",
+        "public app frontend references SERVICE_ROLE — service_role must never appear in a browser bundle (SECURITY.md invariant 13)");
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -213,6 +247,7 @@ function runAll() {
     checkGrantExecuteToPublic(f, text);
     checkChiRealIPUsage(f, text);
     checkRawTokenGrant(f, text);
+    checkFrontendServiceRole(f, text);
   }
 
   if (findings.length === 0) {
