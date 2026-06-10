@@ -13,6 +13,7 @@ on:
       - 'studio/**'
       - 'deploy/**'
       - 'scripts/**'
+      - 'apps/polyglot/**'
       - 'docker-compose.yml'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -86,5 +87,85 @@ jobs:
             # had server_name reactive.pgstack.org and nginx took the
             # first by alphabetical filename — see umbrella commit
             # 178ca7f for the takeover.
+
+            docker image prune -f
+
+  # ── Polyglot matching-engines showcase ──
+  # Same VPS, same repo checkout as `deploy` (reused, not re-cloned). It
+  # `needs: deploy` so the two never race on $SRC's git tree and the
+  # tokenless git-auth dance lives in exactly one place (the deploy job
+  # above). This job builds the 8 polyglot images from the freshened
+  # checkout, stages the runtime dir, and brings the stack up.
+  deploy-polyglot:
+    needs: deploy
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Deploy polyglot showcase via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            SRC=/opt/apps/pg-reactive-src     # build context (the deploy job just reset this to master)
+            POLY=/opt/apps/polyglot           # runtime dir: compose + .env + migration.sql
+
+            test -d "$SRC/.git" || { echo "checkout $SRC missing — the deploy job must run first"; exit 1; }
+            cd "$SRC"
+            echo "building polyglot images at $(git rev-parse --short HEAD)"
+
+            # Build all 8 images and tag them :latest so the template compose
+            # resolves them from the local daemon. Cold .NET/Rust/Spring builds
+            # are the slow part (~15-25 min).
+            bash apps/polyglot/build-all.sh
+
+            # Stage the runtime dir. compose + migration are synced every run;
+            # .env is bootstrapped once and never clobbered so live secrets are
+            # not rotated out from under the running stack.
+            mkdir -p "$POLY"
+            cp deploy/templates/polyglot-showcase/docker-compose.yml "$POLY/docker-compose.yml"
+            cp deploy/templates/polyglot-showcase/migration.sql       "$POLY/migration.sql"
+
+            # 5 shared secrets via the hardened generator (correct base64
+            # SECRETS_ENCRYPTION_KEY, URL-safe password, idempotent). SITE_URL
+            # is pinned to the showcase subdomain on first creation. Every
+            # other compose var (image pins, WS_MAX_PER_IP, generator knobs)
+            # has a default in the compose file, so no .env.example copy.
+            SITE_URL=https://polyglot.pgstack.org ENV_FILE="$POLY/.env" bash scripts/bootstrap-env.sh
+            # POLYGLOT_ENGINE_PASSWORD is the one required secret the generic
+            # bootstrap does not manage (engines + migration share it). Add it
+            # once; never rotate.
+            if ! grep -q '^POLYGLOT_ENGINE_PASSWORD=.\+' "$POLY/.env"; then
+              printf 'POLYGLOT_ENGINE_PASSWORD=%s\n' \
+                "$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)" >> "$POLY/.env"
+              chmod 600 "$POLY/.env"
+            fi
+
+            docker network create gateway 2>/dev/null || true
+            cd "$POLY"
+            # Clean slate each deploy: PG data is ephemeral (no volume), the
+            # one-shot migration re-seeds the schema, and the six engines
+            # reconnect on a fresh book — so the leaderboard reflects the
+            # newly-built images, not stale cumulative state.
+            docker compose --env-file .env down -v --remove-orphans || true
+            docker compose --env-file .env up -d
+
+            # Verify the dashboard's data path is live: poll pgstack /health
+            # (the same endpoint its own healthcheck uses, so curl is present).
+            echo "waiting for pgstack /health..."
+            ok=
+            for i in $(seq 1 24); do
+              if docker exec polyglot-pgstack curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+                ok=1; break
+              fi
+              sleep 5
+            done
+            docker compose --env-file .env ps
+            [ "$ok" = 1 ] || { echo "ERROR: pgstack /health never came up"; exit 1; }
+            running=$(docker compose --env-file .env ps --services --status running 2>/dev/null \
+                      | grep -c '^polyglot-engine-' || true)
+            echo "engines running: ${running}/6"
 
             docker image prune -f
