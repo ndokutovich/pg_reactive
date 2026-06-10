@@ -109,9 +109,10 @@ jobs:
           script_stop: true
           # appleboy's default command_timeout is 10m — a cold sequential
           # build of all 8 images (Maven go-offline, Cargo, the all-in-one
-          # C-extension compile) blows past it mid-Spring. README budgets
-          # 15-25 min; 45m leaves headroom for a fully cold VPS.
-          command_timeout: 45m
+          # C-extension compile) blows past it mid-Spring. A partially-cached
+          # build measured ~36m; 60m leaves headroom for a fully cold VPS
+          # (after docker prune, no layer cache at all).
+          command_timeout: 60m
           script: |
             set -euo pipefail
             SRC=/opt/apps/pg-reactive-src     # build context (the deploy job just reset this to master)
