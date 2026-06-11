@@ -1,14 +1,14 @@
 // What to Buy — Service Worker
 // Provides offline caching for the PWA shell
 
-var CACHE_NAME = 'wtb-v10';
+var CACHE_NAME = 'wtb-v11';
+// Only files that actually ship in the image. Each variant is built as its
+// OWN image with a single index.html — there are no vue.html/react.html/...
+// files, and listing them made cache.addAll() reject the whole precache (it
+// is atomic), so install failed and the SW never activated → no offline.
 var SHELL_FILES = [
   './',
   './index.html',
-  './vue.html',
-  './react.html',
-  './svelte.html',
-  './angular.html',
   './config.js',
   './manifest.json',
   './icon.svg',
