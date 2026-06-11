@@ -2,7 +2,7 @@
 
 Generated: 2026-03-07
 
-> **STATUS 2026-06: COMPLETED PLAN.** Every gap below has shipped except three sub-items: (1) `mailer.go` Gap 3 — `Send`/`sendWithRetry` still take no `context.Context`; (2) `studio` Gap 1 — no EXPLAIN ANALYZE view in the SQL editor; (3) `config.go` — no masked effective-config startup log. Kept for historical reference; the ✅ markers below record what landed.
+> **STATUS 2026-06: COMPLETED PLAN.** Every gap below has shipped except two sub-items: (1) `studio` Gap 1 — no EXPLAIN ANALYZE view in the SQL editor; (2) `config.go` — no masked effective-config startup log. Kept for historical reference; the ✅ markers below record what landed.
 
 > Several C ratings were underestimates after reading the actual code.
 
@@ -68,7 +68,7 @@ email branding means hunting through multiple files.
 `DialAndSend` fails instantly on transient SMTP errors. One retry with 2s delay
 handles 90% of real-world SMTP failures.
 
-### Gap 3 — No context propagation — STILL OPEN
+### Gap 3 — No context propagation ✅ DONE (ctx on Send path, DialContext + conn deadline, cancellable backoff; mailer_test.go)
 `Send()` can't be cancelled — a slow SMTP server blocks the handler goroutine
 indefinitely.
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
@@ -34,7 +35,7 @@ const (
 // so tests can stub the actual network call without spinning up an SMTP
 // server. Production uses smtpStdlibDialer (net/smtp + crypto/tls).
 type smtpDialer interface {
-	send(from, to, subject, htmlBody string) error
+	send(ctx context.Context, from, to, subject, htmlBody string) error
 }
 
 // Mailer sends transactional email via SMTP.
@@ -77,7 +78,7 @@ func NewMailer(cfg Config) *Mailer {
 // flow without leaking the token. The production validator separately
 // refuses to boot in dev-mode mailer state when PGSTACK_ENV=production,
 // so this is the dev / test escape hatch.
-func (m *Mailer) Send(to, subject, htmlBody string) error {
+func (m *Mailer) Send(ctx context.Context, to, subject, htmlBody string) error {
 	_ = htmlBody // body is intentionally discarded in dev-mode logs
 	if m.dialer == nil {
 		log.Warn().
@@ -87,7 +88,7 @@ func (m *Mailer) Send(to, subject, htmlBody string) error {
 		return nil
 	}
 
-	if err := m.sendWithRetry(to, subject, htmlBody); err != nil {
+	if err := m.sendWithRetry(ctx, to, subject, htmlBody); err != nil {
 		return fmt.Errorf("SMTP send failed: %w", err)
 	}
 
@@ -96,36 +97,48 @@ func (m *Mailer) Send(to, subject, htmlBody string) error {
 }
 
 // sendWithRetry attempts delivery up to 3 times with exponential backoff
-// (1s, 2s) to handle transient SMTP errors.
-func (m *Mailer) sendWithRetry(to, subject, htmlBody string) error {
+// (1s, 2s) to handle transient SMTP errors. Cancelling ctx aborts both the
+// in-flight dial (via DialContext / connection deadline) and the backoff
+// sleep, so a dead SMTP server cannot pin a handler goroutine.
+func (m *Mailer) sendWithRetry(ctx context.Context, to, subject, htmlBody string) error {
 	var lastErr error
 	for attempt := range 3 {
-		if lastErr = m.dialer.send(m.from, to, subject, htmlBody); lastErr == nil {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return fmt.Errorf("%w (last attempt: %w)", err, lastErr)
+			}
+			return err
+		}
+		if lastErr = m.dialer.send(ctx, m.from, to, subject, htmlBody); lastErr == nil {
 			return nil
 		}
 		if attempt < 2 {
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("%w (last attempt: %w)", ctx.Err(), lastErr)
+			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			}
 		}
 	}
 	return lastErr
 }
 
 // SendEmailVerification sends a verification link to a newly registered user.
-func (m *Mailer) SendEmailVerification(to, verifyURL string) error {
+func (m *Mailer) SendEmailVerification(ctx context.Context, to, verifyURL string) error {
 	body := fmt.Sprintf(tmplVerification, verifyURL, verifyURL)
-	return m.Send(to, "Verify your email", body)
+	return m.Send(ctx, to, "Verify your email", body)
 }
 
 // SendPasswordReset sends a password-reset link.
-func (m *Mailer) SendPasswordReset(to, resetURL string) error {
+func (m *Mailer) SendPasswordReset(ctx context.Context, to, resetURL string) error {
 	body := fmt.Sprintf(tmplPasswordReset, resetURL, resetURL)
-	return m.Send(to, "Reset your password", body)
+	return m.Send(ctx, to, "Reset your password", body)
 }
 
 // SendMagicLink sends a one-time sign-in link.
-func (m *Mailer) SendMagicLink(to, linkURL string) error {
+func (m *Mailer) SendMagicLink(ctx context.Context, to, linkURL string) error {
 	body := fmt.Sprintf(tmplMagicLink, linkURL, linkURL)
-	return m.Send(to, "Your sign-in link", body)
+	return m.Send(ctx, to, "Your sign-in link", body)
 }
 
 // smtpStdlibDialer implements smtpDialer using crypto/tls + net/smtp from
@@ -146,9 +159,10 @@ type smtpStdlibDialer struct {
 	pass string
 }
 
-func (d *smtpStdlibDialer) send(from, to, subject, htmlBody string) error {
+func (d *smtpStdlibDialer) send(ctx context.Context, from, to, subject, htmlBody string) error {
 	addr := net.JoinHostPort(d.host, strconv.Itoa(d.port))
 	tlsConfig := &tls.Config{ServerName: d.host, MinVersion: tls.VersionTLS12}
+	netDialer := &net.Dialer{Timeout: 30 * time.Second}
 
 	var (
 		conn net.Conn
@@ -156,14 +170,26 @@ func (d *smtpStdlibDialer) send(from, to, subject, htmlBody string) error {
 	)
 	if d.port == 465 {
 		// Implicit TLS — handshake before SMTP greeting.
-		conn, err = tls.Dial("tcp", addr, tlsConfig)
+		tlsDialer := &tls.Dialer{NetDialer: netDialer, Config: tlsConfig}
+		conn, err = tlsDialer.DialContext(ctx, "tcp", addr)
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, 30*time.Second)
+		conn, err = netDialer.DialContext(ctx, "tcp", addr)
 	}
 	if err != nil {
 		return fmt.Errorf("smtp dial %s: %w", addr, err)
 	}
 	defer conn.Close()
+
+	// net/smtp has no context support; bound the whole SMTP conversation
+	// with the context deadline (or a 60s ceiling) via the connection
+	// deadline so a stalled server cannot hold the goroutine forever.
+	deadline := time.Now().Add(60 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("smtp set deadline: %w", err)
+	}
 
 	c, err := smtp.NewClient(conn, d.host)
 	if err != nil {

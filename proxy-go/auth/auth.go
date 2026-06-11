@@ -5,6 +5,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -14,11 +15,13 @@ import (
 
 // MailerIface is the sending capability the auth package requires.
 // The concrete *Mailer in the main package satisfies this interface.
+// All methods take a context so a cancelled request or shutdown aborts
+// the SMTP dial and retry backoff instead of pinning the goroutine.
 type MailerIface interface {
-	Send(to, subject, htmlBody string) error
-	SendEmailVerification(to, verifyURL string) error
-	SendPasswordReset(to, resetURL string) error
-	SendMagicLink(to, linkURL string) error
+	Send(ctx context.Context, to, subject, htmlBody string) error
+	SendEmailVerification(ctx context.Context, to, verifyURL string) error
+	SendPasswordReset(ctx context.Context, to, resetURL string) error
+	SendMagicLink(ctx context.Context, to, linkURL string) error
 }
 
 // Deps carries every dependency the auth handlers need.
