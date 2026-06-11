@@ -15,6 +15,14 @@
 #define PGR_MAX_DEPS_PER_QUERY  16
 #define PGR_QUERY_TEXT_LEN      2048
 #define PGR_AUDIENCE_LEN        512	/* serialised JSON audience predicate */
+/*
+ * The shmem hash is shared across ALL databases in the cluster, so the key
+ * must include the database OID — otherwise two databases that register the
+ * same query_id collide and silently overwrite each other (and table OIDs,
+ * which are also per-database, alias in the reverse index). The key is the
+ * string "<dbid>/<query_id>"; 12 bytes covers "/" + a 32-bit OID + NUL.
+ */
+#define PGR_HASHKEY_LEN         (PGR_QUERY_ID_LEN + 12)
 
 /* GUC variables */
 extern int pgr_max_subscriptions;
@@ -34,7 +42,9 @@ extern bool pgr_batch_invalidation;
  */
 typedef struct PgrDepEntry
 {
-	char		query_id[PGR_QUERY_ID_LEN];		/* hash key */
+	char		hashkey[PGR_HASHKEY_LEN];		/* hash key: "<dbid>/<query_id>" */
+	Oid			dbid;			/* owning database (MyDatabaseId at subscribe) */
+	char		query_id[PGR_QUERY_ID_LEN];		/* user-facing id (display) */
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
 	uint64		col_masks[PGR_MAX_DEPS_PER_QUERY];	/* column bitmask per table */
 	int			num_tables;
@@ -111,6 +121,8 @@ pgr_is_valid_query_id(const char *query_id)
 /* dependency.c */
 extern void pgr_shmem_request(void);
 extern void pgr_shmem_startup(void);
+/* Format the per-database hash key "<MyDatabaseId>/<query_id>" into buf. */
+extern void pgr_dep_format_key(char *buf, Size buflen, const char *query_id);
 extern bool pgr_dep_add(const char *query_id, const char *query_text,
 						Oid *table_oids, uint64 *col_masks,
 						int num_tables, char mode,

@@ -592,12 +592,11 @@ pgr_unsubscribe(PG_FUNCTION_ARGS)
 
 	/* Read mode under lock before removing (entry pointer is invalid after release) */
 	{
-		char		find_key[PGR_QUERY_ID_LEN];
+		char		find_key[PGR_HASHKEY_LEN];
 		PgrDepEntry *e;
 		bool		found_e;
 
-		memset(find_key, 0, PGR_QUERY_ID_LEN);
-		strlcpy(find_key, query_id, PGR_QUERY_ID_LEN);
+		pgr_dep_format_key(find_key, sizeof(find_key), query_id);
 		LWLockAcquire(pgr_state->lock, LW_SHARED);
 		e = (PgrDepEntry *) hash_search(pgr_dep_hash, find_key, HASH_FIND, &found_e);
 		if (found_e && e != NULL)
@@ -694,12 +693,11 @@ pgr_unsubscribe_all_for_table(Oid table_oid, const char *reason)
 
 			/* Read mode under lock before removing (pointer invalid after release) */
 			{
-				char		find_key[PGR_QUERY_ID_LEN];
+				char		find_key[PGR_HASHKEY_LEN];
 				PgrDepEntry *e;
 				bool		found_e;
 
-				memset(find_key, 0, PGR_QUERY_ID_LEN);
-				strlcpy(find_key, query_ids[i], PGR_QUERY_ID_LEN);
+				pgr_dep_format_key(find_key, sizeof(find_key), query_ids[i]);
 				LWLockAcquire(pgr_state->lock, LW_SHARED);
 				e = (PgrDepEntry *) hash_search(pgr_dep_hash, find_key, HASH_FIND, &found_e);
 				if (found_e && e != NULL)
@@ -790,7 +788,13 @@ pgr_get_subscriptions(PG_FUNCTION_ARGS)
 	funcctx = SRF_PERCALL_SETUP();
 	seq = (HASH_SEQ_STATUS *) funcctx->user_fctx;
 
-	entry = (PgrDepEntry *) hash_seq_search(seq);
+	/*
+	 * The shmem hash is shared across the cluster; skip entries owned by
+	 * other databases so each database sees only its own subscriptions.
+	 */
+	while ((entry = (PgrDepEntry *) hash_seq_search(seq)) != NULL &&
+		   entry->dbid != MyDatabaseId)
+		;
 
 	if (entry != NULL)
 	{
@@ -867,10 +871,22 @@ pgr_stats(PG_FUNCTION_ARGS)
 		switch (funcctx->call_cntr)
 		{
 			case 0:
+			{
+				/* per-database count (cluster-shared hash); lock held */
+				HASH_SEQ_STATUS cnt_seq;
+				PgrDepEntry *cnt_entry;
+				long		active = 0;
+
+				hash_seq_init(&cnt_seq, pgr_dep_hash);
+				while ((cnt_entry = hash_seq_search(&cnt_seq)) != NULL)
+				{
+					if (cnt_entry->dbid == MyDatabaseId)
+						active++;
+				}
 				values[0] = CStringGetTextDatum("active_subscriptions");
-				snprintf(valbuf, sizeof(valbuf), "%ld",
-						 hash_get_num_entries(pgr_dep_hash));
+				snprintf(valbuf, sizeof(valbuf), "%ld", active);
 				break;
+			}
 			case 1:
 				values[0] = CStringGetTextDatum("max_subscriptions");
 				snprintf(valbuf, sizeof(valbuf), "%d",

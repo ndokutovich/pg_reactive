@@ -19,6 +19,17 @@ static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
 /*
+ * Format the per-database hash key for a query_id. The shmem hash is shared
+ * across the whole cluster, so the key must be scoped by MyDatabaseId to keep
+ * subscriptions in different databases from colliding.
+ */
+void
+pgr_dep_format_key(char *buf, Size buflen, const char *query_id)
+{
+	snprintf(buf, buflen, "%u/%s", (unsigned) MyDatabaseId, query_id);
+}
+
+/*
  * Estimate shared memory needed.
  */
 static Size
@@ -76,7 +87,7 @@ pgr_shmem_startup(void)
 
 	/* Initialize dependency hash table */
 	memset(&info, 0, sizeof(info));
-	info.keysize = PGR_QUERY_ID_LEN;
+	info.keysize = PGR_HASHKEY_LEN;
 	info.entrysize = sizeof(PgrDepEntry);
 
 	pgr_dep_hash = ShmemInitHash("pg_reactive deps",
@@ -103,7 +114,7 @@ pgr_dep_add(const char *query_id, const char *query_text,
 {
 	PgrDepEntry *entry;
 	bool		found;
-	char		key[PGR_QUERY_ID_LEN];
+	char		key[PGR_HASHKEY_LEN];
 
 	if (evicted)
 		evicted->evicted = false;
@@ -114,9 +125,8 @@ pgr_dep_add(const char *query_id, const char *query_text,
 				 errmsg("pg_reactive: query depends on %d tables, max is %d",
 						num_tables, PGR_MAX_DEPS_PER_QUERY)));
 
-	/* Prepare key */
-	memset(key, 0, PGR_QUERY_ID_LEN);
-	strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+	/* Prepare per-database key */
+	pgr_dep_format_key(key, sizeof(key), query_id);
 
 	LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
 
@@ -130,15 +140,25 @@ pgr_dep_add(const char *query_id, const char *query_text,
 	if (!found &&
 		hash_get_num_entries(pgr_dep_hash) >= (long) pgr_max_subscriptions)
 	{
-		/* At capacity and this is a new key — evict oldest entry */
+		/*
+		 * At capacity and this is a new key — evict the oldest entry that
+		 * belongs to THIS database. We must not evict another database's
+		 * entry: the caller cleans up the evicted snapshot table and
+		 * triggers in the current database, which would silently orphan a
+		 * foreign database's objects. If the cluster-wide hash is full of
+		 * other databases' entries and this one has none to reclaim, fail
+		 * with the capacity error.
+		 */
 		HASH_SEQ_STATUS seq;
 		PgrDepEntry *oldest = NULL;
 		PgrDepEntry *scan;
-		char		evict_key[PGR_QUERY_ID_LEN];
+		char		evict_key[PGR_HASHKEY_LEN];
 
 		hash_seq_init(&seq, pgr_dep_hash);
 		while ((scan = hash_seq_search(&seq)) != NULL)
 		{
+			if (scan->dbid != MyDatabaseId)
+				continue;
 			if (oldest == NULL ||
 				scan->subscribed_at < oldest->subscribed_at)
 				oldest = scan;
@@ -146,7 +166,7 @@ pgr_dep_add(const char *query_id, const char *query_text,
 
 		if (oldest == NULL)
 		{
-			/* Shouldn't happen — table is full but no entries? */
+			/* No reclaimable entry in this database. */
 			LWLockRelease(pgr_state->lock);
 			ereport(ERROR,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
@@ -165,14 +185,14 @@ pgr_dep_add(const char *query_id, const char *query_text,
 			evicted->mode = oldest->mode;
 		}
 
-		/* Remove the oldest entry */
-		memset(evict_key, 0, PGR_QUERY_ID_LEN);
-		strlcpy(evict_key, oldest->query_id, PGR_QUERY_ID_LEN);
+		/* Remove the oldest entry (by its full per-database hash key) */
+		memset(evict_key, 0, PGR_HASHKEY_LEN);
+		strlcpy(evict_key, oldest->hashkey, PGR_HASHKEY_LEN);
 		hash_search(pgr_dep_hash, evict_key, HASH_REMOVE, NULL);
 		pgr_state->eviction_count++;
 
 		elog(LOG, "pg_reactive: evicted oldest subscription '%s'",
-			 evict_key);
+			 oldest->query_id);
 	}
 
 	/* Insert or find the entry */
@@ -196,6 +216,10 @@ pgr_dep_add(const char *query_id, const char *query_text,
 
 	if (!found)
 	{
+		/* hashkey was copied into the entry by hash_search (HASH_STRINGS);
+		 * record the owning database and the user-facing query_id. */
+		entry->dbid = MyDatabaseId;
+		strlcpy(entry->query_id, query_id, PGR_QUERY_ID_LEN);
 		entry->subscribed_at = GetCurrentTimestamp();
 		entry->last_invalidated = 0;
 		entry->invalidation_count = 0;
@@ -215,10 +239,9 @@ bool
 pgr_dep_remove(const char *query_id)
 {
 	bool		found;
-	char		key[PGR_QUERY_ID_LEN];
+	char		key[PGR_HASHKEY_LEN];
 
-	memset(key, 0, PGR_QUERY_ID_LEN);
-	strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+	pgr_dep_format_key(key, sizeof(key), query_id);
 
 	LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
 
@@ -241,10 +264,9 @@ pgr_dep_find(const char *query_id, PgrDepEntry *out)
 {
 	PgrDepEntry *entry;
 	bool		found;
-	char		key[PGR_QUERY_ID_LEN];
+	char		key[PGR_HASHKEY_LEN];
 
-	memset(key, 0, PGR_QUERY_ID_LEN);
-	strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+	pgr_dep_format_key(key, sizeof(key), query_id);
 
 	LWLockAcquire(pgr_state->lock, LW_SHARED);
 
@@ -267,11 +289,10 @@ pgr_dep_copy_tables(const char *query_id, Oid *table_oids, int max_tables)
 {
 	PgrDepEntry *entry;
 	bool		found;
-	char		key[PGR_QUERY_ID_LEN];
+	char		key[PGR_HASHKEY_LEN];
 	int			num_tables = 0;
 
-	memset(key, 0, PGR_QUERY_ID_LEN);
-	strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+	pgr_dep_format_key(key, sizeof(key), query_id);
 
 	LWLockAcquire(pgr_state->lock, LW_SHARED);
 
@@ -309,6 +330,10 @@ pgr_dep_find_by_table(Oid table_oid, char query_ids[][PGR_QUERY_ID_LEN],
 	{
 		int		i;
 
+		/* table OIDs are per-database; only match this database's entries */
+		if (entry->dbid != MyDatabaseId)
+			continue;
+
 		for (i = 0; i < entry->num_tables; i++)
 		{
 			if (entry->table_oids[i] == table_oid)
@@ -338,11 +363,10 @@ pgr_dep_increment_seq(const char *query_id)
 {
 	PgrDepEntry *entry;
 	bool		found;
-	char		key[PGR_QUERY_ID_LEN];
+	char		key[PGR_HASHKEY_LEN];
 	int64		seq;
 
-	memset(key, 0, PGR_QUERY_ID_LEN);
-	strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+	pgr_dep_format_key(key, sizeof(key), query_id);
 
 	LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
 
@@ -370,13 +394,21 @@ pgr_dep_increment_seq(const char *query_id)
 int
 pgr_dep_count(void)
 {
-	long		count;
+	HASH_SEQ_STATUS seq;
+	PgrDepEntry *entry;
+	int			count = 0;
 
+	/* Per-database count: each database sees only its own subscriptions. */
 	LWLockAcquire(pgr_state->lock, LW_SHARED);
-	count = hash_get_num_entries(pgr_dep_hash);
+	hash_seq_init(&seq, pgr_dep_hash);
+	while ((entry = hash_seq_search(&seq)) != NULL)
+	{
+		if (entry->dbid == MyDatabaseId)
+			count++;
+	}
 	LWLockRelease(pgr_state->lock);
 
-	return (int) count;
+	return count;
 }
 
 /*

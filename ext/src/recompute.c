@@ -86,10 +86,9 @@ pgr_recompute_query(const char *query_id)
 	{
 		PgrDepEntry *entry;
 		bool		found;
-		char		key[PGR_QUERY_ID_LEN];
+		char		key[PGR_HASHKEY_LEN];
 
-		memset(key, 0, PGR_QUERY_ID_LEN);
-		strlcpy(key, query_id, PGR_QUERY_ID_LEN);
+		pgr_dep_format_key(key, sizeof(key), query_id);
 
 		LWLockAcquire(pgr_state->lock, LW_SHARED);
 		entry = (PgrDepEntry *) hash_search(pgr_dep_hash, key,
