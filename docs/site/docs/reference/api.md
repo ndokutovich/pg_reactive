@@ -40,15 +40,16 @@ When both `Authorization` and `apikey` headers are present, the JWT is validated
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/auth/v1/signup` | apikey | Register new user |
-| `POST` | `/auth/v1/token?grant_type=password` | apikey | Sign in with email/password |
-| `POST` | `/auth/v1/token?grant_type=refresh_token` | apikey | Refresh access token |
+| `POST` | `/auth/v1/signup` | None (rate-limited) | Register new user |
+| `POST` | `/auth/v1/token?grant_type=password` | None (rate-limited) | Sign in with email/password |
+| `POST` | `/auth/v1/token?grant_type=refresh_token` | None (rate-limited) | Refresh access token |
+| `POST` | `/auth/v1/anonymous` | None | Mint an anonymous (anon-role) JWT; requires `ALLOW_ANONYMOUS_SIGNIN=true`, otherwise `503`. Separate rate-limit bucket (`ANONYMOUS_RATE_LIMIT`) |
 | `GET` | `/auth/v1/user` | JWT | Get current user profile |
 | `PATCH` | `/auth/v1/user` | JWT | Update current user |
 | `POST` | `/auth/v1/logout` | JWT | Sign out, invalidate refresh token |
-| `POST` | `/auth/v1/recover` | apikey | Send password recovery email |
+| `POST` | `/auth/v1/recover` | None (rate-limited) | Send password recovery email |
 | `POST` | `/auth/v1/recover/confirm` | None | Confirm password reset with token |
-| `POST` | `/auth/v1/magiclink` | apikey | Send magic link email |
+| `POST` | `/auth/v1/magiclink` | None (rate-limited) | Send magic link email |
 | `GET` | `/auth/v1/magiclink/verify` | None | Verify magic link token |
 | `GET` | `/auth/v1/verify` | None | Verify email confirmation token |
 | `GET` | `/auth/v1/authorize?provider={name}` | None | Start OAuth flow (google, github, apple, microsoft, oidc) |
@@ -67,6 +68,8 @@ When both `Authorization` and `apikey` headers are present, the JWT is validated
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
+| `GET` | `/rest/v1/` | apikey/JWT | OpenAPI 2.0 spec of exposed tables |
+| `GET` | `/rest/v1/rls-debug` | apikey/JWT | Echo resolved role/claims for RLS debugging |
 | `GET` | `/rest/v1/{table}` | apikey/JWT | Select rows |
 | `POST` | `/rest/v1/{table}` | apikey/JWT | Insert row(s) |
 | `PATCH` | `/rest/v1/{table}` | apikey/JWT | Update rows (filter required) |
@@ -125,6 +128,7 @@ By default the anon key is accepted for live-query subscriptions. Set `REQUIRE_A
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/api/sql` | service_role | Execute raw SQL (requires `ENABLE_SQL_ENDPOINT=true`) |
+| `POST` | `/api/catalog/refresh` | service_role | Refresh the REST catalog (re-introspect schema); returns `{"ok": true}` |
 | `POST` | `/api/demo` | service_role / disabled | Mutates demo tables. Only mounted when `ENABLE_DEMO_ENDPOINT=true` OR a `SERVICE_ROLE_KEY` is configured (which it then requires). Off by default. |
 
 ---
@@ -146,7 +150,16 @@ Response `200 OK`:
 ```json
 {
   "status": "ok",
-  "version": "0.1.1"
+  "pg_connected": true
+}
+```
+
+Response `503 Service Unavailable` (PostgreSQL unreachable):
+
+```json
+{
+  "status": "degraded",
+  "pg_connected": false
 }
 ```
 
@@ -158,7 +171,7 @@ Response `200 OK`:
 
 Register a new user with email and password.
 
-**Headers:** `Authorization: Bearer <ANON_KEY>`
+**Headers:** none required (Supabase clients send `apikey`/`Authorization: Bearer <ANON_KEY>` by convention; the proxy does not enforce it). Rate-limited per IP (`AUTH_RATE_LIMIT`).
 
 **Request body:**
 
@@ -172,7 +185,7 @@ Register a new user with email and password.
 
 `data` is optional — stored as `user_metadata`.
 
-**Response `200 OK`:**
+**Response `201 Created`:**
 
 ```json
 {
@@ -191,13 +204,17 @@ Register a new user with email and password.
 }
 ```
 
+When `REQUIRE_EMAIL_VERIFICATION=true`, the response is instead `200 OK` with `{"message": "Check your email to confirm your account"}` and no tokens are issued until the email is verified.
+
 **Errors:**
 
 | Status | Error | Cause |
 |--------|-------|-------|
-| `400` | `invalid_request` | Missing email or password |
-| `400` | `email_already_exists` | Email already registered |
-| `400` | `password_too_short` | Password < 8 characters |
+| `400` | `invalid request body` / `invalid email address` | Malformed JSON or bad email |
+| `400` | `password must be at least 8 characters` | Password too short (also: `password must be at most 256 characters`) |
+| `409` | `email already registered` | Email already exists |
+
+Error bodies are `{"error": "<message>"}` strings, not machine codes.
 
 ---
 
@@ -205,7 +222,7 @@ Register a new user with email and password.
 
 Sign in or refresh tokens.
 
-**Headers:** `Authorization: Bearer <ANON_KEY>`
+**Headers:** none required (Supabase clients send `apikey`/`Authorization: Bearer <ANON_KEY>` by convention; the proxy does not enforce it). Rate-limited per IP (`AUTH_RATE_LIMIT`).
 
 #### Sign in with password
 
@@ -226,7 +243,7 @@ Sign in or refresh tokens.
 
 | Status | Error | Cause |
 |--------|-------|-------|
-| `401` | `invalid_credentials` | Wrong email or password |
+| `401` | `invalid email or password` | Wrong email or password |
 
 #### Refresh access token
 
@@ -246,7 +263,7 @@ Sign in or refresh tokens.
 
 | Status | Error | Cause |
 |--------|-------|-------|
-| `401` | `invalid_refresh_token` | Refresh token not found or expired |
+| `401` | `invalid refresh token` | Refresh token not found (also: `refresh token expired`) |
 
 ---
 
@@ -311,7 +328,7 @@ Sign out and invalidate the refresh token.
 
 Send a password recovery email. The email contains a link with a reset token.
 
-**Headers:** `Authorization: Bearer <ANON_KEY>`
+**Headers:** none required (Supabase clients send `apikey`/`Authorization: Bearer <ANON_KEY>` by convention; the proxy does not enforce it). Rate-limited per IP (`AUTH_RATE_LIMIT`).
 
 **Request body:**
 
@@ -325,9 +342,11 @@ Send a password recovery email. The email contains a link with a reset token.
 
 ```json
 {
-  "message": "Recovery email sent"
+  "message": "If this email exists, a reset link has been sent"
 }
 ```
+
+The response is identical whether or not the email is registered (anti-enumeration).
 
 ---
 
@@ -346,14 +365,22 @@ Confirm a password reset using the token from the recovery email.
 }
 ```
 
-**Response `200 OK`:** New token pair (same format as sign-in response).
+**Response `200 OK`:**
+
+```json
+{
+  "message": "Password updated"
+}
+```
+
+No tokens are issued — sign in with the new password to obtain a session.
 
 **Errors:**
 
 | Status | Error | Cause |
 |--------|-------|-------|
-| `400` | `invalid_token` | Token expired or already used |
-| `400` | `password_too_short` | Password < 8 characters |
+| `400` | `invalid or expired token` | Token expired or already used |
+| `400` | `password must be at least 8 characters` | Password too short |
 
 ---
 
@@ -361,7 +388,7 @@ Confirm a password reset using the token from the recovery email.
 
 Send a magic link email for passwordless sign-in.
 
-**Headers:** `Authorization: Bearer <ANON_KEY>`
+**Headers:** none required (Supabase clients send `apikey`/`Authorization: Bearer <ANON_KEY>` by convention; the proxy does not enforce it). Rate-limited per IP (`AUTH_RATE_LIMIT`).
 
 **Request body:**
 
@@ -397,7 +424,7 @@ Verify a magic link token and return an access token. Typically visited by click
 GET /auth/v1/magiclink/verify?token=magic-link-token
 ```
 
-**Response `200 OK`:** Token pair (same format as sign-in response).
+**Response `302 Found`:** Redirects to `{SITE_URL}#access_token=...&refresh_token=...&token_type=bearer&expires_in=N`. The client reads the tokens from the URL fragment.
 
 ---
 
@@ -431,7 +458,7 @@ Start an OAuth authorization flow. Redirects the browser to the provider.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `provider` | Yes | `google` or `github` |
+| `provider` | Yes | `google`, `github`, `apple`, `microsoft`, or `oidc` |
 | `redirect_to` | No | Override the post-login redirect URL |
 
 ```
@@ -488,11 +515,16 @@ Create a new user (admin).
 {
   "email": "newuser@example.com",
   "password": "initialpassword",
-  "data": { "full_name": "New User" }
+  "role": "authenticated",
+  "email_confirm": true
 }
 ```
 
-**Response `200 OK`:** Created user object.
+`password` is optional (min 8 / max 256 chars when given). `role` defaults to `authenticated` and must be one of `anon`, `authenticated`, `service_role`. There is no `data`/metadata field — unknown fields are ignored.
+
+**Response `201 Created`:** Created user object.
+
+**Errors:** `409` when the email is already registered.
 
 ---
 
@@ -506,7 +538,7 @@ Delete a user by ID.
 DELETE /auth/v1/admin/users/550e8400-e29b-41d4-a716-446655440000
 ```
 
-**Response `200 OK`:** Deleted user object.
+**Response `204 No Content`** (empty body). Returns `404` `{"error": "user not found"}` when the id does not exist, `400` for a malformed UUID.
 
 ---
 
@@ -527,10 +559,10 @@ Query rows from a table.
 | `select` | Columns to return (default: `*`). Supports FK embedding: `id,customers(name)` |
 | `{column}={op}.{value}` | Filter (e.g., `status=eq.active`) |
 | `order` | Sort: `column.asc` or `column.desc`. Multiple: `col1.asc,col2.desc` |
-| `limit` | Max rows to return (default: 1000) |
+| `limit` | Max rows to return (no default — all matching rows are returned when omitted) |
 | `offset` | Skip N rows |
 
-**Filter operators:** `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `is`, `in`, `not`
+**Filter operators:** `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `is`, `in`, `cs`, `cd`, `ov`, `fts`, `sl`, `sr`, `nxl`, `nxr`, `adj`. Prefix any operator with `not.` to negate it (e.g. `status=not.eq.active`).
 
 **Logical combinators:** `or=(col1.eq.val1,col2.eq.val2)`, `and=(col1.gt.0,col1.lt.100)`
 
@@ -538,7 +570,9 @@ Query rows from a table.
 
 | Header | Description |
 |--------|-------------|
-| `Prefer: count=exact` | Include total row count in `Content-Range` response header |
+| `Prefer: count=exact` | Exact total row count (`count(*)`) in `Content-Range` response header |
+| `Prefer: count=planned` | Planner-estimated count in `Content-Range` |
+| `Prefer: count=estimated` | Estimated count in `Content-Range` |
 
 ```bash
 # Examples
@@ -574,16 +608,13 @@ Insert one or more rows.
 ]
 ```
 
-**Response `200 OK`:** Inserted row(s).
+**Response `201 Created`:** Inserted row(s).
+
+With `Prefer: return=minimal`, the response is `201 Created` with no body.
 
 #### Upsert
 
-Add header `Prefer: resolution=merge-duplicates` and query param `on_conflict=column`:
-
-```bash
-POST /rest/v1/products?on_conflict=sku
-Prefer: resolution=merge-duplicates
-```
+Upsert (`Prefer: resolution=merge-duplicates` with `on_conflict=column`) is not yet supported; POST always performs a plain insert and duplicate keys return a conflict error.
 
 ---
 
@@ -767,11 +798,17 @@ Create a new storage bucket.
 }
 ```
 
-**Response `200 OK`:**
+The request body accepts `id` or `name` (id wins), plus `public`, `file_size_limit`, `allowed_mime_types`.
+
+**Response `201 Created`:**
 
 ```json
 {
-  "name": "avatars"
+  "id": "avatars",
+  "public": false,
+  "file_size_limit": 52428800,
+  "allowed_mime_types": null,
+  "created_at": "2025-01-14T12:00:00Z"
 }
 ```
 
@@ -787,8 +824,8 @@ List all storage buckets.
 
 ```json
 [
-  { "id": "avatars", "name": "avatars", "public": false, "created_at": "2025-01-14T12:00:00Z" },
-  { "id": "uploads", "name": "uploads", "public": true, "created_at": "2025-01-14T12:00:00Z" }
+  { "id": "avatars", "public": false, "file_size_limit": 52428800, "allowed_mime_types": null, "created_at": "2025-01-14T12:00:00Z" },
+  { "id": "uploads", "public": true, "file_size_limit": 52428800, "allowed_mime_types": null, "created_at": "2025-01-14T12:00:00Z" }
 ]
 ```
 
@@ -804,7 +841,11 @@ Delete a storage bucket. The bucket must be empty.
 DELETE /storage/v1/bucket/avatars
 ```
 
-**Response `200 OK`:** Deleted bucket object.
+**Response `200 OK`:**
+
+```json
+{"message": "bucket deleted"}
+```
 
 ---
 
@@ -822,7 +863,8 @@ POST /storage/v1/object/avatars/users/123/photo.png
 
 ```json
 {
-  "Key": "avatars/users/123/photo.png"
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "key": "avatars/users/123/photo.png"
 }
 ```
 
@@ -839,18 +881,16 @@ List objects in a bucket.
 | Parameter | Description |
 |-----------|-------------|
 | `prefix` | Filter by path prefix |
-| `limit` | Max objects to return |
-| `offset` | Skip N objects |
 
 ```bash
-GET /storage/v1/object/list/avatars?prefix=users/123/&limit=20
+GET /storage/v1/object/list/avatars?prefix=users/123/
 ```
 
 **Response `200 OK`:** Array of object metadata.
 
 ```json
 [
-  { "name": "photo.png", "id": "uuid", "metadata": { "size": 12345, "mimetype": "image/png" } }
+  { "id": "550e8400-e29b-41d4-a716-446655440000", "name": "users/123/photo.png", "size": 12345, "mime_type": "image/png", "created_at": "2025-01-14T12:00:00Z" }
 ]
 ```
 
@@ -880,7 +920,11 @@ Delete a file from a bucket.
 DELETE /storage/v1/object/avatars/users/123/photo.png
 ```
 
-**Response `200 OK`:** Deleted object metadata.
+**Response `200 OK`:**
+
+```json
+{"message": "object deleted"}
+```
 
 ---
 
@@ -970,10 +1014,11 @@ When a matching database change occurs, pgStack sends a POST request to the webh
 {
   "event": "INSERT",
   "table": "orders",
-  "record": {"id": 42, "status": "pending", "amount": 149.99},
-  "old_record": null
+  "record": {"id": 42, "status": "pending", "amount": 149.99}
 }
 ```
+
+The `record` and `old_record` fields are omitted entirely when not applicable (e.g. `old_record` for INSERT, `record` for DELETE).
 
 **Headers sent with each delivery:**
 
@@ -983,7 +1028,7 @@ When a matching database change occurs, pgStack sends a POST request to the webh
 | `X-Webhook-Signature` | `sha256=<hex>` — HMAC-SHA256 of the request body, using the webhook secret. Only present when `secret` is set. |
 | `User-Agent` | `pgstack-webhooks/1.0` |
 
-**Retry policy:** 3 attempts with exponential backoff (1s, 4s, 16s). Non-2xx responses trigger a retry.
+**Retry policy:** 3 attempts — the first is immediate, with retries after 1s and 4s. Non-2xx responses (and network errors/timeouts) trigger a retry.
 
 **Verification example (Node.js):**
 
@@ -1030,6 +1075,7 @@ The `query_id` must be registered with `pgr.subscribe()` in PostgreSQL.
 ```json
 {
   "query_id": "active_orders",
+  "seq": 7,
   "inserted": [
     {"id": 42, "status": "pending", "amount": 149.99}
   ],
@@ -1039,19 +1085,39 @@ The `query_id` must be registered with `pgr.subscribe()` in PostgreSQL.
 }
 ```
 
-**Overflow message** (server to client, when delta > 7800 bytes):
+`seq` is a per-subscription monotonically increasing counter; a gap in `seq` means a notification was missed and the client should re-fetch.
+
+**Invalidated message** (server to client, for subscriptions registered with `mode='notify'`):
 
 ```json
-{"type": "overflow", "query_id": "active_orders", "fetch": true}
+{"type": "invalidated", "query_id": "active_orders", "seq": 7}
 ```
 
-When overflow occurs, clear the local snapshot and re-fetch via the REST API.
+Sent instead of deltas; the client should re-fetch the result set via the REST API.
 
-**Error message** (server to client):
+**Overflow message** (server to client, when the delta exceeds the NOTIFY payload limit: 8000 − channel-name length − 100 bytes, i.e. 7897 for the default `pgr` channel):
 
 ```json
-{"type": "error", "message": "Unauthorized"}
+{"type": "overflow", "query_id": "active_orders", "seq": 8, "fetch": true}
 ```
+
+When overflow occurs, clear the local snapshot and re-fetch via the REST API. The same message is also emitted when the stored snapshot's column layout drifts from the live query, forcing a full resync.
+
+**Broadcast message** (client to server, fanned out to peers):
+
+```json
+{"type": "broadcast", "payload": {"any": "JSON"}}
+```
+
+The server wraps it and delivers to all clients on the same `query_id` channel:
+
+```json
+{"type": "broadcast", "from": "a1b2c3d4e5f6...", "payload": {"any": "JSON"}}
+```
+
+`from` is the server-generated client ID, so peers cannot spoof it.
+
+**Connection errors:** there is no in-stream error frame. Auth, audience, origin, and capacity failures are rejected before the WebSocket upgrade as plain HTTP responses with body `{"error": "<message>"}` and status `401` (auth required/invalid), `403` (audience not satisfied), `404` (subscription not found), or `503` (connection limit / metadata unavailable).
 
 ---
 
@@ -1132,10 +1198,11 @@ All error responses use this format:
 
 ```json
 {
-  "error": "human-readable error message",
-  "status": 401
+  "error": "human-readable error message"
 }
 ```
+
+The status is conveyed only via the HTTP status code, not in the body.
 
 ## HTTP Status Codes
 
@@ -1152,5 +1219,7 @@ All error responses use this format:
 | `404` | Not found |
 | `409` | Conflict (unique constraint violation) |
 | `422` | Unprocessable Entity (atomic batch failed -- all rolled back) |
+| `429` | Too Many Requests (auth rate limit exceeded, or per-IP WebSocket connection cap) |
 | `500` | Internal server error |
 | `502` | Bad Gateway (edge runtime unavailable) |
+| `503` | Service Unavailable (DB disconnected, WebSocket connection limit reached, anonymous sign-in disabled, subscription/channel metadata unavailable, or Deno runtime not configured) |

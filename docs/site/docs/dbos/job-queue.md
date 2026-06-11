@@ -48,6 +48,18 @@ queue.register('generate-invoice', async (payload) => {
 
 Handlers are plain async functions. Throw an error to signal failure and trigger a retry.
 
+Handlers receive a second argument, `reportProgress(progress, message?)`, for long-running jobs. It writes best-effort updates to the `progress` (clamped 0–100) and `progress_message` columns of `dbos.job_queue`; a failed progress update never fails the job.
+
+```typescript
+queue.register('import-csv', async (payload, reportProgress) => {
+  reportProgress(0, 'starting');
+  // ... import rows ...
+  reportProgress(50, 'halfway');
+  // ... import rows ...
+  reportProgress(100, 'done');
+});
+```
+
 ## Starting the worker
 
 ```typescript
@@ -86,11 +98,13 @@ const jobId = await queue.enqueue('critical-payment', { orderId: '456' }, {
 ```typescript
 const job = await queue.getJob(jobId);
 
-console.log(job.status);    // 'pending' | 'running' | 'completed' | 'failed'
+console.log(job.status);    // 'pending' | 'running' | 'completed'
 console.log(job.attempt);   // number of attempts so far
 console.log(job.error);     // error message from last failure
 console.log(job.completed_at); // ISO timestamp when completed
 ```
+
+A job awaiting retry shows `'pending'` (with `error` set from its last failure). A job that exhausted all attempts is removed from `dbos.job_queue` entirely — see [Dead letter queue](#dead-letter-queue).
 
 ## Listing jobs
 
@@ -98,8 +112,8 @@ console.log(job.completed_at); // ISO timestamp when completed
 // All pending jobs
 const pending = await queue.listJobs({ status: 'pending' });
 
-// Failed jobs (exceeded max retries)
-const failed = await queue.listJobs({ status: 'failed', limit: 20 });
+// Dead-lettered jobs (exceeded max retries)
+const failed = await queue.listDeadLetterJobs(20);
 
 // All recent jobs
 const all = await queue.listJobs({ limit: 50 });
@@ -126,7 +140,29 @@ const dbos = new PgStackDBOS({
 });
 ```
 
-A job that exceeds `maxAttempts` transitions to `'failed'` status and stops retrying.
+A job that exceeds `maxAttempts` is moved to the dead-letter table `dbos.failed_jobs` (removed from `dbos.job_queue`) and stops retrying. Inspect dead-lettered jobs with `queue.listDeadLetterJobs()` and re-queue one with `queue.retryDeadLetterJob(id)`.
+
+## Dead letter queue
+
+Jobs that exhaust `maxAttempts` are moved out of `dbos.job_queue` into `dbos.failed_jobs` — the dead letter queue:
+
+```typescript
+// Inspect dead-lettered jobs (most recent first, default limit 50)
+const dead = await queue.listDeadLetterJobs(50);
+
+// Replay one — moves it back to the queue with a fresh attempt counter
+const newJobId = await queue.retryDeadLetterJob(dead[0].id);
+```
+
+`retryDeadLetterJob(id)` deletes the row from `dbos.failed_jobs` and inserts a new job with the same `job_name`, `payload`, and `max_attempts` in a single transaction, returning the new job ID. It throws if the ID is not found.
+
+```sql
+-- Dead-lettered jobs, newest first
+SELECT job_name, payload, error, failed_at
+FROM dbos.failed_jobs
+ORDER BY failed_at DESC
+LIMIT 20;
+```
 
 ## Idempotency
 
@@ -166,11 +202,10 @@ Query `dbos.job_queue` directly for monitoring:
 -- Jobs by status
 SELECT status, count(*) FROM dbos.job_queue GROUP BY status;
 
--- Failed jobs with errors
-SELECT job_name, payload, error, attempt, max_attempts, created_at
-FROM dbos.job_queue
-WHERE status = 'failed'
-ORDER BY created_at DESC
+-- Permanently failed jobs (dead letter queue)
+SELECT job_name, payload, error, attempt, max_attempts, original_created_at, failed_at
+FROM dbos.failed_jobs
+ORDER BY failed_at DESC
 LIMIT 20;
 
 -- Slow jobs (running for more than 5 minutes — may indicate hung workers)
@@ -188,6 +223,16 @@ WHERE status = 'completed'
   AND completed_at > now() - interval '1 hour'
 GROUP BY 1
 ORDER BY 1;
+```
+
+### CLI
+
+The `pgstack` CLI wraps the most common queue operations:
+
+```bash
+pgstack dbos status        # Job counts by status
+pgstack dbos retry <id>    # Retry a failed job (resets it to pending)
+pgstack dbos cancel <id>   # Cancel a pending or running job
 ```
 
 ## In-process worker vs separate process

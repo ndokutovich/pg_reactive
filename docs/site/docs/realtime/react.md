@@ -6,13 +6,13 @@ description: useLiveQuery, useAuth, and useRpc React hooks for pgStack.
 
 # React Hooks
 
-The `@pgstack/sdk/react` module (or `pg-reactive-sdk/react`) exports React hooks for live queries, auth, and RPC.
+The `@pgstack/sdk/react` module exports React hooks for live queries, auth, and RPC.
 
 ## Installation
 
 ```bash
 npm install @pgstack/sdk
-# React and react-dom are peer dependencies — already installed in your project
+# React (>=18) is an optional peer dependency — already installed in your project
 ```
 
 ## `useLiveQuery()`
@@ -82,7 +82,7 @@ interface UseLiveQueryResult {
 ```tsx
 import { useEffect, useState } from 'react';
 import { useLiveQuery } from '@pgstack/sdk/react';
-import { createClient } from '@pgstack/sdk';
+import { createClient } from '@pgstack/sdk/pgstack';
 
 const pgstack = createClient('http://127.0.0.1:8080', 'your-anon-key');
 
@@ -277,6 +277,52 @@ function UserOrders({ userId }: { userId: string }) {
   return loading ? <p>Loading...</p> : <OrderList orders={data} />;
 }
 ```
+
+## Provider-based hooks (`@pgstack/sdk/pgstack-react`)
+
+The `pgstack-react` entry point wraps a shared `PgStackClient` in React context so components don't pass URLs and keys around:
+
+```tsx
+import { createClient } from '@pgstack/sdk/pgstack';
+import { PgStackProvider, useQuery, useMutation } from '@pgstack/sdk/pgstack-react';
+
+const pgstack = createClient('http://127.0.0.1:8080', 'your-anon-key');
+
+function Root() {
+  return (
+    <PgStackProvider client={pgstack}>
+      <Todos />
+    </PgStackProvider>
+  );
+}
+
+function Todos() {
+  const { data, loading, refetch } = useQuery('todos', q => q.select('*').eq('done', false));
+  const { insert, update, remove } = useMutation('todos');
+
+  if (loading) return <p>Loading...</p>;
+  return (
+    <ul>
+      {(data as any[])?.map(t => (
+        <li key={t.id}>
+          {t.title}
+          <button onClick={async () => { await update({ done: true }, q => q.eq('id', t.id)); refetch(); }}>
+            Done
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+| Export | Description |
+|--------|-------------|
+| `PgStackProvider` | Context provider — pass the `PgStackClient` once at the root |
+| `usePgStack()` | Returns the shared client from context |
+| `useQuery(table, build?)` | Runs a select on mount; returns `{ data, loading, error, refetch }` |
+| `useMutation(table)` | Returns `{ insert, update, remove }` helpers bound to the table |
+| `useAuth()` | Context-based auth state and `signIn`/`signUp`/`signOut` actions |
 
 ## Best practices
 

@@ -33,36 +33,77 @@ npm install pg
 
 ## Schema bootstrap
 
-The DBOS module creates its own schema. Run the bootstrap migration:
+The DBOS module creates its own schema. The canonical migration is `sdk/src/dbos/migration.sql` in the SDK package — apply it as-is rather than hand-maintaining a copy. It creates the job queue (including the `progress` / `progress_message` columns written by `reportProgress`), the `dbos.failed_jobs` dead-letter table (where permanently-failed jobs land after exhausting retries), and the workflow tables:
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS dbos;
 
 CREATE TABLE IF NOT EXISTS dbos.job_queue (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_name      TEXT NOT NULL,
-  payload       JSONB NOT NULL DEFAULT '{}',
-  status        TEXT NOT NULL DEFAULT 'pending'
-                CHECK (status IN ('pending', 'running', 'completed', 'failed')),
-  attempt       INTEGER NOT NULL DEFAULT 0,
-  max_attempts  INTEGER NOT NULL DEFAULT 3,
-  scheduled_for TIMESTAMPTZ NOT NULL DEFAULT now(),
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  completed_at  TIMESTAMPTZ,
-  error         TEXT
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_name          text NOT NULL,
+    payload           jsonb NOT NULL DEFAULT '{}',
+    status            text NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+    attempt           int NOT NULL DEFAULT 0,
+    max_attempts      int NOT NULL DEFAULT 3,
+    progress          int,
+    progress_message  text,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    scheduled_for     timestamptz NOT NULL DEFAULT now(),
+    completed_at      timestamptz,
+    error             text
 );
 
-CREATE INDEX idx_job_queue_pending
-  ON dbos.job_queue (scheduled_for ASC)
-  WHERE status IN ('pending', 'failed') AND attempt < max_attempts;
+-- Dead letter queue: permanently-failed jobs are moved here after exhausting retries.
+CREATE TABLE IF NOT EXISTS dbos.failed_jobs (
+    id                   uuid PRIMARY KEY,
+    job_name             text NOT NULL,
+    payload              jsonb NOT NULL DEFAULT '{}',
+    attempt              int NOT NULL,
+    max_attempts         int NOT NULL,
+    error                text,
+    original_created_at  timestamptz NOT NULL DEFAULT now(),
+    failed_at            timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_dbos_job_queue_status_scheduled
+    ON dbos.job_queue (status, scheduled_for)
+    WHERE status IN ('pending', 'failed');
+
+CREATE TABLE IF NOT EXISTS dbos.workflow_executions (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    workflow_id text NOT NULL UNIQUE,
+    status      text NOT NULL DEFAULT 'running'
+                CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
+    input       jsonb,
+    output      jsonb,
+    error       text,
+    started_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS dbos.workflow_steps (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    workflow_exec_id uuid NOT NULL REFERENCES dbos.workflow_executions(id) ON DELETE CASCADE,
+    step_name       text NOT NULL,
+    status          text NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+    output          jsonb,
+    error           text,
+    attempt         int NOT NULL DEFAULT 0,
+    started_at      timestamptz,
+    completed_at    timestamptz,
+    UNIQUE(workflow_exec_id, step_name)
+);
 ```
 
 Or run it with the CLI:
 
 ```bash
-pgstack migration new bootstrap_dbos
+pgstack migration create bootstrap_dbos
 # paste the SQL above into the migration file
-pgstack migration up
+pgstack migration run
 ```
 
 ## Quick example

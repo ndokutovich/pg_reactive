@@ -64,7 +64,7 @@ This issues a `SELECT COUNT(*) ...` alongside your query and returns both result
 
 ```tsx
 import { useState } from 'react';
-import { createClient } from '@pgstack/sdk';
+import { createClient } from '@pgstack/sdk/pgstack';
 
 const pgstack = createClient('http://127.0.0.1:8080', 'your-anon-key');
 const PAGE_SIZE = 10;
@@ -164,9 +164,9 @@ For timestamp-based cursors with potential duplicates, combine two columns:
 GET /rest/v1/orders?order=created_at.desc,id.desc&created_at=lt.2025-01-14T00:00:00Z&limit=20
 ```
 
-## Default limit
+## No default limit
 
-If no `limit` is specified, pgStack defaults to returning up to 1000 rows. Always specify a limit for production queries to avoid large payloads.
+If no `limit` is specified, **all matching rows are returned** — there is no server-side default cap. Always specify an explicit limit for production queries to avoid large payloads.
 
 ```typescript
 // Bad: may return thousands of rows

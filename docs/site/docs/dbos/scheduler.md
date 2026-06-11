@@ -24,9 +24,9 @@ const { scheduler, queue } = dbos;
 
 ```typescript
 // Run every 5 minutes
-scheduler.schedule('cleanup-expired-sessions', '*/5 * * * *', async () => {
-  await db.query('DELETE FROM pgstack.sessions WHERE expires_at < now()');
-  console.log('Cleaned up expired sessions');
+scheduler.schedule('cleanup-expired-refresh-tokens', '*/5 * * * *', async () => {
+  await db.query('DELETE FROM pgstack.refresh_tokens WHERE expires_at < now()');
+  console.log('Cleaned up expired refresh tokens');
 });
 
 // Run every 30 minutes
@@ -60,13 +60,7 @@ pgStack currently supports simple interval patterns:
 | `*/60 * * * *` | 1 hour |
 | `*/1440 * * * *` | 24 hours |
 
-For full cron expression support (e.g., `0 9 * * 1-5` for 9 AM on weekdays), install the optional `croner` package:
-
-```bash
-npm install croner
-```
-
-pgStack will automatically use it for richer expressions.
+Only `*/N * * * *` minute-interval expressions are supported. Any other expression logs a warning (`[pgstack-scheduler] Unsupported cron ...`) and the job is silently not scheduled.
 
 ## Starting the scheduler and worker together
 
@@ -77,11 +71,11 @@ The scheduler enqueues cron jobs, but jobs are executed by the queue worker. Sta
 queue.register('send-digest', sendDigestHandler);
 
 // Set up scheduled jobs
-scheduler.schedule('cleanup-sessions', '*/30 * * * *', async () => {
-  await db.query('DELETE FROM pgstack.sessions WHERE expires_at < now()');
+scheduler.schedule('cleanup-refresh-tokens', '*/30 * * * *', async () => {
+  await db.query('DELETE FROM pgstack.refresh_tokens WHERE expires_at < now()');
 });
 
-// Start worker (polls queue + triggers scheduler)
+// Start the queue worker (scheduler timers are already armed by schedule())
 await dbos.start(5000);
 
 // Graceful shutdown
@@ -137,12 +131,12 @@ dbos.queue.register('send-weekly-report', async (payload) => {
 });
 
 // Schedule recurring maintenance tasks
-dbos.scheduler.schedule('expire-sessions', '*/5 * * * *', async () => {
+dbos.scheduler.schedule('expire-refresh-tokens', '*/5 * * * *', async () => {
   const { rowCount } = await pool.query(
-    'DELETE FROM pgstack.sessions WHERE expires_at < now()',
+    'DELETE FROM pgstack.refresh_tokens WHERE expires_at < now()',
   );
   if (rowCount && rowCount > 0) {
-    console.log(`Expired ${rowCount} sessions`);
+    console.log(`Expired ${rowCount} refresh tokens`);
   }
 });
 
@@ -155,7 +149,7 @@ dbos.scheduler.schedule('refresh-rankings', '*/30 * * * *', async () => {
 
 dbos.scheduler.schedule('queue-weekly-reports', '*/1440 * * * *', async () => {
   const { rows } = await pool.query(
-    "SELECT id FROM pgstack.users WHERE weekly_reports = true",
+    "SELECT id FROM pgstack.users WHERE (raw_user_meta->>'weekly_reports')::boolean",
   );
   for (const user of rows) {
     await dbos.queue.enqueue('send-weekly-report', { userId: user.id });

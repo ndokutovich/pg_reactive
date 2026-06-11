@@ -10,7 +10,7 @@ This repository is dual-licensed:
 | Directory                                 | License            | SPDX               |
 |-------------------------------------------|--------------------|--------------------|
 | `ext/`                                    | PostgreSQL License | `PostgreSQL`       |
-| `proxy-go/`, `sdk/`, `studio/`, `cli/`, examples, docs, infra | Apache License 2.0 | `Apache-2.0` |
+| `proxy/`, `proxy-go/`, `sdk/`, `studio/`, `cli/`, examples, docs, infra | Apache License 2.0 | `Apache-2.0` |
 
 **By submitting a pull request you agree to license your contribution under
 the license of the directory it lands in.** No CLA is required — this is a
@@ -45,7 +45,7 @@ Before opening a PR, please verify:
   - C extension changes → add a `pg_regress` test under `ext/sql/` and
     update `ext/expected/` (regenerate from `ext/results/` inside the
     container — trailing whitespace matters).
-  - Proxy changes → add a Go unit test (`go test ./proxy-go/...`) or an
+  - Proxy changes → add a Go unit test (`cd proxy-go && go test ./...`) or an
     E2E script (`tests/e2e_*_test.mjs`).
   - SDK changes → add a vitest case under `sdk/src/*.test.ts`.
 - [ ] No new lint warnings: `cd proxy-go && go vet ./...`,
@@ -71,8 +71,11 @@ Before opening a PR, please verify:
 - Docs improvements — the Docusaurus site lives in `docs/site/`.
 - New runtime support in `proxy-go/functions/` (we already have Deno,
   embedded goja, PL/v8, PL/Python, and `http`).
-- Hardening: closing items in
-  [`docs/SECURITY_AUDIT_2026-03-07.md`](docs/SECURITY_AUDIT_2026-03-07.md).
+- Hardening: new negative tests in `tests/security/`, new lint rules in
+  `tests/lint/security_patterns.mjs`, or filling gaps in the
+  [`SECURITY.md`](SECURITY.md) trust matrix. (The
+  [2026-03-07 audit](docs/SECURITY_AUDIT_2026-03-07.md) is fully closed —
+  it's historical context, not a work queue.)
 
 **Discuss first** (open an issue before writing the code):
 
@@ -96,9 +99,9 @@ Before opening a PR, please verify:
   init.
 - **TypeScript**: `npx tsc --noEmit` must pass. Avoid `any` — prefer
   `unknown` and narrow. No new ESLint disables without a reason.
-- **SQL**: 2-space indent. Lowercase keywords (`select`, not `SELECT`)
-  in migrations and tests; uppercase in extension internals where it
-  matches PostgreSQL source style.
+- **SQL**: 2-space indent. Uppercase keywords (`SELECT`, not `select`)
+  in migrations, tests, and `docker/init.sql` — matching PostgreSQL
+  source style.
 - **Comments**: explain *why*, not *what*. Don't restate what the code
   obviously does. Don't reference the current task, fix number, or
   reviewer in comments — those belong in the PR description.

@@ -4,6 +4,8 @@
 **PostgreSQL:** 16
 **Duration:** 10s per scenario
 
+**Note:** results measured at commit 7539c4b^ (2026-02-23), *before* the temp-table recompute optimization (90a6cc6), batch invalidation (`pg_reactive.batch_invalidation`, default on), and the snapshot-drift rebuild (c104892). Current pg_reactive write throughput is ~8-33x higher (~222 TPS @ 1 sub, ~99 TPS @ 10 subs). Re-run `bash bench/run_all.sh` to regenerate.
+
 ## 1. Feature Matrix (S3)
 
 Shows which SQL constructs each approach supports.

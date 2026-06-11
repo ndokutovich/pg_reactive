@@ -59,7 +59,7 @@ LISTEN pgr;
 
 -- Inserts, updates, deletes that affect the query trigger a delta:
 INSERT INTO orders (customer_id, total, status) VALUES (42, 99.99, 'open');
--- → NOTIFY pgr, '{"query_id":"orders_active","inserted":[{"id":7,"customer_id":42,"total":99.99,"status":"open"}],"deleted":[]}'
+-- → NOTIFY pgr, '{"query_id":"orders_active","seq":1,"inserted":[{"id":7,"customer_id":42,"total":99.99,"status":"open"}],"deleted":[]}'
 
 -- Unsubscribe when done.
 SELECT pgr.unsubscribe('orders_active');
@@ -74,28 +74,52 @@ off this stream.
 All functions live in the `pgr` schema (not `pg_reactive` — the `pg_`
 prefix is reserved by PostgreSQL for system schemas).
 
+All `pgr` functions (and the `pgr.subscriptions` view) are `REVOKE`d from
+`PUBLIC` by default — grant `EXECUTE` (and `SELECT` on the view) explicitly
+to the roles that should manage or inspect subscriptions.
+
 | Function | Description |
 |----------|-------------|
-| `pgr.subscribe(query_id text, query text) → void` | Register a live query under `query_id`. Validates the query is a pure `SELECT` (no DML CTEs). |
-| `pgr.unsubscribe(query_id text) → void` | Remove a subscription and its snapshot table. |
-| `pgr.get_subscriptions() → setof record` | List active subscriptions. |
-| `pgr.stats() → record` | Counters: deltas emitted, recomputes, evictions, overflow events. |
+| `pgr.subscribe(p_query_id text, p_query text, p_mode text DEFAULT 'delta', p_audience jsonb DEFAULT NULL) → jsonb` | Register a live query under `p_query_id`. Validates the query is a pure `SELECT` (no DML CTEs). `mode`: `'delta'` (full diff with snapshots) or `'notify'` (lightweight invalidation). Persists to `pgr.persisted_subscriptions` for restart recovery. |
+| `pgr.unsubscribe(p_query_id text) → boolean` | Remove a subscription, its snapshot table, per-query triggers, and its `pgr.persisted_subscriptions` row. Returns `false` if the subscription did not exist (safe no-op). |
+| `pgr.get_subscriptions() → setof record` | List active subscriptions (`query_id`, `query_text`, `num_tables`, `subscribed_at`, `invalidation_count`, `mode`, `audience`). |
+| `pgr.stats() → setof (metric text, value text)` | Counters: `active_subscriptions`, `max_subscriptions`, `total_subscribes`, `total_unsubscribes`, `total_invalidations`, `total_evictions`, `total_recomputes`. |
+| `pgr.restore_subscriptions() → int` | Rebuild the in-memory subscription hash from `pgr.persisted_subscriptions` after a PG restart (shared memory is wiped). Idempotent; per-query failures become WARNINGs. Returns the count restored. |
+
+`pgr.subscriptions` is a convenience view over `pgr.get_subscriptions()`
+(in-shmem state); `pgr.persisted_subscriptions` is the durable LOGGED
+catalog maintained transparently by `pgr.subscribe` / `pgr.unsubscribe`.
+Shared memory is wiped on every server restart — run
+`SELECT pgr.restore_subscriptions();` once per database afterwards to bring
+live queries back; until then, subscribed queries emit no deltas.
 
 ## Wire format (NOTIFY channel `pgr`)
 
 All payloads are JSON. Single channel for all subscriptions.
 
 ```json
-{"query_id":"orders_active","inserted":[{"id":7,...}],"deleted":[{"id":3,...}]}
-{"type":"overflow","query_id":"orders_active","fetch":true}
+{"query_id":"orders_active","seq":12,"inserted":[{"id":7,...}],"deleted":[{"id":3,...}]}
+{"type":"overflow","query_id":"orders_active","seq":13,"fetch":true}
+{"type":"invalidated","query_id":"orders_active","seq":4}
 ```
 
 - **Delta** — `inserted` and `deleted` arrays contain only the rows that
   changed. Updates appear as a paired `deleted` + `inserted` for the
   same primary-key row.
 - **Overflow** — the payload would exceed PostgreSQL's 8 KB `NOTIFY`
-  limit. Receiver should re-fetch the full query result. Triggered at
-  7800 bytes.
+  limit. Receiver should re-fetch the full query result. Triggered when
+  the payload exceeds 8000 minus the channel-name length minus 100 bytes
+  of framing overhead (7897 bytes for the default `pgr` channel; the
+  channel is configurable via `pg_reactive.notify_channel`). Also emitted
+  when the snapshot's column layout drifts from the live query (count or
+  type change under a stable `query_id`), forcing a full client resync.
+- **Invalidated** — emitted instead of a delta for subscriptions
+  registered with `mode='notify'` (`pgr.subscribe(query_id, query,
+  'notify')`). Signals that the result set may have changed without
+  executing the query; the client re-fetches on its own schedule.
+- **seq** — monotonically increasing per-query notification counter,
+  incremented on every trigger fire; a gap means a missed notification
+  and the client should re-fetch.
 
 ## How it works
 
@@ -110,7 +134,7 @@ All payloads are JSON. Single channel for all subscriptions.
 3. A `ProcessUtility_hook` watches for `TRUNCATE`, `ALTER`, and `DROP`
    on subscribed tables and auto-unsubscribes / re-snapshots as needed.
 4. When a trigger fires, it computes the delta via `EXCEPT` against an
-   `UNLOGGED` snapshot table (`pgr._snapshot_<query_id>`), updates the
+   `UNLOGGED` snapshot table (`pgr._snap_<query_id>`), updates the
    snapshot, and emits the delta via `pg_notify('pgr', ...)`.
 
 ### Performance baselines
@@ -138,16 +162,22 @@ your queries can be column-masked.
 | `shared_preload_libraries` | — | yes | Must include `pg_reactive`. |
 | `pg_reactive.max_subscriptions` | `1024` | yes | Shared memory subscription slot count. |
 | `pg_reactive.async_recompute` | `off` | yes | Background worker for async recompute. Off is fine for most workloads. |
+| `pg_reactive.database` | `postgres` | yes | Database the async-recompute background worker connects to. Only used when `pg_reactive.async_recompute` is `on`. |
+| `pg_reactive.batch_invalidation` | `on` | no (superuser) | Defer recompute to transaction pre-commit; one recompute per query per transaction instead of per statement. |
+| `pg_reactive.notify_channel` | `pgr` | no (superuser) | LISTEN/NOTIFY channel for all delta, overflow, and invalidation payloads. |
 
-Both `pg_reactive.*` GUCs are `PGC_POSTMASTER` — they require a server
-restart to change.
+`max_subscriptions`, `async_recompute`, and `database` are
+`PGC_POSTMASTER` — they require a server restart. `batch_invalidation`
+and `notify_channel` are `PGC_SUSET` — superusers can change them at
+runtime.
 
 ## Testing
 
-`pg_regress` suite (10 SQL files) covers subscribe/unsubscribe semantics,
+`pg_regress` suite (12 SQL files) covers subscribe/unsubscribe semantics,
 column-level invalidation, GROUP BY / window / HAVING / LEFT JOIN queries,
-cross-table dependencies, overflow handling, DDL auto-unsubscribe, and
-batch invalidation:
+cross-table dependencies, overflow handling, notify-mode subscriptions,
+DDL auto-unsubscribe, batch invalidation, audience filtering, and
+snapshot column-drift resync:
 
 ```bash
 cd ext
@@ -176,8 +206,8 @@ ext/
     invalidation.c    AFTER STATEMENT triggers, column-mask tracking, auto-installation
     recompute.c       EXCEPT-based delta computation, snapshot tables, NOTIFY emission
     bgworker.c        Optional background worker (pg_reactive.async_recompute)
-  pg_reactive--0.1.sql        Install script (creates `pgr` schema)
-  pg_reactive--0.1.0--0.1.1.sql, 0.1.1--0.1.2.sql   Migrations
+  pg_reactive--0.1.4.sql      Install script for the current version (creates `pgr` schema)
+  pg_reactive--0.1.1--0.1.2.sql, 0.1.2--0.1.3.sql, 0.1.3--0.1.4.sql   Upgrade scripts
   pg_reactive.control          Extension metadata
   Makefile                     PGXS build
   sql/                         pg_regress tests

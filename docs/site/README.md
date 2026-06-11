@@ -1,41 +1,20 @@
-# Website
+# pg_reactive docs site
 
-This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
+Docusaurus 3 site for the pgStack / pg_reactive documentation. Doc pages live in `docs/`, config in `docusaurus.config.ts` (sidebar in `sidebars.ts`; the blog is disabled via `blog: false`). `DOCS_URL` / `DOCS_BASE_URL` env vars override the site URL and base path at build time.
 
-## Installation
-
-```bash
-yarn
-```
-
-## Local Development
+## Develop
 
 ```bash
-yarn start
+npm install
+npm start
 ```
-
-This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
 
 ## Build
 
 ```bash
-yarn build
+npm run build   # static output in build/
 ```
 
-This command generates static content into the `build` directory and can be served using any static contents hosting service.
+## Deploy
 
-## Deployment
-
-Using SSH:
-
-```bash
-USE_SSH=true yarn deploy
-```
-
-Not using SSH:
-
-```bash
-GIT_USER=<Your GitHub username> yarn deploy
-```
-
-If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+The site is built into the proxy image (`proxy-go/Dockerfile`, `docs-builder` stage, served under `/docs/`) and shipped by `.github/workflows/deploy.yml` on pushes touching `docs/site/**`. There is no manual `yarn deploy` / gh-pages step.

@@ -10,12 +10,28 @@ The `pgstack` CLI is a Node.js command-line tool for developing with pgStack. It
 
 ## Installation
 
-The CLI is installed automatically when you scaffold a project with `npx pgstack init`. You can also install it globally:
+No project-local install is needed — run the CLI via `npx pgstack <command>`, or install it globally:
 
 ```bash
 npm install -g pgstack
 # or use it via npx
 npx pgstack <command>
+```
+
+## Global options
+
+These flags work on every command. The CLI propagates them to subcommands via environment variables, so you can also set the variable directly:
+
+| Flag | Env var | Description |
+|------|---------|-------------|
+| `-v, --version` | — | Print the CLI version and exit |
+| `--verbose` | `PGSTACK_VERBOSE=1` | Enable verbose diagnostic output |
+| `--url <url>` | `PGSTACK_URL` | pgStack proxy URL (the flag overrides the env var) |
+| `--json` | `PGSTACK_JSON=1` | Output results as JSON — useful for scripting and CI |
+
+```bash
+pgstack --json status
+pgstack --url http://127.0.0.1:9090 functions list
 ```
 
 ## All commands
@@ -31,19 +47,19 @@ Creates a new pgStack project directory with Docker Compose config and starter f
 ### Development environment
 
 ```bash
-pgstack dev            # Start Docker containers
-pgstack dev stop       # Stop Docker containers
-pgstack dev logs       # Tail proxy + database logs
-pgstack dev status     # Show container health and ports
-pgstack dev studio     # Open Studio in the browser
+pgstack dev       # Start Docker containers
+pgstack stop      # Stop Docker containers
+pgstack logs      # Tail proxy + database logs
+pgstack status    # Show container health, proxy health, migrations, subscriptions
+pgstack studio    # Open Studio in the browser
 ```
 
 ### Migrations
 
 ```bash
-pgstack migration new <name>     # Create a new migration file
-pgstack migration up             # Run pending migrations
-pgstack migration list           # List all migrations and their status
+pgstack migration create <name>  # Create a new migration file
+pgstack migration run            # Run pending migrations
+pgstack migration status         # List all migrations and their status
 pgstack migration rollback       # Roll back the last applied migration
 ```
 
@@ -63,7 +79,7 @@ Database branching creates a full copy of your database using PostgreSQL's `CREA
 ### Type generation
 
 ```bash
-pgstack generate types                         # Print to stdout
+pgstack generate types                         # Write to types/database.ts (default)
 pgstack generate types --output src/db.ts      # Write to file
 ```
 
@@ -74,6 +90,21 @@ pgstack functions new <name>                   # Scaffold a new function
 pgstack functions deploy <name>                # Register/update a function
 pgstack functions list                         # List all registered functions
 pgstack functions delete <name>                # Deactivate a function
+pgstack functions serve                        # Watch supabase/functions/ and hot-reload on change
+```
+
+### Job queue
+
+```bash
+pgstack dbos status          # Show job queue status (count by status)
+pgstack dbos retry <id>      # Retry a failed job (reset to pending)
+pgstack dbos cancel <id>     # Cancel a pending or running job
+```
+
+### Deployment
+
+```bash
+pgstack deploy --host <user@server>   # Deploy pgStack to a remote Docker host via SSH
 ```
 
 ## Help

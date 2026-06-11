@@ -38,13 +38,14 @@ docker compose up -d
 
 This starts:
 - **PostgreSQL 16** with the `pg_reactive` extension on port `15432` (dev)
-- **pgStack Proxy** (auth + REST + WebSockets) on port `8080`
+- **pgStack Proxy** (auth + REST + WebSockets) on port `8080` if you cloned the repo, or port `3000` if you used `npx pgstack init` (set by `PROXY_PORT` in the generated `.env` — substitute it for `8080` in the URLs below)
 
 Wait a few seconds for the database to initialize, then verify everything is healthy:
 
 ```bash
 docker compose ps
-# Both services should show "healthy" or "running"
+# db and proxy-go should show "healthy" or "running"
+# (the cloned repo's compose also starts a legacy Rust reference proxy on 127.0.0.1:8081)
 ```
 
 ## Step 3: Open Studio
@@ -79,7 +80,18 @@ CREATE POLICY "Anyone can read todos"
 
 CREATE POLICY "Anyone can insert todos"
   ON todos FOR INSERT WITH CHECK (true);
+
+-- pgStack default-denies table privileges for anon/authenticated
+-- (RLS policies alone are not enough — grant what the API needs):
+GRANT SELECT, INSERT ON todos TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO anon, authenticated;
 ```
+
+pgStack's bootstrap intentionally sets no default privileges for `anon`/`authenticated`, so every new table needs explicit GRANTs in addition to RLS policies.
+
+:::note Cloned the repo instead of using `pgstack init`?
+The dev image pre-seeds a demo `todos` table (`docker/init.sql`) with a different shape (serial id, no `created_at`) — run `DROP TABLE IF EXISTS todos;` first, otherwise this CREATE fails with `relation "todos" already exists` and the `created_at` ordering in Step 6 errors.
+:::
 
 ## Step 5: Call the REST API
 
@@ -102,7 +114,7 @@ npm install @pgstack/sdk
 ```
 
 ```typescript
-import { createClient } from '@pgstack/sdk';
+import { createClient } from '@pgstack/sdk/pgstack';
 
 const pgstack = createClient('http://127.0.0.1:8080', 'dev-only-anon-key-do-not-use-in-production');
 
@@ -142,6 +154,7 @@ import { useLiveQuery } from '@pgstack/sdk/react';
 function TodoList() {
   const { rows, state } = useLiveQuery('active_todos', {
     url: 'ws://127.0.0.1:8080',
+    token: 'dev-only-anon-key-do-not-use-in-production',
   });
 
   if (state === 'connecting') return <p>Connecting...</p>;
@@ -155,6 +168,8 @@ function TodoList() {
   );
 }
 ```
+
+The dev stack enables JWT auth by default, so the WebSocket upgrade needs a credential — pass the anon key (or a user's `session.access_token`) via `token`. When `REQUIRE_AUTHENTICATED_WS=true`, only real user JWTs are accepted.
 
 Changes to `todos` will be pushed to all connected clients within milliseconds — no polling required.
 

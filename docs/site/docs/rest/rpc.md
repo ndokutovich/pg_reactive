@@ -26,6 +26,8 @@ GET /rest/v1/rpc/function_name?param1=value1&param2=42
 
 ## Creating functions
 
+Only functions in the `public` schema are reachable via `/rest/v1/rpc/{name}` — the proxy resolves the name against `public` only and calls it as `public.<name>(...)`. Functions in any other schema return 404 `function not found`.
+
 Write PostgreSQL functions in SQL or PL/pgSQL:
 
 ```sql
@@ -233,13 +235,22 @@ if (error) {
 
 ## Error handling
 
-PostgreSQL exceptions are returned as HTTP 400 with an error message:
+PostgreSQL errors are mapped to sanitized fixed-string responses — raw exception text is never forwarded to clients:
 
-```json
-{"error": "Order not found or cannot be cancelled"}
-```
+| SQLSTATE | HTTP status | Body |
+|----------|-------------|------|
+| `23505` (unique violation) | 409 | `{"error": "duplicate value violates unique constraint"}` |
+| `42501` (insufficient privilege) | 403 | `{"error": "permission denied"}` |
+| class `42` (syntax / undefined object) | 400 | `{"error": "invalid request"}` |
+| class `22` (data exception) | 400 | `{"error": "invalid request"}` |
+| class `23` (other constraint violations) | 400 | `{"error": "invalid request"}` |
+| everything else — including plain `RAISE EXCEPTION` (`P0001`) | 500 | `{"error": "internal database error"}` |
 
-Use `RAISE EXCEPTION` to return user-facing error messages from your functions.
+A `RAISE EXCEPTION` message therefore never reaches the client. To return user-facing error states, return them as data instead — e.g. a `jsonb` result like `{"ok": false, "reason": "order not found"}`.
+
+## Caching
+
+Responses from `STABLE` functions are served with `Cache-Control: max-age=60`; `IMMUTABLE` functions get `max-age=3600`. If the request carries any auth surface (`Authorization` header, `apikey` header, `token` query param, or token cookie) the directive is `private, max-age=N` plus `Vary: Authorization` and `Vary: apikey`, so shared caches segment by credential; fully anonymous requests get `public, max-age=N`. `VOLATILE` functions (the default) get no Cache-Control header. Note this means `STABLE` RPC results may be up to 60 seconds stale.
 
 ## Granting access
 

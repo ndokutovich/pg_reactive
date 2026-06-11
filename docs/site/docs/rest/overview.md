@@ -16,7 +16,7 @@ http://127.0.0.1:8080/rest/v1/
 
 ## Authentication
 
-Every request must include an `Authorization` header:
+Requests authenticate via an `Authorization` header:
 
 ```
 Authorization: Bearer <token>
@@ -27,12 +27,14 @@ Where `<token>` is:
 - A **JWT access token** (from login) for authenticated user requests
 - Your **service role key** (`SERVICE_ROLE_KEY`) for admin requests that bypass RLS
 
+Alternatively, send the key in an `apikey: <key>` header (Supabase-compatible) — `apikey: <anon-key>` alone authenticates as anon, `apikey: <service-role-key>` as service_role. When `JWT_SECRET` is unset, requests without credentials pass through as anon.
+
 ## SDK usage
 
 The TypeScript SDK wraps the REST API with a fluent query builder:
 
 ```typescript
-import { createClient } from '@pgstack/sdk';
+import { createClient } from '@pgstack/sdk/pgstack';
 
 const pgstack = createClient('http://127.0.0.1:8080', 'your-anon-key');
 
@@ -104,13 +106,9 @@ Content-Type: application/json
 
 ### UPSERT
 
-```bash
-POST /rest/v1/todos?on_conflict=id
-Prefer: resolution=merge-duplicates
-Content-Type: application/json
-
-{"id": 42, "title": "Updated title", "done": true}
-```
+:::caution Not yet implemented
+UPSERT is not yet implemented by the proxy. `on_conflict` and `Prefer: resolution=merge-duplicates` are ignored — POST always executes a plain INSERT, and a conflicting key returns HTTP 409 `{"error": "duplicate value violates unique constraint"}`. The SDK `upsert()` method sends these parameters but they have no effect server-side.
+:::
 
 ### DELETE
 
@@ -129,10 +127,10 @@ Successful responses return a JSON array for SELECT, or the modified rows for IN
 ]
 ```
 
-Error responses:
+Error responses contain a single sanitized `error` field — raw PostgreSQL messages are never returned, and the status is carried by the HTTP status code, not the body. Example — unknown table returns HTTP 404:
 
 ```json
-{"error": "relation \"nonexistent\" does not exist", "status": 400}
+{"error": "relation not found"}
 ```
 
 ## Vertical filtering (select columns)

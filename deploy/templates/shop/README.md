@@ -1,9 +1,9 @@
 # Personal "What to Buy" shop deployment template
 
 Drop-in template for running the shopping-cart app under your umbrella nginx
-on its own subdomain (e.g. `shop.example.com`). Three containers, one network,
-one umbrella conf — and you swap frontend frameworks by editing a single env
-variable.
+on its own subdomain (e.g. `shop.example.com`). Four containers, two networks
+(private + shared gateway), one umbrella conf — and you swap frontend
+frameworks by editing a single env variable.
 
 ## What's in this directory
 
@@ -19,8 +19,9 @@ this one. A different subdomain = PR against that repo or hand-edit
 the conf there before reload.
 
 `migration.sql` is a bundled copy of `apps/shopping/shared/migration.sql` from
-the repo. Keep them in sync if you patch one — there is an intentional CI
-parity check that flags drift (`scripts/sync-shop-migration.mjs` if/when added).
+the repo. Keep them in sync manually if you patch one — there is currently no
+automated parity check (a `scripts/sync-shop-migration.mjs` + CI step, mirroring
+`scripts/sync-cli-bootstrap.mjs`, would be the right shape).
 
 ## First-time setup on a VPS
 
@@ -55,9 +56,9 @@ docker exec umbrella-proxy nginx -t \
 # 5. Verify
 curl -sI -X POST https://YOUR_SUBDOMAIN.your.tld/auth/v1/anonymous \
   -H 'apikey: '"$(grep '^ANON_KEY=' .env | cut -d= -f2)" | head -3
-# Expect: 503 (ALLOW_ANONYMOUS_SIGNIN=false in this template — auto-signup
-# with a generated email is used instead; flip the flag in .env if you want
-# guest-JWT minting for short sessions).
+# Expect: 503 (ALLOW_ANONYMOUS_SIGNIN=false in this template — users sign up /
+# log in with email+password via the in-app form instead; flip the flag in .env
+# if you want guest-JWT minting for short sessions).
 ```
 
 ## Swapping frontends
@@ -78,8 +79,9 @@ Available variants — same wire contract, different framework:
 | Angular   | `pgstack/shopping-angular:latest`|
 
 All five hit `/rest/v1/shopping_items`, `/rest/v1/rpc/{create,join,my}_shopping_*`,
-`/auth/v1/*` and `/ws/items-{listId}-{uid}` — fully interchangeable, no rebuild
-of the pgstack stack needed when you switch.
+`/rest/v1/rpc/subscribe_list_items`, `/auth/v1/*` and
+`/ws/items-{listId}-{uidNoDashes}` (uid = JWT sub with dashes stripped) — fully
+interchangeable, no rebuild of the pgstack stack needed when you switch.
 
 ## Discipline preserved
 

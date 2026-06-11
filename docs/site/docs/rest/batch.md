@@ -52,6 +52,7 @@ Use `{{opId.field}}` to reference a previous operation's result:
 |----------|-------------|
 | `{{order.id}}` | Extract `id` from operation "order"'s result |
 | `{{items.0.id}}` | Extract `id` from first element if result is an array |
+| `{{items.*.id}}` | Wildcard: comma-separated `id` from every element of an array result — designed for in-filters like `?id=in.({{items.*.id}})` |
 | `{{order.nested.field}}` | Dot-path navigation into nested objects |
 
 Templates work in both `body` (JSON) and `query` (URL query string) fields. References are resolved sequentially — each operation can only reference operations that ran before it.
@@ -73,9 +74,9 @@ All operations run in a single PostgreSQL transaction. If **any** operation fail
 {
   "results": [
     { "id": "order", "status": 201, "data": { "id": 123 } },
-    { "id": "item",  "status": 500, "error": "duplicate key..." }
+    { "id": "item",  "status": 409, "error": "duplicate value violates unique constraint" }
   ],
-  "error": "operation item failed: duplicate key...",
+  "error": "operation item failed: duplicate value violates unique constraint",
   "failed_operation": "item"
 }
 ```
@@ -95,7 +96,7 @@ Each operation gets its own `SAVEPOINT`. Failed operations are rolled back indiv
 {
   "results": [
     { "id": "op0", "status": 201, "data": { "id": 1 } },
-    { "id": "op1", "status": 500, "error": "table not found" },
+    { "id": "op1", "status": 500, "error": "internal database error" },
     { "id": "op2", "status": 201, "data": { "id": 2 } }
   ]
 }
@@ -111,6 +112,8 @@ Each operation gets its own `SAVEPOINT`. Failed operations are rolled back indiv
 | `DELETE` | `/rest/v1/{table}` | Delete (requires at least one filter) |
 | `POST` | `/rest/v1/rpc/{function}` | Call an RPC function |
 | `GET` | `/rest/v1/rpc/{function}` | Call an RPC function via GET |
+
+RPC operations inside a batch read parameters only from `body` — the `query` field is ignored for `/rest/v1/rpc/` paths regardless of method. A GET RPC operation with query-string parameters calls the function with no arguments.
 
 ## Operation fields
 

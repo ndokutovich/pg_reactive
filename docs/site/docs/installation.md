@@ -13,8 +13,7 @@ The `pgstack` CLI scaffolds a new project with Docker Compose, an `.env` file, a
 ```bash
 npx pgstack init my-project
 cd my-project
-cp .env.example .env
-# Edit .env with your secrets
+# .env is generated for you with random secrets — no copy step needed
 docker compose up -d
 ```
 
@@ -22,12 +21,17 @@ What gets created:
 
 ```
 my-project/
-├── docker-compose.yml       # Two-container dev stack
-├── docker-compose.prod.yml  # Production stack (pre-built images)
-├── .env.example             # Variable reference
+├── docker-compose.yml             # All-in-one dev stack (pre-built image)
+├── .env                           # Generated secrets — do not commit
+├── .env.example                   # Variable reference (no secrets)
+├── pgstack.config.json            # Project config (ports, schemas)
+├── .gitignore
 ├── migrations/
-│   └── 00001_init.sql       # Starter migration
-└── package.json             # pgstack CLI dev dependency
+│   └── 00000000000000_pgstack_init.sql  # pgStack security bootstrap
+├── seed.sql                       # Optional seed data
+├── public/
+│   └── index.html                 # Starter page served by the proxy
+└── types/                         # Output dir for `pgstack generate types`
 ```
 
 ## Option 2: Docker Compose from source
@@ -77,6 +81,7 @@ Copy `.env.example` to `.env` and fill in the values before starting in producti
 | `JWT_SECRET` | string | Secret key for signing JWT access tokens. Must be 32+ characters. Generate with `openssl rand -base64 32`. |
 | `ANON_KEY` | string | Opaque API key for anonymous (unauthenticated) requests. Generate with `openssl rand -base64 32`. |
 | `SERVICE_ROLE_KEY` | string | Opaque API key for service-role (admin, bypasses RLS) requests. Keep secret. |
+| `SECRETS_ENCRYPTION_KEY` | string | AES-256 key for at-rest encryption of edge-function env vars and webhook signing secrets. 32 raw bytes, base64-encoded. Generate with `openssl rand -base64 32`. |
 | `SITE_URL` | string | Your application's public URL. Required for OAuth redirect callbacks. Example: `https://app.example.com`. |
 
 ### Database
@@ -105,7 +110,7 @@ Required for email verification and magic links.
 | `SMTP_PORT` | `587` | SMTP port. |
 | `SMTP_USER` | — | SMTP authentication username. |
 | `SMTP_PASS` | — | SMTP authentication password. |
-| `SMTP_FROM` | `noreply@example.com` | From address for emails sent by pgStack. |
+| `SMTP_FROM` | `noreply@pgstack.local` | From address for emails sent by pgStack. |
 
 ### Tuning
 
@@ -138,11 +143,11 @@ See [Environment Variables](deploy/env-vars) for the complete list including TLS
 ## Generating secrets
 
 ```bash
-# JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY, POSTGRES_PASSWORD
+# JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY, POSTGRES_PASSWORD, SECRETS_ENCRYPTION_KEY
 openssl rand -base64 32
 ```
 
-Run this four times and use each output for the respective variable.
+Run this five times and use each output for the respective variable.
 
 ## Verifying the installation
 
@@ -152,7 +157,7 @@ docker compose ps
 
 # Check the proxy responds
 curl http://127.0.0.1:8080/health
-# {"status":"ok","version":"0.1.0"}
+# {"status":"ok","pg_connected":true}
 
 # Check PostgreSQL is running
 docker compose exec db psql -U postgres -c "SELECT version();"
@@ -174,4 +179,21 @@ docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-The database data is stored in a named Docker volume (`pgdata`) and is preserved across container restarts and image updates.
+In the production stack (`docker-compose.prod.yml`) and CLI-scaffolded projects, PostgreSQL data lives in the named volume `pgdata` and survives restarts and image updates. The dev source-build stack stores data on tmpfs — it is wiped on every container restart by design.
+
+### Upgrading the PostgreSQL extension
+
+Pulling a new image does not upgrade an already-installed extension — the installed version lives in the database (the `pgdata` volume). After updating the images, apply pending extension migrations:
+
+```bash
+docker compose exec db psql -U postgres -c "ALTER EXTENSION pg_reactive UPDATE;"
+```
+
+Check the installed version:
+
+```bash
+docker compose exec db psql -U postgres -c \
+  "SELECT extversion FROM pg_extension WHERE extname = 'pg_reactive';"
+```
+
+Upgrade scripts are cumulative (for example `0.1.2 → 0.1.3 → 0.1.4`); `ALTER EXTENSION ... UPDATE` chains them automatically.

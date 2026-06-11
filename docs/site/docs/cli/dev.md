@@ -6,7 +6,7 @@ description: Start, stop, and manage the pgStack development environment.
 
 # pgstack dev
 
-The `pgstack dev` command group manages your local Docker development environment.
+`pgstack dev` and its companion commands (`stop`, `logs`, `status`, `studio`) manage your local Docker development environment.
 
 ## Commands
 
@@ -14,49 +14,44 @@ The `pgstack dev` command group manages your local Docker development environmen
 
 ```bash
 pgstack dev
-# or
-pgstack dev start
 ```
 
-Starts the PostgreSQL and proxy containers via `docker compose up -d`. Outputs the service URLs when healthy:
+Starts the PostgreSQL and proxy containers via `docker compose up -d --build --wait`. Outputs the service URLs when healthy:
 
 ```
-Starting pgStack dev environment...
+Starting pgStack...
+pgStack is running!
 
-  Database:  postgresql://postgres:postgres@127.0.0.1:15432/app
-  API:       http://127.0.0.1:8080
-  Studio:    http://127.0.0.1:8080/studio/
+  PostgreSQL:  postgresql://postgres:postgres@127.0.0.1:15432/app
+  Your app:    http://127.0.0.1:3000/
+  REST API:    http://127.0.0.1:3000/rest/v1/
+  WebSocket:   ws://127.0.0.1:3000/ws/
+  Health:      http://127.0.0.1:3000/health
 
-Both services are healthy.
+Run `pgstack logs` to see output, `pgstack stop` to shut down.
 ```
 
 ### Stop
 
 ```bash
-pgstack dev stop
+pgstack stop
 ```
 
-Stops the containers (`docker compose stop`). Data is preserved in the Docker volume.
+Stops and removes the containers (`docker compose down`). Data persists in the named `pgdata` volume.
 
 ### Logs
 
 ```bash
-pgstack dev logs
+pgstack logs
 ```
 
-Tails the logs from both containers. Press Ctrl+C to stop.
-
-```bash
-# Logs from a specific service
-pgstack dev logs --service proxy
-pgstack dev logs --service db
-```
+Tails the logs from both containers. Press Ctrl+C to stop. To tail a single service, use Docker directly: `docker compose logs -f proxy`.
 
 Example output:
 
 ```
 db    | 2025-01-14 12:00:01 UTC [1] LOG:  database system is ready to accept connections
-proxy | 2025-01-14 12:00:02 INFO pgstack_proxy: Listening on 0.0.0.0:8080
+proxy | 2025-01-14 12:00:02 INFO pgstack_proxy: Listening on 0.0.0.0:3000
 proxy | 2025-01-14 12:00:05 INFO pgstack_proxy: POST /auth/v1/signup 200 12ms
 proxy | 2025-01-14 12:00:06 INFO pgstack_proxy: GET /rest/v1/todos 200 3ms
 ```
@@ -64,24 +59,35 @@ proxy | 2025-01-14 12:00:06 INFO pgstack_proxy: GET /rest/v1/todos 200 3ms
 ### Status
 
 ```bash
-pgstack dev status
+pgstack status
 ```
 
-Shows the running state and health of each container:
+Shows container state, proxy health, migration status, and active live subscriptions:
 
 ```
-Service   Status    Health    Port
-db        running   healthy   127.0.0.1:15432 → 5432
-proxy     running   healthy   127.0.0.1:8080 → 8080
+pgStack Status
+
+Containers:
+  db  running (healthy)
+  proxy  running (healthy)
+
+Proxy health:
+  healthy v0.1.0  http://127.0.0.1:3000/health
+
+Migrations:
+  All migrations applied  (3 total)
+
+Live subscriptions:
+  2 active subscriptions
 ```
 
 ### Studio
 
 ```bash
-pgstack dev studio
+pgstack studio
 ```
 
-Opens the Studio admin dashboard in your default browser.
+Opens the Studio admin dashboard in your default browser. Accepts `--url <url>` to override the proxy base URL (default `http://127.0.0.1:8080`); opens `<url>/studio/` in the default browser. For a scaffolded project running on the default proxy port, pass `--url http://127.0.0.1:3000`.
 
 ## Rebuilding after code changes
 
@@ -106,17 +112,21 @@ To wipe all data and start fresh (development only):
 pgstack db reset
 ```
 
-This drops and recreates the database, then runs all migrations from scratch.
+This drops and recreates the database, runs all migrations from scratch, and runs `seed.sql` if present. Pass `--no-seed` to skip seeding:
+
+```bash
+pgstack db reset --no-seed
+```
 
 ## Environment
 
-The dev environment uses hardcoded development secrets (clearly marked as dev-only in the `.env.example`). Never use development containers in production. Use `docker-compose.prod.yml` with proper secrets for production.
+`pgstack init` auto-generates random `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` values into `.env` (git-ignored); only `POSTGRES_PASSWORD` defaults to `postgres`. Before exposing the proxy to a network, replace every secret listed in `.env.example` (each has an `openssl rand -base64 32` placeholder) and set `PGSTACK_ENV=production` to enable the fail-fast validator, which refuses placeholder secrets and dev-only flags.
 
 ## Port configuration
 
 | Service | Default port | Variable |
 |---------|-------------|----------|
-| pgStack proxy | `8080` | `PROXY_PORT` |
-| PostgreSQL | `15432` (host-side) | — |
+| pgStack proxy | `3000` | `PROXY_PORT` |
+| PostgreSQL | `15432` (host-side) | `PG_PORT` |
 
 The PostgreSQL port is mapped to `15432` on the host to avoid conflicts with any local PostgreSQL installation.

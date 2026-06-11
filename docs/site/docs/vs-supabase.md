@@ -17,16 +17,16 @@ pgStack is designed as a self-hosted Supabase alternative. This page covers the 
 | **REST API** | PostgREST | pgstack-proxy (Go, PostgREST-compatible) |
 | **Real-time** | Phoenix Elixir server | pg_reactive C extension + Go proxy |
 | **Row Level Security** | Yes | Yes |
-| **Storage** | S3-backed (Supabase Storage) | Built-in (PostgreSQL-backed) |
-| **Edge Functions** | Deno runtime | Deno + PL/v8 + Embedded (3 backends) |
+| **Storage** | S3-backed (Supabase Storage) | Built-in (PostgreSQL-backed by default; optional disk backend via STORAGE_BACKEND=disk) |
+| **Edge Functions** | Deno runtime | Deno + PL/v8 + PL/Python + embedded JS + per-function HTTP containers (5 backends) |
 | **Transaction Batching** | Not available | Built-in (`POST /rest/v1/batch`) |
 | **Studio / Dashboard** | Supabase Studio (React) | pgStack Studio (React) |
-| **SDK** | supabase-js | @pgstack/sdk (Supabase-compatible API) |
+| **SDK** | supabase-js | @pgstack/sdk (`/pgstack` entry, Supabase-compatible API) |
 | **Self-hosting** | Complex (15+ services, Kubernetes recommended) | `docker compose up -d` |
 | **Job queues** | Via pg_cron or external | Built-in DBOS (PostgreSQL-backed) |
 | **Migrations** | Supabase CLI | pgstack CLI |
 | **Type generation** | supabase gen types | pgstack generate types |
-| **OAuth** | Google, GitHub, Discord, Twitter, Apple, ... | Google, GitHub |
+| **OAuth** | Google, GitHub, Discord, Twitter, Apple, ... | Google, GitHub, Apple, Microsoft, any OIDC provider |
 | **Magic links** | Yes | Yes |
 | **Phone auth** | Yes (Twilio) | Not included |
 | **Pricing** | Free tier + paid cloud | Open source (self-host free) |
@@ -42,7 +42,9 @@ pgStack is designed as a self-hosted Supabase alternative. This page covers the 
 
 **Transaction batching.** `POST /rest/v1/batch` executes multiple REST operations in a single PostgreSQL transaction with `{{opId.field}}` cross-referencing. Supabase has no equivalent — users have been requesting this since 2015.
 
-**Edge Functions flexibility.** Three runtime backends (Deno, PL/v8, embedded JS) — pick the right tool for the job. Supabase only offers Deno.
+**Edge Functions flexibility.** Five runtime backends (Deno, PL/v8, PL/Python, embedded JS, and per-function HTTP containers in any language) — pick the right tool for the job. Supabase only offers Deno.
+
+**Presence and broadcast included.** Ad-hoc `_channel_`/`_presence_` channels, presence join/leave/state events, peer broadcast, and `GET /ws/_presence/{channel}` ship in the same proxy that serves live SQL queries.
 
 **Durable job queues.** The DBOS integration gives you a PostgreSQL-backed job queue with automatic retries, cron scheduling, and observability — no Redis or RabbitMQ.
 
@@ -54,13 +56,11 @@ pgStack is designed as a self-hosted Supabase alternative. This page covers the 
 
 **Ecosystem.** Supabase has more OAuth providers and a larger community.
 
-**Realtime presence.** Supabase Realtime supports presence channels and broadcast. pgStack's real-time is focused on live SQL queries.
-
 **Phone auth.** Supabase supports SMS-based auth via Twilio.
 
 ## SDK compatibility
 
-The `@pgstack/sdk` is designed to be a drop-in replacement for `@supabase/supabase-js` for the most common patterns:
+The `@pgstack/sdk/pgstack` client is designed to be a drop-in replacement for `@supabase/supabase-js` for the most common patterns:
 
 ```typescript
 // Supabase
@@ -69,7 +69,7 @@ const supabase = createClient(url, anonKey);
 const { data } = await supabase.from('todos').select('*').eq('done', false);
 
 // pgStack — identical API
-import { createClient } from '@pgstack/sdk';
+import { createClient } from '@pgstack/sdk/pgstack';
 const pgstack = createClient(url, anonKey);
 const { data } = await pgstack.from('todos').select('*').eq('done', false);
 ```
@@ -103,4 +103,4 @@ Auth methods match the Supabase JS client:
 
 6. **Test REST queries.** Most PostgREST-compatible queries work without changes.
 
-7. **Migrate storage.** pgStack has built-in storage (PostgreSQL-backed). Upload files via the storage API.
+7. **Migrate storage.** pgStack has built-in storage (PostgreSQL-backed by default; set `STORAGE_BACKEND=disk` + `STORAGE_DIR` for filesystem storage). Upload files via the storage API.

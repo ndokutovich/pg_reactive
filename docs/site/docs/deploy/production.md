@@ -14,7 +14,7 @@ Before launching pgStack in production, review the following checklist.
 
 - [ ] `POSTGRES_PASSWORD` is a strong random value generated with `openssl rand -base64 32`
 - [ ] `JWT_SECRET` is 32+ characters, generated randomly
-- [ ] `JWT_SECRET` does not contain `dev-only` — the proxy warns on startup if it does
+- [ ] `JWT_SECRET` does not contain `dev-only` — with `PGSTACK_ENV=production` (set by `docker-compose.prod.yml`) the proxy refuses to start if it does; outside production it only warns
 - [ ] `ANON_KEY` is a strong random value
 - [ ] `SERVICE_ROLE_KEY` is a strong random value — treat it like a database root password
 - [ ] `.env` file is in `.gitignore` and never committed to version control
@@ -33,7 +33,7 @@ Before launching pgStack in production, review the following checklist.
 - [ ] `TRUSTED_PROXIES` is set to the IP(s) of your reverse proxy — prevents rate limit bypass via `X-Forwarded-For` spoofing
 - [ ] HSTS is automatically added when TLS is active (via `TLS_MODE=auto` or `TLS_MODE=manual`)
 - [ ] WebSocket connections validate Origin header against `ALLOWED_ORIGINS`
-- [ ] `REQUIRE_AUTHENTICATED_WS=true` whenever realtime queries return user-scoped data (rejects anon-key WS subscriptions; requires JWT)
+- [ ] `REQUIRE_AUTHENTICATED_WS=true` — required in production: the `PGSTACK_ENV=production` validator refuses to start with `false`, and `docker-compose.prod.yml` sets it to `true` (rejects anon-key WS subscriptions; requires JWT)
 
 ### Database
 
@@ -64,7 +64,7 @@ docker compose -f docker-compose.prod.yml ps
 
 # Proxy health endpoint
 curl https://your-app.example.com/health
-# {"status":"ok","version":"0.1.1"}
+# {"status":"ok","pg_connected":true}
 ```
 
 ### Container restart policy
@@ -77,6 +77,17 @@ sudo reboot
 # After reboot:
 docker compose -f docker-compose.prod.yml ps
 ```
+
+### Subscription recovery after a PostgreSQL restart
+
+Live-query state lives in shared memory and is wiped by every PostgreSQL restart (crash, `docker compose restart`, host reboot, image update). The extension keeps a durable catalog — `pgr.persisted_subscriptions`, a LOGGED table maintained automatically by `pgr.subscribe` / `pgr.unsubscribe` — but it is only replayed into shared memory on request:
+
+```bash
+docker compose -f docker-compose.prod.yml exec db \
+  psql -U postgres -d app -c "SELECT pgr.restore_subscriptions();"
+```
+
+Run this once per database after every restart — until then, subscribed queries emit no deltas. The function returns the number of subscriptions restored and has `EXECUTE` revoked from `PUBLIC` (superuser or an explicitly granted role only). The all-in-one image runs it automatically at boot; the two-container production stack does not, so add it to your restart runbook.
 
 ### Resource limits
 
@@ -130,7 +141,10 @@ pgbouncer:
   image: bitnami/pgbouncer:latest
   environment:
     PGBOUNCER_DATABASE: app
-    PGBOUNCER_HOST: db
+    POSTGRESQL_HOST: db
+    POSTGRESQL_USERNAME: postgres
+    POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRESQL_DATABASE: app
     PGBOUNCER_POOL_MODE: transaction
     PGBOUNCER_MAX_CLIENT_CONN: 1000
     PGBOUNCER_DEFAULT_POOL_SIZE: 20
@@ -171,11 +185,7 @@ Or use the `fluentd` or `loki` Docker log drivers to ship logs to your logging s
 
 ### Metrics
 
-Check the proxy metrics endpoint (if enabled):
-
-```bash
-curl http://127.0.0.1:8080/metrics
-```
+pgStack has no built-in `/metrics` endpoint. `/health` (status + `pg_connected`) is the only built-in observability endpoint; scrape it or use Docker/PostgreSQL exporters for metrics.
 
 ### Alerting
 
@@ -210,7 +220,7 @@ VACUUM ANALYZE orders;
 
 ### pg_reactive snapshot tables
 
-Live query snapshot tables (`pgr._snapshot_*`) are UNLOGGED and stored in shared memory. They are recreated on each subscription and do not require maintenance.
+Live query snapshot tables (`pgr._snap_*`) are UNLOGGED — ordinary on-disk tables that skip WAL. They are created on subscribe and dropped on unsubscribe (or LRU eviction / DDL auto-unsubscribe) and require no maintenance.
 
 ## Upgrade procedure
 
@@ -219,5 +229,5 @@ Live query snapshot tables (`pgr._snapshot_*`) are UNLOGGED and stored in shared
 3. Take a database backup
 4. Pull new images: `docker compose -f docker-compose.prod.yml pull`
 5. Apply the update: `docker compose -f docker-compose.prod.yml up -d`
-6. Run any new migrations: `pgstack migration up`
+6. Run any new migrations: `pgstack migration run`
 7. Verify the health endpoint and spot-check API responses

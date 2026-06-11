@@ -8,40 +8,44 @@ description: Passwordless email authentication with magic links.
 
 Magic links let users log in without a password. The user enters their email address, receives a link by email, and clicking the link signs them in automatically.
 
-:::info Coming Soon
-Magic link authentication is planned for a future release. This page describes the intended API, which will be compatible with `@supabase/supabase-js`.
+## HTTP API
+
+### Request a magic link
+
+`POST /auth/v1/magiclink` upserts the user account (creating it if the email is new), mints a single-use token valid for one hour, and — when SMTP is configured — emails the login link. The endpoint sits behind the same rate limiter as the other auth endpoints.
+
+```bash
+curl -X POST http://127.0.0.1:8080/auth/v1/magiclink \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "user@example.com"}'
+```
+
+Response:
+
+```json
+{ "message": "Magic link sent" }
+```
+
+:::note
+The Supabase-style `auth.signInWithOtp()` SDK helper is not yet implemented. Call the HTTP endpoint directly (e.g. with `fetch`) for now.
 :::
 
-## Planned API
+### Verify the link
 
-### SDK usage
+The emailed link points at `GET /auth/v1/magiclink/verify?token=...`. The endpoint atomically consumes the token, marks the user's email as confirmed, and 302-redirects to:
+
+```
+SITE_URL#access_token=...&refresh_token=...&token_type=bearer&expires_in=...
+```
+
+The SDK's `handleOAuthRedirect()` already parses that hash fragment into a session on client initialization (enabled by default via `detectSessionInUrl`), so the landing page just needs to create a client and read the session:
 
 ```typescript
-import { createClient } from '@pgstack/sdk';
+import { createClient } from '@pgstack/sdk/pgstack';
 
 const pgstack = createClient('http://127.0.0.1:8080', 'your-anon-key');
 
-// Send a magic link to the user's email
-const { error } = await pgstack.auth.signInWithOtp({
-  email: 'user@example.com',
-  options: {
-    emailRedirectTo: 'https://your-app.com/auth/callback',
-  },
-});
-
-if (error) {
-  console.error('Failed to send magic link:', error.message);
-} else {
-  // Ask user to check their email
-}
-```
-
-### Verify the OTP
-
-When the user clicks the link, they are redirected to your app with a token in the URL. The SDK handles this automatically:
-
-```typescript
-// The SDK detects the token in the URL hash on initialization
+// The SDK detects the tokens in the URL hash on initialization
 const { data: { session } } = await pgstack.auth.getSession();
 
 if (session) {
@@ -64,9 +68,9 @@ SMTP_FROM=noreply@your-app.com
 
 See [Environment Variables](../installation#smtp--email-optional) for details.
 
-## Workaround: OTP via email today
+## Custom OTP flows
 
-While magic links are not yet implemented, you can implement a similar flow yourself using PostgreSQL functions and your own email provider:
+pgStack ships magic links built in (see above). If you need a bespoke OTP flow — custom token shapes, non-email channels, or your own delivery provider — you can build one with PostgreSQL functions:
 
 Everything lives in `public.*`. The REST endpoint at
 `/rest/v1/rpc/{fn}` walks `pg_proc` in the `public` schema only, so
@@ -77,6 +81,8 @@ explicit `GRANT EXECUTE` because the bootstrap default-denies
 returns "permission denied for function".
 
 ```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- provides gen_random_bytes()
+
 -- Store OTP tokens (in public so the helpers below can write to it
 -- while running with their pinned pg_catalog,pg_temp search_path).
 CREATE TABLE IF NOT EXISTS public.auth_otps (
@@ -92,7 +98,10 @@ CREATE TABLE IF NOT EXISTS public.auth_otps (
 -- SECURITY DEFINER with a pinned search_path of pg_catalog + pg_temp
 -- only. Every app object is fully qualified (public.auth_otps) so a
 -- CREATE-on-public role cannot shadow the table or any built-in
--- (encode, gen_random_bytes, now) and run code as the definer.
+-- (encode, now) and run code as the definer. gen_random_bytes comes
+-- from pgcrypto, not pg_catalog — it stays safe under the pinned
+-- path only because column DEFAULT expressions are resolved to
+-- function OIDs at CREATE TABLE time, not re-looked-up per INSERT.
 CREATE OR REPLACE FUNCTION public.request_otp(p_email TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql SECURITY DEFINER

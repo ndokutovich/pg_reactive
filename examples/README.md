@@ -1,12 +1,13 @@
 # pgStack Examples
 
-Seven concentrated lessons + two full apps. Each is the canonical
+Twelve concentrated lessons + two full apps. Each is the canonical
 "do it right" shape — no demo-only shortcuts, no patterns to un-learn.
 
 ## Quick start
 
 ```bash
 cd examples
+docker network create gateway   # once per machine (shared umbrella network)
 docker compose up -d --build
 ```
 
@@ -39,9 +40,10 @@ Then bring up normally — Docker compose picks the .env up automatically.
 ## Production deploy
 
 `docker-compose.prod.yml` is the umbrella override: it resets `ports` so
-nothing binds the host, and exposes the proxy + web as gateway-network
-aliases (`pgr-proxy`, `pgr-web`) for an umbrella nginx to reverse-proxy
-to. Used by `.github/workflows/deploy.yml` against
+nothing binds the host, and exposes the proxy as gateway-network alias
+`pgr-proxy` for an umbrella nginx to reverse-proxy to; the web service's
+`pgr-web` + `pgr-stack` aliases live in the base compose so they don't
+depend on the override merge. Used by `.github/workflows/deploy.yml` against
 `/opt/apps/pg-reactive-src` on the VPS.
 
 ```bash
@@ -56,13 +58,18 @@ docker compose \
 ```
 examples/
 ├── _lib/pgstack.js          shared browser SDK helper (PgStack class)
-├── 01-live-public/          public live query
-├── 02-joins-aggregates/     joins, GROUP BY, window functions
-├── 03-per-user-inventory/   audience-bound subscription (flagship)
-├── 04-rls-shopping-list/    RLS + audience for multi-tenant data
-├── 05-notify-mode/          notify vs delta side-by-side
-├── 06-presence-broadcast/   peer-to-peer chat + presence
-├── 07-edge-function/        runtime='http' invocation
+├── 01-live-products/        filtered live product grid
+├── 02-order-feed/           3-table JOIN order feed
+├── 03-revenue-dashboard/    LEFT JOIN + GROUP BY + SUM bar chart
+├── 04-category-leaderboard/ HAVING + RANK() window (two subscriptions)
+├── 05-realtime-crm/         CTE + LIMIT + GROUP BY, three live panels
+├── 06-inventory-monitor/    CASE-bucketed stock alerts
+├── 07-multi-filter/         three filtered subscriptions, one table
+├── 08-order-analytics/      date_trunc time-bucketed chart
+├── 09-price-comparison/     four-window-function matrix
+├── 10-executive-scorecard/  single-row aggregate KPIs
+├── 11-notify-mode/          notify vs delta side-by-side
+├── 12-tutorial/             15-step interactive tutorial console
 ├── apps/
 │   ├── todo/                per-user task tracker
 │   └── expenses/            per-user expenses with live totals
@@ -102,15 +109,17 @@ examples/
 ## Shared SDK (`_lib/pgstack.js`)
 
 A vanilla JS class wrapping the four pgStack capabilities — Auth,
-LiveQuery, RealtimeChannel, Edge-function invocation — used by every
-example and app. No build step, no bundler. Read the file: it's the
-shortest path to understanding the wire shape.
+LiveQuery, RealtimeChannel, Edge-function invocation — used by the two
+full apps (`apps/todo`, `apps/expenses`); the twelve numbered lessons
+intentionally use raw WebSockets so the wire shape stays visible. No
+build step, no bundler. Read the file: it's the shortest path to
+understanding the wire shape.
 
 ```js
 const pg = new PgStack();
 await pg.autoAuth();                          // signup / re-login from sessionStorage
 
-const qid = await pg.rest('/rpc/subscribe_my_inventory', { method: 'POST', body: '{}' });
+const qid = await pg.rest('/rpc/subscribe_my_todos', { method: 'POST', body: '{}' });
 pg.liveQuery(qid, {
   onSnapshot(rows) { /* initial */ },
   onDelta(ins, del) { /* row-level updates */ }

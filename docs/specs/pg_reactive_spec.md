@@ -1,7 +1,7 @@
 # pg_reactive Technical Specification
 
-**Version:** 0.1
-**Last Updated:** 2026-03-01
+**Version:** 0.1.4
+**Last Updated:** 2026-06-11
 **Status:** Production-ready (Phase 1 complete)
 
 ---
@@ -46,15 +46,17 @@ PostgreSQL 16 + pg_reactive       <-- C extension
 pgr.subscribe('orders_q', 'SELECT id, total FROM orders WHERE status = ''active''')
 ```
 
+0. **Persist catalog row** (since 0.1.4) -- The plpgsql wrapper upserts `(query_id, query_text, mode, audience)` into `pgr.persisted_subscriptions` via `pgr._persist_subscription`, then calls the C-level `pgr._subscribe_internal`, which performs the steps below.
+
 1. **Parse query** -- The raw SQL text is parsed using PostgreSQL's own parser (`raw_parser`). The resulting parse tree is walked recursively to extract table OIDs and per-table column bitmasks.
 
 2. **Extract dependencies** -- Each referenced table is resolved to its OID via `RangeVarGetRelid`. Column references (`ColumnRef` nodes) are mapped to attribute numbers and stored as `uint64` bitmasks (bit N corresponds to `attnum` N+1, supporting up to 64 columns per table).
 
 3. **Allocate shared memory slot** -- A `PgrDepEntry` is inserted into the shared hash table (`ShmemInitHash`). If the table is full (all `max_subscriptions` slots occupied), the entry with the oldest `subscribed_at` timestamp is evicted via LRU, and its snapshot table and triggers are cleaned up.
 
-4. **Create UNLOGGED snapshot table** -- An UNLOGGED table named `pgr._snapshot_<query_id>` is created via SPI: `CREATE UNLOGGED TABLE pgr._snapshot_<query_id> AS <query>`. UNLOGGED tables avoid WAL overhead since snapshots are ephemeral.
+4. **Create UNLOGGED snapshot table** -- An UNLOGGED table named `pgr._snap_<query_id>` is created via SPI: `CREATE UNLOGGED TABLE pgr._snap_<query_id> AS <query>`. UNLOGGED tables avoid WAL overhead since snapshots are ephemeral.
 
-5. **Install AFTER STATEMENT triggers** -- Base triggers (`pgr_ins_<tableoid>`, `pgr_del_<tableoid>`) are installed for INSERT and DELETE on each dependent table. Per-query UPDATE triggers (`pgr_upd_<tableoid>_<queryid>`) are installed with a `WHEN` clause that restricts firing to updates affecting tracked columns only.
+5. **Install AFTER STATEMENT triggers** -- Base triggers (`pgr_ins_<tableoid>`, `pgr_del_<tableoid>`) are installed for INSERT and DELETE on each dependent table. Per-query UPDATE triggers (`pgr_upd_<tableoid>_<queryid>`) are installed with an `AFTER UPDATE OF <tracked columns>` column list that restricts firing to updates affecting tracked columns only (plain `AFTER UPDATE` when the column mask is all-columns or empty).
 
 6. **Return confirmation** -- Returns a JSONB result: `{"status":"subscribed","tables":N,"mode":"delta","query_id":"..."}`.
 
@@ -125,6 +127,7 @@ typedef struct PgrDepEntry {
     int64       invalidation_count;    // Total invalidations for this query
     char        mode;                  // 'd' = delta, 'n' = notify
     int64       notify_seq;            // Monotonic sequence for gap detection
+    char        audience[512];         // Serialised JSON audience predicate enforced by proxy at WS connect (empty = public; since 0.1.2)
 } PgrDepEntry;
 
 typedef struct PgrSharedState {
@@ -145,7 +148,7 @@ Shared memory is requested during `_PG_init` via `shmem_request_hook` and initia
 - **Dependency hash table** -- `hash_estimate_size(max_subscriptions, sizeof(PgrDepEntry))` using `ShmemInitHash` with `HASH_ELEM | HASH_STRINGS` flags.
 - **Dirty queue** -- `MAXALIGN(sizeof(PgrDirtyQueue))` for the optional background worker.
 
-Total shared memory per subscription slot: approximately 2.2 KB (PgrDepEntry is ~2.2 KB with a 2048-byte query text field).
+Total shared memory per subscription slot: approximately 2.8 KB (PgrDepEntry carries a 2048-byte query text field plus a 512-byte audience field).
 
 ### 3.3 Concurrency Control
 
@@ -176,7 +179,6 @@ CREATE TRIGGER pgr_upd_<tableoid>_<queryid>
 AFTER UPDATE OF col1, col2, col3
 ON <table>
 FOR EACH STATEMENT
-WHEN (/* columns overlap check */)
 EXECUTE FUNCTION pgr.trigger_func('<query_id>');
 ```
 
@@ -194,7 +196,7 @@ pgr_columns_overlap(uint64 registered_mask, uint64 updated_mask)
 }
 ```
 
-This function is used at trigger fire time to skip recompute when an UPDATE only modifies columns not tracked by a particular subscription.
+Column skipping is enforced by PostgreSQL itself via the `AFTER UPDATE OF` column list — the trigger never fires for untracked columns. The `pgr_columns_overlap` helper (ext/src/invalidation.h) documents the mask-overlap semantics but is not currently on the trigger fire path.
 
 ---
 
@@ -218,7 +220,8 @@ pg_reactive intercepts DDL statements via a `ProcessUtility_hook`:
 | DDL Statement | Action |
 |---------------|--------|
 | `TRUNCATE <table>` | Calls `pgr_invalidate_table(table_oid)` to recompute all subscriptions depending on the table |
-| `ALTER TABLE <table>` | Auto-unsubscribes all queries referencing the table (column definitions may have changed) |
+| `ALTER TABLE ... DROP COLUMN` / `ALTER TABLE ... RENAME COLUMN` | Auto-unsubscribes all queries referencing the table (handled pre-DDL; column metadata is about to change/disappear) |
+| Other `ALTER TABLE` operations, `ALTER TABLE ... RENAME TO` | Calls `pgr_invalidate_table(table_oid)` to recompute all subscriptions depending on the table (post-DDL) |
 | `DROP TABLE <table>` | Auto-unsubscribes all queries referencing the table |
 
 The hook chains to the previous `ProcessUtility_hook` to maintain compatibility with other extensions.
@@ -252,19 +255,38 @@ When the delta JSON exceeds PostgreSQL's NOTIFY payload limit (8000 bytes minus 
 {
   "type": "overflow",
   "query_id": "orders_q",
+  "seq": 15,
   "fetch": true
 }
 ```
 
 Clients receiving an overflow message should clear their local snapshot and re-fetch the full result set.
 
-### 7.3 Sequence Numbers
+An overflow signal is also emitted when the snapshot's column layout has drifted from the live query (e.g. the subscription was re-registered with a different shape under the same query_id, or a snapshot survived from an older deploy). In that case the snapshot is rebuilt server-side and clients must clear local state and re-fetch.
+
+### 7.3 Invalidation Message (notify mode)
+
+Subscriptions registered with `mode => 'notify'` skip delta computation entirely; each trigger fire emits a lightweight invalidation signal:
+
+```json
+{
+  "type": "invalidated",
+  "query_id": "orders_q",
+  "seq": 15
+}
+```
+
+Clients treat this as a "data changed" hint and re-fetch on their own schedule.
+
+### 7.4 Sequence Numbers
 
 Each delta message includes a `seq` field (monotonically increasing per query_id). Clients can detect missed notifications by observing gaps in the sequence. A gap indicates that either:
-- An overflow occurred (payload too large).
+- A recompute produced no changes for this query (`seq` is a notification-attempt counter incremented before delta computation; when the delta is empty, no NOTIFY is sent and that seq value is silently consumed).
 - A NOTIFY was dropped due to queue pressure.
 
-### 7.4 Proxy Welcome Message
+Overflow messages carry their own `seq` field and therefore do not produce gaps.
+
+### 7.5 Proxy Welcome Message
 
 When a WebSocket client connects, the proxy sends:
 
@@ -283,6 +305,7 @@ When a WebSocket client connects, the proxy sends:
 |-----------|------|---------|---------|-------------|
 | `pg_reactive.max_subscriptions` | `int` | 1024 | Yes (PGC_POSTMASTER) | Maximum concurrent subscriptions. Determines shared memory allocation. |
 | `pg_reactive.async_recompute` | `bool` | `off` | Yes (PGC_POSTMASTER) | Enable background worker for asynchronous recompute. |
+| `pg_reactive.database` | `string` | `postgres` | Yes (PGC_POSTMASTER) | Database the async-recompute background worker connects to. |
 | `pg_reactive.notify_channel` | `string` | `pgr` | No (PGC_SUSET) | NOTIFY channel name for all delta messages. |
 | `pg_reactive.batch_invalidation` | `bool` | `true` | No (PGC_SUSET) | Deduplicate recomputes within a transaction. |
 
@@ -293,14 +316,18 @@ When a WebSocket client connects, the proxy sends:
 ### 9.1 Functions
 
 ```sql
--- Subscribe to a live query (delta or notify mode, optional audience)
-pgr.subscribe(query_id text, query text,
-              mode text DEFAULT 'delta',
-              audience jsonb DEFAULT NULL)
+-- Subscribe to a live query (delta or notify mode, optional audience).
+-- Since 0.1.4 this is a plpgsql wrapper: it first upserts the subscription
+-- into pgr.persisted_subscriptions, then calls the C-level
+-- pgr._subscribe_internal.
+pgr.subscribe(p_query_id text, p_query text,
+              p_mode text DEFAULT 'delta',
+              p_audience jsonb DEFAULT NULL)
   RETURNS jsonb
 
--- Unsubscribe from a live query
-pgr.unsubscribe(query_id text)
+-- Unsubscribe from a live query (wrapper over pgr._unsubscribe_internal;
+-- also deletes the pgr.persisted_subscriptions row)
+pgr.unsubscribe(p_query_id text)
   RETURNS boolean
 
 -- List all active subscriptions
@@ -311,7 +338,18 @@ pgr.get_subscriptions()
 -- Extension-wide statistics
 pgr.stats()
   RETURNS SETOF record(metric, value)
+
+-- Rebuild the in-memory subscription hash from pgr.persisted_subscriptions
+-- after a PG restart wipes shared memory. Idempotent; per-row failures are
+-- reported via RAISE WARNING without aborting the restore. SECURITY DEFINER,
+-- SET search_path = pg_catalog, pgr. Call from a deploy post-init hook.
+pgr.restore_subscriptions()
+  RETURNS int  -- number of successfully restored subscriptions
 ```
+
+#### Persisted subscription catalog (since 0.1.4)
+
+`pgr.persisted_subscriptions` is a LOGGED catalog table (`REVOKE ALL FROM PUBLIC`) that survives server restarts — shared memory does not. Columns: `query_id text PRIMARY KEY`, `query_text text NOT NULL`, `mode text NOT NULL`, `audience jsonb`, `owner_role text DEFAULT current_user`, `created_at` / `updated_at timestamptz`. It is maintained transparently by the `pgr.subscribe` / `pgr.unsubscribe` wrappers via the internal `SECURITY DEFINER` helpers `pgr._persist_subscription(...)` and `pgr._forget_subscription(...)` (both pinned with `SET search_path = pg_catalog, pgr`). After a restart, run `SELECT pgr.restore_subscriptions();` once per database to replay the catalog into shared memory.
 
 #### audience (since 0.1.2)
 
@@ -401,10 +439,10 @@ audience from server-side state:
 -- The SQL text is a literal string the app cannot influence; only the
 -- arguments are taken from the caller.
 --
--- pgr.subscribe signature (see ext/pg_reactive--0.1.3.sql):
---   pgr.subscribe(query_id text, query text, mode text DEFAULT 'delta',
---                 audience jsonb DEFAULT NULL) RETURNS jsonb
--- `mode` is the delivery mode ('delta' = ship inserted/deleted rows on
+-- pgr.subscribe signature (see ext/pg_reactive--0.1.4.sql):
+--   pgr.subscribe(p_query_id text, p_query text, p_mode text DEFAULT 'delta',
+--                 p_audience jsonb DEFAULT NULL) RETURNS jsonb
+-- `p_mode` is the delivery mode ('delta' = ship inserted/deleted rows on
 -- NOTIFY, 'notify' = ship a bare invalidation signal). It is NOT a role
 -- and the function does not switch identity per call.
 CREATE FUNCTION public.subscribe_my_orders(p_user uuid)
@@ -472,7 +510,7 @@ pg_reactive supports any `SELECT` statement that PostgreSQL can parse and execut
 - Maximum 64 tracked columns per table (uint64 bitmask).
 - Query text limited to 2048 characters (`PGR_QUERY_TEXT_LEN`).
 - Query ID limited to 64 characters, alphanumeric plus underscores and hyphens.
-- NOTIFY payload limit of approximately 7800 bytes (after overhead). Larger deltas produce overflow signals.
+- NOTIFY payload limit of approximately 7900 bytes for the default `pgr` channel — computed at runtime as 8000 minus the channel-name length minus 100 bytes overhead (see `PGR_NOTIFY_MAX_PAYLOAD_FOR_CHANNEL` in ext/src/recompute.c). Larger deltas produce overflow signals.
 
 ---
 
@@ -484,7 +522,7 @@ When all shared memory slots are occupied and a new subscription is requested:
 2. Its snapshot table is dropped and triggers are removed.
 3. The shared memory slot is reused for the new subscription.
 4. The `eviction_count` counter is incremented.
-5. A WARNING is logged identifying the evicted query_id.
+5. A LOG-level message is emitted identifying the evicted query_id (`elog(LOG, ...)` in ext/src/dependency.c).
 
 Eviction information is returned in the `PgrEvictedInfo` struct so the caller can perform cleanup (drop triggers, snapshot tables) outside the LWLock.
 
@@ -494,7 +532,7 @@ Eviction information is returned in the `PgrEvictedInfo` struct so the caller ca
 
 When `pg_reactive.async_recompute = on`, a background worker process is registered:
 
-- **Listens on a shared dirty queue** -- Trigger functions push table OIDs to a `PgrDirtyQueue` (spinlock-protected, 256 slots).
+- **Listens on a shared dirty queue** -- Trigger functions push table OIDs to a `PgrDirtyQueue` (spinlock-protected, 4096 slots — `PGR_DIRTY_QUEUE_SIZE`).
 - **Wakes via Latch** -- Trigger functions set the worker's latch after pushing to the queue.
 - **Processes in bulk** -- The worker drains the queue, looks up affected query_ids via the reverse index (`table_oid -> query_ids`), and recomputes each.
 - **Runs in its own transaction** -- Recomputes happen in a separate transaction from the triggering DML.
@@ -507,16 +545,16 @@ This mode trades consistency (delta may arrive slightly after the transaction co
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `ext/src/pg_reactive.c` | ~600 | `_PG_init`, `pgr.subscribe`, `pgr.unsubscribe`, query parsing, dependency extraction, DDL hook |
-| `ext/src/pg_reactive.h` | ~120 | Shared data structures, constants, inline helpers |
-| `ext/src/dependency.c` | ~250 | Shared memory hash table (add, remove, find, LRU eviction, reverse index) |
-| `ext/src/invalidation.c` | ~450 | AFTER STATEMENT triggers, per-transaction dirty list, batch invalidation, DDL ProcessUtility hook |
+| `ext/src/pg_reactive.c` | ~1000 | `_PG_init`, `pgr.subscribe`, `pgr.unsubscribe`, query parsing, dependency extraction, DDL hook |
+| `ext/src/pg_reactive.h` | ~135 | Shared data structures, constants, inline helpers |
+| `ext/src/dependency.c` | ~400 | Shared memory hash table (add, remove, find, LRU eviction, reverse index) |
+| `ext/src/invalidation.c` | ~1000 | AFTER STATEMENT triggers, per-transaction dirty list, batch invalidation, DDL ProcessUtility hook |
 | `ext/src/invalidation.h` | ~55 | Trigger installation API, column overlap inline function |
-| `ext/src/recompute.c` | ~350 | EXCEPT-based delta computation, JSON serialization, NOTIFY dispatch |
-| `ext/src/recompute.h` | ~15 | Recompute API, JSON escape function |
-| `ext/src/bgworker.c` | ~200 | Optional background worker, dirty queue |
-| `ext/src/bgworker.h` | ~30 | Background worker API, dirty queue structure |
-| `ext/pg_reactive--0.1.sql` | ~87 | Extension install script (schema, functions, views, permissions) |
+| `ext/src/recompute.c` | ~650 | EXCEPT-based delta computation, JSON serialization, NOTIFY dispatch |
+| `ext/src/recompute.h` | ~25 | Recompute API, JSON escape function |
+| `ext/src/bgworker.c` | ~230 | Optional background worker, dirty queue |
+| `ext/src/bgworker.h` | ~45 | Background worker API, dirty queue structure |
+| `ext/pg_reactive--0.1.4.sql` | ~230 | Current full install script (`default_version = 0.1.4`; base scripts 0.1–0.1.3 plus three upgrade scripts also ship — 8 SQL files total) |
 | `ext/pg_reactive.control` | ~5 | Extension metadata |
 
 ---
@@ -572,8 +610,8 @@ Use `DELETE` instead of `TRUNCATE` for snapshot tables inside trigger SPI contex
 
 | Test Type | Count | Command |
 |-----------|-------|---------|
-| pg_regress (SQL) | 7 files | `make installcheck` |
+| pg_regress (SQL) | 12 files | `make installcheck` |
 | Isolation (concurrency) | 3 specs | `make isolation_installcheck` |
-| Integration (Python) | 2 scripts | `test_shmem_pressure.py`, `test_notify_throughput.py` |
-| E2E (Node.js) | 3 scripts | `e2e_ws_test.mjs`, `e2e_fanout_test.mjs`, `e2e_jwt_test.mjs` |
-| Performance (P1-P6) | 6 benchmarks | `tests/perf/runner.sh` |
+| Integration (Python) | 3 scripts | `test_shmem_pressure.py`, `test_notify_throughput.py`, `test_lru_eviction.py` |
+| E2E (Node.js) | 4 scripts (realtime core) | `e2e_ws_test.mjs`, `e2e_fanout_test.mjs`, `e2e_jwt_test.mjs`, `e2e_gzip_test.mjs` (10 further pgStack-level `e2e_*.mjs` scripts live in `tests/`) |
+| Performance (P1-P7) | 7 benchmarks | `tests/perf/runner.sh` |

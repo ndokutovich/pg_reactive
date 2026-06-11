@@ -30,7 +30,7 @@ The codebase demonstrates strong security fundamentals: parameterized SQL querie
 | C3 | C Extension | **`pgr_dep_find` returns shared memory pointer after lock release** — another backend can `HASH_REMOVE` the entry concurrently, causing use-after-free. Same pattern in `pgr_dep_add` | `ext/src/dependency.c:234-251, 99-203` | Memory Safety |
 | C4 | C Extension | **User-supplied query_text executed verbatim via SPI** — `pgr.subscribe()` does not validate that the query is a pure SELECT. CTE with DML (`WITH x AS (DELETE ... RETURNING *) SELECT ...`) would execute side effects | `ext/src/recompute.c:223-226, 455-490` | A03 |
 
-### HIGH (11)
+### HIGH (13)
 
 | ID | Component | Finding | File |
 |----|-----------|---------|------|
@@ -107,7 +107,7 @@ The codebase demonstrates strong security fundamentals: parameterized SQL querie
 
 ## Remediation Status
 
-Fixed in commit `98f9667`. Status reflects the state of the codebase after that commit.
+Initial remediation landed in commit `98f9667`; the remaining Medium/Low items (L1-L10 sweep, gomail replacement, secretbox encryption) closed in later hardening rounds (e.g. `7f59f58`, `f7936dd`). Status reflects the current codebase.
 
 ### Critical Findings
 
@@ -142,7 +142,7 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 |----|---------|--------|-------|
 | M1 | WebSocket `CheckOrigin` always returns true | FIXED | `CheckOrigin` now validates against `AllowedOrigins` |
 | M2 | No HSTS header | FIXED | HSTS header added when TLS is active |
-| M3 | Refresh tokens stored as plaintext | FIXED | `pgstack.refresh_tokens.token_hash` stores `HashToken(refresh)` (SHA-256); plaintext never persisted. See `proxy-go/auth/routes.go:56,307,357` |
+| M3 | Refresh tokens stored as plaintext | FIXED | `pgstack.refresh_tokens.token_hash` stores `HashToken(refresh)` (SHA-256); plaintext never persisted. See `proxy-go/auth/tokenhash.go` (HashToken) and `proxy-go/auth/routes.go:79,316,386` |
 | M4 | `unsafe-inline` in script-src CSP | FIXED | `'unsafe-inline'` removed from script-src |
 | M5 | Dev default secrets pass validation | FIXED | Config validation warns on dev-only JWT secrets |
 | M6 | Password grant skips `email_confirmed_at` | FIXED | Password grant checks `email_confirmed_at` when verification required |
@@ -153,7 +153,7 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 | M11 | Production port binds to all interfaces | FIXED | Production port binds to `127.0.0.1` |
 | M12 | Buffer overread in `pgr_dep_find_by_table` | FIXED | `Min(count, 256)` bounds check applied on all loops |
 | M13 | `refresh_tokens`, `email_tokens`, `oauth_sessions` lack RLS | FIXED | RLS enabled on all three tables |
-| M14 | `edge_functions.env_vars` stores secrets as plaintext JSONB | FIXED | Column replaced by `env_vars_encrypted BYTEA` (AES-256-GCM under `SECRETS_ENCRYPTION_KEY`, `proxy-go/secrets/secretbox.go`). Same posture extended to `pgstack.webhooks.secret_encrypted`. See `docker/init.sql:184,369` |
+| M14 | `edge_functions.env_vars` stores secrets as plaintext JSONB | FIXED | Column replaced by `env_vars_encrypted BYTEA` (AES-256-GCM under `SECRETS_ENCRYPTION_KEY`, `proxy-go/secrets/secretbox.go`). Same posture extended to `pgstack.webhooks.secret_encrypted`. See `docker/init.sql:200,468` |
 
 ### Low Findings
 
@@ -162,7 +162,7 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 | L1 | OAuth state token logged at WARN level | FIXED — only an 8-hex-char SHA-256 fingerprint of the state is logged (`auth/oauth.go: stateFingerprint`). Enough to correlate flows in logs without exposing the CSRF-defense secret. |
 | L2 | CORS allows credentials with reflected origin in dev mode | FIXED — `middleware/cors.go` no longer sets `Access-Control-Allow-Credentials` in permissive dev mode. Reflected-Origin+credentials is the CSRF-amplifying combo; pgStack uses Bearer/apikey-header auth, not cookies, so credentials=true was unused. |
 | L3 | Expired email tokens never cleaned up | FIXED — `auth/StartExpiredTokenCleanup` goroutine deletes expired rows from `pgstack.email_tokens` hourly; also reaps `pgstack.refresh_tokens` past expiry (and revoked rows past expiry + 7d grace). Wired in `main.go`. |
-| L4 | Missing `Permissions-Policy` header | FIXED — `middleware/SecurityHeaders` now emits a deny-all `Permissions-Policy` covering 23 high-risk browser features; also propagated to `StudioSecurityHeaders`. |
+| L4 | Missing `Permissions-Policy` header | FIXED — `middleware/SecurityHeaders` now emits a deny-all `Permissions-Policy` covering 24 high-risk browser features; also propagated to `StudioSecurityHeaders`. |
 | L5 | Missing `X-XSS-Protection: 0` header | FIXED — `middleware/SecurityHeaders` now sets `X-XSS-Protection: 0` explicitly. Disables the legacy IE/Chromium auditor that has known bypass tricks (OWASP recommendation). |
 | L6 | Docker images not pinned to SHA256 digest | FIXED — `proxy-go/Dockerfile` pins `node:20-bookworm-slim`, `golang:1.23-bookworm`, `debian:bookworm-slim` by digest. Refresh instructions are inline at the top of the file. |
 | L7 | `gopkg.in/gomail.v2` unmaintained (2016) | FIXED — `proxy-go/mailer.go` rewritten on top of stdlib `net/smtp` + `crypto/tls`; supports STARTTLS (587), implicit TLS (465), and PLAIN auth. No external dependency. |
@@ -200,6 +200,6 @@ Fixed in commit `98f9667`. Status reflects the state of the codebase after that 
 
 ### Phase 3 — Hardening
 
-19. ✅ **M3** + ✅ **M14** complete. Secret-at-rest also extended to `pgstack.webhooks.secret_encrypted` (out-of-scope for the original audit, added during round-7/round-8 hardening). Remaining: all Low findings (L1–L10).
-20. Dependency updates (gomail replacement, Docker image pinning) — pending
+19. ✅ **M3** + ✅ **M14** complete. Secret-at-rest also extended to `pgstack.webhooks.secret_encrypted` (out-of-scope for the original audit, added during round-7/round-8 hardening). All Low findings (L1–L10) closed in round 13 — see the Low Findings table above.
+20. ✅ Dependency updates (gomail replaced by stdlib `net/smtp`; Docker base images pinned by sha256 digest)
 21. Security regression test suite for all fixed findings — in place for the major Critical/High/Medium fixes; gaps tracked in CI

@@ -12,7 +12,7 @@ pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries
 
 - the role list (`anon` / `authenticated` / `service_role` / `admin`),
 - a capability × role matrix for every network-reachable surface, and
-- 10 cross-cutting invariants (no PUBLIC EXECUTE on functions, chi.RealIP must never be added, empty JWT_SECRET fails closed, etc).
+- 13 cross-cutting invariants (no PUBLIC EXECUTE on functions, chi.RealIP must never be added, empty JWT_SECRET fails closed, etc).
 
 When you change anything that touches a capability in that matrix, the **ritual** applies (also documented in SECURITY.md and enforced by `.github/PULL_REQUEST_TEMPLATE.md`):
 
@@ -52,7 +52,7 @@ rather than duplicating it — do not fork the boot logic into those repos.
 # Build + install
 docker compose exec -T db bash -c 'cd /ext/ext && make clean && make && make install'
 
-# pg_regress tests (10 SQL test files)
+# pg_regress tests (12 SQL test files)
 docker compose exec -T db bash -c 'su - postgres -c "cd /ext/ext && make installcheck"'
 
 # Isolation tests (3 concurrency specs)
@@ -88,7 +88,7 @@ The proxy is built and run via Docker in development. Direct `cargo build` is fo
 
 ```bash
 cd proxy-go && go build ./...             # Build all packages
-cd proxy-go && go test ./...              # Run all unit tests (config, gzip, TLS, template)
+cd proxy-go && go test ./...              # Run all unit tests (auth, middleware, realtime, rest, routes, functions, secrets, config/gzip/TLS)
 cd proxy-go && go test -v -run TestValidate ./...  # Run specific tests
 ```
 
@@ -118,7 +118,7 @@ node tests/doc_sql_smoke_test.mjs                  # extract every ```sql block 
 for t in tests/security/*.test.mjs; do node "$t"; done   # negative HTTP-level regression tests
 ```
 
-The lint rules are named after SECURITY.md invariants (`SEC-R3`, `SEC-R25`, `SEC-R28`, `SEC-R30`). Override a verified-safe occurrence with `-- lint:allow=SEC-RXX` on the same line. The adversarial tests need `docker compose up` first (they hit the proxy over loopback). The doc-test harness runs each fenced `sql` block in an isolated `doctest` schema — mark intentionally-unsafe examples with `\`\`\`sql doc-test:skip=<reason>`.
+The lint rules are named after SECURITY.md invariants (`SEC-R3`, `SEC-R13`, `SEC-R25`, `SEC-R28`, `SEC-R30`). Override a verified-safe occurrence with `-- lint:allow=SEC-RXX` on the same line. The adversarial tests need `docker compose up` first (they hit the proxy over loopback). The doc-test harness runs each fenced `sql` block in an isolated `doctest` schema — mark intentionally-unsafe examples with `\`\`\`sql doc-test:skip=<reason>`.
 
 ### E2E Tests (require running docker compose)
 
@@ -139,7 +139,7 @@ docker compose exec -T db bash -c 'cd /ext && python3 tests/integration/test_not
 ### Performance Tests
 
 ```bash
-bash tests/perf/runner.sh    # Full suite (~10 min): P1-P6 with PASS/FAIL thresholds
+bash tests/perf/runner.sh    # Full suite (~10 min): P1-P7 with PASS/FAIL thresholds
 
 # Individual container tests (Python)
 docker compose exec -T db bash -c 'python3 /ext/tests/perf/p1_write_throughput.py'
@@ -150,6 +150,7 @@ docker compose exec -T db bash -c 'python3 /ext/tests/perf/p6_cascade.py'
 node tests/perf/p3_e2e_latency.mjs
 node tests/perf/p4_fanout_scale.mjs
 node tests/perf/p5_soak.mjs
+node tests/perf/p7_concurrent_subscribe.mjs
 ```
 
 ## Architecture
@@ -161,7 +162,7 @@ All SQL functions live in the `pgr` schema (not `pg_reactive` — the `pg_` pref
 - **pg_reactive.c** — `_PG_init()`, `ProcessUtility_hook` for DDL (TRUNCATE/ALTER/DROP), `pgr.subscribe()`, `pgr.unsubscribe()`, query parsing to extract table OIDs and column masks
 - **dependency.c** — Shared memory hash table (`ShmemInitHash`) mapping query_id→table dependencies with LRU eviction. Protected by `LWLock`. Reverse index: table_oid→query_ids
 - **invalidation.c** — AFTER STATEMENT triggers for INSERT/UPDATE/DELETE. Column-level tracking via `uint64` bitmasks. Auto-installs/removes triggers on subscribe/unsubscribe
-- **recompute.c** — EXCEPT-based delta computation. Stores snapshots in UNLOGGED tables (`pgr._snapshot_<query_id>`). Emits JSON via `pg_notify('pgr', ...)`. Overflow at 7800 bytes
+- **recompute.c** — EXCEPT-based delta computation. Stores snapshots in UNLOGGED tables (`pgr._snap_<query_id>`). Emits JSON via NOTIFY on the configurable `pg_reactive.notify_channel` channel (default `pgr`). Overflow when payload exceeds 8000 - strlen(channel) - 100 bytes (7897 for the default channel)
 - **bgworker.c** — Optional background worker for async recompute (controlled by `pg_reactive.async_recompute` GUC, PGC_POSTMASTER)
 
 ### Go Proxy (`proxy-go/`)
@@ -194,9 +195,10 @@ Use `docker compose exec -T db bash -c '...'` with the command in quotes. Git Ba
 
 ### NOTIFY Wire Format
 
-Single channel `pgr` for all queries:
-- Delta: `{"query_id":"...","inserted":[...],"deleted":[]}`
-- Overflow: `{"type":"overflow","query_id":"...","fetch":true}`
+Single channel for all queries, configurable via `pg_reactive.notify_channel` (default `pgr`; the Go proxy hardcodes `LISTEN pgr`, so only the default works end-to-end):
+- Delta: `{"query_id":"...","seq":N,"inserted":[...],"deleted":[]}`
+- Overflow: `{"type":"overflow","query_id":"...","seq":N,"fetch":true}`
+- Invalidated (mode='notify'): `{"type":"invalidated","query_id":"...","seq":N}`
 - Proxy welcome: `{"type":"subscribed","query_id":"..."}`
 
 ### pg_regress Stats Tests
@@ -221,7 +223,7 @@ The security-critical bootstrap backbone — roles, schemas, auth tables, RLS, d
 
 ### pgr.subscribe is a privileged API
 
-`pgr.subscribe()` stores raw SQL that is later re-executed by `SECURITY DEFINER` triggers. Granting `EXECUTE` to an app role that also holds `CREATE FUNCTION` on any schema in its `search_path` is a definer-context RCE waiting to happen. Expose subscription registration to app clients only through purpose-built `SECURITY DEFINER` wrappers with a fixed query template, server-derived `query_id`/audience, and `SET search_path = pg_catalog, pg_temp`. See `docs/specs/pg_reactive_spec.md` §9.4 for the canonical pattern and `examples/03-per-user-inventory/setup.sql` for a working example.
+`pgr.subscribe()` stores raw SQL that is later re-executed by `SECURITY DEFINER` triggers. Granting `EXECUTE` to an app role that also holds `CREATE FUNCTION` on any schema in its `search_path` is a definer-context RCE waiting to happen. Expose subscription registration to app clients only through purpose-built `SECURITY DEFINER` wrappers with a fixed query template, server-derived `query_id`/audience, and `SET search_path = pg_catalog, pg_temp`. See `docs/specs/pg_reactive_spec.md` §9.4 for the canonical pattern and `examples/apps/todo/setup.sql` for a working example.
 
 ### SECURITY DEFINER hardening
 
@@ -233,3 +235,6 @@ Every `SECURITY DEFINER` function in this repo MUST: (a) carry `SET search_path 
 |-----------|------|---------|-------------|
 | `pg_reactive.max_subscriptions` | PGC_POSTMASTER | 1024 | Shared memory slots. Requires restart. Set via docker-compose `command:` flag |
 | `pg_reactive.async_recompute` | PGC_POSTMASTER | off | Enable background worker. Requires restart |
+| `pg_reactive.database` | PGC_POSTMASTER | postgres | Database the async-recompute background worker connects to. Requires restart |
+| `pg_reactive.batch_invalidation` | PGC_SUSET | on | Defer recompute to transaction pre-commit, batching multiple DML statements into one recompute per query |
+| `pg_reactive.notify_channel` | PGC_SUSET | pgr | LISTEN/NOTIFY channel for all delta/overflow/invalidation notifications |

@@ -89,7 +89,6 @@ function validateEnvVars() {
     TLS_CERT_DIR: '/data/certs',
     HTTPS_ADDR: ':443',
     HTTP_ADDR: ':80',
-    FUNCTIONS_DIR: '/functions',
   };
 
   for (const [name, codeDefault] of Object.entries(codeDefaults)) {
@@ -112,7 +111,9 @@ function validateEnvVars() {
     'EDGE_RUNTIME_URL', 'PUBLIC_DIR', 'TLS_DOMAINS', 'TLS_ACME_EMAIL',
     'TLS_CERT_FILE', 'TLS_KEY_FILE',
     // Docker/PG vars (not in config.go, they're GUC or compose vars)
-    'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'PROXY_PORT',
+    'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'PROXY_PORT', 'PROXY_RUST_PORT',
+    // Logging vars read in main.go, not config.go
+    'LOG_LEVEL', 'LOG_PRETTY',
     // PG tuning GUC params (documented in env-vars.md but not config.go env vars)
     'max_connections', 'shared_buffers', 'effective_cache_size',
     'pg_reactive.max_subscriptions', 'log_min_messages', 'log_statement',

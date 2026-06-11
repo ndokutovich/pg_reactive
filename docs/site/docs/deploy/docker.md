@@ -54,6 +54,9 @@ SERVICE_ROLE_KEY=<generate with: openssl rand -base64 32>
 
 # Your app's public URL
 SITE_URL=https://your-app.example.com
+
+# At-rest encryption (edge function env vars, webhook signing secrets)
+SECRETS_ENCRYPTION_KEY=<generate with: openssl rand -base64 32>
 ```
 
 ### 4. Start the stack
@@ -71,6 +74,33 @@ docker compose -f docker-compose.prod.yml ps
 # Check the health endpoint
 curl http://127.0.0.1:8080/health
 ```
+
+## What the first boot creates
+
+The `pgstack-postgres` image ships the pgStack bootstrap (`docker/init.sql`) in `/docker-entrypoint-initdb.d/`. On the **first** start with an empty `pgdata` volume, PostgreSQL runs it automatically and creates the security backbone: the `anon`, `authenticated`, and `service_role` roles, the `pgstack` and `auth` schemas, the auth tables (users, refresh tokens, email tokens, storage, webhooks) with RLS enabled, and default-deny grants (`EXECUTE` revoked from `PUBLIC` on all functions).
+
+Two consequences:
+
+- The bootstrap runs **only when the data directory is empty**. Re-running `up -d` against an existing `pgdata` volume never re-applies it.
+- If you point `DATABASE_URL` at an external PostgreSQL instead of the bundled `db` service, nothing bootstraps that database. Apply the core schema yourself first — `pgstack init` scaffolds it as your first migration, or run `docker/init.sql` manually.
+
+## Deploying with the CLI
+
+`pgstack deploy` automates the steps above — it copies your compose file and environment file to a remote Docker host over SSH and starts the stack:
+
+```bash
+pgstack deploy --host deploy@your-server
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--host <user@server>` | (required) | SSH target |
+| `--env <path>` | `.env.production` | Environment file to copy |
+| `--compose <path>` | `docker-compose.prod.yml` | Docker Compose file to use |
+| `--dir <path>` | `~/pgstack` | Remote directory for the deployment |
+| `--dry-run` | — | Show what would be deployed without executing |
+
+Run with `--dry-run` first to review the plan before anything touches the server.
 
 ## HTTPS with a reverse proxy
 
@@ -204,22 +234,33 @@ proxy:
 
 Use the `pgstack` CLI — it understands the `-- migrate:up` / `-- migrate:down` markers in our migration files and runs only the `up` section. **Do NOT** invoke `psql -f migration.sql` directly: psql ignores those markers and would run both sections back-to-back, leaving the database in a roll-forward-then-roll-back state.
 
-From your local machine, pointed at the production database:
+Run migrations from your project checkout — the directory containing `pgstack.config.json` and `migrations/`. The CLI refuses to run anywhere else (`Not a pgStack project.`), so the bare `~/pgstack` directory from step 2 will not work.
 
-```bash
-DATABASE_URL=postgres://postgres:password@your-server:5432/app \
-  pgstack migration up
+The production compose file does not publish PostgreSQL on any host port (and the Firewall section below blocks 5432), so reach the database through the compose network. Either add a loopback-only mapping to the `db` service:
+
+```yaml
+db:
+  ports:
+    - "127.0.0.1:5432:5432"
 ```
 
-Or shell into the server first and run the CLI there:
+then on the server, from the project checkout:
 
 ```bash
-ssh user@your-server
-cd ~/pgstack
-DATABASE_URL=postgres://postgres:password@db:5432/app pgstack migration up
+DATABASE_URL=postgres://postgres:$POSTGRES_PASSWORD@127.0.0.1:5432/app \
+  pgstack migration run
 ```
 
-`pgstack migration` is idempotent: it tracks applied migrations in a metadata table and skips ones that have already run. `pgstack migration down` runs the matching `-- migrate:down` section of the most recent migration; useful for the rare rollback.
+Or from your local machine over an SSH tunnel:
+
+```bash
+ssh -L 15432:127.0.0.1:5432 user@your-server
+DATABASE_URL=postgres://postgres:<password>@127.0.0.1:15432/app pgstack migration run
+```
+
+Alternatively run the CLI in a one-off Node container attached to the compose network, where `db:5432` resolves.
+
+`pgstack migration run` is idempotent: it tracks applied migrations in a metadata table and skips ones that have already run. `pgstack migration rollback` runs the matching `-- migrate:down` section of the most recent migration (use `-n <count>` to roll back more than one, `--dry-run` to preview the SQL); useful for the rare rollback.
 
 ## Updating pgStack
 
@@ -234,22 +275,24 @@ Database data is persisted in the `pgdata` Docker volume and is not affected by 
 
 Back up the PostgreSQL data volume regularly:
 
+The production image enforces `scram-sha-256` even for local socket connections, so pass the password from the container's own environment (and use `-T` so dump output is not CRLF-mangled by a TTY):
+
 ```bash
 # Dump the database
-docker compose -f docker-compose.prod.yml exec db pg_dump -U postgres app > backup_$(date +%Y%m%d_%H%M%S).sql
+docker compose -f docker-compose.prod.yml exec -T db bash -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U postgres app' > backup_$(date +%Y%m%d_%H%M%S).sql
 
 # Or dump with compression
-docker compose -f docker-compose.prod.yml exec db pg_dump -U postgres -Fc app > backup_$(date +%Y%m%d_%H%M%S).dump
+docker compose -f docker-compose.prod.yml exec -T db bash -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U postgres -Fc app' > backup_$(date +%Y%m%d_%H%M%S).dump
 ```
 
 Restore from backup:
 
 ```bash
 # Text dump
-docker compose -f docker-compose.prod.yml exec -T db psql -U postgres app < backup_20250114.sql
+docker compose -f docker-compose.prod.yml exec -T db bash -c 'PGPASSWORD=$POSTGRES_PASSWORD psql -U postgres app' < backup_20250114.sql
 
 # Custom format dump
-docker compose -f docker-compose.prod.yml exec -T db pg_restore -U postgres -d app < backup_20250114.dump
+docker compose -f docker-compose.prod.yml exec -T db bash -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_restore -U postgres -d app' < backup_20250114.dump
 ```
 
 Consider automating backups with a cron job and shipping them to object storage (S3, Backblaze B2, etc.).

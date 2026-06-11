@@ -2,6 +2,8 @@
 
 Generated: 2026-03-07
 
+> **STATUS 2026-06: COMPLETED PLAN.** Every gap below has shipped except three sub-items: (1) `mailer.go` Gap 3 — `Send`/`sendWithRetry` still take no `context.Context`; (2) `studio` Gap 1 — no EXPLAIN ANALYZE view in the SQL editor; (3) `config.go` — no masked effective-config startup log. Kept for historical reference; the ✅ markers below record what landed.
+
 > Several C ratings were underestimates after reading the actual code.
 
 ## Re-evaluation
@@ -20,12 +22,12 @@ Plus underrated B files need specific gaps filled to reach A.
 
 ## `config.go` → A
 
-### Gap 1 — Silent swallowing of invalid env values
+### Gap 1 — Silent swallowing of invalid env values ✅ DONE (envBoolOrDefault warns to stderr, config.go:343)
 `envBoolOrDefault` accepts `"yes"`, `"TRUE"`, `"on"` — all fall through to the
 default silently. `REQUIRE_EMAIL_VERIFICATION=yes` disables email verification
 with no warning.
 
-### Gap 2 — Panic vs. structured validation
+### Gap 2 — Panic vs. structured validation ✅ DONE (Config.Validate() collects all errors, config.go:361; main.go aborts)
 JWT length check uses `panic()`. Other invalid configs (SMTP enabled without
 host, `MaxConnections < 1`) are never caught. Errors should be collected and
 returned together.
@@ -57,16 +59,16 @@ Also add a startup log line printing effective config with secrets masked.
 
 ## `mailer.go` → A
 
-### Gap 1 — HTML templates scattered in callers
+### Gap 1 — HTML templates scattered in callers ✅ DONE (templates live in mailer.go:17-31; gomail replaced by net/smtp in audit L7)
 Callers construct raw HTML strings and pass them in. Verification email,
 password reset, and magic link templates live in `auth/` handlers — changing
 email branding means hunting through multiple files.
 
-### Gap 2 — No retry
+### Gap 2 — No retry ✅ DONE (sendWithRetry 3x with backoff, mailer.go:100)
 `DialAndSend` fails instantly on transient SMTP errors. One retry with 2s delay
 handles 90% of real-world SMTP failures.
 
-### Gap 3 — No context propagation
+### Gap 3 — No context propagation — STILL OPEN
 `Send()` can't be cancelled — a slow SMTP server blocks the handler goroutine
 indefinitely.
 
@@ -94,7 +96,7 @@ Define templates as `text/template` strings at the top of `mailer.go`, not in ca
 
 ---
 
-## `state.go` → A
+## `state.go` → A ✅ DONE (Catalog field state.go:49, Health() :82, Close() :98 — pool-only, does not drain WSSemaphore)
 
 ### Gap 1 — No `Health()` method
 `PGConnected` is an `atomic.Bool` but there's no aggregated health response.
@@ -135,7 +137,7 @@ func (s *AppState) Close() {
 
 ## `error.go` → A *(already B — one gap from A)*
 
-### Gap — 4 missing SQLSTATE codes that hit real users constantly
+### Gap — 4 missing SQLSTATE codes ✅ DONE (23503→409, 23502/23514/22P02→400 in error.go:54-65)
 
 | Code | Meaning | Current response | Correct response |
 |---|---|---|---|
@@ -155,12 +157,12 @@ debug which constraint fired.
 
 ## `template.go` → A *(already B — two gaps from A)*
 
-### Gap 1 — Error stops at first miss
+### Gap 1 — Error stops at first miss ✅ DONE (ResolveTemplates accumulates all errors, template.go:27)
 `resolveErr` is set on first failure and subsequent `{{refs}}` are left as-is.
 For a batch request with 5 broken references, you get one error, fix it, get
 another. All resolution errors should be returned together.
 
-### Gap 2 — No wildcard path
+### Gap 2 — No wildcard path ✅ DONE (navigatePath handles `*`, template.go:123)
 `{{op1.*.name}}` — collect a field from all elements of an array result — is
 the missing case that makes template resolution feel complete. Without it,
 callers must do their own post-processing for one-to-many results.
@@ -176,7 +178,7 @@ in `navigatePath` that maps over arrays.
 6 Python/JS benchmark scripts with multi-level load and `runner.sh`. Real work.
 But output is ephemeral stdout with no history.
 
-### Gap — No baseline tracking
+### Gap — No baseline tracking ✅ DONE (results.jsonl in runner.sh:115, tests/perf/compare.sh, p7_concurrent_subscribe.mjs)
 Results print to stdout and disappear. No way to know if a refactor regressed
 P3 latency by 20%.
 
@@ -202,15 +204,15 @@ The page list (`SqlEditorPage`, `TableEditorPage`, `RealtimePage`,
 `AuthUsersPage`, `LogsPage`) shows the bones are there. Studio is the
 first-impression component — what demo viewers open first.
 
-### Gap 1 — SQL editor lacks execution plan view
+### Gap 1 — SQL editor lacks execution plan view — STILL OPEN
 `SqlEditorPage.tsx` probably runs `SELECT` and shows results. `EXPLAIN ANALYZE`
 output formatted as a tree makes it genuinely useful for debugging slow queries.
 
-### Gap 2 — Realtime page probably shows raw JSON
+### Gap 2 — Realtime page ✅ MOSTLY DONE (per-sub rate + 20-sample sparkline in SubscriptionTable.tsx; seq-gap/overflow not surfaced)
 If it just prints messages, it misses: seq gap detection, message rate, overflow
 count. A sparkline of delta frequency per subscription would be A-level UX.
 
-### Gap 3 — Table editor likely lacks filter UI
+### Gap 3 — Table editor filter UI ✅ DONE (FilterBar.tsx, per-column filters via table store)
 An inline filter row (PostgREST-style `column=value`) that generates the REST
 query closes the loop between the REST API and the UI.
 

@@ -19,13 +19,21 @@ npm install @pgstack/sdk
 Initialize the client:
 
 ```typescript
-import { createClient } from '@pgstack/sdk';
+import { createClient } from '@pgstack/sdk/pgstack';
 
 const pgstack = createClient(
   'http://127.0.0.1:8080',
   process.env.NEXT_PUBLIC_PGSTACK_ANON_KEY!,
 );
 ```
+
+`createClient(url, anonKey, options?)` accepts an optional third argument:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `headers` | — | Custom headers included in every request |
+| `autoRefreshToken` | `true` | Refresh the JWT 60 seconds before it expires |
+| `persistSession` | `true` (browser) | Persist the session to `sessionStorage` (tab-scoped — closing the browser logs the user out). Set `false` to keep the session in memory only |
 
 ### Sign up
 
@@ -237,10 +245,13 @@ curl -X POST 'http://127.0.0.1:8080/auth/v1/token?grant_type=password' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer YOUR_ANON_KEY' \
   -d '{
+    "grant_type": "password",
     "email": "user@example.com",
     "password": "strongpassword123"
   }'
 ```
+
+`grant_type` must be set in the JSON body — the query string is accepted for Supabase familiarity but ignored by the proxy.
 
 ### Refresh token
 
@@ -248,7 +259,7 @@ curl -X POST 'http://127.0.0.1:8080/auth/v1/token?grant_type=password' \
 curl -X POST 'http://127.0.0.1:8080/auth/v1/token?grant_type=refresh_token' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer YOUR_ANON_KEY' \
-  -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'
+  -d '{"grant_type": "refresh_token", "refresh_token": "YOUR_REFRESH_TOKEN"}'
 ```
 
 ### Get user
@@ -260,14 +271,21 @@ curl http://127.0.0.1:8080/auth/v1/user \
 
 ## Error handling
 
-| HTTP Status | Error | Cause |
-|------------|-------|-------|
-| `400` | `invalid_request` | Missing or malformed fields |
-| `400` | `email_already_exists` | Signup with existing email |
-| `401` | `invalid_credentials` | Wrong email/password |
-| `401` | `invalid_token` | Expired or invalid JWT |
-| `401` | `invalid_refresh_token` | Refresh token not found or expired |
+All auth errors are returned as `{"error": "<message>"}` — human-readable strings, not machine codes.
+
+| HTTP Status | Error message | Cause |
+|------------|---------------|-------|
+| `400` | `invalid request body` | Missing or malformed JSON |
+| `400` | `invalid email address` | Email fails validation |
+| `409` | `email already registered` | Signup with existing email |
+| `401` | `invalid email or password` | Wrong email/password |
+| `401` | `invalid or expired token` | Expired or invalid JWT |
+| `401` | `invalid refresh token` | Refresh token not found |
+| `401` | `refresh token expired` | Refresh token past expiry |
+| `401` | `refresh token reuse detected — please log in again` | Revoked refresh token replayed (whole family revoked) |
+| `403` | `email not verified` | Login with `REQUIRE_EMAIL_VERIFICATION=true` before the email is confirmed |
+| `429` | `too many requests, try again later` | More than `AUTH_RATE_LIMIT` (default 30) requests/min per IP on signup/token/recover/magiclink |
 
 ## Password requirements
 
-pgStack enforces a minimum password length of 8 characters. You can add your own validation in your application before calling the auth API.
+pgStack enforces a minimum password length of 8 characters and a maximum of 256 characters. You can add your own validation in your application before calling the auth API.

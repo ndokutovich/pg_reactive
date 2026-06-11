@@ -22,11 +22,15 @@ This creates a new database `my-feature` as a clone of your current database. Th
 pgstack db checkout my-feature
 ```
 
-Updates `DATABASE_URL` in your project's `.env` file to point to the branch database. Restart the proxy after switching:
+Updates `DATABASE_URL` in your project's `.env` file to point to the branch database. This switches all CLI commands (`migration`, `db reset/seed/shell`, `generate types`) to the branch.
+
+The proxy does NOT follow `DATABASE_URL` — the scaffolded `docker-compose.yml` builds the proxy's connection string from `POSTGRES_DB`. To point the proxy at the branch, also set `POSTGRES_DB=<branch>` in `.env`, then recreate the proxy:
 
 ```bash
 docker compose up -d proxy
 ```
+
+(For names that get sanitized, use the sanitized database name — e.g. `feat/login` becomes `featlogin`.)
 
 ## Delete a branch
 

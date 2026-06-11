@@ -14,7 +14,7 @@ pgStack is built on a single architectural principle: every backend capability -
 
 **Design tenets:**
 
-1. **Every feature is a SQL function or extension.** Authentication is SQL functions over an `auth.users` table. Authorization is Row-Level Security policies. Real-time is `pg_notify`. Storage is `bytea` columns.
+1. **Every feature is a SQL function or extension.** Authentication is SQL functions over a `pgstack.users` table. Authorization is Row-Level Security policies. Real-time is `pg_notify`. Storage is `bytea` columns.
 
 2. **The proxy is a thin translator.** It translates HTTP and WebSocket into SQL. It holds no application state. If the proxy restarts, no data is lost.
 
@@ -37,7 +37,9 @@ pgstack-proxy (Go binary, ~15 MB)
   |-- /rest/v1/*          REST API (PostgREST-compatible CRUD, RPC, embedding)
   |-- /ws/{queryID}       Realtime (pg_reactive live queries)
   |-- /storage/v1/*       Storage (bytea file upload/download)
+  |-- /functions/v1/*     Edge Functions (goja, PL/v8, PL/Python, Deno, http)
   |-- /studio/*           Admin Dashboard (React SPA)
+  |-- /docs/*             Documentation site (Docusaurus static, DOCS_DIR)
   |-- /api/sql            SQL Endpoint (dev mode)
   |-- /health             Health check
   |-- /*                  User SPA (static files from PUBLIC_DIR)
@@ -46,11 +48,12 @@ pgstack-proxy (Go binary, ~15 MB)
   v
 PostgreSQL 16
   |-- pg_reactive         Live queries (C extension)
-  |-- pgcrypto            Password hashing (bcrypt)
   |-- RLS policies        Row-level security
-  |-- auth schema         Users, sessions, refresh tokens, OAuth
-  |-- pgstack schema      Buckets, storage objects, DBOS jobs
+  |-- auth schema         JWT claim helpers (auth.uid/role/email/jwt)
+  |-- pgstack schema      Users, refresh tokens, OAuth sessions, email tokens, buckets, storage objects, DBOS jobs
 ```
+
+(Password hashing is Argon2id in the proxy — `proxy-go/auth/password.go` — not in PostgreSQL.)
 
 ### Process Model
 
@@ -71,8 +74,8 @@ Contrast with Supabase's deployment model which requires Kong, GoTrue, PostgREST
 Client                          Proxy                      PostgreSQL
   |                               |                            |
   |-- POST /auth/v1/signup ------>|                            |
-  |                               |-- INSERT auth.users ------>|
-  |                               |-- INSERT auth.tokens ----->|
+  |                               |-- INSERT pgstack.users --->|
+  |                               |-- INSERT pgstack.refresh_tokens ->|
   |                               |<--- rows inserted ---------|
   |<-- { access_token, user } ----|                            |
   |                               |                            |
@@ -88,12 +91,17 @@ Client                          Proxy                      PostgreSQL
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | Email/password signup | `POST /auth/v1/signup` | Creates user, returns JWT |
-| Password login | `POST /auth/v1/token?grant_type=password` | Validates credentials, returns JWT |
-| Token refresh | `POST /auth/v1/token?grant_type=refresh_token` | Rotates refresh token (family-based reuse detection) |
+| Password login | `POST /auth/v1/token` | JSON body `{"grant_type":"password","email":...,"password":...}`; returns JWT |
+| Token refresh | `POST /auth/v1/token` | JSON body `{"grant_type":"refresh_token","refresh_token":...}`; rotates refresh token (family-based reuse detection) |
+| Anonymous sign-in | `POST /auth/v1/anonymous` | Mints short-lived anon JWT; gated by `ALLOW_ANONYMOUS_SIGNIN` |
 | OAuth (Google) | `GET /auth/v1/authorize?provider=google` | PKCE (S256), redirects to provider |
-| OAuth (GitHub) | `GET /auth/v1/authorize?provider=github` | PKCE (S256), redirects to provider |
+| OAuth (GitHub) | `GET /auth/v1/authorize?provider=github` | State-validated, redirects to provider |
+| OAuth (Apple/Microsoft/OIDC) | `GET /auth/v1/authorize?provider=apple\|microsoft\|oidc` | PKCE S256 (Apple: `form_post`; OIDC: issuer discovery) |
+| OAuth callback | `GET/POST /auth/v1/callback` | Code exchange; POST `form_post` for Apple |
 | Magic link | `POST /auth/v1/magiclink` | Sends login link via email |
+| Magic link verify | `GET /auth/v1/magiclink/verify?token=...` | Consumes magic-link token, returns session |
 | Password reset | `POST /auth/v1/recover` | Sends recovery email |
+| Password reset confirm | `POST /auth/v1/recover/confirm` | Consumes recovery token, sets new password |
 | Email verification | `GET /auth/v1/verify?token=...` | Confirms email address |
 | Get current user | `GET /auth/v1/user` | Returns user profile (requires JWT) |
 | Update user | `PATCH /auth/v1/user` | Update profile/metadata (requires JWT) |
@@ -155,6 +163,15 @@ DELETE /rest/v1/{table}?col=eq.value                        DELETE
 | `ilike` | `?name=ilike.*john*` | `name ILIKE '%john%'` |
 | `in` | `?id=in.(1,2,3)` | `id IN (1, 2, 3)` |
 | `is` | `?deleted_at=is.null` | `deleted_at IS NULL` |
+| `cs` | `?tags=cs.{urgent,home}` | `tags @> '{urgent,home}'` |
+| `cd` | `?tags=cd.{a,b,c}` | `tags <@ '{a,b,c}'` |
+| `fts` | `?body=fts.cat` | `body @@ 'cat'` (full-text search) |
+| `ov` | `?period=ov.[1,10]` | `period && '[1,10]'` |
+| `sl` | `?range=sl.(1,10)` | `range << '(1,10)'` |
+| `sr` | `?range=sr.(1,10)` | `range >> '(1,10)'` |
+| `nxl` | `?range=nxl.(1,10)` | `range &< '(1,10)'` |
+| `nxr` | `?range=nxr.(1,10)` | `range &> '(1,10)'` |
+| `adj` | `?range=adj.(1,10)` | `range -\|- '(1,10)'` |
 
 **Ordering and Pagination:**
 
@@ -224,7 +241,9 @@ The catalog can be refreshed at runtime via `POST /api/catalog/refresh` (require
 ### 5.2 Client Integration
 
 ```typescript
-import { createClient } from '@pgstack/sdk'
+import { createClient } from '@pgstack/sdk/pgstack'
+import { LiveQuery } from '@pgstack/sdk'
+import { useLiveQuery } from '@pgstack/sdk/react'
 
 const pgstack = createClient('http://127.0.0.1:8080', 'your-anon-key')
 
@@ -273,24 +292,31 @@ File storage uses PostgreSQL `bytea` columns. This eliminates the need for a sep
 
 ```sql
 -- Internal storage schema (managed by the proxy)
-CREATE TABLE pgstack.buckets (
-  id TEXT PRIMARY KEY,
-  public BOOLEAN DEFAULT false,
-  file_size_limit INTEGER,
-  allowed_mime_types TEXT[],
-  created_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE pgstack.storage_buckets (
+  id text PRIMARY KEY,
+  public boolean DEFAULT false,
+  file_size_limit bigint DEFAULT 52428800,
+  allowed_mime_types text[],
+  created_at timestamptz DEFAULT now(),
+  CONSTRAINT bucket_id_on_disk_safe CHECK (id ~ '^[a-z0-9][a-z0-9_-]{0,62}$')
 );
 
-CREATE TABLE pgstack.objects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bucket_id TEXT REFERENCES pgstack.buckets(id),
-  name TEXT NOT NULL,
-  data BYTEA,
-  mime_type TEXT,
-  size INTEGER,
-  created_at TIMESTAMPTZ DEFAULT now()
+CREATE TABLE pgstack.storage_objects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  bucket_id text NOT NULL REFERENCES pgstack.storage_buckets(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  size bigint NOT NULL,
+  mime_type text,
+  data bytea,  -- NULL when STORAGE_BACKEND=disk
+  metadata jsonb DEFAULT '{}',
+  owner uuid REFERENCES pgstack.users(id) ON DELETE SET NULL,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE(bucket_id, name)
 );
 ```
+
+Both tables are RLS-enabled: public-bucket read for `anon`/`authenticated`, owner-scoped read/write for private buckets.
 
 ### 6.2 API
 
@@ -334,7 +360,7 @@ const { data: { publicUrl } } = pgstack.storage
 | CDN integration | Not built-in | S3 + CloudFront |
 | Cost at scale | PostgreSQL storage cost | S3 pricing (cheaper) |
 
-For most applications (avatars, documents, small media), bytea storage is simpler and sufficient. For large-file workloads, disk-based storage is planned as a future enhancement.
+For most applications (avatars, documents, small media), bytea storage is simpler and sufficient. For large-file workloads, set `STORAGE_BACKEND=disk`: file bytes are stored on the filesystem under `STORAGE_DIR` (default `/data/storage`) while metadata stays in `pgstack.storage_objects` (its `data` column is NULL).
 
 ---
 
@@ -344,7 +370,7 @@ For most applications (avatars, documents, small media), bytea storage is simple
 
 ```bash
 # Install CLI
-npm install -g @pgstack/cli
+npm install -g pgstack
 
 # Create project
 pgstack init myapp
@@ -357,7 +383,7 @@ pgstack dev
 cat > migrations/001_create_todos.sql << 'SQL'
 CREATE TABLE public.todos (
   id SERIAL PRIMARY KEY,
-  user_id UUID REFERENCES auth.users(id),
+  user_id UUID REFERENCES pgstack.users(id),
   title TEXT NOT NULL,
   done BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT now()
@@ -386,7 +412,7 @@ pgstack generate
 ### 7.2 TypeScript SDK
 
 ```typescript
-import { createClient } from '@pgstack/sdk'
+import { createClient } from '@pgstack/sdk/pgstack'
 
 const pgstack = createClient('http://127.0.0.1:8080', 'your-anon-key')
 
@@ -467,17 +493,24 @@ function Dashboard({ user }) {
 pgstack init <name>              # Scaffold project
 pgstack dev                      # Start PostgreSQL + proxy
 pgstack stop                     # Stop containers
-pgstack deploy --host user@vps   # Deploy to production
-pgstack migration new <name>     # Create migration file
-pgstack migration run            # Apply pending migrations
-pgstack migration rollback       # Roll back last migration
-pgstack migration list           # Show migration status
-pgstack db push                  # Push schema changes
-pgstack db reset                 # Reset database
-pgstack generate                 # Generate TypeScript types
-pgstack dbos                     # DBOS job management
+pgstack logs                     # Tail container logs
 pgstack status                   # Show service status
 pgstack studio                   # Open dashboard in browser
+pgstack deploy --host user@vps   # Deploy to production
+pgstack migration create <name>  # Create migration file
+pgstack migration run            # Apply pending migrations
+pgstack migration rollback       # Roll back last migration
+pgstack migration status         # Show migration status
+pgstack db shell                 # Open psql shell
+pgstack db reset                 # Reset database
+pgstack db seed                  # Run seed files
+pgstack db branch <name>         # Create database branch (TEMPLATE clone)
+pgstack db checkout <name>       # Switch database branch
+pgstack generate types           # Generate TypeScript types
+pgstack dbos status|retry <id>|cancel <id>             # DBOS job management
+pgstack functions new|list|deploy|delete|serve <name>  # Edge functions
+
+# Global options: --url <proxy-url>, --json, --verbose (or PGSTACK_URL / PGSTACK_JSON / PGSTACK_VERBOSE)
 ```
 
 ---
@@ -490,7 +523,7 @@ pgstack studio                   # Open dashboard in browser
 |-----------|-------------|
 | JWT (HS256) | Access tokens signed with a shared secret (min 32 chars). Passed as `Authorization: Bearer` header. |
 | API Keys | `anon` key for unauthenticated access, `service_role` key for admin operations. Passed as `apikey` header. |
-| OAuth PKCE | S256 challenge for Google and GitHub OAuth flows. Prevents authorization code interception. |
+| OAuth | Five providers: Google, GitHub, Apple, Microsoft, generic OIDC. PKCE (S256 challenge) for Google, Microsoft, and OIDC. GitHub does not support PKCE and Apple uses `response_mode=form_post`; both rely on the `state` parameter for CSRF protection. |
 | Refresh tokens | Family-based reuse detection. If a revoked token is replayed, the entire token family is revoked. |
 
 ### 8.2 Authorization Layer
@@ -516,7 +549,7 @@ The proxy sets the PostgreSQL role before each request:
 ### 8.3 Rate Limiting
 
 - Auth endpoints (`/auth/v1/signup`, `/auth/v1/token`): 30 requests per minute per IP (configurable via `AUTH_RATE_LIMIT`).
-- Proxy-aware: uses `X-Forwarded-For` for IP resolution behind reverse proxies.
+- Proxy-aware: `X-Forwarded-For` is trusted only when the direct TCP peer is listed in `TRUSTED_PROXIES` (the chain is walked right-to-left, skipping trusted proxies); otherwise the header is ignored and the TCP peer address is used, preventing IP spoofing.
 
 ### 8.4 Security Headers
 
@@ -541,7 +574,7 @@ The proxy sets the PostgreSQL role before each request:
     - `pgstack.edge_functions.env_vars_encrypted` is AES-256-GCM ciphertext under `SECRETS_ENCRYPTION_KEY` (32 random bytes, base64). The wire format is `[version=0x01][12-byte nonce][ciphertext+GCM tag]`. The old plaintext `env_vars JSONB` column has been removed.
     - Existing installs upgrade via `migrations/20260515210000_hash_tokens_encrypt_envvars.sql`; the migration cannot reverse-derive plaintext from missing data, so it force-rotates all refresh tokens (every user re-authenticates) and clears unused email tokens.
 
-### 8.7 WebSocket message scope (since 2026-05)
+### 8.6 WebSocket message scope (since 2026-05)
 
 Client-to-server WS frames are restricted to a typed whitelist:
 
@@ -550,7 +583,7 @@ Client-to-server WS frames are restricted to a typed whitelist:
 
 Everything else is dropped at debug level. Server-side live-query deltas flow exclusively from the PG `NOTIFY` listener; no client frame can inject events into that stream.
 
-### 8.6 Realtime Authorization (since 2026-05)
+### 8.7 Realtime Authorization (since 2026-05)
 
 WebSocket subscriptions (`GET /ws/{query_id}`) are authenticated against the `JWT_SECRET` like every other endpoint. Two knobs control how strict that gate is:
 
@@ -599,14 +632,44 @@ All configuration is via environment variables:
 | `SMTP_FROM` | `noreply@pgstack.local` | Sender email address |
 | `REQUIRE_EMAIL_VERIFICATION` | false | Require email verification before login |
 | `ALLOWED_ORIGINS` | (empty) | CORS / WS origin allow-list. Empty = strict (see `ALLOW_PERMISSIVE_CORS`). |
-| `ALLOW_PERMISSIVE_CORS` | false | When `ALLOWED_ORIGINS` is empty and this is true, reflect any Origin with credentials (DEV ONLY). |
+| `ALLOW_PERMISSIVE_CORS` | false | When `ALLOWED_ORIGINS` is empty and this is true, reflect any Origin WITHOUT credentials (DEV ONLY). Credentialed CORS (`Access-Control-Allow-Credentials: true`) is only ever sent for origins on the `ALLOWED_ORIGINS` allow-list. |
 | `REQUIRE_AUTHENTICATED_WS` | false | Reject anon-key WS subscriptions; require JWT for `/ws/{query_id}`. |
 | `ENABLE_SQL_ENDPOINT` | false | Enable `/api/sql` endpoint (dev only) |
 | `ENABLE_DEMO_ENDPOINT` | false | Mount `POST /api/demo` (demo-table mutator). Off by default. |
 | `STUDIO_DIR` | `/studio` | Path to Studio SPA files |
 | `PUBLIC_DIR` | (none) | Path to user static files |
+| `PUBLIC_ALLOW_INLINE_SCRIPTS` | false | Add `'unsafe-inline'` to script-src for PUBLIC_DIR responses |
+| `PUBLIC_DEMO_SITE` | false | Mark this deployment as the public pg_reactive demo (relaxes the production demo-endpoint check) |
+| `DOCS_DIR` | `/docs` | Path to built docs site, served at `/docs/` |
+| `LOG_LEVEL` | info | Log verbosity (trace/debug/info/warn/error/fatal/panic) |
 | `LOG_PRETTY` | 0 | Pretty-print logs (1 = human-readable) |
 | `PG_RECONNECT_MAX_BACKOFF` | 30 | Max backoff for LISTEN reconnect (seconds) |
+| `PGSTACK_ENV` | (empty) | `production` promotes dev-secret / SQL-endpoint / CORS / WS misconfigurations to fatal startup errors |
+| `MAX_FILE_SIZE` | 52428800 (50 MB) | Maximum storage upload size |
+| `MAX_BATCH_OPERATIONS` | 20 | Max operations per `POST /rest/v1/batch` |
+| `WS_MAX_PER_IP` | 10 | Max concurrent WS connections per client IP (0 = off) |
+| `ALLOW_ANONYMOUS_SIGNIN` | false | Enable `POST /auth/v1/anonymous` |
+| `ANONYMOUS_JWT_TTL` | 3600 | Anonymous JWT lifetime (seconds) |
+| `ANONYMOUS_RATE_LIMIT` | `AUTH_RATE_LIMIT × 10` | Per-IP rate limit for anonymous sign-in |
+| `ANONYMOUS_RATE_WINDOW` | 60 | Anonymous rate-limit window (seconds) |
+| `GZIP_LEVEL` | 5 | Gzip compression level (0 = off) |
+| `READ_TIMEOUT` / `WRITE_TIMEOUT` / `IDLE_TIMEOUT` / `SHUTDOWN_TIMEOUT` | 30 / 60 / 120 / 15 | HTTP server timeouts (seconds) |
+| `PG_POOL_MAX_CONNS` / `PG_POOL_MIN_CONNS` / `PG_POOL_MAX_CONN_IDLE_TIME` | 50 / 5 / 300 | Proxy PG pool tuning |
+| `TRUSTED_PROXIES` | (empty) | Reverse-proxy IPs allowed to set `X-Forwarded-For` |
+| `HSTS_MAX_AGE_SECONDS` | 63072000 | HSTS max-age (sent only on TLS-verified requests) |
+| `HSTS_PRELOAD` | false | Append `preload` to the HSTS header |
+| `SECRETS_ENCRYPTION_KEY` | (none) | AES-256-GCM key (32 bytes base64) for at-rest secrets; invalid value is fatal |
+| `STORAGE_BACKEND` | database | `database` (bytea) or `disk` |
+| `STORAGE_DIR` | `/data/storage` | File path when `STORAGE_BACKEND=disk` |
+| `EDGE_RUNTIME_URL` | (empty = disabled) | Deno edge-runtime sidecar URL |
+| `EDGE_FN_TIMEOUT_MS` | 60000 | Per-invocation edge-function deadline |
+| `EMBEDDED_FUNCTIONS` | true | Enable in-process goja runtime |
+| `TLS_MODE` | off | `off` / `auto` (Let's Encrypt) / `manual` |
+| `TLS_DOMAINS` / `TLS_CERT_DIR` / `TLS_CERT_FILE` / `TLS_KEY_FILE` / `TLS_ACME_EMAIL` | (none) / `/data/certs` / (none) / (none) / (none) | TLS material for auto/manual modes |
+| `HTTPS_ADDR` / `HTTP_ADDR` | `:443` / `:80` | TLS listen addresses (ignored when `TLS_MODE=off`) |
+| `APPLE_CLIENT_ID` / `APPLE_TEAM_ID` / `APPLE_KEY_ID` / `APPLE_PRIVATE_KEY` | (none) | Sign in with Apple |
+| `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | (none) | Microsoft OAuth |
+| `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_ISSUER_URL` | (none) | Generic OIDC provider |
 
 ---
 

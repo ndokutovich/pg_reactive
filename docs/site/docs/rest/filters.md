@@ -39,6 +39,8 @@ Multiple filters are combined with AND:
 | `fts` | full-text search | `?content=fts.hello` |
 | `sl` | strictly left of (ranges) | `?range=sl.[1,5]` |
 | `sr` | strictly right of (ranges) | `?range=sr.[1,5]` |
+| `nxl` | does not extend to the left of (ranges) | `?range=nxl.[1,5]` |
+| `nxr` | does not extend to the right of (ranges) | `?range=nxr.[1,5]` |
 | `adj` | adjacent (ranges) | `?range=adj.[1,5]` |
 
 ## Examples
@@ -162,6 +164,8 @@ GET /rest/v1/events?range=adj.[1,5]
 |--------|-----|
 | `?range=sl.[1,5]` | `range << '[1,5]'` |
 | `?range=sr.[1,5]` | `range >> '[1,5]'` |
+| `?range=nxl.[1,5]` | `range &< '[1,5]'` |
+| `?range=nxr.[1,5]` | `range &> '[1,5]'` |
 | `?range=adj.[1,5]` | `range -\|- '[1,5]'` |
 
 ## SDK filter methods
@@ -268,25 +272,7 @@ GET /rest/v1/products?category=eq.electronics&or=(status.eq.active,status.eq.pen
 
 This returns electronics products where status is active OR pending.
 
-SDK:
-
-```typescript
-// OR combinator
-const { data } = await pgstack.from('products')
-  .select('*')
-  .or('status.eq.active,status.eq.pending');
-
-// AND combinator (explicit)
-const { data } = await pgstack.from('products')
-  .select('*')
-  .and('price.gt.10,price.lt.100');
-
-// Combined with regular filters
-const { data } = await pgstack.from('products')
-  .select('*')
-  .eq('category', 'electronics')
-  .or('status.eq.active,status.eq.pending');
-```
+The SDK query builder does not yet expose `.or()` / `.and()` methods — logical combinators are currently available only as REST query parameters (`?or=(...)` / `?and=(...)`). The SDK's per-column methods (`.eq()`, `.gt()`, ...) always combine with AND.
 
 ## Wildcard patterns
 

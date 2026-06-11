@@ -11,11 +11,11 @@ All pgStack configuration is done through environment variables. Copy `.env.exam
 ## Generating secrets
 
 ```bash
-# Use this for JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY, POSTGRES_PASSWORD
+# Use this for JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY, POSTGRES_PASSWORD, SECRETS_ENCRYPTION_KEY
 openssl rand -base64 32
 ```
 
-Run it four times and use each output for a different secret.
+Run it five times and use each output for a different secret.
 
 ## Required variables
 
@@ -47,6 +47,11 @@ These must be set for production. In development, the compose file provides inse
 | `ENABLE_SQL_ENDPOINT` | `false` | Enable `/api/sql` endpoint for raw SQL (dev only). **Never enable in production.** |
 | `ENABLE_DEMO_ENDPOINT` | `false` | Mount `POST /api/demo` (mutates demo tables). Off by default; even when off the route is still mounted if a service_role key is configured (and then requires that key). **Never enable on a public host.** |
 | `PUBLIC_DIR` | *(empty — disabled)* | Directory for serving static files at the root path. When set, files in this directory are served with SPA fallback (unknown paths serve `index.html`). |
+| `PUBLIC_ALLOW_INLINE_SCRIPTS` | `false` | Add `'unsafe-inline'` to the `script-src` of the Content-Security-Policy sent with `PUBLIC_DIR` responses. Needed for single-file static apps that use inline `<script>` blocks. Default is strict (`script-src 'self'`); prefer external script files in production. |
+| `STUDIO_DIR` | `/studio` | Directory containing the Studio SPA build, served at `/studio/` with a relaxed CSP. Point at your own build when customizing the image. |
+| `DOCS_DIR` | `/docs` | Directory containing the built documentation site (Docusaurus static output), served at `/docs/`. |
+| `PGSTACK_ENV` | *(empty)* | Set to `production` to promote security misconfigurations (dev-only secrets, `ENABLE_SQL_ENDPOINT=true`, permissive CORS, `REQUIRE_AUTHENTICATED_WS=false`) from startup warnings to fatal startup errors. `docker-compose.prod.yml` sets it. |
+| `PROXY_RUST_PORT` | `8081` | Host port for the legacy Rust reference proxy that the dev compose file starts alongside the primary Go proxy. Dev only — not part of the production stack. |
 
 ## Auth variables
 
@@ -57,6 +62,10 @@ These must be set for production. In development, the compose file provides inse
 | `AUTH_RATE_LIMIT` | `30` | Auth endpoint rate limit (requests per window). |
 | `AUTH_RATE_WINDOW` | `60` | Rate limit window in seconds. |
 | `REQUIRE_EMAIL_VERIFICATION` | `false` | Block login for unverified emails. Requires SMTP to be configured. |
+| `ALLOW_ANONYMOUS_SIGNIN` | `false` | Enable `POST /auth/v1/anonymous` (SDK `auth.signInAnonymously()`), which mints a short-lived `role=anon` JWT without creating a user row. Default-deny: when `false` the endpoint returns `503`. |
+| `ANONYMOUS_JWT_TTL` | `3600` | Lifetime in seconds of anonymous JWTs. No refresh token is issued — clients must re-mint before expiry. |
+| `ANONYMOUS_RATE_LIMIT` | `300` | Per-IP rate limit for `/auth/v1/anonymous` (requests per window). Defaults to `10 × AUTH_RATE_LIMIT`; uses a limiter separate from the other auth endpoints. |
+| `ANONYMOUS_RATE_WINDOW` | `60` | Anonymous sign-in rate limit window in seconds. |
 
 ## OAuth variables (optional)
 
@@ -114,7 +123,7 @@ Required for email verification and password reset emails. If not set, these fea
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ALLOWED_ORIGINS` | *(empty)* | Comma-separated list of allowed CORS / WebSocket origins. For production set explicitly: `https://app.example.com,https://admin.example.com`. |
-| `ALLOW_PERMISSIVE_CORS` | `false` | When `ALLOWED_ORIGINS` is empty AND this is `true`, the proxy reflects any `Origin` with `Access-Control-Allow-Credentials: true` (the old dev behavior). Default is **strict**: no `Allow-Origin` header is emitted, cross-origin browsers are blocked, same-origin and non-browser clients still work. The proxy logs a loud WARN when this is enabled. **Never enable on a public host.** |
+| `ALLOW_PERMISSIVE_CORS` | `false` | When `ALLOWED_ORIGINS` is empty AND this is `true`, the proxy reflects any `Origin` (or `*` when no Origin header is present) **without** `Access-Control-Allow-Credentials` — reflected Origin + credentials is the CSRF-amplifying combo the security audit removed, and Bearer/apikey header auth does not need it. Default is **strict**: no `Allow-Origin` header is emitted, cross-origin browsers are blocked, same-origin and non-browser clients still work. The proxy logs a loud WARN when this is enabled. **Never enable on a public host.** |
 
 The strict default (since the 2026-05 security audit) prevents a CSRF/exfiltration footgun where any site could call your API with the user's credentials. Pre-audit deployments that relied on the permissive default must either set `ALLOWED_ORIGINS` or `ALLOW_PERMISSIVE_CORS=true` for dev.
 
@@ -130,7 +139,7 @@ The strict default (since the 2026-05 security audit) prevents a CSRF/exfiltrati
 |----------|---------|-------------|
 | `EDGE_RUNTIME_URL` | *(empty — disabled)* | URL of Supabase edge-runtime container. Example: `http://edge-runtime:9000`. Empty disables Deno backend. |
 | `EMBEDDED_FUNCTIONS` | `true` | Enable embedded JS runtime (goja) for lightweight functions. |
-| `FUNCTIONS_DIR` | `/functions` | Directory where Deno function sources are mounted. |
+| `EDGE_FN_TIMEOUT_MS` | `60000` | Per-invocation deadline (ms) applied to every edge function runtime (goja, plv8, plpython, Deno, http). |
 
 ## Batch transaction variables
 
@@ -142,8 +151,10 @@ The strict default (since the 2026-05 security audit) prevents a CSRF/exfiltrati
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAX_CONNECTIONS` | `10000` | Maximum concurrent WebSocket connections. Each connection holds a PostgreSQL `LISTEN` session. |
-| `REQUIRE_AUTHENTICATED_WS` | `false` | When `true`, anon-key WS subscriptions are rejected — only real JWTs (`authenticated` or `service_role`) can open `/ws/{query_id}`. Closes the "public anon key + guessable query_id" read vector. Recommended for any production deployment whose live queries return user-scoped data. |
+| `MAX_CONNECTIONS` | `10000` | Maximum concurrent WebSocket connections. Enforced as a semaphore on WebSocket upgrades; notifications are fanned out from a single dedicated PostgreSQL `LISTEN` connection, so WebSocket clients do not hold PG sessions. |
+| `REQUIRE_AUTHENTICATED_WS` | `false` | When `true`, anon-key WS subscriptions are rejected — only real JWTs (`authenticated` or `service_role`) can open `/ws/{query_id}`. Closes the "public anon key + guessable query_id" read vector. Required under `PGSTACK_ENV=production`: the proxy refuses to start with `false` when JWT_SECRET and ANON_KEY are set, and `docker-compose.prod.yml` pins it to `true`. |
+| `WS_MAX_PER_IP` | `10` | Maximum concurrent WebSocket connections per client IP (`0` disables the cap). Excess connections are rejected with `429` before the upgrade completes. Honours `TRUSTED_PROXIES` when resolving the client IP, like the auth rate limiter. Raise this when many users share a NAT or corporate proxy IP. |
+| `BROADCAST_CAPACITY` | `1024` | Per-client buffered message capacity for NOTIFY fan-out. A client that falls further behind is disconnected rather than blocking the hub. |
 
 ## Connection / body size limits
 
@@ -171,6 +182,13 @@ The strict default (since the 2026-05 security audit) prevents a CSRF/exfiltrati
 
 WebSocket connections may need longer `WRITE_TIMEOUT` values. The default 60s is sufficient for most use cases.
 
+## Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`. |
+| `LOG_PRETTY` | *(unset)* | Set to `1` for human-readable console output instead of structured JSON. |
+
 ## PostgreSQL Connection Pool
 
 | Variable | Default | Description |
@@ -178,6 +196,7 @@ WebSocket connections may need longer `WRITE_TIMEOUT` values. The default 60s is
 | `PG_POOL_MAX_CONNS` | `50` | Maximum connections in the proxy's PG pool |
 | `PG_POOL_MIN_CONNS` | `5` | Minimum idle connections kept warm |
 | `PG_POOL_MAX_CONN_IDLE_TIME` | `300` | Seconds before an idle connection is closed |
+| `PG_RECONNECT_MAX_BACKOFF` | `30` | Maximum backoff in seconds between reconnect attempts of the dedicated `LISTEN` connection |
 
 This is the proxy's built-in pool. For advanced pooling (transaction mode, prepared statements), use PgBouncer in front of PostgreSQL.
 
@@ -193,6 +212,8 @@ This is the proxy's built-in pool. For advanced pooling (transaction mode, prepa
 | `TLS_KEY_FILE` | — | Path to TLS private key (required when `TLS_MODE=manual`) |
 | `HTTPS_ADDR` | `:443` | Listen address for HTTPS (ignored when `TLS_MODE=off`) |
 | `HTTP_ADDR` | `:80` | Listen address for ACME challenges + HTTP→HTTPS redirect |
+| `HSTS_MAX_AGE_SECONDS` | `63072000` | `Strict-Transport-Security` max-age (2 years — the hstspreload.org minimum). Sent only on requests that demonstrably arrived over TLS: direct TLS, or `X-Forwarded-Proto: https` from a `TRUSTED_PROXIES` address. Lower it during initial TLS rollout to limit blast radius if TLS breaks. |
+| `HSTS_PRELOAD` | `false` | Append `preload` to the HSTS header. Opt-in only: preload-list submission is effectively irreversible, so enable it only once you are committed to HTTPS-only. |
 
 In `auto` mode the proxy handles Let's Encrypt certificate issuance and renewal automatically. Ports 80 and 443 must be publicly reachable. For most deployments behind a load balancer or CDN, use `TLS_MODE=off` with a reverse proxy (Caddy, nginx) handling TLS termination.
 
@@ -243,5 +264,5 @@ Before going to production:
 - [ ] `.env` is in `.gitignore` (never committed)
 - [ ] PostgreSQL port (`5432`) is not exposed to the internet
 - [ ] `TRUSTED_PROXIES` is set if running behind a reverse proxy (prevents rate limit bypass via spoofed `X-Forwarded-For` headers)
-- [ ] `JWT_SECRET` does not contain `dev-only` (the proxy warns on startup if it does)
+- [ ] `JWT_SECRET` does not contain `dev-only` (the proxy warns on startup if it does, and refuses to start entirely when `PGSTACK_ENV=production`)
 - [ ] `REQUIRE_EMAIL_VERIFICATION` is `true` if SMTP is configured

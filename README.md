@@ -18,9 +18,9 @@ lock-in, no per-row pricing, no proprietary protocol on top of PG.
 |-----------|--------------|-------|
 | **Go proxy** (`proxy-go/`) | chi-based server: REST, Auth, Realtime, Edge Functions, Storage, RLS middleware, rate limiting, TLS via Let's Encrypt | One binary, one container |
 | **Studio** (`studio/`) | React SPA: table editor, SQL editor, auth users, realtime channels, logs | Served at `/studio/` |
-| **TypeScript SDK** (`sdk/`) | `PgStackClient` (REST + auth + realtime + functions), React hooks, server-side admin, generic query builder, DBOS-style job queue | `pgstack-sdk` on npm |
+| **TypeScript SDK** (`sdk/`) | `PgStackClient` (REST + auth + realtime + functions), React hooks, server-side admin, generic query builder, DBOS-style job queue | `@pgstack/sdk` on npm |
 | **CLI** (`cli/`) | `pgstack init`, `pgstack dev`, migration management, type generation, project scaffolding | `pgstack` on npm |
-| **pg_reactive** (`ext/`) | PostgreSQL extension: live `SELECT` subscriptions with delta `NOTIFY`s. One of the realtime backends pgStack can use | Standalone — see [`ext/README.md`](ext/README.md) |
+| **pg_reactive** (`ext/`) | PostgreSQL extension: live `SELECT` subscriptions with delta `NOTIFY`s. The realtime backend pgStack uses | Standalone — see [`ext/README.md`](ext/README.md) |
 
 ## Quick start
 
@@ -49,16 +49,13 @@ npx pgstack dev
 ## Use it from your app
 
 ```typescript
-import { createPgStackClient } from "pgstack-sdk";
+import { createClient } from "@pgstack/sdk/pgstack";
 
-const client = createPgStackClient({
-  url: "http://127.0.0.1:8080",
-  anonKey: process.env.PGSTACK_ANON_KEY!,
-});
+const client = createClient("http://127.0.0.1:8080", process.env.PGSTACK_ANON_KEY!);
 
 // Auth
 await client.auth.signUp({ email, password });
-const { session } = await client.auth.signIn({ email, password });
+const { data: auth } = await client.auth.signInWithPassword({ email, password }); // session at auth.session
 
 // REST (PostgREST-compatible)
 const { data: orders } = await client.from("orders")
@@ -67,8 +64,9 @@ const { data: orders } = await client.from("orders")
   .order("total", { ascending: false })
   .limit(20);
 
-// Realtime — same wire format as pg_reactive
-const live = client.subscribe("orders_q");
+// Realtime — same wire format as pg_reactive (root entry, not the pgstack client)
+import { createClient as createLiveClient } from "@pgstack/sdk";
+const live = createLiveClient({ url: "ws://127.0.0.1:8080" }).subscribe("orders_q");
 live.on((event, data) => { /* delta / overflow / invalidated */ });
 
 // Edge functions
@@ -81,7 +79,11 @@ const { data } = await client.functions.invoke("process-order", {
 
 `examples/docker-compose.prod.yml` is the canonical production overlay:
 fail-fast on missing secrets, `PGSTACK_ENV=production` strict validator,
-`127.0.0.1` port bindings by default, TLS via `TLS_MODE=auto` (autocert).
+no host ports by default (traffic enters only through the umbrella nginx
+over the shared `gateway` network), scram-sha-256 auth,
+`REQUIRE_AUTHENTICATED_WS=true`. For a standalone single-box deploy with
+`127.0.0.1` port bindings and `TLS_MODE=auto` (autocert), use the root
+`docker-compose.prod.yml` instead.
 
 A fresh VPS bootstrap is one script:
 
@@ -101,10 +103,10 @@ deployment guide.
 +--------------------+           +-----------------------+           +-------------------+
 |  PostgreSQL        |           |  Go proxy (chi)       |           |  Browser / Node   |
 |                    |   NOTIFY  |                       |    WS     |                   |
-|  pg_reactive ext   | --------> |  Realtime backend     | --------> |  pgstack-sdk      |
-|  (one of several   |           |                       |           |  React hooks      |
-|   realtime         |           |  Auth / OAuth         |   REST    |  Studio           |
-|   backends)        |           |  REST + RLS           | <-------> |                   |
+|  pg_reactive ext   | --------> |  Realtime backend     | --------> |  @pgstack/sdk  |
+|  (realtime         |           |                       |           |  React hooks      |
+|   backend)         |           |  Auth / OAuth         |   REST    |  Studio           |
+|                    |           |  REST + RLS           | <-------> |                   |
 |                    |  pgx pool |  Edge Functions       |           |                   |
 |                    | <-------- |  Storage              |           |                   |
 +--------------------+           +-----------------------+           +-------------------+
@@ -117,15 +119,15 @@ deployment guide.
                                   +---------------+
 ```
 
-Realtime is pluggable: today it's `pg_reactive` (LISTEN/NOTIFY, low-latency,
-column-level invalidation). Tomorrow the same `realtime/Backend` seam can
-host polling, logical-replication, or CDC backends for workloads where
-NOTIFY's profile doesn't fit.
+Realtime today is `pg_reactive` (LISTEN/NOTIFY, low-latency, column-level
+invalidation). Polling, logical-replication, or CDC backends could be added
+behind the same proxy in the future for workloads where NOTIFY's profile
+doesn't fit.
 
 ## Features
 
 **Auth**
-- Email + password (Argon2id), OAuth (Google, GitHub, Apple), magic links,
+- Email + password (Argon2id), OAuth (Google, GitHub, Apple, Microsoft, generic OIDC), magic links,
   email verification, password reset, admin user CRUD.
 - Refresh-token rotation with family-based reuse detection.
 - JWT issuance, RLS context injection.
@@ -175,7 +177,7 @@ NOTIFY's profile doesn't fit.
 
 ## Documentation
 
-- **Full docs site** (Docusaurus 3, 33 pages): [`docs/site/`](docs/site/)
+- **Full docs site** (Docusaurus 3): [`docs/site/`](docs/site/)
 - **Architecture & dev workflow**: [`CLAUDE.md`](CLAUDE.md)
 - **Security policy**: [`SECURITY.md`](SECURITY.md)
 - **Security audit** (Critical/High/Medium remediated): [`docs/SECURITY_AUDIT_2026-03-07.md`](docs/SECURITY_AUDIT_2026-03-07.md)
@@ -199,7 +201,7 @@ cd sdk && npm test
 cd cli && npm test
 
 # E2E (requires docker compose up)
-node tests/e2e_ws_test.mjs       # …and 14 other E2E suites
+node tests/e2e_ws_test.mjs       # …and 13 other E2E suites
 bash tests/perf/runner.sh         # full perf suite (~10 min)
 ```
 
@@ -209,7 +211,7 @@ bash tests/perf/runner.sh         # full perf suite (~10 min)
 ext/                  pg_reactive PostgreSQL extension (own README, own LICENSE)
 proxy-go/             Go proxy: REST, Auth, Realtime, Edge Functions, Storage
 studio/               React Studio SPA
-sdk/                  TypeScript SDK (pgstack-sdk)
+sdk/                  TypeScript SDK (@pgstack/sdk)
 cli/                  pgstack CLI tool
 docker/               Production Dockerfiles + init.sql + entrypoint
 examples/             Demo apps + production compose overlay

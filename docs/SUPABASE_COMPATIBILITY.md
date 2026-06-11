@@ -19,6 +19,7 @@
 | `ov` (overlap) | ✅ | ✅ | Implemented |
 | `sl`/`sr` (range) | ✅ | ✅ | Implemented |
 | `adj` (adjacent) | ✅ | ✅ | Implemented |
+| `nxl`/`nxr` (does not extend) | ✅ | ✅ | Implemented |
 | `plfts`/`phfts`/`wfts` | ✅ | ❌ | Not implemented |
 | `?select=col1,col2` | ✅ | ✅ | Live verified |
 | `?order=col.asc` | ✅ | ✅ | Live verified |
@@ -27,7 +28,7 @@
 | INSERT (POST) | ✅ | ✅ | Live verified (201) |
 | UPDATE (PATCH) | ✅ | ✅ | Live verified |
 | DELETE | ✅ | ✅ | Live verified |
-| Upsert (POST + Prefer) | ✅ | ✅ | SDK test |
+| Upsert (POST + Prefer) | ✅ | ❌ | SDK sends `Prefer: resolution=merge-duplicates` but proxy ignores it (no `ON CONFLICT`); duplicates raise unique-violation |
 | Bulk INSERT (array) | ✅ | ✅ | E2E test |
 | RPC (POST /rpc/fn) | ✅ | ✅ | Live verified |
 | RPC (GET /rpc/fn) | ✅ | ✅ | E2E test |
@@ -52,9 +53,13 @@
 | GET /auth/v1/verify | ✅ | ✅ | E2E test |
 | OAuth (Google, PKCE) | ✅ | ✅ | Live verified (302 redirect) |
 | OAuth (GitHub) | ✅ | ✅ | Implemented |
+| OAuth (Apple, form_post) | ✅ | ✅ | Implemented |
+| OAuth (Microsoft) | ✅ | ✅ | Implemented |
+| Generic OIDC provider | ⚠️ | ✅ | `OIDC_{CLIENT_ID,CLIENT_SECRET,ISSUER_URL}` |
 | Admin CRUD users | ✅ | ✅ | Live verified |
 | Refresh token families | ✅ | ✅ | E2E test |
 | Email verification | ✅ | ✅ | Implemented |
+| Anonymous sign-in | ✅ | ⚠️ | POST /auth/v1/anonymous (`ALLOW_ANONYMOUS_SIGNIN`); ephemeral JWT, no user row / refresh token |
 | SMS auth | ✅ | ❌ | Not planned |
 | Phone field | ✅ | ❌ | Not planned |
 | SAML/SSO | ✅ Enterprise | ❌ | Not planned |
@@ -70,9 +75,10 @@
 | Window functions | ❌ | ✅ | pgStack-only |
 | Multi-table JOIN subscriptions | ❌ | ✅ | pgStack-only |
 | Column-level tracking | ❌ | ✅ | pgStack-only |
-| Presence | ✅ | ❌ | Not planned |
+| Presence | ✅ | ✅ | `_presence_` channels over WS + `GET /ws/_presence/{channel}` |
 | Broadcast channels | ✅ | ⚠️ | Custom channels only |
 | Notify (lightweight) mode | ❌ | ✅ | pgStack-only |
+| Database webhooks | ✅ | ✅ | `/rest/v1/webhooks`, HMAC-SHA256 `X-Webhook-Signature` delivery |
 
 ## Storage
 
@@ -80,11 +86,11 @@
 |---------|:---:|:---:|:---:|
 | Upload/download | ✅ | ✅ | Implemented |
 | List objects | ✅ | ✅ | Implemented |
-| Signed URLs | ✅ | ✅ | Implemented |
+| Signed URLs | ✅ | ❌ | Not implemented (`getPublicUrl` for public buckets only) |
 | Buckets (public/private) | ✅ | ✅ | Implemented |
 | RLS on objects | ✅ | ✅ | init.sql policies |
 | Image transforms | ✅ | ❌ | Not planned |
-| S3 backend | ✅ | ❌ | DB-backed (bytea) |
+| S3 backend | ✅ | ❌ | DB (bytea) or local-disk backend via `STORAGE_BACKEND` (`database`/`disk`); no S3 |
 
 ## Edge Functions
 
@@ -97,7 +103,7 @@
 | JWT verification | ✅ | ✅ | Per-function flag |
 | RLS enforcement | ✅ | ✅ | Per-call transactions |
 | Function catalog (DB-backed) | ❌ | ✅ | NOTIFY auto-refresh |
-| Extensible to any runtime | ❌ | ✅ | Reverse-proxy pattern |
+| HTTP runtime (per-function container, any language) | ❌ | ✅ | `runtime='http'` + `upstream_url` in catalog |
 
 ## SDK
 
@@ -127,9 +133,9 @@
 
 | Layer | Coverage | Notes |
 |-------|----------|-------|
-| **REST API** | **95%** | Missing only plfts/phfts/wfts (niche full-text variants) |
+| **REST API** | **90%** | Missing plfts/phfts/wfts (niche full-text variants) and upsert (no `ON CONFLICT`) |
 | **Auth** | **90%** | Missing SMS, SAML (enterprise features) |
-| **Storage** | **85%** | Missing image transforms, S3 backend |
+| **Storage** | **75%** | Missing image transforms, S3 backend, signed URLs |
 | **Edge Functions** | **100%+** | More runtimes than Supabase |
-| **Realtime** | **Different** | Strictly more powerful for query subscriptions; no presence/broadcast |
+| **Realtime** | **Different** | Strictly more powerful for query subscriptions; presence and custom broadcast channels supported (different protocol from Supabase Realtime) |
 | **SDK** | **90%** | Different realtime API |

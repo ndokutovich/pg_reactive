@@ -74,10 +74,10 @@ SELECT * FROM pgr.get_subscriptions();
 
 Returns:
 
-| query_id | sql | subscribed_at |
-|----------|-----|---------------|
-| active_orders | SELECT id, ... | 2025-01-14 12:00:00+00 |
-| user_notifications | SELECT id, ... | 2025-01-14 12:01:00+00 |
+| query_id | query_text | num_tables | subscribed_at | invalidation_count | mode | audience |
+|----------|------------|------------|---------------|--------------------|------|----------|
+| active_orders | SELECT id, ... | 1 | 2025-01-14 12:00:00+00 | 0 | delta | NULL |
+| user_notifications | SELECT id, ... | 1 | 2025-01-14 12:01:00+00 | 3 | delta | NULL |
 
 ## Unsubscribe
 
@@ -118,7 +118,7 @@ Other clients (with `sub=99`) attempting the same URL get `403 Forbidden` before
 - `NULL` audience (default) = public; any authenticated WS client can read.
 - JSON object = strict AND-match: every key must be present in claims with byte-equal value.
 - `{"sub":"42"}` matches `{"sub":"42",...}` but **not** `{"sub":42,...}` — pick a consistent JWT encoding.
-- Max 512 bytes serialised.
+- Max 511 bytes serialised.
 - Combine with [REQUIRE_AUTHENTICATED_WS](../deploy/env-vars.md) for defence in depth: even public subscriptions then require a JWT.
 
 ### Capability vs audience
@@ -127,6 +127,19 @@ The older capability-via-unguessable-id pattern (server-side broker hands out ra
 - The subscription is long-lived and tied to a stable user identity.
 - You want a leaked channel name to be useless without the matching JWT.
 - You want server-side audit of "who is bound to what" in terms of claims, not opaque ids.
+
+## Surviving restarts (since 0.1.4)
+
+Subscriptions live in shared memory, which is wiped on a PostgreSQL restart. Since 0.1.4, `pgr.subscribe()` also records each subscription (query, mode, audience, owner role) in the logged catalog table `pgr.persisted_subscriptions`, and `pgr.unsubscribe()` removes it.
+
+After a restart, replay the catalog into shared memory:
+
+```sql
+SELECT pgr.restore_subscriptions();
+-- returns the number of subscriptions restored
+```
+
+The function is idempotent — already-active subscriptions are skipped, and a subscription that fails to restore (for example, its table was dropped) raises a warning without aborting the rest. The all-in-one Docker image runs it automatically at boot for every database with the extension installed; on self-managed deployments, call it once from your startup hook before clients reconnect. `EXECUTE` is revoked from `PUBLIC` — run it as a privileged role.
 
 ## Subscription limits
 
@@ -151,7 +164,7 @@ When you call `pgr.subscribe()`, pg_reactive:
 
 1. Parses your SQL to extract the referenced table OIDs
 2. Creates or reuses AFTER STATEMENT triggers on each referenced table
-3. Creates an UNLOGGED snapshot table `pgr._snapshot_<query_id>`
+3. Creates an UNLOGGED snapshot table `pgr._snap_<query_id>`
 4. Runs your query immediately to populate the initial snapshot
 
 When a watched table changes:
@@ -179,7 +192,7 @@ SELECT pgr.subscribe(
 
 ## Snapshot visibility note
 
-AFTER STATEMENT triggers run after the DML commits. The trigger can see the committed state of the data, so deltas always reflect the final state — not intermediate states within a transaction.
+AFTER STATEMENT triggers fire at the end of each statement, inside the still-open transaction — not after commit. With `pg_reactive.batch_invalidation` (default on), recompute is deferred to a single pass per query at transaction pre-commit, and PostgreSQL delivers the NOTIFY to listeners only at commit — so deltas reflect the transaction's final committed state, never intermediate states.
 
 ## Server-side subscription management
 
@@ -192,18 +205,18 @@ const admin = new PgReactiveAdmin({
   connectionString: process.env.DATABASE_URL!,
 });
 
-// Subscribe
-await admin.subscribe(
+// Register
+await admin.register(
   'active_orders',
   "SELECT id, status, amount FROM orders WHERE status = 'active'",
 );
 
 // List subscriptions
-const subs = await admin.getSubscriptions();
+const subs = await admin.listSubscriptions();
 
-// Unsubscribe
-await admin.unsubscribe('active_orders');
+// Unregister
+await admin.unregister('active_orders');
 
 // Cleanup
-await admin.end();
+await admin.close();
 ```

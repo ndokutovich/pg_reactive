@@ -50,13 +50,23 @@ $$ LANGUAGE plv8;
 ## Deploy
 
 ```bash
-pgstack functions deploy process-order --runtime plv8
+pgstack functions deploy process_order --runtime plv8
+```
+
+The function name must match the SQL function suffix exactly — invoking `/functions/v1/process_order` makes the proxy call `pgstack.fn_process_order`.
+
+Prerequisites: `SERVICE_ROLE_KEY` must be set (env or `--service-role-key`), and `supabase/functions/process_order/index.ts` must exist — the CLI reads it into the `code` column even for plv8 (create it with `pgstack functions new process_order`; execution still uses the `pgstack.fn_process_order` SQL function, not that file). Alternatively, register directly in SQL:
+
+```sql
+INSERT INTO pgstack.edge_functions (name, runtime)
+VALUES ('process_order', 'plv8')
+ON CONFLICT (name) DO UPDATE SET runtime = EXCLUDED.runtime, status = 'active';
 ```
 
 ## Invoke
 
 ```bash
-curl -X POST http://127.0.0.1:8080/functions/v1/process-order \
+curl -X POST http://127.0.0.1:8080/functions/v1/process_order \
   -H "Authorization: Bearer <jwt>" \
   -H "Content-Type: application/json" \
   -d '{"order_id": 1, "items": [{"product_id": 5, "quantity": 2, "price": 9.99}]}'

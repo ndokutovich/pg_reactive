@@ -8,6 +8,16 @@ declared in `ext/pg_reactive.control`).
 ## [Unreleased]
 
 ### Added
+- **pg_reactive 0.1.3** (`ext/pg_reactive--0.1.2--0.1.3.sql`): security-only
+  upgrade — `REVOKE EXECUTE` on `pgr.get_subscriptions()` and `pgr.stats()`,
+  `REVOKE SELECT` on `pgr.subscriptions` from PUBLIC, giving pre-0.1.2
+  installs the same default-deny posture (audit finding L8).
+- **pg_reactive 0.1.4** (`ext/pg_reactive--0.1.3--0.1.4.sql`): durable
+  subscription persistence — new `pgr.persisted_subscriptions` catalog and
+  `pgr.restore_subscriptions()` to rebuild shmem state after restart;
+  `pgr.subscribe`/`pgr.unsubscribe` re-shaped as plpgsql wrappers over new
+  `pgr._subscribe_internal`/`pgr._unsubscribe_internal` C entry points
+  (SQL API signatures unchanged).
 - Dual licensing scheme: `ext/` under PostgreSQL License, everything else
   under Apache License 2.0. New `NOTICE`, `SECURITY.md`, `CONTRIBUTING.md`,
   and this `CHANGELOG.md`.
@@ -58,9 +68,8 @@ adversarial review and the following security hardening lands across them.
 - **Refresh token hashing**: `pgstack.refresh_tokens.token_hash` stores
   SHA-256 of the opaque refresh token. Plaintext is never persisted.
 - **`PGSTACK_ENV=production` strict validator** — refuses to start with
-  default dev secrets, `ENABLE_SQL_ENDPOINT=true` (without explicit
-  service-role gating), `ALLOW_PERMISSIVE_CORS=true`, or missing
-  `SECRETS_ENCRYPTION_KEY` when encrypted columns are in use.
+  default dev secrets, `ENABLE_SQL_ENDPOINT=true`,
+  `ALLOW_PERMISSIVE_CORS=true`, or a missing `SECRETS_ENCRYPTION_KEY`.
 - **Trusted-proxy configuration** (`TRUSTED_PROXIES`) for safe
   `X-Forwarded-For` handling. Untrusted requests fall back to
   `RemoteAddr`, preventing rate-limit bypass.
@@ -137,7 +146,5 @@ adversarial review and the following security hardening lands across them.
 - TypeScript SDK with `LiveQuery` and `createClient`.
 - pg_regress and isolation test suites.
 
-[Unreleased]: https://github.com/ndokutovich/pg_reactive/compare/v0.1.2...HEAD
-[0.1.2]: https://github.com/ndokutovich/pg_reactive/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/ndokutovich/pg_reactive/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/ndokutovich/pg_reactive/releases/tag/v0.1.0
+[Unreleased]: https://github.com/ndokutovich/pg_reactive/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ndokutovich/pg_reactive/releases/tag/v0.1.1

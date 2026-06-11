@@ -6,13 +6,11 @@ description: LiveQuery class, createClient(), and RealtimeChannel API reference.
 
 # SDK Reference
 
-The `pg-reactive-sdk` package provides the TypeScript client for live query subscriptions.
+The `@pgstack/sdk` package provides the TypeScript client for live query subscriptions.
 
 ## Installation
 
 ```bash
-npm install pg-reactive-sdk
-# or
 npm install @pgstack/sdk
 ```
 
@@ -21,7 +19,7 @@ npm install @pgstack/sdk
 Create a client that manages multiple live queries with shared connection options:
 
 ```typescript
-import { createClient } from 'pg-reactive-sdk';
+import { createClient } from '@pgstack/sdk';
 
 const client = createClient({
   url: 'ws://127.0.0.1:8080',
@@ -63,7 +61,7 @@ The `LiveQuery` class manages a single WebSocket subscription.
 ### Constructor
 
 ```typescript
-import { LiveQuery } from 'pg-reactive-sdk';
+import { LiveQuery } from '@pgstack/sdk';
 
 const lq = new LiveQuery('active_orders', {
   url: 'ws://127.0.0.1:8080',
@@ -228,17 +226,71 @@ ch.unsubscribe();
 | `message` | Frame received. Inspect `data.type` to classify: `broadcast` (peer), `presence_*` (presence), or absence of `type` + `inserted`/`deleted` (server delta). |
 | `error` | Connection error |
 
+## `LiveQueryHub`
+
+`createHub()` is the recommended entry point for apps that need optimistic updates, offline support, or multiple subscriptions sharing one set of connection options:
+
+```typescript
+import { createHub } from '@pgstack/sdk';
+
+const hub = createHub({ url: 'ws://127.0.0.1:8080', token: '...' });
+
+const orders = hub.subscribe('orders_q');
+orders.on((event, data) => console.log(event, data));
+
+// Optimistic insert — shows in the UI immediately:
+orders.optimisticInsert({ id: 999, status: 'pending' });
+try {
+  await hub.mutate(() =>
+    fetch('/rest/v1/orders', { method: 'POST', body: JSON.stringify(row) }),
+  );
+  orders.commitOptimistic();
+} catch {
+  orders.rollback();
+}
+
+hub.close(); // close all subscriptions
+```
+
+### Options
+
+`HubOptions` extends `LiveQueryClientOptions` with:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `maxOfflineQueue` | `100` | Maximum mutations queued while offline — the oldest is dropped when full |
+
+### Hub methods
+
+| Method | Description |
+|--------|-------------|
+| `.subscribe(queryId)` | Returns a `HubSubscription` with optimistic-update helpers |
+| `.mutate(fn)` | Runs the mutation now if online; queues it (and replays on reconnect) if offline |
+| `.queueMutation(fn)` | Queue a mutation explicitly for replay on reconnect |
+| `.pendingMutations` | Number of mutations currently queued |
+| `.close()` | Close all subscriptions and the underlying client |
+
+### `HubSubscription` helpers
+
+| Method | Description |
+|--------|-------------|
+| `.optimisticInsert(row)` | Insert a row into the local snapshot immediately |
+| `.optimisticDelete(row)` | Remove a row from the local snapshot immediately |
+| `.commitOptimistic()` | Accept the optimistic state (after the server confirmed) |
+| `.rollback()` | Revert the snapshot to the last server-confirmed state |
+
 ## Full example
 
 ```typescript
-import { createClient } from 'pg-reactive-sdk';
+import { createClient } from '@pgstack/sdk';
 
 const client = createClient({
   url: 'ws://127.0.0.1:8080',
   // sessionStorage is tab-scoped — closing the browser logs the user
   // out; XSS cannot survive a browser restart. The React `useAuth` hook
-  // writes there by default.
-  token: sessionStorage.getItem('access_token') ?? undefined,
+  // persists the whole session as JSON under the 'pgstack-session' key.
+  token: (JSON.parse(sessionStorage.getItem('pgstack-session') ?? 'null') as
+    { access_token?: string } | null)?.access_token,
 });
 
 // Subscribe to active orders

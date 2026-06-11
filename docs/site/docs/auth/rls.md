@@ -202,22 +202,28 @@ To add custom claims, include extra fields when generating your JWTs.
 
 ## Testing RLS policies
 
-Use `SET ROLE` in psql to test policies as a specific user:
+Use `SET LOCAL ROLE` in psql to test policies as a specific user:
 
 ```sql
+-- SET LOCAL only takes effect inside a transaction block,
+-- so wrap each test in BEGIN ... ROLLBACK.
+
 -- Test as anonymous user
-SET ROLE anon;
+BEGIN;
+SET LOCAL ROLE anon;
 SET LOCAL request.jwt.claims = '{"role":"anon"}';
 SELECT * FROM orders; -- should return 0 rows (or public rows only)
+ROLLBACK;
 
 -- Test as authenticated user
-SET ROLE authenticated;
+BEGIN;
+SET LOCAL ROLE authenticated;
 SET LOCAL request.jwt.claims = '{"sub":"550e8400-e29b-41d4-a716-446655440000","role":"authenticated"}';
 SELECT * FROM orders; -- should return only that user's orders
-
--- Reset
-RESET ROLE;
+ROLLBACK;
 ```
+
+`ROLLBACK` reverts both `SET LOCAL` settings and the role, so no `RESET ROLE` is needed.
 
 ## Common mistakes
 
@@ -260,7 +266,7 @@ CREATE POLICY "Team access" ON public.projects FOR SELECT
   USING (public.is_team_member(team_id));
 ```
 
-**Not enabling RLS.** RLS policies are only evaluated when RLS is enabled on the table. A table without `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` allows all access.
+**Not enabling RLS.** RLS policies are only evaluated when RLS is enabled on the table. A table without `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` allows all access permitted by its table-level grants.
 
 ## Disabling RLS for a table
 
@@ -268,7 +274,10 @@ For tables that should be fully public (e.g., a read-only products catalog):
 
 ```sql
 -- Option 1: Don't enable RLS
--- All roles can read (anon, authenticated, service_role)
+-- Access is then governed purely by table-level grants. anon and
+-- authenticated have NO default privileges on public tables (2026-05
+-- audit), so you must still grant read access explicitly:
+GRANT SELECT ON products TO anon, authenticated;
 
 -- Option 2: Enable RLS with an open policy
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;

@@ -9,7 +9,7 @@ description: Fetch related rows via foreign keys using the select parameter.
 Embedding lets you fetch related rows from joined tables in a single request by traversing foreign key relationships. The syntax uses parentheses in the `select` parameter.
 
 :::info Implementation Status
-Basic embedding support is planned. The examples on this page describe the intended API compatible with PostgREST.
+Embedding is implemented for foreign-key relationships (many-to-one and one-to-many), up to 3 levels of nesting. Filters, ordering, limits, and counts on embedded relations are not yet supported.
 :::
 
 ## Basic embedding
@@ -98,6 +98,8 @@ Embed multiple levels deep:
 GET /rest/v1/orders?select=id,status,order_items(quantity,products(name,sku))
 ```
 
+Nesting is limited to 3 levels. Deeper embeds are rejected with HTTP 400 (`"invalid embed in request"`).
+
 ## Multiple embeds
 
 ```bash
@@ -142,26 +144,15 @@ const { data } = await pgstack.from<OrderWithCustomer>('orders')
 
 ## Filtering embedded results
 
-Apply filters to the embedded table using dot notation:
-
-```bash
-# Orders for customers in New York
-GET /rest/v1/orders?select=id,status,customers(name,city)&customers.city=eq.New York
-```
+Not yet supported. Dotted filter keys such as `customers.city=eq.New York` are treated as a column filter on the top-level table and rejected with HTTP 400 (`"unknown column in request"`). Filters currently apply only to the top-level table.
 
 ## Limiting embedded results
 
-```bash
-# Each customer's 3 most recent orders
-GET /rest/v1/customers?select=name,orders(id,status)&orders.limit=3&orders.order=created_at.desc
-```
+Not yet supported. `orders.limit=3` is parsed as a filter on a literal column named `orders.limit` (HTTP 400 `"unknown column in request"`), and `orders.order=created_at.desc` fails operator parsing. One-to-many embeds always return all matching rows.
 
 ## Counting related rows
 
-```bash
-# Customers with order count
-GET /rest/v1/customers?select=name,orders(count)
-```
+Not yet supported. `orders(count)` is interpreted as a request for a column named `count` on the `orders` table and rejected with HTTP 400 (`"invalid embed in request"`). There is no aggregate/count embed feature; use `Prefer: count=exact` on a separate request against the related table.
 
 ## Schema requirements
 

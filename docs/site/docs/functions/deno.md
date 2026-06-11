@@ -63,10 +63,13 @@ Deno.serve(async (req: Request) => {
 ## Deploy
 
 ```bash
+export SERVICE_ROLE_KEY=<your-service-role-key>   # or pass --service-role-key <key>
 pgstack functions deploy my-function --runtime deno
 ```
 
 This registers the function in `pgstack.edge_functions` and refreshes the proxy's catalog. The edge-runtime picks up function files from the mounted volume.
+
+Deploy registers the function via the proxy's `POST /api/sql` endpoint, so the proxy must be running with `ENABLE_SQL_ENDPOINT=true` (the dev `docker-compose.yml` sets it; it is `false` by default and should stay disabled in production).
 
 ## Features
 

@@ -52,7 +52,7 @@ PostgreSQL 16 + pg_reactive extension  ← port 5432 (internal)
 
 **RLS enforced by default.** Every REST request runs as the authenticated PostgreSQL role. The proxy sets `request.jwt.claims` and switches role before executing queries, so your `ROW LEVEL SECURITY` policies run automatically.
 
-**Two containers.** `docker compose up -d` and you're done. No Kubernetes required for development or small production deployments.
+**Two containers.** The production stack and `pgstack init` scaffolds run just PostgreSQL + the Go proxy — `docker compose up -d` and you're done. (The development compose in this repo additionally starts a legacy Rust reference proxy on `127.0.0.1:8081`.) No Kubernetes required for development or small production deployments.
 
 ## Quick example
 
@@ -72,7 +72,7 @@ curl http://127.0.0.1:8080/rest/v1/todos?done=eq.false \
 
 ```typescript
 // TypeScript client
-import { createClient } from '@pgstack/sdk';
+import { createClient } from '@pgstack/sdk/pgstack';
 
 const pgstack = createClient('http://127.0.0.1:8080', 'your-anon-key');
 

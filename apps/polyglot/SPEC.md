@@ -1,15 +1,17 @@
 # Polyglot Matching Engines — design spec
 
 A side-by-side comparison of six identical-contract order-matching engines
-written in Go, Spring Boot, FastAPI, Rust, .NET, and Node. They all consume
-the same order stream, run independently, and publish their fills + book
-state back to pgstack so the frontend can show the differences in flight.
+written in Go, Spring Boot, Python (engine id `fastapi` — a plain asyncpg
+worker, no FastAPI HTTP layer), Rust, .NET, and Node. They all consume the
+same order stream, run independently, and publish their fills + book state
+back to pgstack so the frontend can show the differences in flight.
 
 This is the **pitch**: not "look, the same handler in six languages" — but
-"look, six independent matching engines processing the same orders, with
-visibly different fill rates, latencies, and book states." A pgstack
-deployment where the database is the message bus and the polyglot workers
-are interchangeable building blocks.
+"look, six independent engines running one normalized matching profile
+(decimal money math, sorted-tree book, FIFO levels), so the visible
+differences — latency and throughput — reflect the language/runtime, not
+the algorithm." A pgstack deployment where the database is the message bus
+and the polyglot workers are interchangeable building blocks.
 
 ## Architecture
 
@@ -26,21 +28,21 @@ are interchangeable building blocks.
                  │               ▼                              │
                  └───────────────┼──────────────────────────────┘
                                  │
-        ┌────────────┬───────────┼───────────┬────────────┐
-        ▼            ▼           ▼           ▼            ▼
-   ┌────────┐  ┌────────┐  ┌──────────┐ ┌──────┐  ┌──────────┐
-   │ engine │  │ engine │  │  engine  │ │engine│  │  engine  │
-   │   go   │  │ spring │  │ fastapi  │ │ rust │  │  dotnet  │
-   └────────┘  └────────┘  └──────────┘ └──────┘  └──────────┘
-        │            │           │           │            │
-        └────────────┴───────────┼───────────┴────────────┘
+     ┌──────────┬──────────┬─────┴─────┬──────────┬──────────┐
+     ▼          ▼          ▼           ▼          ▼          ▼
+ ┌────────┐ ┌────────┐ ┌─────────┐ ┌────────┐ ┌────────┐ ┌────────┐
+ │ engine │ │ engine │ │ engine  │ │ engine │ │ engine │ │ engine │
+ │   go   │ │ spring │ │ fastapi │ │  rust  │ │ dotnet │ │  node  │
+ └────────┘ └────────┘ └─────────┘ └────────┘ └────────┘ └────────┘
+     │          │          │           │          │          │
+     └──────────┴──────────┴─────┬─────┴──────────┴──────────┘
                                  │ writes fills + book + stats
                                  ▼
                          frontend live-queries:
-                           top_of_book_BTCUSD
+                           engine_perf_{engine}
                            recent_fills_{engine}
                            engine_book_{engine}_BTCUSD
-                           engine_perf_summary
+                           (top-of-book + perf summary aggregated client-side)
 ```
 
 Each engine is a long-running container that:
@@ -59,8 +61,9 @@ talks to pgstack the way a real polyglot stream-processor would.
 ## Shared schema
 
 `apps/polyglot/shared/migration.sql` is the single source of truth. It
-ships with the polyglot deploy template and is also bundled into the demo
-landing.
+ships with the polyglot deploy template
+(`deploy/templates/polyglot-showcase/migration.sql`, which the deploy
+workflow copies to the VPS).
 
 ### `public.order_events` — append-only ledger
 
@@ -73,12 +76,12 @@ landing.
 | `order_type`  | text        | `limit`, `market`, `cancel` |
 | `price`       | numeric     | null for market / cancel |
 | `qty`         | numeric     | for cancel: 0 |
-| `client_id`   | text        | UUID — the placing party |
+| `client_id`   | uuid        | the placing party |
 | `parent_order`| bigint      | for `cancel`: ref to original order |
 
 After every `INSERT` a trigger fires `pg_notify('order_event_added', id)`.
-Engines use the payload to skip the round-trip when the only thing they
-need is the watermark.
+Engines ignore the payload and always drain `WHERE id > last_seen_id`, so a
+missed notify (e.g. engine restart) is recovered on the next event.
 
 ### `public.engine_fills` — per-engine matching decisions
 
@@ -131,10 +134,15 @@ Registered in `migration.sql` via `pgr.subscribe`:
 
 | query_id                          | what the frontend gets |
 |-----------------------------------|------------------------|
-| `top_of_book_BTCUSD`              | top-10 bid + top-10 ask, aggregated across all 6 engines |
+| `engine_perf_{engine}`            | one row per engine — for the stats panel (six subscriptions) |
 | `recent_fills_{engine}`           | last 20 fills per engine (six subscriptions) |
-| `engine_book_{engine}_BTCUSD`     | full book per engine (depth chart) |
-| `engine_perf_summary`             | one row per engine — for the stats panel |
+| `engine_book_{engine}_BTCUSD`     | top-10 book levels per engine |
+
+Cross-engine aggregates (a unified top-of-book, a perf summary) are
+deliberately not registered server-side — six engines writing one shared
+`_snap_` table is a deadlock storm (see the comment in `migration.sql`).
+The frontend computes both client-side by unioning the six per-engine
+streams.
 
 All subscriptions have `audience = null` (read-only public data) — anyone with
 a valid JWT (including guest JWT via `signInAnonymously`) can watch.
@@ -163,8 +171,10 @@ listener.
 | var                 | required | meaning |
 |---------------------|----------|---------|
 | `DATABASE_URL`      | yes      | `postgres://polyglot_engine:...@pgstack:5432/pg_reactive_test` |
-| `ENGINE_NAME`       | yes      | `go` / `spring` / `fastapi` / `rust` / `dotnet` / `node` |
-| `LATENCY_HISTOGRAM` | no       | reservoir size for p99 (default 1024) |
+| `ENGINE_NAME`       | Go only — the other five default to their own engine id | `go` / `spring` / `fastapi` / `rust` / `dotnet` / `node` |
+
+The latency reservoir for p99 is a fixed 1024-sample ring in every engine
+(not configurable).
 
 ### Matching algorithm (reference)
 
@@ -173,37 +183,41 @@ in the book at their price. Incoming limit orders that cross the spread match
 the resting opposite side from best price outward until exhausted. Market
 orders take the top of book; cancels remove the parent order.
 
-This is the reference. Engines MAY deviate (pro-rata, hidden tick, etc) —
-the deviation is the demonstration. If they deviate, the engine README
-documents what they do differently and why.
+This is the reference and all six engines implement it exactly, normalized
+to one shared profile (decimal money math, O(log n) sorted price ladder,
+O(1)-amortized FIFO per level, O(1) cancel, fixed-size latency reservoir)
+so the leaderboard reflects the language/runtime, not the implementation.
 
 ## Frontend
 
-Single static page at `apps/polyglot/web/index.html`. Loads from CDN, no build.
+Single self-contained static page at `apps/polyglot/web/index.html` —
+inline JS/CSS plus local `config.js`, no build, no external dependencies.
 
-Layout — three rows × dynamic columns:
+Layout — three rows:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Header — symbol selector, "send random order" button, play/pause   │
-├─────────────────────────────────────────────────────────────────────┤
-│  Aggregated top-of-book (one panel, 10 deep both sides)             │
-├─────────────────────────────────────────────────────────────────────┤
+│  Header — fixed BTC-USD badge, connection status, manual order      │
+│  form (side/type/price/qty) + "Send order" button                   │
+├───────────────────────────────────┬─────────────────────────────────┤
+│  Aggregated top-of-book           │  Engine performance summary     │
+│  (10 deep both sides,             │  (orders / matches / volume /   │
+│   client-side union)              │   avg / p99 per engine row)     │
+├───────────────────────────────────┴─────────────────────────────────┤
 │  6-grid: per-engine mini-panels (fills + p99 latency + book depth)  │
 │   ┌──────┬──────┬──────┐                                            │
 │   │  go  │spring│fastpi│                                            │
 │   ├──────┼──────┼──────┤                                            │
 │   │ rust │dotnet│ node │                                            │
 │   └──────┴──────┴──────┘                                            │
-├─────────────────────────────────────────────────────────────────────┤
-│  Consensus monitor: where engines disagree on top-of-book           │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-The "send random order" button POSTs to `POST /rest/v1/rpc/place_order`
-(a SECURITY DEFINER function that wraps the INSERT and assigns the
-`client_id` from `auth.uid()`). One synthetic generator container can be
-toggled on for ambient activity (configurable rate).
+The "Send order" form POSTs the chosen side/type/price/qty to
+`POST /rest/v1/rpc/place_order` (a SECURITY DEFINER function that wraps
+the INSERT and assigns the `client_id` from `auth.uid()`). One synthetic
+generator container can be toggled on for ambient activity (configurable
+rate).
 
 ## Deploy
 
@@ -215,7 +229,7 @@ generator. Umbrella nginx routes `polyglot.pgstack.org` to it via
 
 ## Implementation order
 
-1. **`apps/polyglot/shared/migration.sql`** — schema + role + RLS + triggers
+1. **`apps/polyglot/shared/migration.sql`** — schema + role + grants + triggers
    + `pgr.subscribe` registrations + `place_order` RPC.
 2. **`apps/polyglot/engines/go/`** — reference engine. Used as template for
    the other five.

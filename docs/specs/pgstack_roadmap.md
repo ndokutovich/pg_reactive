@@ -27,13 +27,13 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 - DDL auto-unsubscribe (ProcessUtility hook for TRUNCATE/ALTER/DROP)
 - Sequence numbers in NOTIFY for gap detection
 - Configurable NOTIFY channel GUC
-- Rust WebSocket proxy (legacy, single-file tokio-tungstenite server)
+- Rust WebSocket proxy (reference implementation; modular axum + sqlx)
 - TypeScript SDK with LiveQuery class, local snapshot management, React hook
 - 12 example dashboards demonstrating various query types
-- pg_regress tests (7 SQL test files)
+- pg_regress tests (12 SQL test files)
 - Isolation tests (3 concurrency specs)
 - Integration and E2E test suites
-- Performance benchmarks (P1-P6)
+- Performance benchmarks (P1-P7)
 
 **Key Metrics:**
 
@@ -117,7 +117,7 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 | Server-side admin client (PgReactiveAdmin) | Done |
 | DBOS job queue and scheduler | Done |
 
-### CLI (@pgstack/cli)
+### CLI (pgstack)
 
 | Command | Description | Status |
 |---------|-------------|--------|
@@ -125,13 +125,17 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 | `pgstack dev` | Start PostgreSQL + proxy in Docker | Done |
 | `pgstack stop` | Stop containers | Done |
 | `pgstack deploy --host <user@server>` | Deploy to production via SSH | Done |
-| `pgstack migration new <name>` | Create timestamped migration file | Done |
+|  `pgstack migration create <name>` | Create timestamped migration file | Done |
 | `pgstack migration run` | Apply pending migrations | Done |
 | `pgstack migration rollback` | Roll back last migration | Done |
-| `pgstack migration list` | List migration status | Done |
-| `pgstack db push` | Push schema changes | Done |
+| `pgstack migration status` | Show migration status | Done |
+| `pgstack db shell` | Open psql shell | Done |
 | `pgstack db reset` | Reset database | Done |
-| `pgstack generate` | Generate TypeScript types from schema | Done |
+| `pgstack db seed` | Run seed SQL | Done |
+| `pgstack db branch` / `pgstack db checkout` | Database branching (TEMPLATE clone) | Done |
+| `pgstack generate types` | Generate TypeScript types from schema | Done |
+| `pgstack functions new\|list\|deploy\|delete\|serve` | Edge function management | Done |
+| `pgstack logs` | Tail container logs | Done |
 | `pgstack dbos` | DBOS job queue management | Done |
 | `pgstack status` | Show container and service status | Done |
 | `pgstack studio` | Open Studio dashboard in browser | Done |
@@ -150,7 +154,7 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 
 | Item | Status |
 |------|--------|
-| Docusaurus 3 documentation site (33 pages, 9 sidebar categories) | Done |
+| Docusaurus 3 documentation site (39 pages, 9 sidebar categories) | Done |
 | CI/CD pipelines (GitHub Actions) | Done |
 | Docker images (GHCR) | Done |
 | Production docker-compose with .env.example | Done |
@@ -159,15 +163,15 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 
 ## Phase 3 -- GA Preparation (CURRENT)
 
-**Goal:** Harden the platform for general availability. Achieve feature parity between Rust and Go proxy implementations. Complete testing and documentation.
+**Goal:** Harden the platform for general availability. Complete testing and documentation. (Proxy parity is settled: the Go proxy is the primary implementation and exceeds the Rust reference.)
 
 | Task | Status |
 |------|--------|
-| Go proxy feature parity with Rust proxy | In progress |
-| Advanced query type testing (recursive CTEs, lateral joins) | In progress |
+| Go proxy feature parity with Rust proxy | Done — Go proxy is primary and exceeds it (edge functions, batch endpoint, TLS autocert); Rust proxy kept as reference |
+| Advanced query type testing (recursive CTEs, lateral joins) | Done |
 | Batch invalidation optimization | Done |
 | OpenAPI auto-generation from catalog | Done |
-| Studio Playwright E2E tests | Planned |
+| Studio Playwright E2E tests | Done |
 | Updated specification documents (this document) | In progress |
 | Landing page and marketing site | Planned |
 | npm package publishing preparation | Planned |
@@ -180,7 +184,7 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 | Component | Technology | Approximate LOC |
 |-----------|-----------|-----------------|
 | C Extension | C, PostgreSQL SPI/shmem | ~3,000 |
-| Go Proxy | Go, chi, pgx, zerolog | ~4,500 |
+| Go Proxy | Go, chi, pgx, zerolog | ~14,000 |
 | Rust Proxy (legacy) | Rust, axum, sqlx | ~3,200 |
 | TypeScript SDK | TypeScript | ~2,500 |
 | TypeScript CLI | TypeScript, commander | ~2,000 |
@@ -188,7 +192,7 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 | Tests | SQL, TypeScript, Python, JavaScript | ~5,000 |
 | Documentation | Markdown, Docusaurus 3 | ~6,000 |
 | Docker / CI | YAML, Dockerfile, Shell | ~1,000 |
-| **Total** | | **~35,000** |
+| **Total** | | **~44,500** |
 
 ---
 
@@ -197,7 +201,7 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 | Feature | Supabase | pgStack | Notes |
 |---------|----------|---------|-------|
 | Auth (email/password) | Yes | Yes | |
-| Auth (OAuth) | Yes (many providers) | Yes (Google, GitHub) | More providers planned |
+| Auth (OAuth) | Yes (many providers) | Yes (Google, GitHub, Apple, Microsoft, generic OIDC) | |
 | Auth (magic links) | Yes | Yes | |
 | Auth (email verification) | Yes | Yes | |
 | Auth (password reset) | Yes | Yes | |
@@ -208,15 +212,15 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 | Realtime | Postgres Changes (table-level) | Live Queries (query-level) | pg_reactive is more granular |
 | Realtime Channels | Yes | Yes | General pub/sub |
 | Storage | S3-backed (separate service) | bytea (in PostgreSQL) | Simpler, no external deps |
-| Edge Functions | Deno (separate service) | Not yet | Planned |
+| Edge Functions | Deno (separate service) | Yes (5 runtimes: goja, PL/v8, PL/Python, Deno, http) | In-process, in-DB, sidecar, and per-function container options |
 | Dashboard | Yes (Next.js) | Yes (React SPA) | |
 | CLI | Yes | Yes | |
 | TypeScript SDK | Yes | Yes (compatible API) | |
 | React Hooks | Community | Built-in | useAuth, useLiveQuery, useRpc |
 | Self-hosted | Yes (complex) | Yes (simple) | 2 containers vs 15+ |
-| Database branching | No | Not yet | Planned |
+| Database branching | No | Yes | `pgstack db branch` / `pgstack db checkout` (TEMPLATE clone) |
 | Job queue | No (use pg_cron) | Yes (DBOS) | Built-in scheduler |
-| Type generation | Yes | Yes | `pgstack generate` |
+| Type generation | Yes | Yes | `pgstack generate types` |
 
 ### Architectural Differences
 
@@ -237,18 +241,23 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 
 | Category | Count | Technology |
 |----------|-------|------------|
-| pg_regress (C extension) | 7 files | SQL |
+| pg_regress (C extension) | 12 files | SQL |
 | Isolation tests | 3 specs | pg_isolation_regress |
-| SDK unit tests | 42 tests | Vitest |
-| CLI tests | 29 tests (12 integration + 17 unit) | Vitest |
+| SDK unit tests | 73 tests | Vitest |
+| CLI tests | 160 tests | Vitest |
 | E2E auth tests | 37 tests | Node.js |
 | E2E REST tests | 34 tests | Node.js |
 | E2E SDK tests | 29 tests | Node.js |
 | E2E embed/RPC tests | 40 tests | Node.js |
 | E2E realtime tests | 3 scripts | Node.js |
 | Integration tests | 2 scripts | Python |
-| Performance tests (P1-P6) | 6 benchmarks | Python + Node.js |
-| **Total** | **~210 tests** | |
+| Performance tests (P1-P7) | 7 benchmarks | Python + Node.js |
+| Studio Playwright tests | 40 tests | Playwright |
+| Security regression tests | 7 scripts | Node.js |
+| Security lint | 1 script (SEC-R* rules) | Node.js |
+| Doc SQL smoke test | 1 harness | Node.js |
+| E2E batch/gzip/static-hosting/RLS/OAuth/RPC/embed | 7 scripts | Node.js |
+| **Total** | **350+ tests** | |
 
 ---
 

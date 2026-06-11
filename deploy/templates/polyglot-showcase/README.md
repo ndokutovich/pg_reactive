@@ -15,13 +15,13 @@ architecture and the engine contract.
 |-------------------------------------|------|
 | `docker-compose.yml`                | pgstack + one-shot migration + generator + 6 engines + static web + Inbucket |
 | `.env.example`                      | Required secrets and image pins |
-| `migration.sql`                     | Schema + roles + RLS + RPC + `pgr.subscribe` registrations |
+| `migration.sql`                     | Schema + roles + grants + RPC + `pgr.subscribe` registrations |
 
 The umbrella nginx route for `polyglot.pgstack.org` is owned by the
 **vps-12gb-pgstack** repo (`nginx/conf.d/app-polyglot.conf` there), not
 this one. Adding a new variant subdomain = PR against that repo.
 
-## Build the 8 images on a Docker host
+## Build the 8 polyglot images + the pgstack all-in-one
 
 The engines, generator, and dashboard are not yet published to a public
 registry — for now, build each one locally from the repo:
@@ -99,7 +99,10 @@ A different subdomain → edit that file in the umbrella repo first.
 | `SPREAD`           | ± from `MID_PRICE` for limit orders |
 | `MAX_QTY`          | per-order ceiling |
 | `CANCEL_RATE`      | fraction of events that are cancels |
+| `WS_MAX_PER_IP`    | concurrent WS connections per source IP — default 50; the dashboard opens 18 subs per viewer (3 × 6 engines), the proxy default of 10 would 429 eight of them |
+| `TRUSTED_PROXIES`  | umbrella nginx network IP/range so the per-IP cap applies per-viewer instead of collapsing every viewer to the gateway IP |
 | `ENGINE_*_IMAGE`   | per-engine image pin |
+| `PGSTACK_IMAGE` / `WEB_IMAGE` / `GENERATOR_IMAGE` | non-engine image pins |
 
 To pause the ambient flow, scale the generator to zero:
 
@@ -117,7 +120,9 @@ The manual "Send order" form on the dashboard stays alive — it calls the
 showcase intentionally enables `ALLOW_ANONYMOUS_SIGNIN=true` so the
 dashboard works without an account; everything else stays strict.
 
-The `polyglot_engine` role has GRANTs only on the tables it needs —
-SELECT on `order_events`, full CRUD on `engine_*`. The frontend role
+The `polyglot_engine` role has GRANTs only on what it needs — SELECT +
+INSERT on `order_events` (the generator writes the order stream as the
+same role), full CRUD on `engine_*`, and DML on `pgr` snapshot tables
+so the recompute triggers can run under its identity. The frontend role
 sees the same data SELECT-only, with mutation gated by the `place_order`
 RPC. Round 26/28/33 hardening on every SECURITY DEFINER as usual.

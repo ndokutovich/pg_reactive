@@ -82,7 +82,7 @@ file, not a deviation to debate.
 |------|-----------------|---------------|----------------|
 | `anon` | no JWT, anon API key | no | unauthenticated browser |
 | `authenticated` | valid JWT, `role=authenticated` | no | logged-in browser/mobile |
-| `service_role` | `SERVICE_ROLE_KEY` bearer / `role=service_role` JWT | **yes** | server-side process only |
+| `service_role` | `SERVICE_ROLE_KEY` as bearer or `apikey` header (constant-time match); a `role=service_role` JWT claim is demoted to `authenticated` (`proxy-go/middleware/rls.go:claimsFromJWT`) | **yes** | server-side process only |
 | `admin` (DBA) | direct PG connection as `postgres` | yes | migrations, ops, never network-reachable |
 
 `anon` and `authenticated` are the only roles intended to be reachable
@@ -110,11 +110,11 @@ this matrix is a bug.
 | Storage: overwrite existing object | DENY | COND | ALLOW | same-owner check + atomic upsert (round 14) |
 | Auth: signup / token / refresh | ALLOW | ALLOW | ALLOW | rate-limited per real-IP (`middleware/rate_limit.go`) |
 | Auth: password reset / magiclink / verify | ALLOW | ALLOW | ALLOW | atomic token consume (F6 round 13); SMTP required in production (F5 round 26) |
-| Auth: anonymous signin `/auth/v1/anonymous` | COND | COND | COND | **default-deny** — `ALLOW_ANONYMOUS_SIGNIN=false` returns 503 (round 34); when enabled mints a short-lived role=anon JWT (`ANONYMOUS_JWT_TTL`, default 3600s), no DB row, no refresh, rate-limited by per-IP `AUTH_RATE_LIMIT` |
+| Auth: anonymous signin `/auth/v1/anonymous` | COND | COND | COND | **default-deny** — `ALLOW_ANONYMOUS_SIGNIN=false` returns 503 (round 34); when enabled mints a short-lived role=anon JWT (`ANONYMOUS_JWT_TTL`, default 3600s), no DB row, no refresh, rate-limited per-IP by a separate `ANONYMOUS_RATE_LIMIT` bucket (default 10 × `AUTH_RATE_LIMIT` = 300 per `ANONYMOUS_RATE_WINDOW`, default 60s) |
 | Auth: admin user CRUD | DENY | DENY | ALLOW | `requireServiceRole` empty-key guard (`auth/jwt.go` round 24) |
 | Auth: full JWT validation | COND | COND | COND | empty `JWT_SECRET` fails closed in `GenerateToken`/`ValidateToken`/`requireJWT` (round 26 F1 CRITICAL) |
 | Edge function: call any function | COND | ALLOW | ALLOW | invokes function with caller's RLS context |
-| Edge function: HTTP runtime upstream | n/a | n/a | n/a | `validateUpstreamURL` rejects IP literals, dotted FQDNs, loopback bare names (round 21 F3) |
+| Edge function: HTTP runtime upstream | n/a | n/a | n/a | `validateUpstreamURL` rejects IP literals, dotted FQDNs, loopback bare names (round 28 F3) |
 | `/api/sql` raw SQL endpoint | DENY | DENY | COND | `ENABLE_SQL_ENDPOINT=true` AND service_role bearer; refused outright in `PGSTACK_ENV=production` validator |
 | Webhook CRUD | DENY | DENY | ALLOW | secret stored AES-256-GCM-encrypted at rest |
 | `pgr.subscribe` (registration) | DENY | DENY | ALLOW | revoked from PUBLIC; app callers go through `SECURITY DEFINER` wrappers with fixed SQL (see `docs/specs/pg_reactive_spec.md` §9.4) |
@@ -126,17 +126,17 @@ These are properties the whole stack maintains. They override any
 per-capability rule that contradicts them.
 
 1. **No blanket `GRANT ALL ... TO authenticated`** on the public schema. New tables are default-deny for `authenticated`/`anon`. The bootstrap revokes the PostgreSQL default; `migrations/20260515200000_revoke_blanket_grants.sql` enforces it on existing deployments (round 12 F3).
-2. **No `PUBLIC EXECUTE` on `public.*` functions.** Functions are default-deny; expose to RPC by explicit `GRANT EXECUTE TO {role}`. Owner-loop applies the rule across `postgres` + `current_user` so multi-tenant function owners are covered (round 28 F1 + round 29 F1). **PostgreSQL quirk**: `ALTER DEFAULT PRIVILEGES ... REVOKE EXECUTE ... FROM PUBLIC` does NOT actually defeat the built-in `PUBLIC=EXECUTE` default for new functions (works fine for tables). The actual enforcement is a `ddl_command_end` event trigger `pgstack_revoke_public_execute` (defined in `docker/init.sql`) that runs `REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC` after every `CREATE FUNCTION`/`CREATE PROCEDURE` in `public`. Round 33 / audit F2.
+2. **No `PUBLIC EXECUTE` on `public.*` functions.** Functions are default-deny; expose to RPC by explicit `GRANT EXECUTE TO {role}`. Owner-loop applies the rule across `postgres` + `current_user` so multi-tenant function owners are covered (round 28 F1 + round 29 F1). **PostgreSQL quirk**: `ALTER DEFAULT PRIVILEGES ... REVOKE EXECUTE ... FROM PUBLIC` does NOT actually defeat the built-in `PUBLIC=EXECUTE` default for new functions (works fine for tables). The actual enforcement is a `ddl_command_end` event trigger `pgstack_revoke_public_execute` (defined in `docker/init.sql`) that runs `REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC` after every `CREATE FUNCTION`/`CREATE PROCEDURE` in `public`. Round 33 / audit F1 (the F1 label is shared with the separate round-33 sub-claim pass in invariant 11).
 3. **`SECURITY DEFINER` requires pinned `search_path = pg_catalog, pg_temp`** plus fully-qualified object refs. Any docs/examples that violate this are bugs.
 4. **`X-Forwarded-For` / `X-Forwarded-Proto` are only honoured from `TRUSTED_PROXIES`.** Without that env, the proxy uses kernel-attested `RemoteAddr` and ignores all forwarded headers. The XFF chain is walked right-to-left, skipping trusted-proxy hops, so the nginx `$proxy_add_x_forwarded_for` append pattern cannot be spoofed (round 22 F1). `X-Real-IP` is never honoured (round 23 F1).
 5. **`chiMiddleware.RealIP` is NEVER added to the router.** It rewrites `RemoteAddr` from spoofable headers and defeats every gate downstream. `proxy-go/middleware/composition_test.go` "negative pin" test guards this (round 25 HIGH).
 6. **Empty `JWT_SECRET` ⇒ all auth refused, not bypassed.** `GenerateToken`/`ValidateToken`/`requireJWT` are fail-closed (round 26 F1 CRITICAL).
 7. **Empty `SERVICE_ROLE_KEY` ⇒ no admin requests succeed.** Round 24 empty-key guard.
 8. **Raw OTP tokens never leave Postgres on any code path reachable from a non-`service_role` caller.** Round 30 HIGH.
-9. **Edge function HTTP upstreams reject loopback bare hostnames** (`localhost`, `ip6-localhost`, …) in addition to IP literals (round 21 F3).
+9. **Edge function HTTP upstreams reject loopback bare hostnames** (`localhost`, `ip6-localhost`, …) in addition to IP literals (round 28 F3).
 10. **HSTS `preload` is opt-in via `HSTS_PRELOAD=true`.** The `preload` directive is irreversible; never default-on (round 21 F5).
 11. **JWT MUST carry a non-empty `sub` claim** to authenticate as anything other than anon — both the `/auth/v1/*` path (`auth/jwt.go:ValidateToken`) and the REST / RPC / storage path (`middleware/rls.go:validateJWT`) enforce this. Without the gate a signed-but-identityless token resolves as `authenticated` with `sub=""`, and RLS policies keyed on `auth.uid()` see NULL — any policy whose USING expression evaluates that to truthy becomes a row-level bypass (round 33 / audit F1).
-12. **PG SQLSTATE class 22 (data exception) and class 23 (integrity constraint) map to HTTP 400**, not 500. `proxy-go/rest/rest.go:pgHTTPStatus` enforces this. An injection probe like `?id=eq.1' OR '1'='1` lands as an `invalid_text_representation (22P02)` for the integer cast — that is the client sending garbage, not the server crashing. Mapping 22xxx/23xxx to 500 made the `rest__sql_injection` regression test (Round 31 T3.5) flag every parameterized-but-malformed value as a possible crash. Round 33 / audit F2.
+12. **PG SQLSTATE class 22 (data exception) and class 23 (integrity constraint) map to 4xx, never 500** — 400 for everything except unique-violation `23505`, which maps to 409 Conflict (the main-package `error.go` mapping additionally returns 409 for foreign-key `23503`). `proxy-go/rest/rest.go:pgHTTPStatus` enforces this. An injection probe like `?id=eq.1' OR '1'='1` lands as an `invalid_text_representation (22P02)` for the integer cast — that is the client sending garbage, not the server crashing. Mapping 22xxx/23xxx to 500 made the `rest__sql_injection` regression test (Round 31 T3.5) flag every parameterized-but-malformed value as a possible crash. Round 33 / audit F2.
 13. **No public app frontend bundle references `service_role` or the `/api/sql` endpoint.** Both are server-only; a browser bundle that ships either hands every visitor an RLS-bypass primitive. The in-browser "Setup Database" wizard (raw SQL posted to `/api/sql` under a service_role bearer) was removed from the vanilla shop variant in an earlier pass but lingered, dead-but-present, in the `angular` variant — found in the round-35 review. Lint `SEC-R13` walks `apps/**/*.{html,js,mjs,ts}` and fails on either token; comment lines are skipped. Studio (`studio/`, the admin SQL console) is intentionally out of scope — it is not a public bundle.
 
 ## Ritual: every security finding leaves three things behind
@@ -175,14 +175,24 @@ round number — that's the canonical pointer.
 
 The proxy will refuse to start in `PGSTACK_ENV=production` mode without:
 
-- Real secrets (`JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`,
-  `POSTGRES_PASSWORD`, `SECRETS_ENCRYPTION_KEY`) — minimum 32 bytes each.
-  Generate via `openssl rand -base64 32`.
-- `SECRETS_ENCRYPTION_KEY` set if you intend to use edge function environment
-  variables or webhook signing secrets — both are stored AES-256-GCM-encrypted
-  at rest.
-- `ENABLE_SQL_ENDPOINT=true` is gated to require `service_role` keys even when
-  enabled. Leave it `false` unless you have a clear need.
+- Real secrets: `JWT_SECRET` (min 32 chars, enforced), `ANON_KEY` and
+  `SERVICE_ROLE_KEY` (non-empty and not publicly-known dev values; 32+ random
+  bytes recommended), `SECRETS_ENCRYPTION_KEY` (base64 decoding to exactly
+  32 bytes — an invalid key is a fatal startup error). Generate via
+  `openssl rand -base64 32`. `POSTGRES_PASSWORD` is enforced by the compose
+  file's `${POSTGRES_PASSWORD:?}` interpolation
+  (`examples/docker-compose.prod.yml`), not by the proxy validator.
+- `SECRETS_ENCRYPTION_KEY` — unconditionally required in production; it
+  encrypts edge function environment variables and webhook signing secrets
+  at rest (AES-256-GCM).
+- `ENABLE_SQL_ENDPOINT=false` — setting it `true` is a fatal startup error in
+  `PGSTACK_ENV=production` (no escape hatch). Outside production the
+  `/api/sql` handler additionally always requires a `service_role` bearer.
+- `REQUIRE_AUTHENTICATED_WS=true` — with `JWT_SECRET` and `ANON_KEY` set (both
+  already required in production), leaving it `false` is fatal.
+- `SMTP_HOST`, `SMTP_USER` and `SMTP_PASS` — without SMTP the dev mailer logs
+  reset/magiclink/verification URLs to the console (round 26 F5).
+- `ENABLE_DEMO_ENDPOINT=false` — `true` is fatal unless `PUBLIC_DEMO_SITE=true`.
 - `ALLOW_PERMISSIVE_CORS=false` (default in production).
 - `TRUSTED_PROXIES` configured if you sit behind a reverse proxy; otherwise
   `X-Forwarded-For` is ignored to prevent rate-limit bypass.

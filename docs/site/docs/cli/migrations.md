@@ -6,62 +6,67 @@ description: Create and manage database migrations with pgstack migration.
 
 # Migrations
 
-pgStack uses a sequential SQL migration system. Migration files are plain `.sql` files numbered sequentially and run in order.
+pgStack uses a plain-SQL migration system. Migration files are `.sql` files prefixed with a `YYYYMMDDHHMMSS` timestamp (e.g. `20250114120000_add_products_table.sql`) and applied in filename sort order; the scaffolded bootstrap migration `00000000000000_pgstack_init.sql` sorts first.
 
 ## Commands
 
 ### Create a migration
 
 ```bash
-pgstack migration new <name>
+pgstack migration create <name>
 ```
 
-Creates a new numbered migration file in the `migrations/` directory:
+Creates a new timestamped migration file in the `migrations/` directory:
 
 ```bash
-pgstack migration new add_products_table
-# Creates: migrations/00002_add_products_table.sql
+pgstack migration create add_products_table
+# Creates: migrations/20250114120000_add_products_table.sql
 ```
 
 The generated file contains a template:
 
 ```sql
--- Migration: 00002_add_products_table
--- Created: 2025-01-14T12:00:00Z
+-- Migration: add_products_table
+-- Created at: 2025-01-14T12:00:00.000Z
 
--- Write your migration SQL here.
--- To roll back, the system will look for a corresponding rollback migration.
+-- migrate:up
+
+
+-- migrate:down
 ```
+
+SQL under `-- migrate:up` is applied by `pgstack migration run`; SQL under `-- migrate:down` is executed on rollback.
 
 ### Run migrations
 
 ```bash
-pgstack migration up
+pgstack migration run
 ```
 
-Applies all pending migrations in numeric order:
+Applies all pending migrations in filename sort order:
 
 ```
-Running migration 00001_init.sql... OK
-Running migration 00002_add_products_table.sql... OK
-All migrations applied. Database is up to date.
+  + 20250114120000_add_products_table
+  + 20250114120500_add_sku_to_products
+Applied 2 migration(s).
 ```
 
-Migrations are tracked in a `pgstack_migrations` table created automatically.
+Migrations are tracked in a `pgstack.migrations` table (schema `pgstack`, table `migrations`) created automatically.
 
-### List migrations
+### Migration status
 
 ```bash
-pgstack migration list
+pgstack migration status
 ```
 
 Shows all migrations and their status:
 
 ```
-#      Name                           Applied At
-00001  init                           2025-01-14 12:00:00
-00002  add_products_table             2025-01-14 12:05:00
-00003  add_orders_table               not applied
+Migration Status:
+
+  v 00000000000000_pgstack_init  applied 1/14/2025, 12:00:00 PM
+  v 20250114120000_add_products_table  applied 1/14/2025, 12:05:00 PM
+  o 20250114121000_add_orders_table  pending
 ```
 
 ### Roll back
@@ -70,25 +75,30 @@ Shows all migrations and their status:
 pgstack migration rollback
 ```
 
-Rolls back the most recently applied migration. Looks for the migration SQL and executes a corresponding `_rollback.sql` file if it exists.
+Options:
+
+- `-n, --count <n>` — number of migrations to roll back (default: 1)
+- `--dry-run` — print the down SQL that would be executed without running it
+
+Rolls back the most recently applied migration(s) by executing the SQL in the `-- migrate:down` section of the same migration file, then deleting its row from `pgstack.migrations`. If the migration file is missing or has no `-- migrate:down` section, that migration is skipped with a warning — the command does not fail.
+
+Roll back several migrations at once, or preview the SQL first:
 
 ```bash
-# Rollback migrations must be named:
-migrations/00002_add_products_table_rollback.sql
+pgstack migration rollback -n 2          # roll back the last 2 migrations
+pgstack migration rollback --dry-run     # print the rollback SQL without executing
 ```
-
-If no rollback file exists, the command fails with an error asking you to write one.
 
 ## Migration file conventions
 
 Name migrations descriptively:
 
 ```
-00001_init.sql                    # initial schema
-00002_add_products_table.sql      # new table
-00003_add_category_to_products.sql # alter table
-00004_add_product_search_index.sql # index
-00005_seed_categories.sql         # data migration
+00000000000000_pgstack_init.sql              # scaffolded bootstrap (sorts first)
+20250114120000_add_products_table.sql        # new table
+20250114120500_add_category_to_products.sql  # alter table
+20250114121000_add_product_search_index.sql  # index
+20250114121500_seed_categories.sql           # data migration
 ```
 
 ## Example migrations
@@ -96,8 +106,9 @@ Name migrations descriptively:
 ### Create a table
 
 ```sql
--- 00002_add_products_table.sql
+-- 20250114120000_add_products_table.sql
 
+-- migrate:up
 CREATE TABLE products (
   id          BIGSERIAL PRIMARY KEY,
   name        TEXT NOT NULL,
@@ -123,22 +134,30 @@ CREATE POLICY "Service role full access"
 GRANT SELECT ON products TO anon, authenticated;
 GRANT INSERT, UPDATE, DELETE ON products TO service_role;
 GRANT USAGE, SELECT ON SEQUENCE products_id_seq TO service_role;
+
+-- migrate:down
+DROP TABLE IF EXISTS products;
 ```
 
 ### Add a column
 
 ```sql
--- 00003_add_sku_to_products.sql
+-- 20250114120500_add_sku_to_products.sql
 
+-- migrate:up
 ALTER TABLE products ADD COLUMN sku TEXT UNIQUE;
 CREATE INDEX idx_products_sku ON products(sku) WHERE sku IS NOT NULL;
+
+-- migrate:down
+ALTER TABLE products DROP COLUMN IF EXISTS sku;
 ```
 
 ### Add a foreign key
 
 ```sql
--- 00004_add_orders_table.sql
+-- 20250114121000_add_orders_table.sql
 
+-- migrate:up
 CREATE TABLE orders (
   id          BIGSERIAL PRIMARY KEY,
   user_id     UUID NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
@@ -158,13 +177,17 @@ CREATE POLICY "Users insert own orders" ON orders
 
 GRANT SELECT, INSERT ON orders TO authenticated;
 GRANT USAGE, SELECT ON SEQUENCE orders_id_seq TO authenticated;
+
+-- migrate:down
+DROP TABLE IF EXISTS orders;
 ```
 
 ### Data migration
 
 ```sql
--- 00005_seed_categories.sql
+-- 20250114121500_seed_categories.sql
 
+-- migrate:up
 INSERT INTO categories (name, slug) VALUES
   ('Electronics', 'electronics'),
   ('Clothing', 'clothing'),
@@ -172,28 +195,40 @@ INSERT INTO categories (name, slug) VALUES
   ('Home & Garden', 'home-garden'),
   ('Sports', 'sports')
 ON CONFLICT (slug) DO NOTHING;
+
+-- migrate:down
+DELETE FROM categories
+WHERE slug IN ('electronics', 'clothing', 'books', 'home-garden', 'sports');
 ```
 
-## Rollback files
+## Rollback sections
+
+Rollback SQL lives in the same migration file, under the `-- migrate:down` marker:
 
 ```sql
--- 00002_add_products_table_rollback.sql
+-- 20250114120000_add_products_table.sql
 
+-- migrate:up
+CREATE TABLE products (...);
+
+-- migrate:down
 DROP TABLE IF EXISTS products;
 ```
+
+`pgstack migration rollback` executes the `-- migrate:down` section of the most recently applied migration.
 
 ## Migration table
 
 pgStack tracks applied migrations in:
 
 ```sql
-SELECT * FROM pgstack_migrations ORDER BY applied_at;
+SELECT * FROM pgstack.migrations ORDER BY applied_at;
 ```
 
 | id | name | applied_at |
 |----|------|------------|
-| 1 | 00001_init | 2025-01-14 12:00:00+00 |
-| 2 | 00002_add_products | 2025-01-14 12:05:00+00 |
+| 1 | 00000000000000_pgstack_init | 2025-01-14 12:00:00+00 |
+| 2 | 20250114120000_add_products_table | 2025-01-14 12:05:00+00 |
 
 ## Best practices
 
@@ -203,14 +238,4 @@ SELECT * FROM pgstack_migrations ORDER BY applied_at;
 
 **Never edit applied migrations.** Once a migration has been applied to any environment, don't modify it. Create a new migration instead.
 
-**Use transactions.** Wrap DDL in explicit transactions when running multiple statements, so a failure rolls back everything:
-
-```sql
-BEGIN;
-
-ALTER TABLE orders ADD COLUMN notes TEXT;
-CREATE INDEX idx_orders_notes_gin ON orders USING gin(to_tsvector('english', notes))
-  WHERE notes IS NOT NULL;
-
-COMMIT;
-```
+**Transactions are automatic.** Each migration runs inside a single transaction (`BEGIN` ... `COMMIT`) — if any statement fails, the whole migration rolls back and is not recorded. Do not add explicit `BEGIN`/`COMMIT` to migration files.
