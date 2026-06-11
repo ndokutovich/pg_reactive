@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "miscadmin.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
@@ -17,6 +18,67 @@ HTAB *pgr_dep_hash = NULL;
 /* Previous hooks */
 static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+
+/*
+ * Backend-local record of shmem entries newly inserted by the current
+ * transaction. Shared-memory mutations are NOT transactional: if a
+ * transaction registers a subscription in shmem and then aborts, the
+ * catalog INSERT (pgr.persisted_subscriptions) and the snapshot table /
+ * triggers all roll back, but the shmem entry would linger as an orphan
+ * with no catalog row (Codex round-36 #6). The transaction-abort callback
+ * below removes these entries so shmem stays consistent with the catalog.
+ * Only genuine new inserts are tracked — in-place updates of a pre-existing
+ * entry are not, since removing those on abort would drop a subscription
+ * that legitimately existed before this transaction.
+ */
+#define PGR_MAX_PENDING_ADDS 256
+static char pgr_pending_adds[PGR_MAX_PENDING_ADDS][PGR_HASHKEY_LEN];
+static int	pgr_pending_add_count = 0;
+static bool pgr_pending_overflow = false;
+
+static void
+pgr_xact_callback(XactEvent event, void *arg)
+{
+	if (event == XACT_EVENT_ABORT || event == XACT_EVENT_PARALLEL_ABORT)
+	{
+		if (pgr_pending_add_count > 0 && pgr_state != NULL && pgr_dep_hash != NULL)
+		{
+			int		i;
+
+			LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
+			for (i = 0; i < pgr_pending_add_count; i++)
+				hash_search(pgr_dep_hash, pgr_pending_adds[i], HASH_REMOVE, NULL);
+			LWLockRelease(pgr_state->lock);
+		}
+		if (pgr_pending_overflow)
+			elog(WARNING,
+				 "pg_reactive: aborted transaction added more than %d subscriptions; "
+				 "some shmem entries may be orphaned — run pgr.restore_subscriptions() to reconcile",
+				 PGR_MAX_PENDING_ADDS);
+	}
+
+	/* Any terminal transaction event ends the tracking window. On COMMIT the
+	 * entries are now backed by committed catalog rows, so we simply forget
+	 * them. */
+	if (event == XACT_EVENT_COMMIT || event == XACT_EVENT_ABORT ||
+		event == XACT_EVENT_PREPARE ||
+		event == XACT_EVENT_PARALLEL_COMMIT || event == XACT_EVENT_PARALLEL_ABORT)
+	{
+		pgr_pending_add_count = 0;
+		pgr_pending_overflow = false;
+	}
+}
+
+/* Record a newly-inserted shmem key for abort cleanup. Called under the
+ * state lock from pgr_dep_add's new-insert branch. */
+static void
+pgr_track_pending_add(const char *hashkey)
+{
+	if (pgr_pending_add_count < PGR_MAX_PENDING_ADDS)
+		strlcpy(pgr_pending_adds[pgr_pending_add_count++], hashkey, PGR_HASHKEY_LEN);
+	else
+		pgr_pending_overflow = true;
+}
 
 /*
  * Format the per-database hash key for a query_id. The shmem hash is shared
@@ -225,6 +287,9 @@ pgr_dep_add(const char *query_id, const char *query_text,
 		entry->invalidation_count = 0;
 		entry->notify_seq = 0;
 		pgr_state->subscribe_count++;
+		/* Track for removal if this transaction aborts (shmem is not
+		 * transactional; see pgr_xact_callback). */
+		pgr_track_pending_add(key);
 	}
 
 	LWLockRelease(pgr_state->lock);
@@ -422,4 +487,8 @@ pgr_dep_init_hooks(void)
 
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = pgr_shmem_startup;
+
+	/* Remove shmem entries left by aborted transactions (shmem is not
+	 * transactional; see pgr_xact_callback). Registered once at module load. */
+	RegisterXactCallback(pgr_xact_callback, NULL);
 }
