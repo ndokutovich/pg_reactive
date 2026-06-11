@@ -87,6 +87,18 @@ func TestSendRetriesThenSucceeds(t *testing.T) {
 	}
 }
 
+// SMTP STARTTLS policy — Codex finding #11. The submission port 587 must
+// refuse plaintext when the server does not advertise STARTTLS; implicit-TLS
+// 465 and private-network plain ports do not force an upgrade.
+func TestStartTLSRequiredOnlyOnSubmissionPort(t *testing.T) {
+	cases := map[int]bool{587: true, 465: false, 25: false, 2525: false, 1025: false}
+	for port, want := range cases {
+		if got := starttlsRequired(port); got != want {
+			t.Errorf("starttlsRequired(%d) = %v, want %v", port, got, want)
+		}
+	}
+}
+
 type flakyDialer struct {
 	failuresLeft int
 	attempts     int

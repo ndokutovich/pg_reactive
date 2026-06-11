@@ -58,15 +58,22 @@ export function SqlEditorPage(): React.ReactElement {
     }
   }, [sql, running]);
 
-  // EXPLAIN ANALYZE executes the statement — safe for SELECT/WITH, a side
-  // effect for DML. Reads get the full ANALYZE+BUFFERS plan; everything
-  // else gets a plain EXPLAIN (plan only, nothing executed). Explain runs
-  // are not added to history — the underlying query already is.
+  // EXPLAIN ANALYZE *executes* the statement, so it is only safe for pure
+  // reads. A data-modifying CTE starts with WITH but still writes — e.g.
+  // `WITH x AS (INSERT ... RETURNING *) SELECT * FROM x` — so a leading
+  // SELECT/WITH is NOT sufficient. We only ANALYZE statements that start
+  // with SELECT/WITH AND contain no data-modifying keyword anywhere;
+  // everything else (DML, DDL, WITH-with-writes) gets a plain EXPLAIN that
+  // plans without executing. The keyword check errs safe: a SELECT that
+  // merely mentions "insert" in a string/identifier loses ANALYZE but is
+  // never executed against its will. Explain runs are not added to history.
   const runExplain = useCallback(async () => {
     const stmt = sql.trim().replace(/;+\s*$/, '');
     if (!stmt || running) return;
-    const isReadOnly = /^(select|with)\b/i.test(stmt);
-    const explainSql = isReadOnly
+    const startsRead = /^\s*(select|with|table|values)\b/i.test(stmt);
+    const hasWrite = /\b(insert|update|delete|merge|create|alter|drop|truncate|grant|revoke|call|do)\b/i.test(stmt);
+    const analyzeSafe = startsRead && !hasWrite;
+    const explainSql = analyzeSafe
       ? `EXPLAIN (ANALYZE, BUFFERS) ${stmt}`
       : `EXPLAIN ${stmt}`;
     setRunning(true);

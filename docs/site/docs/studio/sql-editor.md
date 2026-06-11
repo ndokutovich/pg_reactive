@@ -28,7 +28,7 @@ The results appear below the editor as a table.
 
 ## Execution plans
 
-Press **Explain** to see the planner's execution plan for the current statement instead of its results. `SELECT`/`WITH` statements run `EXPLAIN (ANALYZE, BUFFERS)` — the query is executed and the plan includes real timings and buffer counts. Any other statement runs plain `EXPLAIN` (plan only, nothing is executed), so explaining an `UPDATE` or `DELETE` never modifies data.
+Press **Explain** to see the planner's execution plan for the current statement instead of its results. A pure read — a `SELECT`/`WITH`/`TABLE`/`VALUES` statement that contains no data-modifying keyword — runs `EXPLAIN (ANALYZE, BUFFERS)`, so the plan includes real timings and buffer counts. Anything that can write (DML, DDL, or a data-modifying CTE such as `WITH x AS (INSERT ... RETURNING ...) SELECT ...`) runs plain `EXPLAIN` (plan only, nothing executed), so explaining it never modifies data.
 
 ## Multi-statement queries
 

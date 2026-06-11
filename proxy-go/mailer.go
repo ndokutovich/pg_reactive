@@ -159,6 +159,13 @@ type smtpStdlibDialer struct {
 	pass string
 }
 
+// starttlsRequired reports whether plaintext delivery must be refused when
+// the server does not advertise STARTTLS. The IANA submission port 587
+// (RFC 6409 / RFC 8314) must always upgrade before AUTH; implicit-TLS port
+// 465 is already encrypted and never STARTTLSes; any other port is treated
+// as private-network plain SMTP where the operator has accepted the risk.
+func starttlsRequired(port int) bool { return port == 587 }
+
 func (d *smtpStdlibDialer) send(ctx context.Context, from, to, subject, htmlBody string) error {
 	addr := net.JoinHostPort(d.host, strconv.Itoa(d.port))
 	tlsConfig := &tls.Config{ServerName: d.host, MinVersion: tls.VersionTLS12}
@@ -198,10 +205,16 @@ func (d *smtpStdlibDialer) send(ctx context.Context, from, to, subject, htmlBody
 	defer c.Close()
 
 	if d.port != 465 {
-		if ok, _ := c.Extension("STARTTLS"); ok {
+		ok, _ := c.Extension("STARTTLS")
+		if ok {
 			if err := c.StartTLS(tlsConfig); err != nil {
 				return fmt.Errorf("smtp starttls: %w", err)
 			}
+		} else if starttlsRequired(d.port) {
+			// RFC 6409 submission port: never send AUTH credentials or
+			// the email body (which carries reset / magic-link tokens)
+			// over an un-upgraded plaintext connection. Fail closed.
+			return fmt.Errorf("smtp: server on submission port %d does not advertise STARTTLS; refusing to send over plaintext", d.port)
 		}
 	}
 
