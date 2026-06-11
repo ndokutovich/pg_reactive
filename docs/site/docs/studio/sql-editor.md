@@ -26,6 +26,10 @@ LIMIT 10;
 
 The results appear below the editor as a table.
 
+## Execution plans
+
+Press **Explain** to see the planner's execution plan for the current statement instead of its results. `SELECT`/`WITH` statements run `EXPLAIN (ANALYZE, BUFFERS)` — the query is executed and the plan includes real timings and buffer counts. Any other statement runs plain `EXPLAIN` (plan only, nothing is executed), so explaining an `UPDATE` or `DELETE` never modifies data.
+
 ## Multi-statement queries
 
 The SQL editor runs the entire contents of the editor as a single query. For multiple statements, use a transaction:

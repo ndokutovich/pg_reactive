@@ -2,7 +2,7 @@
 
 Generated: 2026-03-07
 
-> **STATUS 2026-06: COMPLETED PLAN.** Every gap below has shipped except two sub-items: (1) `studio` Gap 1 — no EXPLAIN ANALYZE view in the SQL editor; (2) `config.go` — no masked effective-config startup log. Kept for historical reference; the ✅ markers below record what landed.
+> **STATUS 2026-06: COMPLETED PLAN.** Every gap below has shipped except one nicety: `config.go` — no masked effective-config startup log. Kept for historical reference; the ✅ markers below record what landed.
 
 > Several C ratings were underestimates after reading the actual code.
 
@@ -204,7 +204,7 @@ The page list (`SqlEditorPage`, `TableEditorPage`, `RealtimePage`,
 `AuthUsersPage`, `LogsPage`) shows the bones are there. Studio is the
 first-impression component — what demo viewers open first.
 
-### Gap 1 — SQL editor lacks execution plan view — STILL OPEN
+### Gap 1 — SQL editor lacks execution plan view ✅ DONE (Explain button: EXPLAIN ANALYZE+BUFFERS for SELECT/WITH, plain EXPLAIN otherwise)
 `SqlEditorPage.tsx` probably runs `SELECT` and shows results. `EXPLAIN ANALYZE`
 output formatted as a tree makes it genuinely useful for debugging slow queries.
 

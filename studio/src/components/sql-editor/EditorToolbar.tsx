@@ -4,12 +4,13 @@ import { Spinner } from '../ui/Spinner';
 
 interface EditorToolbarProps {
   onRun: () => void;
+  onExplain: () => void;
   isRunning: boolean;
   rowCount?: number;
   elapsedMs?: number;
 }
 
-export function EditorToolbar({ onRun, isRunning, rowCount, elapsedMs }: EditorToolbarProps): React.ReactElement {
+export function EditorToolbar({ onRun, onExplain, isRunning, rowCount, elapsedMs }: EditorToolbarProps): React.ReactElement {
   return (
     <div className="flex items-center gap-3 px-4 py-2 border-b border-surface-200 bg-surface-100 flex-shrink-0">
       <Button variant="primary" size="sm" onClick={onRun} loading={isRunning}>
@@ -18,6 +19,16 @@ export function EditorToolbar({ onRun, isRunning, rowCount, elapsedMs }: EditorT
         </svg>
         Run
         <span className="text-xs opacity-60 ml-1">(Ctrl+Enter)</span>
+      </Button>
+
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={onExplain}
+        disabled={isRunning}
+        title="Show the execution plan. SELECT/WITH statements run EXPLAIN ANALYZE (executes the query); other statements use plain EXPLAIN (plan only, no execution)."
+      >
+        Explain
       </Button>
 
       {isRunning && <Spinner size="sm" />}

@@ -58,6 +58,28 @@ export function SqlEditorPage(): React.ReactElement {
     }
   }, [sql, running]);
 
+  // EXPLAIN ANALYZE executes the statement — safe for SELECT/WITH, a side
+  // effect for DML. Reads get the full ANALYZE+BUFFERS plan; everything
+  // else gets a plain EXPLAIN (plan only, nothing executed). Explain runs
+  // are not added to history — the underlying query already is.
+  const runExplain = useCallback(async () => {
+    const stmt = sql.trim().replace(/;+\s*$/, '');
+    if (!stmt || running) return;
+    const isReadOnly = /^(select|with)\b/i.test(stmt);
+    const explainSql = isReadOnly
+      ? `EXPLAIN (ANALYZE, BUFFERS) ${stmt}`
+      : `EXPLAIN ${stmt}`;
+    setRunning(true);
+    const start = Date.now();
+    try {
+      const res = await postSql(explainSql);
+      setResult(res);
+      setElapsedMs(Date.now() - start);
+    } finally {
+      setRunning(false);
+    }
+  }, [sql, running]);
+
   const rowCount =
     result?.rows !== undefined ? result.rows.length : undefined;
 
@@ -65,6 +87,7 @@ export function SqlEditorPage(): React.ReactElement {
     <div className="flex flex-col h-full">
       <EditorToolbar
         onRun={() => void runQuery()}
+        onExplain={() => void runExplain()}
         isRunning={running}
         rowCount={rowCount}
         elapsedMs={elapsedMs}
