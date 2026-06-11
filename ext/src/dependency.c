@@ -146,6 +146,25 @@ pgr_journal_discard(void)
 static void
 pgr_xact_callback(XactEvent event, void *arg)
 {
+	/*
+	 * Round 37 F2: shared memory cannot participate in two-phase commit. The
+	 * before-image journal is per-backend and is discarded at PREPARE, so a
+	 * subsequent ROLLBACK PREPARED (potentially from another backend, after
+	 * this one has exited) has nothing to revert — shmem would keep the
+	 * prepared transaction's subscription mutations while the catalog rolls
+	 * back, diverging exactly like the pre-journal bug this guards against.
+	 * Forbid PREPARE for any transaction that touched the subscription
+	 * registry. Fires at PRE_PREPARE so the ERROR aborts cleanly before the
+	 * 2PC state file is written; the resulting ABORT then reverts the journal.
+	 * No-op when the transaction never touched subscriptions (journal NULL).
+	 */
+	if (event == XACT_EVENT_PRE_PREPARE && pgr_journal != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("pg_reactive: PREPARE TRANSACTION is not supported for transactions that modify live-query subscriptions"),
+				 errdetail("Shared-memory subscription state cannot be rolled back by ROLLBACK PREPARED."),
+				 errhint("COMMIT or ROLLBACK the transaction instead, or register subscriptions outside the prepared transaction.")));
+
 	if (event == XACT_EVENT_ABORT || event == XACT_EVENT_PARALLEL_ABORT)
 	{
 		if (pgr_journal != NULL && pgr_state != NULL && pgr_dep_hash != NULL)
