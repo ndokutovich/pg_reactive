@@ -464,7 +464,10 @@ jobs:
       - name: Start PostgreSQL container
         run: |
           docker compose up -d --build db
-          timeout 30 bash -c 'until docker compose exec -T db pg_isready -U postgres; do sleep 1; done'
+          # The dev image compiles the extension in its entrypoint before
+          # PostgreSQL starts; a cold compile + initdb + bootstrap can take
+          # ~40s, so allow generous headroom (was 30s, which it now exceeds).
+          timeout 120 bash -c 'until docker compose exec -T db pg_isready -U postgres; do sleep 1; done'
 
       - name: Shared memory pressure test
         run: |

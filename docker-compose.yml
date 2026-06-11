@@ -19,6 +19,12 @@ services:
       interval: 2s
       timeout: 5s
       retries: 10
+      # The dev image COMPILES the extension in its entrypoint before
+      # PostgreSQL starts (Dockerfile.dev COPYs source, entrypoint runs make).
+      # A cold compile + initdb + the pgstack bootstrap can take ~40s, which
+      # exceeds retries*interval (~20s) and falsely marked the container
+      # unhealthy. start_period suppresses unhealthy during the boot window.
+      start_period: 90s
     tmpfs:
       - /var/lib/postgresql/data
 
