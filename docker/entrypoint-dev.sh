@@ -48,14 +48,34 @@ PG_PID=$!
 export PGHOST=127.0.0.1
 export PGPORT=5432
 export PGUSER="${POSTGRES_USER:-postgres}"
-export PGPASSWORD="${POSTGRES_PASSWORD:-postgres}"
+# Support the Docker secret convention: POSTGRES_PASSWORD_FILE points at a
+# file (e.g. a mounted secret) whose contents are the password.
+if [ -n "${POSTGRES_PASSWORD_FILE:-}" ] && [ -r "${POSTGRES_PASSWORD_FILE}" ]; then
+    PGPASSWORD="$(cat "${POSTGRES_PASSWORD_FILE}")"
+else
+    PGPASSWORD="${POSTGRES_PASSWORD:-postgres}"
+fi
+export PGPASSWORD
 export PGDATABASE="${POSTGRES_DB:-postgres}"
 
 echo "==> Waiting for PostgreSQL (TCP ${PGHOST}:${PGPORT})..."
+# Break out if the backgrounded PostgreSQL has already exited — otherwise a
+# crash during initdb/bootstrap would leave us waiting forever for a server
+# that is never coming up.
 until pg_isready -q 2>/dev/null; do
+    if ! kill -0 "$PG_PID" 2>/dev/null; then
+        echo "==> PostgreSQL exited during startup; aborting." >&2
+        wait "$PG_PID" 2>/dev/null
+        exit "${?:-1}"
+    fi
     sleep 0.5
 done
-until psql -c "SELECT 1" &>/dev/null; do
+until psql -c "SELECT 1" >/dev/null 2>&1; do
+    if ! kill -0 "$PG_PID" 2>/dev/null; then
+        echo "==> PostgreSQL exited before accepting connections; aborting." >&2
+        wait "$PG_PID" 2>/dev/null
+        exit "${?:-1}"
+    fi
     sleep 0.5
 done
 echo "==> PostgreSQL ready."
@@ -63,16 +83,27 @@ echo "==> PostgreSQL ready."
 # ── Restore pg_reactive subscriptions from the durable catalog ──────────────
 # Iterate every database that has the extension installed and replay
 # pgr.persisted_subscriptions into shmem. Catalog-empty DBs return 0 cheaply.
+# Restore failures are SURFACED (logged with the error and a non-zero marker),
+# not swallowed — a container that came up without its live queries restored
+# should be diagnosable, not silently "n/a".
 echo "==> Restoring pg_reactive subscriptions..."
 DBLIST=$(psql -tAc "SELECT datname FROM pg_database WHERE datallowconn AND datname NOT IN ('template0','template1','postgres');" 2>/dev/null || true)
 DBLIST="$DBLIST $PGDATABASE"   # include the default DB
+restore_failures=0
 for db in $(echo "$DBLIST" | tr ' ' '\n' | sort -u); do
     [ -z "$db" ] && continue
     has_ext=$(psql -d "$db" -tAc "SELECT 1 FROM pg_extension WHERE extname='pg_reactive';" 2>/dev/null || true)
     [ "$has_ext" = "1" ] || continue
-    restored=$(psql -d "$db" -tAc "SELECT pgr.restore_subscriptions();" 2>/dev/null || echo "n/a")
-    echo "==>   $db: $restored subscriptions restored"
+    if restored=$(psql -d "$db" -v ON_ERROR_STOP=1 -tAc "SELECT pgr.restore_subscriptions();" 2>&1); then
+        echo "==>   $db: $restored subscriptions restored"
+    else
+        echo "==>   $db: RESTORE FAILED — $restored" >&2
+        restore_failures=$((restore_failures + 1))
+    fi
 done
+if [ "$restore_failures" -gt 0 ]; then
+    echo "==> WARNING: $restore_failures database(s) failed subscription restore — live queries may be missing until re-subscribed." >&2
+fi
 
 echo "==> pg_reactive ready. PostgreSQL is the lifecycle leader."
 
