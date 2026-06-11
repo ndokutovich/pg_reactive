@@ -80,14 +80,18 @@ docker compose -f docker-compose.prod.yml ps
 
 ### Subscription recovery after a PostgreSQL restart
 
-Live-query state lives in shared memory and is wiped by every PostgreSQL restart (crash, `docker compose restart`, host reboot, image update). The extension keeps a durable catalog — `pgr.persisted_subscriptions`, a LOGGED table maintained automatically by `pgr.subscribe` / `pgr.unsubscribe` — but it is only replayed into shared memory on request:
+Live-query state lives in shared memory and is wiped by every PostgreSQL restart (crash, `docker compose restart`, host reboot, image update). The extension keeps a durable catalog — `pgr.persisted_subscriptions`, a LOGGED table maintained automatically by `pgr.subscribe` / `pgr.unsubscribe` — which is replayed into shared memory by `pgr.restore_subscriptions()`.
+
+**This is automatic.** Both the all-in-one image and the two-container `pgstack-postgres` image run the restore on every boot (their entrypoint waits for PostgreSQL to accept connections, then calls `pgr.restore_subscriptions()` for each database with the extension installed, before the stack starts serving). You do not need a manual restore step.
+
+If you run PostgreSQL with a custom entrypoint that does not include this step, replay it yourself after every restart:
 
 ```bash
 docker compose -f docker-compose.prod.yml exec db \
   psql -U postgres -d app -c "SELECT pgr.restore_subscriptions();"
 ```
 
-Run this once per database after every restart — until then, subscribed queries emit no deltas. The function returns the number of subscriptions restored and has `EXECUTE` revoked from `PUBLIC` (superuser or an explicitly granted role only). The all-in-one image runs it automatically at boot; the two-container production stack does not, so add it to your restart runbook.
+The function returns the number of subscriptions restored and has `EXECUTE` revoked from `PUBLIC` (superuser or an explicitly granted role only).
 
 ### Resource limits
 
