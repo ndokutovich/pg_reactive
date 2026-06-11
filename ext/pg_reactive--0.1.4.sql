@@ -50,6 +50,13 @@ CREATE TABLE pgr.persisted_subscriptions (
     mode        text NOT NULL,
     audience    jsonb,
     owner_role  text NOT NULL DEFAULT current_user,
+    -- The caller's search_path at subscribe time. restore_subscriptions()
+    -- replays it before re-parsing query_text, so an unqualified query like
+    -- "SELECT id FROM orders" (orders in public) resolves on restart exactly
+    -- as it did at subscribe time. Without this, restore ran under the
+    -- function's pinned pg_catalog,pgr path and failed to extract any table
+    -- references for non-fully-qualified queries.
+    search_path text,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -72,7 +79,8 @@ CREATE FUNCTION pgr._persist_subscription(
     p_query_id text,
     p_query text,
     p_mode text,
-    p_audience jsonb
+    p_audience jsonb,
+    p_search_path text
 ) RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -80,14 +88,15 @@ SET search_path = pg_catalog, pgr
 AS $fn$
 BEGIN
     INSERT INTO pgr.persisted_subscriptions
-        (query_id, query_text, mode, audience, owner_role, created_at, updated_at)
+        (query_id, query_text, mode, audience, owner_role, search_path, created_at, updated_at)
     VALUES
-        (p_query_id, p_query, p_mode, p_audience, current_user, now(), now())
+        (p_query_id, p_query, p_mode, p_audience, current_user, p_search_path, now(), now())
     ON CONFLICT (query_id) DO UPDATE SET
-        query_text = EXCLUDED.query_text,
-        mode       = EXCLUDED.mode,
-        audience   = EXCLUDED.audience,
-        updated_at = now();
+        query_text  = EXCLUDED.query_text,
+        mode        = EXCLUDED.mode,
+        audience    = EXCLUDED.audience,
+        search_path = EXCLUDED.search_path,
+        updated_at  = now();
 END
 $fn$;
 
@@ -119,7 +128,11 @@ BEGIN
     -- the shmem entry orphaned. Writing the catalog row first means a
     -- subsequent failure leaves a persisted row that pgr.restore_subscriptions
     -- can safely replay (it is idempotent on the shmem side).
-    PERFORM pgr._persist_subscription(p_query_id, p_query, p_mode, p_audience);
+    -- We capture the caller's current search_path so restore can re-resolve
+    -- unqualified table names exactly as they resolved here (this wrapper is
+    -- INVOKER, so current_setting sees the caller's session path).
+    PERFORM pgr._persist_subscription(p_query_id, p_query, p_mode, p_audience,
+                                      current_setting('search_path'));
     result := pgr._subscribe_internal(p_query_id, p_query, p_mode, p_audience);
     RETURN result;
 END
@@ -157,11 +170,19 @@ DECLARE
     restored int := 0;
     failed int := 0;
 BEGIN
-    FOR r IN SELECT query_id, query_text, mode, audience
+    FOR r IN SELECT query_id, query_text, mode, audience, search_path
              FROM pgr.persisted_subscriptions
              ORDER BY created_at
     LOOP
         BEGIN
+            -- Replay the caller's original search_path so the C parser
+            -- resolves unqualified table names. The loop query above is
+            -- fully qualified, so it is unaffected by this change;
+            -- set_config(..., true) is transaction-local and the function's
+            -- pinned SET search_path is restored on exit.
+            PERFORM set_config('search_path',
+                               COALESCE(NULLIF(r.search_path, ''), 'pg_catalog, pgr, public'),
+                               true);
             PERFORM pgr._subscribe_internal(r.query_id, r.query_text, r.mode, r.audience);
             restored := restored + 1;
         EXCEPTION WHEN OTHERS THEN
@@ -191,16 +212,35 @@ LANGUAGE C STRICT;
 
 GRANT USAGE ON SCHEMA pgr TO PUBLIC;
 
--- Default-deny posture. Granting EXECUTE on pgr.subscribe still cascades
--- the catalog INSERT via the wrapper's SECURITY DEFINER context.
-REVOKE EXECUTE ON FUNCTION pgr._subscribe_internal(text, text, text, jsonb) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pgr._unsubscribe_internal(text)                  FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pgr.subscribe(text, text, text, jsonb)            FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pgr.unsubscribe(text)                             FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pgr.get_subscriptions()                           FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pgr.stats()                                       FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pgr.restore_subscriptions()                       FROM PUBLIC;
-REVOKE SELECT  ON pgr.subscriptions                                          FROM PUBLIC;
+-- Default-deny posture. pgr.subscribe / unsubscribe are SECURITY INVOKER
+-- (so the C parser sees the caller's search_path), and they PERFORM the
+-- revoked pgr._subscribe_internal in the caller's privilege context — so a
+-- plain `GRANT EXECUTE ON pgr.subscribe TO approle` is NOT sufficient and
+-- yields "permission denied for function _subscribe_internal". This is
+-- intentional: pgr.subscribe stores raw SQL re-executed by SECURITY DEFINER
+-- triggers and is a privileged API (docs/specs §9.4, CLAUDE.md). Expose
+-- subscription registration to app roles only through a purpose-built
+-- SECURITY DEFINER wrapper with a fixed query template and server-derived
+-- query_id/audience — never by granting the raw functions. The
+-- _persist_subscription / _forget_subscription helpers are SECURITY DEFINER
+-- and MUST be revoked too: PostgreSQL grants PUBLIC EXECUTE on new functions
+-- by default, so without this any role could write arbitrary rows into the
+-- durable catalog, which restore_subscriptions replays as the extension
+-- owner (persistence poisoning).
+REVOKE EXECUTE ON FUNCTION pgr._subscribe_internal(text, text, text, jsonb)         FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr._unsubscribe_internal(text)                          FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr._persist_subscription(text, text, text, jsonb, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr._forget_subscription(text)                           FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.subscribe(text, text, text, jsonb)                   FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.unsubscribe(text)                                    FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.get_subscriptions()                                  FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.stats()                                              FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.restore_subscriptions()                              FROM PUBLIC;
+-- trigger_func is SECURITY DEFINER. PostgreSQL does not require EXECUTE on a
+-- trigger function for the triggering DML, so revoking it from PUBLIC keeps
+-- triggers firing while closing direct user calls.
+REVOKE EXECUTE ON FUNCTION pgr.trigger_func()                                       FROM PUBLIC;
+REVOKE SELECT  ON pgr.subscriptions                                                 FROM PUBLIC;
 
 COMMENT ON FUNCTION pgr.subscribe(text, text, text, jsonb) IS
     'Register a live query. Persists to pgr.persisted_subscriptions for restart recovery. '

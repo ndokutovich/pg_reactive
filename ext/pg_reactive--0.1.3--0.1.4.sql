@@ -38,6 +38,9 @@ CREATE TABLE pgr.persisted_subscriptions (
     mode        text NOT NULL,
     audience    jsonb,
     owner_role  text NOT NULL DEFAULT current_user,
+    -- Caller's search_path at subscribe time, replayed by
+    -- restore_subscriptions() so unqualified queries re-resolve correctly.
+    search_path text,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -57,7 +60,8 @@ CREATE FUNCTION pgr._persist_subscription(
     p_query_id text,
     p_query text,
     p_mode text,
-    p_audience jsonb
+    p_audience jsonb,
+    p_search_path text
 ) RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -65,14 +69,15 @@ SET search_path = pg_catalog, pgr
 AS $fn$
 BEGIN
     INSERT INTO pgr.persisted_subscriptions
-        (query_id, query_text, mode, audience, owner_role, created_at, updated_at)
+        (query_id, query_text, mode, audience, owner_role, search_path, created_at, updated_at)
     VALUES
-        (p_query_id, p_query, p_mode, p_audience, current_user, now(), now())
+        (p_query_id, p_query, p_mode, p_audience, current_user, p_search_path, now(), now())
     ON CONFLICT (query_id) DO UPDATE SET
-        query_text = EXCLUDED.query_text,
-        mode       = EXCLUDED.mode,
-        audience   = EXCLUDED.audience,
-        updated_at = now();
+        query_text  = EXCLUDED.query_text,
+        mode        = EXCLUDED.mode,
+        audience    = EXCLUDED.audience,
+        search_path = EXCLUDED.search_path,
+        updated_at  = now();
 END
 $fn$;
 
@@ -88,8 +93,8 @@ BEGIN
 END
 $fn$;
 
-REVOKE EXECUTE ON FUNCTION pgr._persist_subscription(text, text, text, jsonb) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pgr._forget_subscription(text)                     FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr._persist_subscription(text, text, text, jsonb, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr._forget_subscription(text)                           FROM PUBLIC;
 
 -- Public subscribe / unsubscribe are SECURITY INVOKER so the caller's
 -- search_path is preserved for the C extract_deps parser — otherwise
@@ -111,7 +116,8 @@ BEGIN
     -- the shmem entry orphaned. Writing the catalog row first means a
     -- subsequent failure leaves a persisted row that pgr.restore_subscriptions
     -- can safely replay (it is idempotent on the shmem side).
-    PERFORM pgr._persist_subscription(p_query_id, p_query, p_mode, p_audience);
+    PERFORM pgr._persist_subscription(p_query_id, p_query, p_mode, p_audience,
+                                      current_setting('search_path'));
     result := pgr._subscribe_internal(p_query_id, p_query, p_mode, p_audience);
     RETURN result;
 END
@@ -147,11 +153,17 @@ DECLARE
     restored int := 0;
     failed int := 0;
 BEGIN
-    FOR r IN SELECT query_id, query_text, mode, audience
+    FOR r IN SELECT query_id, query_text, mode, audience, search_path
              FROM pgr.persisted_subscriptions
              ORDER BY created_at
     LOOP
         BEGIN
+            -- Replay the caller's original search_path so the C parser
+            -- resolves unqualified table names. Loop query is qualified, so
+            -- it is unaffected; set_config is transaction-local.
+            PERFORM set_config('search_path',
+                               COALESCE(NULLIF(r.search_path, ''), 'pg_catalog, pgr, public'),
+                               true);
             PERFORM pgr._subscribe_internal(r.query_id, r.query_text, r.mode, r.audience);
             restored := restored + 1;
         EXCEPTION WHEN OTHERS THEN
@@ -165,6 +177,10 @@ END
 $fn$;
 
 REVOKE EXECUTE ON FUNCTION pgr.restore_subscriptions() FROM PUBLIC;
+-- trigger_func (SECURITY DEFINER, created in the base install) was left
+-- PUBLIC-executable. Triggers fire regardless of EXECUTE grant, so revoke
+-- it here too — upgraded installs match the hardened fresh install.
+REVOKE EXECUTE ON FUNCTION pgr.trigger_func() FROM PUBLIC;
 
 COMMENT ON TABLE pgr.persisted_subscriptions IS
     'Durable catalog of live-query subscriptions. Survives PG restart; rebuilt into shmem by pgr.restore_subscriptions().';

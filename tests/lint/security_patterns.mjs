@@ -236,11 +236,72 @@ function checkFrontendServiceRole(file, text) {
   }
 }
 
+// Rule SEC-R14 — every SECURITY DEFINER function in the extension's install
+//   path must be REVOKEd from PUBLIC. Round 36.
+//   PostgreSQL grants PUBLIC EXECUTE on new functions by default. A
+//   SECURITY DEFINER function left PUBLIC-executable runs as the extension
+//   owner for any caller — exactly the persistence-poisoning hole where the
+//   0.1.4 fresh install created pgr._persist_subscription / _forget_subscription
+//   (SD) but forgot to revoke them, while the upgrade script did. This rule
+//   would have caught it. Scope: the default-version full-install script and
+//   any upgrade script that lands on the default version (read from
+//   pg_reactive.control), so superseded historical scripts are not flagged.
+//   Override a verified-safe occurrence with `-- lint:allow=SEC-R14`.
+function auditSDRevoke(file, text) {
+  const lines = text.split(/\r?\n/);
+  // Collect SECURITY DEFINER function names with their CREATE line index.
+  const sdFns = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(/i.exec(lines[i]);
+    if (!m) continue;
+    // Scan the header (until the body delimiter) for SECURITY DEFINER.
+    let isSD = false;
+    for (let j = i; j < Math.min(i + 40, lines.length); j++) {
+      if (/\bSECURITY\s+DEFINER\b/i.test(lines[j])) { isSD = true; }
+      if (/\bAS\s+(\$|')/i.test(lines[j]) || /\bAS\s+'MODULE_PATHNAME'/i.test(lines[j])) break;
+    }
+    if (isSD) sdFns.push({ name: m[1], line: i + 1 });
+  }
+  for (const fn of sdFns) {
+    if (/lint:allow=SEC-R14/.test(lines[fn.line - 1])) continue;
+    const esc = fn.name.replace(/[.]/g, "\\.");
+    const revoke = new RegExp(
+      `REVOKE\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+${esc}\\s*\\([^)]*\\)\\s+FROM\\s+PUBLIC`, "i");
+    if (!revoke.test(text)) {
+      report(file, fn.line, "SEC-R14",
+        `SECURITY DEFINER function ${fn.name} is never REVOKEd from PUBLIC — PostgreSQL grants PUBLIC EXECUTE by default, so any role runs it as the extension owner (SECURITY.md invariant 14)`);
+    }
+  }
+}
+
+function checkExtSDRevoke() {
+  const extDir = join(ROOT, "ext");
+  let ctrl;
+  try { ctrl = readFileSync(join(extDir, "pg_reactive.control"), "utf-8"); } catch { return; }
+  const m = /default_version\s*=\s*'([^']+)'/.exec(ctrl);
+  if (!m) return;
+  const ver = m[1];
+  const verEsc = ver.replace(/[.]/g, "\\.");
+  const targets = new Set([`pg_reactive--${ver}.sql`]);
+  let names;
+  try { names = readdirSync(extDir); } catch { names = []; }
+  for (const n of names) {
+    if (new RegExp(`^pg_reactive--[0-9.]+--${verEsc}\\.sql$`).test(n)) targets.add(n);
+  }
+  for (const t of targets) {
+    const fp = join(extDir, t);
+    let text;
+    try { text = readFileSync(fp, "utf-8"); } catch { continue; }
+    auditSDRevoke(fp, text);
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
     walk(join(ROOT, r), files);
   }
+  checkExtSDRevoke();
 
   for (const f of files) {
     let text;
