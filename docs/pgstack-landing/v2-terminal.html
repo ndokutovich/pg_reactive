@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>pg_reactive -- Subscribe to Any SELECT in PostgreSQL</title>
-<meta name="description" content="PostgreSQL C extension. Subscribe to GROUP BY, window functions, aggregates. JSON deltas on change. No Kafka, no Materialize. MIT licensed.">
+<meta name="description" content="PostgreSQL C extension. Subscribe to GROUP BY, window functions, aggregates. JSON deltas on change. No Kafka, no Materialize. PostgreSQL-licensed.">
 <meta property="og:title" content="pg_reactive -- Live Queries Inside PostgreSQL">
 <meta property="og:description" content="Subscribe to any SELECT. Get JSON deltas when results change. No extra process.">
 <meta property="og:type" content="website">
@@ -224,12 +224,12 @@ Get JSON deltas pushed to your app when results change.
 GROUP BY, window functions, JOINs, aggregates -- all reactive.
 
 No extra process. No Kafka. No Materialize. No logical replication slots.
-A single C extension loaded into Postgres. MIT licensed.
+A single C extension loaded into Postgres. PostgreSQL-licensed.
 </pre>
 <pre class="out-dim" style="margin-top:12px">
   Language:   C (PostgreSQL extension)
   Requires:   PostgreSQL 14+
-  License:    MIT
+  License:    PostgreSQL
   Status:     Production-ready</pre>
 <pre class="prompt" style="margin-top:20px">$ <span class="cursor"></span></pre>
 </div>
@@ -492,7 +492,7 @@ Or use the optional <span class="out-cyan">pgr-ws</span> WebSocket bridge:
 <span class="pg-data"> Delta format</span>       | <span class="out-green">JSON</span>        | rows        | Avro/JSON      | DIY
 <span class="pg-data"> Memory overhead</span>    | <span class="out-green">minimal</span>     | GBs         | GBs            | query
 <span class="pg-data"> Setup time</span>         | <span class="out-green">1 minute</span>    | hours       | days           | none
-<span class="pg-data"> License</span>            | <span class="out-green">MIT</span>         | BSL         | Apache-2       | n/a</pre>
+<span class="pg-data"> License</span>            | <span class="out-green">PostgreSQL</span>  | BSL         | Apache-2       | n/a</pre>
 </div>
 
 <!-- ============================================ -->
@@ -576,7 +576,7 @@ Cloning into 'pg_reactive'...
 </pre>
 
 <pre class="out-dim" style="margin-top:32px">
-MIT License. Built by <a href="https://github.com/pgstack" style="color:var(--dim)">pgstack</a>.
+PostgreSQL License. Built by <a href="https://github.com/pgstack" style="color:var(--dim)">pgstack</a>.
 pg_reactive is not affiliated with the PostgreSQL Global Development Group.
 </pre>
 

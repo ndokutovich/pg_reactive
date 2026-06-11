@@ -236,6 +236,13 @@ jobs:
       - name: Static asset path guard
         run: node tests/static_asset_paths_test.mjs
 
+      # Round 39: the repo is PostgreSQL (ext/) + Apache-2.0 — never MIT/GPL.
+      # Stale "MIT licensed" copy kept resurfacing in landing drafts, a report,
+      # a roadmap note and a spec table; this fails on any stray MIT/GPL token
+      # in project files (third-party attributions in NOTICE are allow-listed).
+      - name: License consistency guard
+        run: node tests/license_consistency_test.mjs
+
   # ─── Adversarial security fixtures ──────────────────────────────────────────
   # Round-31 Tier 3.5: negative tests in tests/security/ assert that
   # specific attacks are refused. Each prior audit finding leaves one
