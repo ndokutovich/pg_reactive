@@ -31,7 +31,7 @@ ENV DOCS_URL=http://localhost:8080 DOCS_BASE_URL=${DOCS_BASE_URL}
 RUN npm run build
 
 # ── Stage 3: Build Go proxy ────────────────────────────────────────────────────
-FROM golang:1.23-bookworm@sha256:167053a2bb901972bf2c1611f8f52c44d5fe7e762e5cab213708d82c421614db AS builder
+FROM golang:1.25.11-bookworm@sha256:60cdd53a9656379b55681e2832cbf29ca1bffca1e6e8263b41d3b50aca826191 AS builder
 WORKDIR /app
 ENV GOTOOLCHAIN=auto
 
