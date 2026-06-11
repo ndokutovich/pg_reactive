@@ -117,6 +117,7 @@ Required for email verification and password reset emails. If not set, these fea
 | `SMTP_USER` | — | SMTP authentication username. |
 | `SMTP_PASS` | — | SMTP authentication password. |
 | `SMTP_FROM` | `noreply@pgstack.local` | From address for all auth emails. |
+| `ALLOW_INSECURE_SMTP` | `false` | Dev opt-out for the production TLS policy. Under `PGSTACK_ENV=production` the mailer refuses to send over an un-encrypted connection on **any** port (implicit TLS on 465, STARTTLS elsewhere) so AUTH credentials and reset/magic-link tokens never cross the wire in clear. Set `true` only for a trusted private-network relay. |
 
 ## CORS / Origin variables
 

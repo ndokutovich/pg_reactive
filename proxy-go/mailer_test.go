@@ -91,10 +91,24 @@ func TestSendRetriesThenSucceeds(t *testing.T) {
 // refuse plaintext when the server does not advertise STARTTLS; implicit-TLS
 // 465 and private-network plain ports do not force an upgrade.
 func TestStartTLSRequiredOnlyOnSubmissionPort(t *testing.T) {
+	// Without the production TLS policy, only submission port 587 forces an
+	// upgrade; other ports are treated as a private-network relay.
 	cases := map[int]bool{587: true, 465: false, 25: false, 2525: false, 1025: false}
 	for port, want := range cases {
-		if got := starttlsRequired(port); got != want {
-			t.Errorf("starttlsRequired(%d) = %v, want %v", port, got, want)
+		d := &smtpStdlibDialer{port: port, requireTLS: false}
+		if got := d.starttlsRequired(); got != want {
+			t.Errorf("starttlsRequired(port=%d, requireTLS=false) = %v, want %v", port, got, want)
+		}
+	}
+}
+
+func TestStartTLSRequiredEverywhereInProduction(t *testing.T) {
+	// Under the production TLS policy, plaintext is refused on every non-465
+	// port, including 25/2525 that were previously allowed to send clear.
+	for _, port := range []int{587, 25, 2525, 1025} {
+		d := &smtpStdlibDialer{port: port, requireTLS: true}
+		if !d.starttlsRequired() {
+			t.Errorf("starttlsRequired(port=%d, requireTLS=true) = false, want true", port)
 		}
 	}
 }

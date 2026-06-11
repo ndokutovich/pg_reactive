@@ -53,13 +53,23 @@ func NewMailer(cfg Config) *Mailer {
 	m := &Mailer{from: cfg.SMTPFrom}
 
 	if cfg.SMTPHost != "" && cfg.SMTPUser != "" && cfg.SMTPPass != "" {
+		// In production, require an encrypted channel on EVERY port (implicit
+		// TLS on 465, or STARTTLS elsewhere) so AUTH credentials and the
+		// reset/magic-link tokens in the body never cross the wire in clear.
+		// ALLOW_INSECURE_SMTP is the explicit dev opt-out for a trusted relay.
+		requireTLS := cfg.PgstackEnv == "production" && !cfg.AllowInsecureSMTP
 		m.dialer = &smtpStdlibDialer{
-			host: cfg.SMTPHost,
-			port: cfg.SMTPPort,
-			user: cfg.SMTPUser,
-			pass: cfg.SMTPPass,
+			host:       cfg.SMTPHost,
+			port:       cfg.SMTPPort,
+			user:       cfg.SMTPUser,
+			pass:       cfg.SMTPPass,
+			requireTLS: requireTLS,
 		}
-		log.Info().Str("host", cfg.SMTPHost).Int("port", cfg.SMTPPort).Msg("SMTP configured")
+		log.Info().Str("host", cfg.SMTPHost).Int("port", cfg.SMTPPort).
+			Bool("require_tls", requireTLS).Msg("SMTP configured")
+		if cfg.PgstackEnv == "production" && cfg.AllowInsecureSMTP {
+			log.Warn().Msg("ALLOW_INSECURE_SMTP=true in production — SMTP may send credentials/tokens in plaintext")
+		}
 	} else {
 		log.Warn().Msg("SMTP not configured — emails will be logged to console")
 	}
@@ -153,18 +163,23 @@ func (m *Mailer) SendMagicLink(ctx context.Context, to, linkURL string) error {
 // most modern transactional providers. Mailers that require XOAUTH2 or
 // other modern mechanisms need a richer library.
 type smtpStdlibDialer struct {
-	host string
-	port int
-	user string
-	pass string
+	host       string
+	port       int
+	user       string
+	pass       string
+	requireTLS bool // production: refuse plaintext on any port (see NewMailer)
 }
 
-// starttlsRequired reports whether plaintext delivery must be refused when
-// the server does not advertise STARTTLS. The IANA submission port 587
-// (RFC 6409 / RFC 8314) must always upgrade before AUTH; implicit-TLS port
-// 465 is already encrypted and never STARTTLSes; any other port is treated
-// as private-network plain SMTP where the operator has accepted the risk.
-func starttlsRequired(port int) bool { return port == 587 }
+// starttlsRequired reports whether plaintext delivery must be refused for
+// this dialer when the server does not advertise STARTTLS. The IANA
+// submission port 587 (RFC 6409 / RFC 8314) must always upgrade before AUTH;
+// implicit-TLS port 465 is already encrypted and never STARTTLSes. Under the
+// production TLS policy (requireTLS) plaintext is refused on every other
+// port too; otherwise non-standard ports are treated as a private-network
+// relay where the operator has accepted the risk.
+func (d *smtpStdlibDialer) starttlsRequired() bool {
+	return d.port == 587 || d.requireTLS
+}
 
 func (d *smtpStdlibDialer) send(ctx context.Context, from, to, subject, htmlBody string) error {
 	addr := net.JoinHostPort(d.host, strconv.Itoa(d.port))
@@ -210,7 +225,7 @@ func (d *smtpStdlibDialer) send(ctx context.Context, from, to, subject, htmlBody
 			if err := c.StartTLS(tlsConfig); err != nil {
 				return fmt.Errorf("smtp starttls: %w", err)
 			}
-		} else if starttlsRequired(d.port) {
+		} else if d.starttlsRequired() {
 			// RFC 6409 submission port: never send AUTH credentials or
 			// the email body (which carries reset / magic-link tokens)
 			// over an un-upgraded plaintext connection. Fail closed.

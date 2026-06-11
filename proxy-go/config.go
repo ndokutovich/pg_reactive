@@ -141,6 +141,7 @@ type Config struct {
 	SMTPPort                 int
 	SMTPUser                 string
 	SMTPPass                 string
+	AllowInsecureSMTP        bool
 
 	// Studio SPA
 	StudioDir string
@@ -293,6 +294,11 @@ func FromEnv() Config {
 	cfg.SMTPPort = envIntOrDefault("SMTP_PORT", 587)
 	cfg.SMTPUser = os.Getenv("SMTP_USER")
 	cfg.SMTPPass = os.Getenv("SMTP_PASS")
+	// Opt-out for plaintext SMTP. By default the mailer refuses to send AUTH
+	// credentials and reset/magic-link tokens over an un-upgraded connection
+	// (any port) under PGSTACK_ENV=production. Set true only for a trusted
+	// private-network relay in dev.
+	cfg.AllowInsecureSMTP = envBoolOrDefault("ALLOW_INSECURE_SMTP", false)
 
 	cfg.StudioDir = envOrDefault("STUDIO_DIR", "/studio")
 	cfg.DocsDir = envOrDefault("DOCS_DIR", "/docs")
