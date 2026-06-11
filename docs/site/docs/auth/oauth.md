@@ -10,18 +10,19 @@ pgStack supports OAuth login with Google, GitHub, Apple, Microsoft, and any Open
 
 ## How it works
 
-```
-Browser                pgStack Proxy         OAuth Provider (Google/GitHub/Apple/Microsoft/OIDC)
-   │                        │                         │
-   ├─ GET /auth/v1/authorize?provider=google ─►│       │
-   │                        ├─ 302 redirect ──────────►│
-   │◄────────────────────────────────────────────────  │
-   ├─ user logs in at provider ──────────────────────►│
-   │                        │◄── callback with code ──┤
-   │                        ├─ exchange code for tokens │
-   │                        ├─ upsert user in pgstack.users
-   │◄── 302 redirect to SITE_URL#access_token=... ─── │
-   │ (hash fragment contains access_token + refresh_token)
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Proxy as pgStack Proxy
+    participant Provider as OAuth Provider<br/>(Google/GitHub/Apple/Microsoft/OIDC)
+
+    Browser->>Proxy: GET /auth/v1/authorize?provider=google
+    Proxy-->>Browser: 302 redirect to provider
+    Browser->>Provider: user logs in at provider
+    Provider->>Proxy: callback with code
+    Proxy->>Proxy: exchange code for tokens
+    Proxy->>Proxy: upsert user in pgstack.users
+    Proxy-->>Browser: 302 redirect to SITE_URL#access_token=...<br/>(hash fragment contains access_token + refresh_token)
 ```
 
 After the redirect, your application reads the tokens from the URL hash fragment. The SDK's `handleOAuthRedirect()` method does this automatically.

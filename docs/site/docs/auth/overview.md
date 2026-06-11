@@ -10,22 +10,25 @@ pgStack ships a complete authentication system built directly into the proxy. No
 
 ## How it works
 
-```
-Client                 pgStack Proxy              PostgreSQL
-  │                         │                         │
-  ├─ POST /auth/v1/signup ──►│                         │
-  │                         ├─ argon2id hash password  │
-  │                         ├─ INSERT INTO pgstack.users ►│
-  │                         ├─ INSERT INTO pgstack.refresh_tokens ►│
-  │                         ◄─ { access_token, refresh_token, user } ─┤
-  │                         │                         │
-  ├─ GET /rest/v1/todos ────►│                         │
-  │  Authorization: Bearer  ├─ verify JWT              │
-  │                         ├─ SET LOCAL role = 'authenticated' ►│
-  │                         ├─ SET LOCAL request.jwt.claims = '...' ►│
-  │                         ├─ SELECT * FROM todos ──►│
-  │                         │  (RLS policies run here) │
-  │                         ◄─ [{ id, title, ... }] ──┤
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Proxy as pgStack Proxy
+    participant PG as PostgreSQL
+
+    Client->>Proxy: POST /auth/v1/signup
+    Proxy->>Proxy: argon2id hash password
+    Proxy->>PG: INSERT INTO pgstack.users
+    Proxy->>PG: INSERT INTO pgstack.refresh_tokens
+    Proxy-->>Client: { access_token, refresh_token, user }
+
+    Client->>Proxy: GET /rest/v1/todos<br/>Authorization: Bearer
+    Proxy->>Proxy: verify JWT
+    Proxy->>PG: SET LOCAL role = 'authenticated'
+    Proxy->>PG: SET LOCAL request.jwt.claims = '...'
+    Proxy->>PG: SELECT * FROM todos<br/>(RLS policies run here)
+    PG-->>Proxy: [{ id, title, ... }]
+    Proxy-->>Client: [{ id, title, ... }]
 ```
 
 ## Token format
@@ -65,17 +68,13 @@ Passwords are hashed with **argon2id** using memory-hard parameters. Plain-text 
 
 ## Token lifecycle
 
-```
-Signup/Login
-  └── issues: access_token (1 hour) + refresh_token (30 days)
-
-Access token expires
-  └── client calls POST /auth/v1/token { grant_type: "refresh_token", refresh_token }
-        └── issues new access_token + rotates refresh_token
-
-Logout
-  └── refresh_token invalidated in database
-  └── access_token expires naturally (short-lived, not revocable)
+```mermaid
+flowchart TD
+    A["Signup/Login"] --> B["issues: access_token (1 hour)<br/>+ refresh_token (30 days)"]
+    C["Access token expires"] --> D["client calls POST /auth/v1/token<br/>{ grant_type: 'refresh_token', refresh_token }"]
+    D --> E["issues new access_token<br/>+ rotates refresh_token"]
+    F["Logout"] --> G["refresh_token invalidated in database"]
+    F --> H["access_token expires naturally<br/>(short-lived, not revocable)"]
 ```
 
 Token lifetimes are configurable via environment variables:

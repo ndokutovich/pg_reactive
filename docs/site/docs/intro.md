@@ -22,24 +22,29 @@ Everything you expect from a modern backend: authentication, a REST API, real-ti
 
 ## Architecture overview
 
-```
-Your App (React, Next.js, etc.)
-    │
-    ▼
-pgStack Proxy (Go / chi)  ← port 8080
-  ├── /auth/v1/*        Auth (signup, login, refresh, OAuth)
-  ├── /rest/v1/*        REST API (PostgREST-compatible CRUD)
-  ├── /rest/v1/batch    Transaction batching (multi-op transactions)
-  ├── /functions/v1/*   Edge Functions (HTTP/any-language, Deno, PL/v8, PL/Python, embedded)
-  ├── /ws/:query_id     WebSocket live query subscriptions
-  ├── /storage/v1/*     File storage
-  └── /studio/          Admin UI
-    │
-    ▼
-PostgreSQL 16 + pg_reactive extension  ← port 5432 (internal)
-  ├── pgstack schema  (users, tokens, sessions, RLS policies)
-  ├── pgr schema      (live query subscriptions, snapshots)
-  └── your schema     (your tables, your data)
+```mermaid
+flowchart TD
+  App["Your App<br/>(React, Next.js, …)"]
+
+  subgraph Proxy["pgStack Proxy · Go / chi · :8080"]
+    direction TB
+    Auth["/auth/v1/* — signup, login, refresh, OAuth"]
+    Rest["/rest/v1/* — PostgREST-compatible CRUD"]
+    Batch["/rest/v1/batch — transaction batching"]
+    Fns["/functions/v1/* — Edge Functions<br/>(HTTP, Deno, PL/v8, PL/Python, embedded)"]
+    Ws["/ws/:query_id — WebSocket live queries"]
+    Storage["/storage/v1/* — file storage"]
+    Studio["/studio/ — admin UI"]
+  end
+
+  subgraph PG["PostgreSQL 16 + pg_reactive · :5432 (internal)"]
+    direction TB
+    SchemaPgstack["pgstack schema — users, tokens, sessions, RLS"]
+    SchemaPgr["pgr schema — live-query subscriptions, snapshots"]
+    SchemaYours["your schema — your tables, your data"]
+  end
+
+  App --> Proxy --> PG
 ```
 
 ## Philosophy

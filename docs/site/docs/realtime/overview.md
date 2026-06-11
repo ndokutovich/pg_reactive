@@ -12,14 +12,14 @@ This page covers the **pgStack integration**. For the engine itself — standalo
 
 ## How it fits together
 
-```
-Your App (WebSocket client)
-  │  ws://127.0.0.1:8080/ws/{query_id}?token={jwt}
-  ▼
-pgStack Proxy (Go)        ← auth, audience gate, connection limits
-  │  LISTEN pgr
-  ▼
-PostgreSQL + pg_reactive  ← AFTER STATEMENT triggers → EXCEPT diff → NOTIFY 'pgr'
+```mermaid
+flowchart TD
+    App["Your App<br/>(WebSocket client)"]
+    Proxy["pgStack Proxy (Go)<br/>auth · audience gate · connection limits"]
+    PG["PostgreSQL + pg_reactive<br/>AFTER STATEMENT triggers → EXCEPT diff → NOTIFY 'pgr'"]
+
+    App -->|"ws://127.0.0.1:8080/ws/{query_id}?token={jwt}"| Proxy
+    Proxy -->|"LISTEN pgr"| PG
 ```
 
 A row changes → pg_reactive re-runs your query, diffs it against the stored snapshot with SQL `EXCEPT`, and emits a JSON delta on the `pgr` channel. The proxy receives the `NOTIFY` and routes it to the WebSocket connections subscribed to that `query_id`.

@@ -113,14 +113,13 @@ live query straight to component state.
 
 See [SDK](./sdk.md) and [React](./react.md).
 
-```
-Browser / mobile / server app
-        │  WebSocket  (layer 3: optional SDK)
-        ▼
-  WebSocket proxy            (layer 2: optional fan-out)
-        │  LISTEN pgr
-        ▼
-PostgreSQL + pg_reactive     (layer 1: the extension — the core)
+```mermaid
+flowchart TD
+    App["Browser / mobile / server app"]
+    Proxy["WebSocket proxy<br/>(layer 2: optional fan-out)"]
+    PG["PostgreSQL + pg_reactive<br/>(layer 1: the extension — the core)"]
+    App -->|"WebSocket (layer 3: optional SDK)"| Proxy
+    Proxy -->|"LISTEN pgr"| PG
 ```
 
 You can stop at any layer. Raw `LISTEN pgr` from a backend job is a
@@ -156,17 +155,15 @@ Then, whenever a tracked DML statement commits, the firing trigger:
 3. Replaces the snapshot with the new result.
 4. Emits the delta with `pg_notify('pgr', …)`.
 
-```
-DML on a tracked table
-   │
-   ▼
-AFTER STATEMENT trigger (column-mask gated)
-   │  re-run SELECT once → temp table
-   ▼
-EXCEPT diff  vs  pgr._snap_<query_id>  (UNLOGGED snapshot)
-   │  inserted = new − snapshot ;  deleted = snapshot − new
-   ▼
-NOTIFY pgr  '{"query_id":…,"seq":N,"inserted":[…],"deleted":[…]}'
+```mermaid
+flowchart TD
+    DML["DML on a tracked table"]
+    Trigger["AFTER STATEMENT trigger<br/>(column-mask gated)"]
+    Except["EXCEPT diff vs pgr._snap_&lt;query_id&gt;<br/>(UNLOGGED snapshot)"]
+    Notify["NOTIFY pgr<br/>'{query_id:…, seq:N, inserted:[…], deleted:[…]}'"]
+    DML --> Trigger
+    Trigger -->|"re-run SELECT once → temp table"| Except
+    Except -->|"inserted = new − snapshot ; deleted = snapshot − new"| Notify
 ```
 
 When `mode = 'notify'`, no snapshot or EXCEPT is involved — the trigger

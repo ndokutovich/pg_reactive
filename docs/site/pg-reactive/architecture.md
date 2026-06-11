@@ -12,20 +12,22 @@ If you only want to *use* the extension, start with [Overview](./overview.md) an
 
 The extension lives entirely inside PostgreSQL. There is no daemon, no sidecar — `pg_reactive` is loaded via `shared_preload_libraries`, it parses your `SELECT` once at subscribe time to learn which tables and columns it depends on, then installs `AFTER STATEMENT` triggers that recompute the query and emit a JSON delta over a single `NOTIFY` channel. A separate [Go proxy](./proxy.md) does `LISTEN pgr` and fans those deltas out to WebSocket clients.
 
-```
-DML on a tracked table
-        │
-        ▼
-AFTER STATEMENT trigger  (invalidation.c)
-        │  mark query_id dirty
-        ▼
-XACT_EVENT_PRE_COMMIT     (invalidation.c — batch invalidation)
-        │  recompute each dirty query once
-        ▼
-EXCEPT-based delta         (recompute.c)
-        │  build JSON, check overflow
-        ▼
-NOTIFY pgr '{...}'   ───►  Go proxy LISTEN pgr  ───►  WebSocket clients
+```mermaid
+flowchart TD
+    A["DML on a tracked table"]
+    B["AFTER STATEMENT trigger<br/>(invalidation.c)"]
+    C["XACT_EVENT_PRE_COMMIT<br/>(invalidation.c — batch invalidation)"]
+    D["EXCEPT-based delta<br/>(recompute.c)"]
+    E["NOTIFY pgr '{...}'"]
+    F["Go proxy LISTEN pgr"]
+    G["WebSocket clients"]
+
+    A --> B
+    B -->|"mark query_id dirty"| C
+    C -->|"recompute each dirty query once"| D
+    D -->|"build JSON, check overflow"| E
+    E --> F
+    F --> G
 ```
 
 Everything the proxy needs to authorize a connection — query SQL, mode, audience — lives in shared memory, indexed by `query_id`. That index is the spine of the whole system.

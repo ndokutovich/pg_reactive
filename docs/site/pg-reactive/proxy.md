@@ -12,15 +12,25 @@ You do not need the proxy to use pg_reactive. If your consumer already holds a d
 
 ## What it does
 
-```
-PostgreSQL                  Proxy (Go)                     Browser clients
-──────────                  ──────────                     ───────────────
-NOTIFY 'pgr'  ──────────▶   LISTEN pgr  ─┐
-{query_id,seq,...}          (one conn)   │
-                                         ▼
-                                       Hub ──── fan-out ───▶  ws://…/ws/orders_q1
-                                         │                ──▶  ws://…/ws/orders_q1
-                                         └────────────────▶  ws://…/ws/active_users
+```mermaid
+flowchart LR
+    subgraph PG["PostgreSQL"]
+        Notify["NOTIFY 'pgr'<br/>{query_id, seq, ...}"]
+    end
+    subgraph Proxy["Proxy (Go)"]
+        Listen["LISTEN pgr<br/>(one conn)"]
+        Hub["Hub"]
+        Listen --> Hub
+    end
+    subgraph Clients["Browser clients"]
+        C1["ws://…/ws/orders_q1"]
+        C2["ws://…/ws/orders_q1"]
+        C3["ws://…/ws/active_users"]
+    end
+    Notify --> Listen
+    Hub -->|"fan-out"| C1
+    Hub --> C2
+    Hub --> C3
 ```
 
 One process holds **one** dedicated PostgreSQL connection running `LISTEN pgr`. Every notification is parsed for its `query_id`, then broadcast to exactly the WebSocket clients subscribed to that `query_id` via an in-memory hub. Clients never touch the database directly; they connect to the proxy at:
