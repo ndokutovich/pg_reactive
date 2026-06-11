@@ -38,6 +38,15 @@ jobs:
           docker compose exec -T db bash -c \
             'su - postgres -c "cd /ext/ext && make isolation_installcheck"'
 
+      # Round 37 F2: the main server runs max_prepared_transactions=0, so the
+      # PREPARE-rejection guard can't be exercised by pg_regress. This spins a
+      # throwaway 2PC-enabled instance and asserts PREPARE-after-subscribe is
+      # rejected (with catalog+shmem rollback) while a clean txn still prepares.
+      - name: 2PC PREPARE guard test
+        run: |
+          docker compose exec -T db bash -c \
+            'su - postgres -c "bash /ext/tests/ext_prepare_guard_test.sh"'
+
       - name: Upload regression diffs on failure
         if: failure()
         uses: actions/upload-artifact@v4
