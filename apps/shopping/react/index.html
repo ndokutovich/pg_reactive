@@ -336,9 +336,9 @@
 
 <div id="root"></div>
 
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js" integrity="sha384-x/ilTFv/u/eu6YSmkFDZl5V5Mm/pkxxcVv2cVJOrr1J0rvILhMvRBCy6yA75wYBj" crossorigin="anonymous"></script>
 
 <script type="text/babel">
 (function() {
@@ -369,13 +369,13 @@
   // SESSION PERSISTENCE
   // ═══════════════════════════════════════════════════════════════
   function saveSession(data) {
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
   }
   function loadSession() {
-    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+    try { return JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
   }
   function clearSession() {
-    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
   }
   function tryRefresh() {
     var session = loadSession();
@@ -1319,7 +1319,7 @@
     useEffect(() => {
       registerServiceWorker();
 
-      // Restore session from localStorage
+      // Restore session from sessionStorage
       const session = loadSession();
       if (session && session.access_token) {
         setAccessToken(session.access_token);

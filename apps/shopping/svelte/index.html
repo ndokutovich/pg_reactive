@@ -656,15 +656,15 @@
   // SESSION PERSISTENCE
   // ═══════════════════════════════════════════════════════════════
   function saveSession(data) {
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
   }
 
   function loadSession() {
-    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+    try { return JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
   }
 
   function clearSession() {
-    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
   }
 
   function tryRefresh() {
@@ -1772,7 +1772,7 @@
     registerServiceWorker();
     App();
 
-    // Restore session from localStorage
+    // Restore session from sessionStorage
     var session = loadSession();
     if (session && session.access_token) {
       accessToken.set(session.access_token);

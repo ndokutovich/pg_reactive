@@ -92,7 +92,7 @@ SET search_path = pg_catalog, pg_temp
 AS $fn$
 DECLARE
   uid    uuid := auth.uid();
-  code   text := upper(substr(md5(random()::text), 1, 6));
+  code   text := upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 12));
   result public.shopping_lists;
 BEGIN
   IF uid IS NULL THEN

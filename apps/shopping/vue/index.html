@@ -516,7 +516,7 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js" integrity="sha384-W/1Fp/LgAYO/oTn9Gs+PbeWuMuq1eQCnUMPCeg8POmMYchhzxctjEqtbiCIxDOON" crossorigin="anonymous"></script>
 <script>
 (function() {
   'use strict';
@@ -594,15 +594,15 @@
 
   // ---- Session persistence ----
   function saveSession(data) {
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch (e) {}
   }
 
   function loadSession() {
-    try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+    try { return JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
   }
 
   function clearSession() {
-    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
   }
 
   function tryRefresh() {
