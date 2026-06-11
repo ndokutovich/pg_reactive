@@ -7,7 +7,7 @@
  *
  * @example
  * ```ts
- * import { PgReactiveAdmin } from "pg-reactive-sdk/server";
+ * import { PgReactiveAdmin } from "@pgstack/sdk/server";
  *
  * const admin = new PgReactiveAdmin({
  *   connectionString: "postgres://user:pass@127.0.0.1:5432/mydb",

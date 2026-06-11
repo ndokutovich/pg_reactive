@@ -1,5 +1,5 @@
 {
-  "name": "pg-reactive-sdk",
+  "name": "@pgstack/sdk",
   "version": "0.1.1",
   "description": "TypeScript SDK for pg_reactive live queries",
   "type": "module",
@@ -35,6 +35,9 @@
     "dist",
     "!dist/**/*.test.*"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "prepack": "npm run build",

@@ -101,7 +101,7 @@ jobs:
 
   # ─── Publish npm packages ────────────────────────────────────────────────────
   npm-sdk:
-    name: npm — pg-reactive-sdk
+    name: npm — @pgstack/sdk
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
@@ -177,6 +177,6 @@ jobs:
 
             ### npm packages
             ```bash
-            npm install pg-reactive-sdk@${{ steps.version.outputs.version }}
+            npm install @pgstack/sdk@${{ steps.version.outputs.version }}
             npm install -g pgstack@${{ steps.version.outputs.version }}
             ```
