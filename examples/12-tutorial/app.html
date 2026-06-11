@@ -173,20 +173,6 @@
     .content { padding: 16px 16px 72px; }
   }
 
-  /* Execute button & live results */
-  .exec-btn { background: none; border: 1px solid rgba(63,185,80,0.4); color: var(--green); border-radius: 4px; padding: 3px 10px; font-size: 11px; cursor: pointer; transition: all 0.2s; font-family: var(--font); flex-shrink: 0; }
-  .exec-btn:hover { border-color: var(--green); background: rgba(63,185,80,0.1); }
-  .exec-btn.running { opacity: 0.6; cursor: wait; }
-  .live-result { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--green); border-radius: 0 8px 8px 0; margin-bottom: 16px; overflow: hidden; animation: stepIn 0.25s ease-out; }
-  .live-result .live-head { display: flex; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); gap: 10px; }
-  .live-result .live-badge { font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; background: rgba(63,185,80,0.15); color: var(--green); }
-  .live-result .live-label { font-size: 12px; color: var(--muted); flex: 1; }
-  .live-result .result-table { width: 100%; }
-  .live-result .live-status { padding: 12px 16px; font-family: var(--mono); font-size: 13px; color: var(--green); }
-  .live-error { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--red); border-radius: 0 8px 8px 0; padding: 12px 16px; margin-bottom: 16px; animation: stepIn 0.25s ease-out; }
-  .live-error .err-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .live-error .err-badge { font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 700; text-transform: uppercase; background: rgba(248,81,73,0.15); color: var(--red); }
-  .live-error .err-msg { font-family: var(--mono); font-size: 12px; color: var(--red); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 </style>
 <script src="../config.js"></script>
 </head>
@@ -705,13 +691,6 @@ function buildSQLBlock(block, stepIdx, blockIdx) {
     btn.dataset.blockIdx = blockIdx;
     btn.addEventListener('click', handleCopy);
     head.appendChild(btn);
-    if (/^\s*(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER|DROP|TRUNCATE)\b/i.test(block.copyText)) {
-      var execBtn = el('button', 'exec-btn', 'Execute');
-      execBtn.dataset.stepIdx = stepIdx;
-      execBtn.dataset.blockIdx = blockIdx;
-      execBtn.addEventListener('click', handleExecute);
-      head.appendChild(execBtn);
-    }
   }
   panel.appendChild(head);
 
@@ -1007,115 +986,15 @@ function handleCopy(e) {
   });
 }
 
-/* ── Execute SQL ── */
-
-function handleExecute(e) {
-  var btn = e.currentTarget;
-  var si = parseInt(btn.dataset.stepIdx);
-  var bi = parseInt(btn.dataset.blockIdx);
-  var text = STEPS[si].blocks[bi].copyText;
-  if (!text || btn.classList.contains('running')) return;
-
-  var stmts = text.split(';').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
-  if (stmts.length === 0) return;
-
-  btn.classList.add('running');
-  btn.textContent = 'Running\u2026';
-
-  var panel = document.getElementById('sql-' + si + '-' + bi);
-  // Remove previous live results for this block
-  var cls = 'live-target-' + si + '-' + bi;
-  var existing = panel.parentNode.querySelectorAll('.' + cls);
-  existing.forEach(function(n) { n.remove(); });
-
-  executeSequential(stmts, 0, panel, cls, btn);
-}
-
-function executeSequential(stmts, idx, afterEl, cls, btn) {
-  if (idx >= stmts.length) {
-    btn.classList.remove('running');
-    btn.textContent = 'Execute';
-    return;
-  }
-  fetch(PGR.apiBase + '/sql', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + PGR.serviceRoleKey
-    },
-    body: JSON.stringify({ sql: stmts[idx] })
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(data) {
-    var resultEl = buildLiveResultPanel(data);
-    resultEl.classList.add(cls);
-    afterEl.after(resultEl);
-    executeSequential(stmts, idx + 1, resultEl, cls, btn);
-  })
-  .catch(function(err) {
-    var errEl = buildLiveErrorPanel(err.message || 'Network error');
-    errEl.classList.add(cls);
-    afterEl.after(errEl);
-    btn.classList.remove('running');
-    btn.textContent = 'Execute';
-  });
-}
-
-function buildLiveResultPanel(data) {
-  if (data.error) return buildLiveErrorPanel(data.error);
-
-  var panel = el('div', 'live-result');
-  var head = el('div', 'live-head');
-  head.appendChild(el('span', 'live-badge', 'Live'));
-
-  if (data.rows !== undefined) {
-    var rows = Array.isArray(data.rows) ? data.rows : [];
-    var count = rows.length;
-    head.appendChild(el('span', 'live-label', count + ' row' + (count !== 1 ? 's' : '')));
-    panel.appendChild(head);
-
-    if (count > 0) {
-      var cols = Object.keys(rows[0]);
-      var table = el('table', 'result-table');
-      var thead = document.createElement('thead');
-      var hrow = document.createElement('tr');
-      cols.forEach(function(c) { hrow.appendChild(el('th', '', c)); });
-      thead.appendChild(hrow);
-      table.appendChild(thead);
-
-      var tbody = document.createElement('tbody');
-      rows.forEach(function(row) {
-        var tr = document.createElement('tr');
-        cols.forEach(function(c) {
-          var val = row[c];
-          var display = val === null ? 'NULL' : typeof val === 'object' ? JSON.stringify(val) : String(val);
-          tr.appendChild(el('td', '', display));
-        });
-        tbody.appendChild(tr);
-      });
-      table.appendChild(tbody);
-      panel.appendChild(table);
-    }
-  } else {
-    head.appendChild(el('span', 'live-label', 'Statement executed'));
-    panel.appendChild(head);
-    var status = el('div', 'live-status');
-    status.textContent = data.rows_affected !== undefined
-      ? data.rows_affected + ' row' + (data.rows_affected !== 1 ? 's' : '') + ' affected'
-      : 'OK';
-    panel.appendChild(status);
-  }
-  return panel;
-}
-
-function buildLiveErrorPanel(msg) {
-  var panel = el('div', 'live-error');
-  var head = el('div', 'err-head');
-  head.appendChild(el('span', 'err-badge', 'Error'));
-  panel.appendChild(head);
-  panel.appendChild(el('div', 'err-msg', msg));
-  return panel;
-}
+/* ── No in-browser SQL execution (round 36, SECURITY.md invariant 13) ──
+ * This page used to render an "Execute" button that POSTed each SQL block
+ * to the raw-SQL endpoint as service_role. That can never work and must
+ * never work from a public page: the service-role key is deliberately not
+ * exposed to browsers (see ../config.js), and the endpoint is not mounted
+ * in production - the button only produced a cryptic JSON.parse error on
+ * the plain-text 404. SQL blocks are copy-paste material for the Studio
+ * SQL editor (dev stacks) or psql. The SEC-R13 lint rule guards this
+ * file class. */
 
 /* ── Keyboard navigation ── */
 document.addEventListener('keydown', function(e) {

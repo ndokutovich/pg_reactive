@@ -6,3 +6,6 @@ rust/target/
 **/node_modules/
 node/package-lock.json
 rust/Cargo.lock
+spring/target/
+dotnet/obj/
+dotnet/bin/
