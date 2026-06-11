@@ -58,24 +58,15 @@ export function SqlEditorPage(): React.ReactElement {
     }
   }, [sql, running]);
 
-  // EXPLAIN ANALYZE *executes* the statement, so it is only safe for pure
-  // reads. A data-modifying CTE starts with WITH but still writes — e.g.
-  // `WITH x AS (INSERT ... RETURNING *) SELECT * FROM x` — so a leading
-  // SELECT/WITH is NOT sufficient. We only ANALYZE statements that start
-  // with SELECT/WITH AND contain no data-modifying keyword anywhere;
-  // everything else (DML, DDL, WITH-with-writes) gets a plain EXPLAIN that
-  // plans without executing. The keyword check errs safe: a SELECT that
-  // merely mentions "insert" in a string/identifier loses ANALYZE but is
-  // never executed against its will. Explain runs are not added to history.
-  const runExplain = useCallback(async () => {
+  // Plain EXPLAIN: the planner's plan WITHOUT executing the statement. This
+  // is always safe — there is no reliable way to tell from SQL text whether a
+  // statement has side effects (a bare SELECT can call nextval() or any
+  // VOLATILE function, and a WITH can wrap an INSERT ... RETURNING), so the
+  // default Explain never runs ANALYZE. Explain runs are not added to history.
+  const explainWith = useCallback(async (opts: string) => {
     const stmt = sql.trim().replace(/;+\s*$/, '');
     if (!stmt || running) return;
-    const startsRead = /^\s*(select|with|table|values)\b/i.test(stmt);
-    const hasWrite = /\b(insert|update|delete|merge|create|alter|drop|truncate|grant|revoke|call|do)\b/i.test(stmt);
-    const analyzeSafe = startsRead && !hasWrite;
-    const explainSql = analyzeSafe
-      ? `EXPLAIN (ANALYZE, BUFFERS) ${stmt}`
-      : `EXPLAIN ${stmt}`;
+    const explainSql = `EXPLAIN ${opts}${stmt}`;
     setRunning(true);
     const start = Date.now();
     try {
@@ -87,6 +78,20 @@ export function SqlEditorPage(): React.ReactElement {
     }
   }, [sql, running]);
 
+  const runExplain = useCallback(() => explainWith(''), [explainWith]);
+
+  // EXPLAIN ANALYZE *executes* the statement (writes, sequence bumps, volatile
+  // side effects all happen). It is a separate, explicitly-confirmed action —
+  // never the default — because "explain" must be safe to click on any query.
+  const runAnalyze = useCallback(() => {
+    if (typeof window !== 'undefined' && !window.confirm(
+      'EXPLAIN ANALYZE runs the statement for real — including any INSERT/UPDATE/'
+      + 'DELETE, nextval(), or other side effects. Continue?')) {
+      return;
+    }
+    return explainWith('(ANALYZE, BUFFERS) ');
+  }, [explainWith]);
+
   const rowCount =
     result?.rows !== undefined ? result.rows.length : undefined;
 
@@ -95,6 +100,7 @@ export function SqlEditorPage(): React.ReactElement {
       <EditorToolbar
         onRun={() => void runQuery()}
         onExplain={() => void runExplain()}
+        onAnalyze={() => void runAnalyze()}
         isRunning={running}
         rowCount={rowCount}
         elapsedMs={elapsedMs}
