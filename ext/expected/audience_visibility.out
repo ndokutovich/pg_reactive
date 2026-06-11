@@ -1,0 +1,37 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_repub s2_read s1_rollback s2_read
+baseline  
+----------
+subscribed
+(1 row)
+
+step s1_begin: BEGIN;
+s1: NOTICE:  relation "_snap_aud_q" already exists, skipping
+step s1_repub: SELECT (pgr.subscribe('aud_q', 'SELECT id FROM aud_t', 'delta', NULL))->>'status' AS repub;
+repub     
+----------
+subscribed
+(1 row)
+
+step s2_read: 
+    SELECT
+        (SELECT audience::text FROM pgr.subscription_meta('aud_q')) AS proxy_gate,
+        (SELECT audience::text FROM pgr.get_subscriptions() WHERE query_id = 'aud_q') AS shmem_view;
+
+proxy_gate       |shmem_view
+-----------------+----------
+{"sub": "victim"}|          
+(1 row)
+
+step s1_rollback: ROLLBACK;
+step s2_read: 
+    SELECT
+        (SELECT audience::text FROM pgr.subscription_meta('aud_q')) AS proxy_gate,
+        (SELECT audience::text FROM pgr.get_subscriptions() WHERE query_id = 'aud_q') AS shmem_view;
+
+proxy_gate       |shmem_view       
+-----------------+-----------------
+{"sub": "victim"}|{"sub": "victim"}
+(1 row)
+

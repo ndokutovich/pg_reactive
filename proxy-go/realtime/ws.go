@@ -403,14 +403,14 @@ func originMatchesHost(origin, host string) bool {
 }
 
 // ErrSubscriptionNotFound is returned by subscriptionMeta when no row exists
-// in pgr.get_subscriptions() for the given query_id and the id does not match
-// the ad-hoc public-channel prefix convention.
+// in the pgr.persisted_subscriptions catalog for the given query_id and the id
+// does not match the ad-hoc public-channel prefix convention.
 var ErrSubscriptionNotFound = errors.New("subscription not found")
 
 // channelPrefixes lists query_id prefixes that are treated as ad-hoc public
 // broadcast / presence channels — they don't need a pre-registered row in
-// pgr.get_subscriptions(). Use audience binding (server-registered) for any
-// channel that should be private.
+// the pgr.persisted_subscriptions catalog. Use audience binding
+// (server-registered) for any channel that should be private.
 var channelPrefixes = []string{"_channel_", "_presence_"}
 
 // isAdHocChannel reports whether a query_id is allowed to connect without
@@ -430,10 +430,14 @@ func isAdHocChannel(queryID string) bool {
 //   - audience is the raw JSON string of the audience constraint, or "" when
 //     the subscription is public (NULL audience).
 //
+// The source is the transactional pgr.subscription_meta (round 37 F1), so an
+// uncommitted or rolled-back re-subscribe in another session never leaks into
+// the gate.
+//
 // Failure modes (since the 2026-05 audit closed the previous fail-open
 // vector — silently returning ("delta", "") on any DB error meant an
 // audience-bound subscription could become unprotected if the proxy's
-// EXECUTE grant on pgr.get_subscriptions was revoked or the DB blipped):
+// EXECUTE grant on the lookup function was revoked or the DB blipped):
 //
 //   - pgx.ErrNoRows + query_id matches an ad-hoc channel prefix
 //     → mode="delta", audience="", err=nil. Public ad-hoc channel.
@@ -453,8 +457,15 @@ func subscriptionMeta(pool *pgxpool.Pool, queryID string) (mode, audience string
 		return "", "", ErrSubscriptionNotFound
 	}
 	var aud *string
+	// Round 37 F1: read the audience/mode gate from the TRANSACTIONAL catalog
+	// (pgr.subscription_meta over pgr.persisted_subscriptions), NOT from
+	// pgr.get_subscriptions() which reads the non-transactional shmem hash.
+	// pgr.subscribe() mutates shmem out-of-transaction, so reading shmem here
+	// would let a concurrent session's uncommitted (or rolled-back) re-subscribe
+	// flip an audience-bound subscription to public for the whole transaction
+	// window — an audience bypass. The catalog read sees only committed rows.
 	err = pool.QueryRow(context.Background(),
-		`SELECT mode, audience::text FROM pgr.get_subscriptions() WHERE query_id = $1`,
+		`SELECT mode, audience::text FROM pgr.subscription_meta($1)`,
 		queryID).Scan(&mode, &aud)
 	if err == nil {
 		if aud != nil {

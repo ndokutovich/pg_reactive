@@ -296,6 +296,33 @@ function checkExtSDRevoke() {
   }
 }
 
+// Rule SEC-R37 — the WebSocket proxy audience/mode gate must read the
+//   transactional pgr.subscription_meta catalog, never pgr.get_subscriptions().
+//   SECURITY.md invariant #15. Audit round 37 F1 HIGH.
+//   pgr.get_subscriptions() reads the non-transactional shmem hash, which
+//   pgr.subscribe() mutates out-of-transaction. Sourcing the audience gate
+//   from it lets a concurrent session's uncommitted (or later rolled-back)
+//   re-subscribe flip an audience-bound subscription to public for the whole
+//   transaction window — an audience bypass at WS-connect. pgr.subscription_meta
+//   reads pgr.persisted_subscriptions (MVCC), so only committed rows are seen.
+//   Scope: proxy-go/**/*.go. Matches a (non-comment) line that pulls `audience`
+//   from pgr.get_subscriptions().
+//   Override a verified-safe occurrence with `// lint:allow=SEC-R37`.
+function checkProxyAudienceSource(file, text) {
+  const norm = file.replace(/\\/g, "/");
+  if (!/\/proxy-go\//.test(norm) || !/\.go$/.test(norm)) return;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/lint:allow=SEC-R37/.test(line)) continue;
+    if (/^\s*\/\//.test(line)) continue; // comment-only line
+    if (/get_subscriptions/.test(line) && /audience/i.test(line)) {
+      report(file, i + 1, "SEC-R37",
+        "proxy reads audience from pgr.get_subscriptions() (non-transactional shmem) — the audience gate must use pgr.subscription_meta (transactional catalog) so an uncommitted/rolled-back re-subscribe cannot leak (SECURITY.md invariant 15, round-37 F1)");
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -311,6 +338,7 @@ function runAll() {
     checkChiRealIPUsage(f, text);
     checkRawTokenGrant(f, text);
     checkFrontendServiceRole(f, text);
+    checkProxyAudienceSource(f, text);
   }
 
   if (findings.length === 0) {

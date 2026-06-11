@@ -7,7 +7,7 @@ import (
 // Regression for the fail-open vector closed in the 2026-05 review:
 // subscriptionMeta used to swallow every DB error and return public defaults,
 // which silently disabled audience enforcement when the proxy DB role lost
-// EXECUTE on pgr.get_subscriptions(). The current code is fail-closed; this
+// EXECUTE on the lookup function. The current code is fail-closed; this
 // test pins down the prefix-exemption that keeps ad-hoc public channels
 // working.
 

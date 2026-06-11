@@ -7,7 +7,7 @@ DATA = pg_reactive--0.1.2.sql pg_reactive--0.1.1--0.1.2.sql pg_reactive--0.1.3.s
 REGRESS = 00_setup 01_subscribe 02_invalidation 03_recompute 04_overflow 05_coverage 06_column_tracking 07_notify_mode 08_advanced_queries 09_batch_invalidation 10_audience 11_snapshot_drift 12_rollback_journal
 REGRESS_OPTS = --dbname=pg_reactive_test
 
-ISOLATION = concurrent_dml concurrent_subscribe concurrent_invalidation
+ISOLATION = concurrent_dml concurrent_subscribe concurrent_invalidation audience_visibility
 ISOLATION_OPTS = --dbname=pg_reactive_test
 
 PG_CPPFLAGS = -I$(srcdir)/src

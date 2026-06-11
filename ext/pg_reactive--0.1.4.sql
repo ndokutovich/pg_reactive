@@ -112,6 +112,31 @@ BEGIN
 END
 $fn$;
 
+-- ─── Security gate source for the proxy (round 37 F1) ─────────────────────
+-- The WebSocket proxy enforces the audience constraint at connect time. It
+-- MUST read mode/audience from this TRANSACTIONAL catalog — never from
+-- pgr.get_subscriptions(), which reads the non-transactional shmem hash.
+-- pgr.subscribe() mutates shmem out-of-transaction (immediately visible to
+-- every backend), so a re-subscribe that flips audience inside an uncommitted
+-- transaction would let a concurrent gate read see a protected subscription as
+-- public — an audience bypass that persists for the whole transaction window
+-- and even survives a later ROLLBACK as far as the racing reader is concerned.
+-- Reading persisted_subscriptions binds the gate to the committed snapshot:
+-- uncommitted re-subscribes are invisible and rolled-back ones never appear.
+-- SECURITY DEFINER + pinned path so the privileged proxy role can read
+-- mode/audience without a direct SELECT grant on the catalog table.
+CREATE FUNCTION pgr.subscription_meta(p_query_id text)
+RETURNS TABLE(mode text, audience jsonb)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pgr
+AS $fn$
+    SELECT ps.mode, ps.audience
+    FROM pgr.persisted_subscriptions ps
+    WHERE ps.query_id = p_query_id;
+$fn$;
+
 -- ─── Public subscribe / unsubscribe wrappers (SECURITY INVOKER) ──────────
 CREATE FUNCTION pgr.subscribe(
     p_query_id text,
@@ -234,6 +259,7 @@ REVOKE EXECUTE ON FUNCTION pgr._forget_subscription(text)                       
 REVOKE EXECUTE ON FUNCTION pgr.subscribe(text, text, text, jsonb)                   FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pgr.unsubscribe(text)                                    FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pgr.get_subscriptions()                                  FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pgr.subscription_meta(text)                              FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pgr.stats()                                              FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pgr.restore_subscriptions()                              FROM PUBLIC;
 -- trigger_func is SECURITY DEFINER. PostgreSQL does not require EXECUTE on a
@@ -258,7 +284,12 @@ COMMENT ON TABLE pgr.persisted_subscriptions IS
     'Durable catalog of live-query subscriptions. Survives PG restart; rebuilt into shmem by pgr.restore_subscriptions().';
 
 COMMENT ON FUNCTION pgr.get_subscriptions() IS
-    'List all active (in-shmem) subscriptions. Distinct from pgr.persisted_subscriptions which is the durable catalog.';
+    'List all active (in-shmem) subscriptions. Distinct from pgr.persisted_subscriptions which is the durable catalog. '
+    'NOT a security source: shmem is non-transactional. The proxy audience gate uses pgr.subscription_meta instead.';
+
+COMMENT ON FUNCTION pgr.subscription_meta(text) IS
+    'Transactional mode/audience lookup over pgr.persisted_subscriptions for the WebSocket proxy audience gate. '
+    'Reads the committed catalog (MVCC), so an uncommitted or rolled-back re-subscribe never leaks to the gate (round 37 F1).';
 
 COMMENT ON VIEW pgr.subscriptions IS
     'Convenience view over pgr.get_subscriptions().';
