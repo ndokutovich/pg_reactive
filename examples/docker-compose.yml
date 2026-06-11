@@ -28,7 +28,13 @@ services:
       context: ..
       dockerfile: proxy-go/Dockerfile
       args:
-        DOCS_BASE_URL: /pg-reactive/docs/
+        # Docusaurus baseUrl baked into the docs build the proxy serves at
+        # /docs/. reactive.pgstack.org (dedicated subdomain) and local dev
+        # both serve docs under /docs/, so that is the default. Override to
+        # a sub-path (e.g. /pg-reactive/docs/) only when the stack is reverse-
+        # proxied under a prefix. Was hard-pinned to /pg-reactive/docs/, which
+        # 404'd every doc asset on the reactive.pgstack.org subdomain.
+        DOCS_BASE_URL: ${DOCS_BASE_URL:-/docs/}
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
