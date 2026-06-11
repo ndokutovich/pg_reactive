@@ -65,6 +65,26 @@ func TestClaimsSatisfyAudience_AllKeysMustMatch(t *testing.T) {
 	}
 }
 
+// Round 37 F5 (surfaced by the F1 adversarial review): a non-NULL audience
+// that parses to zero predicates (jsonb 'null', '{}', or a non-object) must
+// fail closed, not admit every authenticated JWT. Public subscriptions are
+// signalled by a SQL NULL audience, which reaches the matcher as "".
+func TestClaimsSatisfyAudience_DegenerateAudienceFailsClosed(t *testing.T) {
+	for _, aud := range []string{`null`, `{}`, `[]`, `"victim"`, `42`} {
+		if claimsSatisfyAudience(aud, `{"sub":"42","role":"authenticated"}`) {
+			t.Fatalf("degenerate audience %q must fail closed, not admit an authenticated JWT", aud)
+		}
+	}
+	// Sanity: a NULL audience (rendered "") is still public, and a real
+	// single-predicate audience still matches — the guard is narrow.
+	if !claimsSatisfyAudience("", `{"sub":"42"}`) {
+		t.Fatal("NULL audience (\"\") must remain public")
+	}
+	if !claimsSatisfyAudience(`{"sub":"42"}`, `{"sub":"42"}`) {
+		t.Fatal("a real single-predicate audience must still match")
+	}
+}
+
 func TestClaimsSatisfyAudience_NumberVsString(t *testing.T) {
 	// {"sub":42} and {"sub":"42"} are NOT equal — JWT issuers must pick a
 	// consistent encoding. Document the gotcha by asserting it.

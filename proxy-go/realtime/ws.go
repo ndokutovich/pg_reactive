@@ -497,6 +497,12 @@ func subscriptionMeta(pool *pgxpool.Pool, queryID string) (mode, audience string
 //     {"sub":"42"} matches {"sub":"42"} but {"sub":42} does NOT match
 //     {"sub":"42"}. Pick a consistent encoding when issuing JWTs.
 //   - Empty audience ("") is treated as no constraint and returns true.
+//     This is the public signal — a SQL NULL audience, rendered as "" by the
+//     gate. It is the ONLY way to be public.
+//   - A non-NULL audience that carries no predicates (jsonb 'null' or '{}', or
+//     any value that unmarshals to an empty object) fails closed: the
+//     registrant signalled intent to restrict but gave nothing to check, so we
+//     refuse rather than admit every authenticated JWT (round 37 F5).
 //   - Malformed JSON on either side fails closed: returns false.
 func claimsSatisfyAudience(audience, claimsJSON string) bool {
 	if audience == "" {
@@ -505,6 +511,16 @@ func claimsSatisfyAudience(audience, claimsJSON string) bool {
 	var aud map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(audience), &aud); err != nil {
 		log.Warn().Err(err).Str("audience", audience).Msg("audience JSON unparseable; failing closed")
+		return false
+	}
+	// Non-NULL but predicate-less audience (jsonb 'null' -> nil map, '{}' ->
+	// empty map): the loop below would be vacuously satisfied and admit any
+	// JWT. That defeats the intent of setting an audience at all. Public
+	// subscriptions use a SQL NULL audience (handled above as ""); a non-NULL
+	// audience with zero keys is a misconfiguration and must fail closed.
+	if len(aud) == 0 {
+		log.Warn().Str("audience", audience).
+			Msg("audience has no predicates; failing closed (use a NULL audience for public)")
 		return false
 	}
 	var claims map[string]json.RawMessage
