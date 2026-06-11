@@ -229,6 +229,13 @@ jobs:
       - name: pg_reactive docs parity (GUCs + wire format)
         run: node scripts/check-docs-parity.mjs
 
+      # A page served by the proxy PublicSPA catch-all (public/index.html) for
+      # any unmatched depth must use root-absolute asset paths — a relative
+      # href="style.css" resolves to /docs/intro/style.css, which the catch-all
+      # answers with index.html (text/html) and the browser rejects the CSS.
+      - name: Static asset path guard
+        run: node tests/static_asset_paths_test.mjs
+
   # ─── Adversarial security fixtures ──────────────────────────────────────────
   # Round-31 Tier 3.5: negative tests in tests/security/ assert that
   # specific attacks are refused. Each prior audit finding leaves one
