@@ -58,7 +58,7 @@ describe("pgstack init", () => {
 
     expect(config.projectName).toBe("test-project");
     expect(config.dbPort).toBe(15432);
-    expect(config.proxyPort).toBe(3000);
+    expect(config.proxyPort).toBe(8080);
     expect(config.pgVersion).toBe("16");
     expect(config.schemas).toEqual(["public"]);
   });
@@ -102,7 +102,14 @@ describe("pgstack init", () => {
     expect(dc).toContain("services:");
     expect(dc).toContain("db:");
     expect(dc).toContain("proxy:");
-    expect(dc).toContain("postgres:16-bookworm");
+    // The db image must ship the pg_reactive extension: the compose command
+    // sets shared_preload_libraries=pg_reactive, which makes a stock
+    // postgres image FATAL at postmaster start. The proxy image must be one
+    // the release pipeline actually publishes (ghcr.io), not a phantom.
+    expect(dc).toContain("ghcr.io/ndokutovich/pgstack-postgres:latest");
+    expect(dc).toContain("ghcr.io/ndokutovich/pgstack-proxy:latest");
+    expect(dc).not.toContain("postgres:16-bookworm");
+    expect(dc).not.toContain("image: pgstack/proxy:latest");
     expect(dc).toContain("JWT_SECRET");
     expect(dc).toContain("ANON_KEY");
     expect(dc).toContain("SERVICE_ROLE_KEY");

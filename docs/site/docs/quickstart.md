@@ -38,7 +38,7 @@ docker compose up -d
 
 This starts:
 - **PostgreSQL 16** with the `pg_reactive` extension on port `15432` (dev)
-- **pgStack Proxy** (auth + REST + WebSockets) on port `8080` if you cloned the repo, or port `3000` if you used `npx pgstack init` (set by `PROXY_PORT` in the generated `.env` — substitute it for `8080` in the URLs below)
+- **pgStack Proxy** (auth + REST + WebSockets) on port `8080` (override with `PROXY_PORT` in `.env`)
 
 Wait a few seconds for the database to initialize, then verify everything is healthy:
 

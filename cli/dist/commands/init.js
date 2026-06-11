@@ -23,7 +23,7 @@ function readBootstrapCore() {
     }
 }
 const DEFAULT_DB_PORT = 15432;
-const DEFAULT_PROXY_PORT = 3000;
+const DEFAULT_PROXY_PORT = 8080;
 const DEFAULT_DB_NAME = "app";
 export function registerInitCommand(program) {
     program
@@ -83,7 +83,9 @@ export function registerInitCommand(program) {
 function generateDockerCompose() {
     return `services:
   db:
-    image: postgres:16-bookworm
+    # Ships PostgreSQL 16 + the pg_reactive extension; a stock postgres
+    # image FATALs on shared_preload_libraries=pg_reactive below.
+    image: ghcr.io/ndokutovich/pgstack-postgres:latest
     ports:
       - "\${PG_PORT:-${DEFAULT_DB_PORT}}:5432"
     environment:
@@ -103,7 +105,7 @@ function generateDockerCompose() {
       retries: 15
 
   proxy:
-    image: pgstack/proxy:latest
+    image: ghcr.io/ndokutovich/pgstack-proxy:latest
     ports:
       - "\${PROXY_PORT:-${DEFAULT_PROXY_PORT}}:${DEFAULT_PROXY_PORT}"
     environment:

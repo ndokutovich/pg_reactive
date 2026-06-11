@@ -23,10 +23,10 @@ Starting pgStack...
 pgStack is running!
 
   PostgreSQL:  postgresql://postgres:postgres@127.0.0.1:15432/app
-  Your app:    http://127.0.0.1:3000/
-  REST API:    http://127.0.0.1:3000/rest/v1/
-  WebSocket:   ws://127.0.0.1:3000/ws/
-  Health:      http://127.0.0.1:3000/health
+  Your app:    http://127.0.0.1:8080/
+  REST API:    http://127.0.0.1:8080/rest/v1/
+  WebSocket:   ws://127.0.0.1:8080/ws/
+  Health:      http://127.0.0.1:8080/health
 
 Run `pgstack logs` to see output, `pgstack stop` to shut down.
 ```
@@ -51,7 +51,7 @@ Example output:
 
 ```
 db    | 2025-01-14 12:00:01 UTC [1] LOG:  database system is ready to accept connections
-proxy | 2025-01-14 12:00:02 INFO pgstack_proxy: Listening on 0.0.0.0:3000
+proxy | 2025-01-14 12:00:02 INFO pgstack_proxy: Listening on 0.0.0.0:8080
 proxy | 2025-01-14 12:00:05 INFO pgstack_proxy: POST /auth/v1/signup 200 12ms
 proxy | 2025-01-14 12:00:06 INFO pgstack_proxy: GET /rest/v1/todos 200 3ms
 ```
@@ -72,7 +72,7 @@ Containers:
   proxy  running (healthy)
 
 Proxy health:
-  healthy v0.1.0  http://127.0.0.1:3000/health
+  healthy v0.1.0  http://127.0.0.1:8080/health
 
 Migrations:
   All migrations applied  (3 total)
@@ -87,7 +87,7 @@ Live subscriptions:
 pgstack studio
 ```
 
-Opens the Studio admin dashboard in your default browser. Accepts `--url <url>` to override the proxy base URL (default `http://127.0.0.1:8080`); opens `<url>/studio/` in the default browser. For a scaffolded project running on the default proxy port, pass `--url http://127.0.0.1:3000`.
+Opens the Studio admin dashboard in your default browser. Accepts `--url <url>` to override the proxy base URL (default `http://127.0.0.1:8080`); opens `<url>/studio/` in the default browser.
 
 ## Rebuilding after code changes
 
@@ -126,7 +126,7 @@ pgstack db reset --no-seed
 
 | Service | Default port | Variable |
 |---------|-------------|----------|
-| pgStack proxy | `3000` | `PROXY_PORT` |
+| pgStack proxy | `8080` | `PROXY_PORT` |
 | PostgreSQL | `15432` (host-side) | `PG_PORT` |
 
 The PostgreSQL port is mapped to `15432` on the host to avoid conflicts with any local PostgreSQL installation.
