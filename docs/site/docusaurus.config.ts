@@ -46,6 +46,19 @@ const config: Config = {
     ],
   ],
 
+  plugins: [
+    [
+      '@docusaurus/plugin-content-docs',
+      {
+        id: 'reactive',
+        path: 'pg-reactive',
+        routeBasePath: 'pg-reactive',
+        sidebarPath: './sidebars.reactive.ts',
+        editUrl: 'https://github.com/ndokutovich/pg_reactive/edit/master/docs/site/',
+      },
+    ],
+  ],
+
   themeConfig: {
     colorMode: {
       defaultMode: 'dark',
@@ -62,7 +75,14 @@ const config: Config = {
           type: 'docSidebar',
           sidebarId: 'docs',
           position: 'left',
-          label: 'Docs',
+          label: 'Platform',
+        },
+        {
+          type: 'docSidebar',
+          docsPluginId: 'reactive',
+          sidebarId: 'reactive',
+          position: 'left',
+          label: 'pg_reactive',
         },
         {
           href: 'https://github.com/ndokutovich/pg_reactive',
@@ -105,6 +125,23 @@ const config: Config = {
             {
               label: 'Live Queries',
               to: 'realtime/overview',
+            },
+          ],
+        },
+        {
+          title: 'pg_reactive',
+          items: [
+            {
+              label: 'The Extension',
+              to: '/pg-reactive/',
+            },
+            {
+              label: 'Install Standalone',
+              to: '/pg-reactive/install',
+            },
+            {
+              label: 'Subscribe API',
+              to: '/pg-reactive/subscribe',
             },
           ],
         },

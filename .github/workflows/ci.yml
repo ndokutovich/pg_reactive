@@ -213,6 +213,13 @@ jobs:
             exit 1
           fi
 
+      # Docs reorg: the standalone pg_reactive extension docset must not drift
+      # from the C source of truth. check-docs-parity asserts every GUC
+      # registered in ext/src/*.c is documented in docs/site/pg-reactive/gucs.md,
+      # and the NOTIFY wire contract appears in pg-reactive/wire-format.md.
+      - name: pg_reactive docs parity (GUCs + wire format)
+        run: node scripts/check-docs-parity.mjs
+
   # ─── Adversarial security fixtures ──────────────────────────────────────────
   # Round-31 Tier 3.5: negative tests in tests/security/ assert that
   # specific attacks are refused. Each prior audit finding leaves one

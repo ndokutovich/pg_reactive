@@ -48,7 +48,7 @@ PostgreSQL 16 + pg_reactive extension  ← port 5432 (internal)
 
 **PostgREST-compatible REST API.** The filter syntax, embedding syntax, and response format match PostgREST. If you're migrating from Supabase, most client code works without changes.
 
-**Real-time first.** The `pg_reactive` C extension turns any `SELECT` into a live query. Changes are diffed at the SQL layer using `EXCEPT`-based comparison and delivered as JSON deltas over WebSocket.
+**Real-time first.** The [`pg_reactive`](/pg-reactive/) C extension turns any `SELECT` into a live query. Changes are diffed at the SQL layer using `EXCEPT`-based comparison and delivered as JSON deltas over WebSocket. pg_reactive is a standalone PostgreSQL extension — usable on its own with nothing but `LISTEN pgr` — and has its **[own documentation section](/pg-reactive/)**; pgStack is the batteries-included platform built around it.
 
 **RLS enforced by default.** Every REST request runs as the authenticated PostgreSQL role. The proxy sets `request.jwt.claims` and switches role before executing queries, so your `ROW LEVEL SECURITY` policies run automatically.
 
@@ -105,3 +105,4 @@ function TodoList() {
 - [Quick Start](./quickstart) — up and running in 5 minutes
 - [Installation](./installation) — full installation options
 - [vs Supabase](./vs-supabase) — feature comparison
+- [pg_reactive](/pg-reactive/) — the standalone live-query extension at pgStack's core

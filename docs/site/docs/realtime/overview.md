@@ -1,147 +1,59 @@
 ---
-title: Live Queries Overview
+title: Realtime
 sidebar_position: 1
-description: Real-time SQL subscriptions powered by the pg_reactive PostgreSQL C extension.
+description: Realtime in pgStack — live queries powered by the pg_reactive extension, wired into pgStack auth, RLS, and the SDK.
 ---
 
-# Live Queries Overview
+# Realtime
 
-pgStack's real-time system is powered by `pg_reactive` — a PostgreSQL C extension that turns any `SELECT` query into a live subscription. When underlying data changes, the extension computes a diff and delivers only the changed rows to connected clients.
+pgStack's realtime layer is **[pg_reactive](/pg-reactive/)** — a PostgreSQL C extension that turns any `SELECT` into a live query and pushes JSON deltas over `LISTEN`/`NOTIFY`. pgStack bundles the extension, runs the WebSocket fan-out proxy for you, and ties subscriptions into the platform's auth and Row-Level Security.
 
-## How it works
+This page covers the **pgStack integration**. For the engine itself — standalone install, the full SQL subscription API, the wire protocol, GUCs, the security model, and the SDK — see the dedicated **[pg_reactive documentation](/pg-reactive/)**.
+
+## How it fits together
 
 ```
 Your App (WebSocket client)
-  │
-  │  ws://127.0.0.1:8080/ws/my_query_id
-  │
-pgStack Proxy (Go)
+  │  ws://127.0.0.1:8080/ws/{query_id}?token={jwt}
+  ▼
+pgStack Proxy (Go)        ← auth, audience gate, connection limits
   │  LISTEN pgr
-  │
-PostgreSQL
-  │
-  ├── AFTER INSERT/UPDATE/DELETE triggers (installed by pg_reactive)
-  │       │
-  │       └── recompute.c: runs your SELECT query once into a temp table,
-  │                         computes EXCEPT diff against the stored snapshot
-  │                         NOTIFY 'pgr' with JSON delta
-  │
-  └── Snapshot tables: pgr._snap_<query_id>  (UNLOGGED, not WAL-logged)
+  ▼
+PostgreSQL + pg_reactive  ← AFTER STATEMENT triggers → EXCEPT diff → NOTIFY 'pgr'
 ```
 
-### Delta delivery
+A row changes → pg_reactive re-runs your query, diffs it against the stored snapshot with SQL `EXCEPT`, and emits a JSON delta on the `pgr` channel. The proxy receives the `NOTIFY` and routes it to the WebSocket connections subscribed to that `query_id`.
 
-When a row changes in a subscribed table:
-
-1. An AFTER STATEMENT trigger fires
-2. pg_reactive re-runs your query and computes the difference using SQL `EXCEPT`
-3. The diff is serialized as JSON and published via `pg_notify('pgr', ...)`
-4. The proxy receives the NOTIFY, routes it to subscribed WebSocket connections
-5. The SDK receives the delta, applies it to the local snapshot
-
-### Delta format
-
-```json
-{
-  "query_id": "active_orders",
-  "seq": 17,
-  "inserted": [
-    {"id": 42, "status": "active", "customer": "Jane Doe", "amount": 149.99}
-  ],
-  "deleted": [
-    {"id": 37, "status": "active", "customer": "Bob Smith", "amount": 29.99}
-  ]
-}
-```
-
-`inserted` contains rows that appeared in the result set. `deleted` contains rows that disappeared. For an UPDATE that changes a non-subscribed column, no delta is emitted at all.
-
-`seq` is a per-query monotonic counter incremented on every notification attempt; gaps indicate missed notifications.
-
-## Why SQL-level deltas?
-
-Traditional real-time systems (Debezium, Supabase Realtime) deliver raw WAL events — every INSERT, UPDATE, DELETE on every row. This means:
-- The client must understand your data model to know if a change affects the query result
-- Filtered queries (e.g., `WHERE status = 'active'`) require client-side filtering
-- Aggregates and JOINs cannot be subscribed to
-
-pg_reactive subscribes at the **query level**. If you subscribe to `SELECT * FROM orders WHERE status = 'active'`, you only receive deltas when the active orders set changes. An update to `orders.notes` (not in your SELECT) doesn't trigger a notification.
-
-## Performance characteristics
-
-| Scenario | P50 latency | Notes |
-|----------|-------------|-------|
-| E2E (write → client) | 3 ms | Docker on Windows |
-| Snapshot on 1K rows | 2.8 ms | EXCEPT diff |
-| Snapshot on 10K rows | 18.5 ms | |
-| Snapshot on 100K rows | 263 ms | Not recommended |
-| 1 subscriber | ~222 TPS write throughput | |
-| 10 subscribers | ~99 TPS write throughput | |
-| 200 WebSocket clients | 0 missed deltas | Fan-out test |
-
-For best performance, keep subscribed queries fast (indexed columns, small result sets).
-
-## Overflow handling
-
-PostgreSQL `NOTIFY` payloads are limited to 8000 bytes. pg_reactive reserves ~100 bytes of envelope overhead plus the channel name, so deltas larger than ~7897 bytes (default `pgr` channel) are replaced with an overflow message:
-
-```json
-{"type": "overflow", "query_id": "active_orders", "seq": 18, "fetch": true}
-```
-
-The SDK clears its local snapshot and emits an `overflow` event. Your application should re-fetch the full query result via the REST API.
-
-An overflow is also emitted when the stored snapshot's column layout no longer matches the query result — for example after `ALTER TABLE ... ADD/DROP COLUMN` on a watched table. The extension rebuilds the snapshot and signals clients to resync. Treat `overflow` as a generic "re-fetch now" instruction, not only as "delta too large".
-
-## Connection format
-
-WebSocket URL:
+## Connecting from a client
 
 ```
 ws://127.0.0.1:8080/ws/{query_id}
 ws://127.0.0.1:8080/ws/{query_id}?token={jwt}
 ```
 
-The proxy sends a confirmation message after connection:
+The proxy confirms the subscription, then streams deltas:
 
 ```json
 {"type": "subscribed", "query_id": "active_orders"}
+{"query_id": "active_orders", "seq": 17, "inserted": [/* … */], "deleted": [/* … */]}
 ```
 
-## Message types
+The TypeScript SDK manages this socket, applies deltas to a local snapshot, and re-fetches on overflow — see the [SDK](/pg-reactive/sdk) and [React hook](/pg-reactive/react) pages. The complete message catalogue lives in [Wire Format](/pg-reactive/wire-format).
 
-| Type | Description |
-|------|-------------|
-| `{"type":"subscribed","query_id":"..."}` | Connection confirmed |
-| `{"query_id":"...","seq":N,"inserted":[...],"deleted":[...]}` | Delta update |
-| `{"type":"overflow","query_id":"...","seq":N,"fetch":true}` | Re-fetch needed (oversize delta or snapshot resync) |
-| `{"type":"invalidated","query_id":"...","seq":N}` | Query invalidated (notify mode) |
-| `{"type":"presence_join","channel":"...","client_id":"...","state":{}}` | Client joined channel |
-| `{"type":"presence_leave","channel":"...","client_id":"..."}` | Client left channel |
-| `{"type":"presence_state","channel":"...","client_id":"...","state":{}}` | Client updated presence |
+## Registering a query
 
-Auth and connection-limit failures are rejected before the WebSocket upgrade as plain HTTP responses (401/403/404/503) with body `{"error":"..."}` — no error frame is ever delivered over an established socket. The SDK's `error` event is emitted client-side (local exceptions and `ws.onerror`), not from a server frame.
+Subscriptions are registered in PostgreSQL with `pgr.subscribe()`. Because the stored SQL is later re-executed by `SECURITY DEFINER` triggers, **never grant `pgr.subscribe` directly to app roles** — expose it through a purpose-built `SECURITY DEFINER` wrapper with a fixed query template and a server-derived `query_id`/audience. The full reasoning and the canonical wrapper pattern are in the [Security Model](/pg-reactive/security-model); see [The Subscription API](/pg-reactive/subscribe) for the function reference.
 
-## Presence
+## Auth & RLS integration
 
-Presence tracks which clients are currently connected to a channel and their live state (cursor position, online status, typing indicator, etc.). Presence is **ephemeral** — held in proxy memory and lost on restart.
+pgStack adds two things on top of the bare extension:
 
-Clients join automatically when connecting via WebSocket. To update state, send a message:
-
-```json
-{"type": "presence", "state": {"username": "jane", "status": "online"}}
-```
-
-To poll current presence via HTTP:
-
-```bash
-curl http://127.0.0.1:8080/ws/_presence/my_channel
-```
-
-See the [API Reference](../reference/api#presence) for the full presence protocol.
+- **Audience-bound subscriptions.** A subscription registered with an `audience` (e.g. `{"sub":"42"}`) is only served to a client whose JWT satisfies it; everyone else is rejected with `403` at WS-connect, before any data flows. This closes capability leakage even if a client guesses the `query_id`. See [Row-Level Security](./../auth/rls.md) for the worked example.
+- **Defence in depth with RLS.** The snapshot is filtered by the query's `WHERE` at subscribe time, and your table `ROW LEVEL SECURITY` policies still apply when the proxy is not using `service_role`.
 
 ## Next steps
 
-- [Subscribe to a Live Query](./subscribe) — register queries in PostgreSQL
-- [SDK Reference](./sdk) — `LiveQuery` class and `createClient()`
-- [React Hook](./react) — `useLiveQuery()` for React apps
+- **[pg_reactive — the extension](/pg-reactive/)** — the full engine documentation
+- [The Subscription API](/pg-reactive/subscribe) — `pgr.subscribe`, modes, lifecycle
+- [Wire Format](/pg-reactive/wire-format) — every message the channel emits
+- [Security Model](/pg-reactive/security-model) — the privileged-API footgun and the safe pattern

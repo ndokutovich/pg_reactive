@@ -31,16 +31,7 @@ const sidebars: SidebarsConfig = {
         'rest/batch',
       ],
     },
-    {
-      type: 'category',
-      label: 'Live Queries',
-      items: [
-        'realtime/overview',
-        'realtime/subscribe',
-        'realtime/sdk',
-        'realtime/react',
-      ],
-    },
+    'realtime/overview',
     {
       type: 'category',
       label: 'Studio',
@@ -57,6 +48,7 @@ const sidebars: SidebarsConfig = {
         'functions/overview',
         'functions/deno',
         'functions/plv8',
+        'functions/http',
       ],
     },
     {
@@ -68,6 +60,7 @@ const sidebars: SidebarsConfig = {
         'cli/dev',
         'cli/migrations',
         'cli/generate',
+        'cli/db-branching',
       ],
     },
     {
