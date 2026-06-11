@@ -169,6 +169,36 @@ BEGIN
   IF p_qty <= 0 AND p_type <> 'cancel' THEN
     RAISE EXCEPTION 'qty must be positive';
   END IF;
+  -- Upper bounds. PostgreSQL numeric is effectively unbounded, but the
+  -- engines read price/qty into native fixed types (.NET decimal tops out
+  -- near 7.9e28; GetDecimal throws OverflowException on a wider value and
+  -- the reader loop then dies on that one row forever). Cap well below that
+  -- and reject absurd values — this also stops a public caller from DoS-ing
+  -- the engines with giant numbers. A symbol is a short ticker.
+  IF p_price IS NOT NULL AND (p_price < 0 OR p_price > 1e9) THEN
+    RAISE EXCEPTION 'price out of range (0 .. 1e9)';
+  END IF;
+  IF p_qty IS NOT NULL AND p_qty > 1e9 THEN
+    RAISE EXCEPTION 'qty out of range (max 1e9)';
+  END IF;
+  IF length(p_symbol) > 16 THEN
+    RAISE EXCEPTION 'symbol too long (max 16 chars)';
+  END IF;
+
+  -- Cancel must target one of the caller's OWN orders. Public dashboards
+  -- show every order id, so without this any viewer could cancel another
+  -- participant's resting order.
+  IF p_type = 'cancel' THEN
+    IF p_parent IS NULL THEN
+      RAISE EXCEPTION 'cancel requires the parent order id';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM public.order_events
+      WHERE id = p_parent AND client_id = uid
+    ) THEN
+      RAISE EXCEPTION 'cannot cancel an order you do not own';
+    END IF;
+  END IF;
 
   INSERT INTO public.order_events
     (symbol, side, order_type, price, qty, client_id, parent_order)

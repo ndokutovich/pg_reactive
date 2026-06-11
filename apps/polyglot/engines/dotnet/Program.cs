@@ -235,6 +235,10 @@ class Engine
     public async Task DrainOnceAsync(NpgsqlConnection conn)
     {
         var rows = new List<OrderRow>();
+        // Track the highest id seen this batch, INCLUDING rows we skip below.
+        // _lastSeenId must advance past a skipped row or the next poll re-reads
+        // it forever (a poison row would pin the engine permanently).
+        long maxIdInBatch = _lastSeenId;
         await using (var cmd = new NpgsqlCommand(
             @"SELECT id, symbol, side, order_type, COALESCE(price, 0), qty, parent_order
               FROM public.order_events WHERE id > @last ORDER BY id LIMIT 256", conn))
@@ -243,17 +247,41 @@ class Engine
             await using var rdr = await cmd.ExecuteReaderAsync();
             while (await rdr.ReadAsync())
             {
+                long id = rdr.GetInt64(0);
+                if (id > maxIdInBatch) maxIdInBatch = id;
+
+                decimal price, qty;
+                try
+                {
+                    // PostgreSQL numeric is wider than .NET decimal (max ~7.9e28).
+                    // place_order caps price/qty at 1e9, but guard anyway so a row
+                    // inserted out-of-band cannot crash the reader loop forever.
+                    price = rdr.GetDecimal(4);
+                    qty = rdr.GetDecimal(5);
+                }
+                catch (OverflowException)
+                {
+                    Console.Error.WriteLine(
+                        $"[{_name}] skipping order {id}: price/qty out of decimal range");
+                    continue;   // skip poison row; maxIdInBatch already advanced
+                }
+
                 rows.Add(new OrderRow(
-                    rdr.GetInt64(0),
+                    id,
                     rdr.GetString(1),
                     rdr.GetString(2),
                     rdr.GetString(3),
-                    rdr.GetDecimal(4),
-                    rdr.GetDecimal(5),
+                    price,
+                    qty,
                     rdr.IsDBNull(6) ? (long?)null : rdr.GetInt64(6)));
             }
         }
-        if (rows.Count == 0) return;
+        if (rows.Count == 0)
+        {
+            // Even with nothing to process, advance past any skipped poison rows.
+            if (maxIdInBatch > _lastSeenId) _lastSeenId = maxIdInBatch;
+            return;
+        }
 
         var allFills = new List<Fill>();
         var touched = new Dictionary<string, HashSet<(string side, decimal price)>>();
@@ -360,6 +388,8 @@ class Engine
         }
 
         await tx.CommitAsync();
-        _lastSeenId = rows[^1].Id;
+        // Advance past every row read this batch, including skipped poison rows
+        // (maxIdInBatch >= rows[^1].Id).
+        _lastSeenId = maxIdInBatch;
     }
 }
