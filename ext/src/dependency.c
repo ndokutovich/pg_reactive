@@ -6,6 +6,7 @@
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "utils/hsearch.h"
+#include "utils/memutils.h"
 #include "utils/timestamp.h"
 
 #include "pg_reactive.h"
@@ -20,64 +21,172 @@ static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
 /*
- * Backend-local record of shmem entries newly inserted by the current
- * transaction. Shared-memory mutations are NOT transactional: if a
- * transaction registers a subscription in shmem and then aborts, the
- * catalog INSERT (pgr.persisted_subscriptions) and the snapshot table /
- * triggers all roll back, but the shmem entry would linger as an orphan
- * with no catalog row (Codex round-36 #6). The transaction-abort callback
- * below removes these entries so shmem stays consistent with the catalog.
- * Only genuine new inserts are tracked — in-place updates of a pre-existing
- * entry are not, since removing those on abort would drop a subscription
- * that legitimately existed before this transaction.
+ * ── Transaction rollback journal (before-image) ─────────────────────────────
+ *
+ * Shared-memory mutations are NOT transactional. Every shmem add / update /
+ * remove / LRU-eviction done by pgr_dep_add/pgr_dep_remove must be undone if
+ * the (sub)transaction that made it aborts — otherwise:
+ *   - an aborted subscribe leaves an orphan shmem entry with no catalog row;
+ *   - an aborted re-subscribe (UPDATE) leaves the entry with the new,
+ *     uncommitted audience/query while the catalog reverts — the proxy would
+ *     read the stale shmem audience and could treat a protected subscription
+ *     as public (Codex round-36 audit #1);
+ *   - an aborted unsubscribe (REMOVE) leaves the catalog row without its
+ *     shmem entry, so the query silently stops delivering.
+ *
+ * For each mutation we record a BEFORE-image (the entry as it was, or
+ * "absent") tagged with the SubTransactionId that made it. On abort we replay
+ * the before-images; on subtransaction commit we re-tag to the parent so a
+ * later parent abort still reverts them. Journal records live in a dedicated
+ * memory context (not the fixed-size array of the earlier fix, so there is no
+ * cap and no orphan-on-overflow).
  */
-#define PGR_MAX_PENDING_ADDS 256
-static char pgr_pending_adds[PGR_MAX_PENDING_ADDS][PGR_HASHKEY_LEN];
-static int	pgr_pending_add_count = 0;
-static bool pgr_pending_overflow = false;
+typedef enum
+{
+	PGR_BEFORE_ABSENT,			/* key did not exist before the mutation */
+	PGR_BEFORE_PRESENT			/* key existed; `before` holds its prior value */
+} PgrBeforeKind;
+
+typedef struct PgrJournalEntry
+{
+	struct PgrJournalEntry *next;	/* most-recent-first list */
+	SubTransactionId subid;			/* subxact that made the mutation */
+	PgrBeforeKind	kind;
+	char			hashkey[PGR_HASHKEY_LEN];
+	PgrDepEntry		before;			/* valid iff kind == PGR_BEFORE_PRESENT */
+} PgrJournalEntry;
+
+static PgrJournalEntry *pgr_journal = NULL;
+static MemoryContext pgr_journal_ctx = NULL;
+static bool pgr_cb_registered = false;
+
+/*
+ * Record the before-image of `hashkey` prior to mutating it. MUST be called
+ * while holding pgr_state->lock so the captured image is consistent with the
+ * mutation that follows.
+ */
+static void
+pgr_journal_record(const char *hashkey)
+{
+	PgrJournalEntry *je;
+	PgrDepEntry *cur;
+	bool		found;
+	MemoryContext old;
+
+	if (pgr_journal_ctx == NULL)
+		pgr_journal_ctx = AllocSetContextCreate(TopMemoryContext,
+												"pg_reactive xact journal",
+												ALLOCSET_SMALL_SIZES);
+
+	old = MemoryContextSwitchTo(pgr_journal_ctx);
+	je = (PgrJournalEntry *) palloc0(sizeof(PgrJournalEntry));
+	MemoryContextSwitchTo(old);
+
+	je->subid = GetCurrentSubTransactionId();
+	strlcpy(je->hashkey, hashkey, PGR_HASHKEY_LEN);
+
+	cur = (PgrDepEntry *) hash_search(pgr_dep_hash, hashkey, HASH_FIND, &found);
+	if (found && cur != NULL)
+	{
+		je->kind = PGR_BEFORE_PRESENT;
+		memcpy(&je->before, cur, sizeof(PgrDepEntry));
+	}
+	else
+		je->kind = PGR_BEFORE_ABSENT;
+
+	je->next = pgr_journal;
+	pgr_journal = je;
+}
+
+/*
+ * Apply (and unlink) journal records matching `pred`. Applying the list in
+ * most-recent-first order means the EARLIEST before-image for a key is applied
+ * last and wins, restoring the key's pre-transaction state. Caller holds the
+ * lock. matchSubid < 0 means "all records" (top-level abort).
+ */
+static void
+pgr_journal_revert(SubTransactionId matchSubid, bool matchAll)
+{
+	PgrJournalEntry **pp = &pgr_journal;
+
+	while (*pp != NULL)
+	{
+		PgrJournalEntry *je = *pp;
+
+		if (matchAll || je->subid == matchSubid)
+		{
+			if (je->kind == PGR_BEFORE_PRESENT)
+			{
+				bool		found;
+				PgrDepEntry *e = (PgrDepEntry *) hash_search(pgr_dep_hash,
+															 je->hashkey,
+															 HASH_ENTER, &found);
+
+				memcpy(e, &je->before, sizeof(PgrDepEntry));
+			}
+			else	/* PGR_BEFORE_ABSENT — undo the insert */
+				hash_search(pgr_dep_hash, je->hashkey, HASH_REMOVE, NULL);
+
+			*pp = je->next;
+			pfree(je);
+		}
+		else
+			pp = &je->next;
+	}
+}
+
+static void
+pgr_journal_discard(void)
+{
+	pgr_journal = NULL;
+	if (pgr_journal_ctx != NULL)
+		MemoryContextReset(pgr_journal_ctx);
+}
 
 static void
 pgr_xact_callback(XactEvent event, void *arg)
 {
 	if (event == XACT_EVENT_ABORT || event == XACT_EVENT_PARALLEL_ABORT)
 	{
-		if (pgr_pending_add_count > 0 && pgr_state != NULL && pgr_dep_hash != NULL)
+		if (pgr_journal != NULL && pgr_state != NULL && pgr_dep_hash != NULL)
 		{
-			int		i;
-
 			LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
-			for (i = 0; i < pgr_pending_add_count; i++)
-				hash_search(pgr_dep_hash, pgr_pending_adds[i], HASH_REMOVE, NULL);
+			pgr_journal_revert(InvalidSubTransactionId, true);
 			LWLockRelease(pgr_state->lock);
 		}
-		if (pgr_pending_overflow)
-			elog(WARNING,
-				 "pg_reactive: aborted transaction added more than %d subscriptions; "
-				 "some shmem entries may be orphaned — run pgr.restore_subscriptions() to reconcile",
-				 PGR_MAX_PENDING_ADDS);
 	}
 
-	/* Any terminal transaction event ends the tracking window. On COMMIT the
-	 * entries are now backed by committed catalog rows, so we simply forget
-	 * them. */
+	/* Any terminal top-level event ends the journal window. */
 	if (event == XACT_EVENT_COMMIT || event == XACT_EVENT_ABORT ||
 		event == XACT_EVENT_PREPARE ||
 		event == XACT_EVENT_PARALLEL_COMMIT || event == XACT_EVENT_PARALLEL_ABORT)
-	{
-		pgr_pending_add_count = 0;
-		pgr_pending_overflow = false;
-	}
+		pgr_journal_discard();
 }
 
-/* Record a newly-inserted shmem key for abort cleanup. Called under the
- * state lock from pgr_dep_add's new-insert branch. */
 static void
-pgr_track_pending_add(const char *hashkey)
+pgr_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
+					 SubTransactionId parentSubid, void *arg)
 {
-	if (pgr_pending_add_count < PGR_MAX_PENDING_ADDS)
-		strlcpy(pgr_pending_adds[pgr_pending_add_count++], hashkey, PGR_HASHKEY_LEN);
-	else
-		pgr_pending_overflow = true;
+	if (event == SUBXACT_EVENT_ABORT_SUB)
+	{
+		/* ROLLBACK TO SAVEPOINT: undo only this subtransaction's mutations. */
+		if (pgr_journal != NULL && pgr_state != NULL && pgr_dep_hash != NULL)
+		{
+			LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
+			pgr_journal_revert(mySubid, false);
+			LWLockRelease(pgr_state->lock);
+		}
+	}
+	else if (event == SUBXACT_EVENT_COMMIT_SUB)
+	{
+		/* The subxact committed into its parent; its mutations are now the
+		 * parent's. Re-tag so a later parent abort still reverts them. */
+		PgrJournalEntry *je;
+
+		for (je = pgr_journal; je != NULL; je = je->next)
+			if (je->subid == mySubid)
+				je->subid = parentSubid;
+	}
 }
 
 /*
@@ -192,6 +301,10 @@ pgr_dep_add(const char *query_id, const char *query_text,
 
 	LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
 
+	/* Journal the target's before-image (absent or its prior value) so an
+	 * aborting (sub)transaction can undo this add/update. */
+	pgr_journal_record(key);
+
 	/*
 	 * Check if key already exists — if so, we can update in place
 	 * without worrying about capacity.
@@ -250,6 +363,9 @@ pgr_dep_add(const char *query_id, const char *query_text,
 		/* Remove the oldest entry (by its full per-database hash key) */
 		memset(evict_key, 0, PGR_HASHKEY_LEN);
 		strlcpy(evict_key, oldest->hashkey, PGR_HASHKEY_LEN);
+		/* Journal the evicted entry too — if this txn aborts, the eviction
+		 * must be undone (the victim's subscription legitimately existed). */
+		pgr_journal_record(evict_key);
 		hash_search(pgr_dep_hash, evict_key, HASH_REMOVE, NULL);
 		pgr_state->eviction_count++;
 
@@ -287,9 +403,6 @@ pgr_dep_add(const char *query_id, const char *query_text,
 		entry->invalidation_count = 0;
 		entry->notify_seq = 0;
 		pgr_state->subscribe_count++;
-		/* Track for removal if this transaction aborts (shmem is not
-		 * transactional; see pgr_xact_callback). */
-		pgr_track_pending_add(key);
 	}
 
 	LWLockRelease(pgr_state->lock);
@@ -309,6 +422,11 @@ pgr_dep_remove(const char *query_id)
 	pgr_dep_format_key(key, sizeof(key), query_id);
 
 	LWLockAcquire(pgr_state->lock, LW_EXCLUSIVE);
+
+	/* Journal the before-image so an aborting (sub)transaction re-inserts the
+	 * entry — otherwise a rolled-back unsubscribe leaves the catalog row
+	 * without its shmem entry. */
+	pgr_journal_record(key);
 
 	hash_search(pgr_dep_hash, key, HASH_REMOVE, &found);
 
@@ -488,7 +606,12 @@ pgr_dep_init_hooks(void)
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = pgr_shmem_startup;
 
-	/* Remove shmem entries left by aborted transactions (shmem is not
-	 * transactional; see pgr_xact_callback). Registered once at module load. */
-	RegisterXactCallback(pgr_xact_callback, NULL);
+	/* Revert non-transactional shmem mutations on (sub)transaction abort via
+	 * the before-image journal. Registered once at module load. */
+	if (!pgr_cb_registered)
+	{
+		RegisterXactCallback(pgr_xact_callback, NULL);
+		RegisterSubXactCallback(pgr_subxact_callback, NULL);
+		pgr_cb_registered = true;
+	}
 }
