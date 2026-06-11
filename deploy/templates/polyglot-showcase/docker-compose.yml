@@ -187,6 +187,11 @@ services:
     image: ${WEB_IMAGE:-pgstack/polyglot-web:latest}
     container_name: polyglot-web
     restart: unless-stopped
+    # Inject the deployment anon key into the served config.js at startup
+    # (replaces the dev placeholder), so the dashboard presents the key the
+    # backend expects instead of 401-ing.
+    environment:
+      ANON_KEY:               ${ANON_KEY:?required}
     depends_on:
       polyglot-migration:
         condition: service_completed_successfully

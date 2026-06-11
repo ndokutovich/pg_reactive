@@ -90,6 +90,11 @@ services:
     image: ${FRONTEND_IMAGE:-pgstack/shopping-vanilla:latest}
     container_name: shop-web
     restart: unless-stopped
+    # The frontend must present the SAME anon key the backend expects, or
+    # auth/REST/guest-mint return 401. The image's entrypoint injects this
+    # into the served config.js at startup (replacing the dev placeholder).
+    environment:
+      ANON_KEY:               ${ANON_KEY:?ANON_KEY required (32+ chars)}
     depends_on:
       shop-migration:
         condition: service_completed_successfully

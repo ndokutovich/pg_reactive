@@ -20,6 +20,11 @@ RUN test -n "${VARIANT}"
 
 WORKDIR /usr/share/nginx/html
 
+# Runtime ANON_KEY injection: replaces the dev placeholder in config.js with
+# the deployment's ANON_KEY (passed as an env var) before nginx starts.
+COPY shared/inject-anon-key.sh /docker-entrypoint.d/40-inject-anon-key.sh
+RUN chmod +x /docker-entrypoint.d/40-inject-anon-key.sh
+
 # Shared assets first (config + PWA manifest + service worker + icons).
 COPY shared/config.js     ./config.js
 COPY shared/manifest.json ./manifest.json
