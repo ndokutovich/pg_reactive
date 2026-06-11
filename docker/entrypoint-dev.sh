@@ -94,6 +94,13 @@ for db in $(echo "$DBLIST" | tr ' ' '\n' | sort -u); do
     [ -z "$db" ] && continue
     has_ext=$(psql -d "$db" -tAc "SELECT 1 FROM pg_extension WHERE extname='pg_reactive';" 2>/dev/null || true)
     [ "$has_ext" = "1" ] || continue
+    # Pull the extension up to the installed version before restoring, so a
+    # persistent database created by an older build gains new objects like
+    # pgr.subscription_meta (round 37 F1). No-op when already current.
+    if ! upd=$(psql -d "$db" -v ON_ERROR_STOP=1 -tAc "ALTER EXTENSION pg_reactive UPDATE;" 2>&1); then
+        echo "==>   $db: EXTENSION UPGRADE FAILED — $upd" >&2
+        restore_failures=$((restore_failures + 1))
+    fi
     if restored=$(psql -d "$db" -v ON_ERROR_STOP=1 -tAc "SELECT pgr.restore_subscriptions();" 2>&1); then
         echo "==>   $db: $restored subscriptions restored"
     else

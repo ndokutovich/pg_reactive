@@ -75,17 +75,37 @@ echo "==> PostgreSQL ready."
 # essentially nothing. Catalog-non-empty DBs get their shmem hash rebuilt
 # before the proxy starts serving WS upgrades — so the first delta after
 # restart is delivered correctly.
-echo "==> Restoring pg_reactive subscriptions..."
+echo "==> Upgrading pg_reactive and restoring subscriptions..."
 DBLIST=$(psql -tAc "SELECT datname FROM pg_database WHERE datallowconn AND datname NOT IN ('template0','template1','postgres');" 2>/dev/null || true)
 # always include the default DB in case the catalog query above filtered it
 DBLIST="$DBLIST $PGDATABASE"
+restore_failures=0
 for db in $(echo "$DBLIST" | tr ' ' '\n' | sort -u); do
   [ -z "$db" ] && continue
   has_ext=$(psql -d "$db" -tAc "SELECT 1 FROM pg_extension WHERE extname='pg_reactive';" 2>/dev/null || true)
   [ "$has_ext" = "1" ] || continue
-  restored=$(psql -d "$db" -tAc "SELECT pgr.restore_subscriptions();" 2>/dev/null || echo "n/a")
-  echo "==>   $db: $restored subscriptions restored"
+  # Pull a persistent database up to the image's installed extension version
+  # BEFORE restoring. The data volume survives image upgrades, so an extension
+  # installed by an older image (e.g. 0.1.4 without pgr.subscription_meta) would
+  # otherwise keep its old object set and the proxy would 503 every WS/presence
+  # request (round 37 F1). ALTER EXTENSION ... UPDATE is a no-op when current.
+  if ! upd=$(psql -d "$db" -v ON_ERROR_STOP=1 -tAc "ALTER EXTENSION pg_reactive UPDATE;" 2>&1); then
+    echo "==>   $db: EXTENSION UPGRADE FAILED — $upd" >&2
+    restore_failures=$((restore_failures + 1))
+  fi
+  # Surface restore failures (round 37 F2) — never swallow them as "n/a". A
+  # container that came up without its live queries restored must be
+  # diagnosable, not silently healthy.
+  if restored=$(psql -d "$db" -v ON_ERROR_STOP=1 -tAc "SELECT pgr.restore_subscriptions();" 2>&1); then
+    echo "==>   $db: $restored subscriptions restored"
+  else
+    echo "==>   $db: RESTORE FAILED — $restored" >&2
+    restore_failures=$((restore_failures + 1))
+  fi
 done
+if [ "$restore_failures" -gt 0 ]; then
+  echo "==> WARNING: $restore_failures database(s) failed extension upgrade or subscription restore — live queries may be missing until re-subscribed." >&2
+fi
 
 # ── Deployment-specific post-init hook (optional) ───────────────────────────
 if [ -x /app/post-init.sh ]; then

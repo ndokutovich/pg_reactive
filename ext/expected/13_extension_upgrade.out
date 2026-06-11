@@ -1,0 +1,50 @@
+-- 13_extension_upgrade (round 37 F1 follow-up): a database already at 0.1.4 must
+-- gain pgr.subscription_meta via ALTER EXTENSION ... UPDATE to 0.1.5.
+--
+-- Round 37 F1 shipped subscription_meta in-place inside 0.1.4, so there was no
+-- 0.1.4 -> 0.1.4 upgrade path: a persistent production database already at 0.1.4
+-- never received the function on UPDATE, and the new proxy (which calls
+-- subscriptionMeta() unconditionally) then 503'd every WS/presence request.
+-- 0.1.5 makes subscription_meta a proper version delta so every 0.1.4 database
+-- can upgrade into it.
+DROP EXTENSION IF EXISTS pg_reactive CASCADE;
+CREATE EXTENSION pg_reactive VERSION '0.1.4';
+-- At 0.1.4 the proxy's security-gate function does not exist yet — this is
+-- exactly what a persistent 0.1.4 database hits.
+SELECT extversion AS version_before FROM pg_extension WHERE extname = 'pg_reactive';
+ version_before 
+----------------
+ 0.1.4
+(1 row)
+
+SELECT count(*)::int AS subscription_meta_before
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'pgr' AND p.proname = 'subscription_meta';
+ subscription_meta_before 
+--------------------------
+                        0
+(1 row)
+
+-- Upgrade to the current default version.
+ALTER EXTENSION pg_reactive UPDATE;
+SELECT extversion AS version_after FROM pg_extension WHERE extname = 'pg_reactive';
+ version_after 
+---------------
+ 0.1.5
+(1 row)
+
+SELECT count(*)::int AS subscription_meta_after
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'pgr' AND p.proname = 'subscription_meta';
+ subscription_meta_after 
+-------------------------
+                       1
+(1 row)
+
+-- And it is default-denied (REVOKE'd from PUBLIC) like the other gate functions.
+SELECT has_function_privilege('public', 'pgr.subscription_meta(text)', 'EXECUTE') AS public_can_exec;
+ public_can_exec 
+-----------------
+ f
+(1 row)
+

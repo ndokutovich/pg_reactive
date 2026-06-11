@@ -96,24 +96,6 @@ $fn$;
 REVOKE EXECUTE ON FUNCTION pgr._persist_subscription(text, text, text, jsonb, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pgr._forget_subscription(text)                           FROM PUBLIC;
 
--- Round 37 F1: the proxy audience gate reads mode/audience from this
--- TRANSACTIONAL catalog (MVCC), never from pgr.get_subscriptions() (shmem,
--- non-transactional). Otherwise an uncommitted/rolled-back re-subscribe leaks
--- an audience change to a concurrent gate read — an audience bypass.
-CREATE FUNCTION pgr.subscription_meta(p_query_id text)
-RETURNS TABLE(mode text, audience jsonb)
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = pg_catalog, pgr
-AS $fn$
-    SELECT ps.mode, ps.audience
-    FROM pgr.persisted_subscriptions ps
-    WHERE ps.query_id = p_query_id;
-$fn$;
-
-REVOKE EXECUTE ON FUNCTION pgr.subscription_meta(text)                              FROM PUBLIC;
-
 -- Public subscribe / unsubscribe are SECURITY INVOKER so the caller's
 -- search_path is preserved for the C extract_deps parser — otherwise
 -- "SELECT * FROM my_table" would fail to resolve user tables that live
