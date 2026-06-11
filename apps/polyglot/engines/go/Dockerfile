@@ -8,11 +8,11 @@ FROM golang:1.25.11-bookworm AS build
 WORKDIR /app
 ENV GOTOOLCHAIN=auto
 
-COPY go.mod ./
-RUN go mod download || true
+COPY go.mod go.sum ./
+RUN go mod download
 
 COPY . .
-RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o engine .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o engine .
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /app/engine /engine

@@ -400,7 +400,7 @@ jobs:
   test-e2e:
     name: E2E tests
     runs-on: [self-hosted, Linux, X64]
-    needs: [test-extension, test-proxy, test-sdk]
+    needs: [test-extension, test-proxy-go, test-sdk]
     steps:
       - uses: actions/checkout@v4
 
@@ -513,6 +513,18 @@ jobs:
 
       - name: npm audit — CLI
         working-directory: cli
+        run: npm audit --audit-level=high --omit=dev
+
+      # Round 37 F4: the docs site was previously unaudited. Its dependency tree
+      # pulls webpack-dev-server (a build/dev-server-only chain that never lands
+      # in the static output or the proxy-go runtime image), so the residual
+      # MODERATE advisories there are toolchain risk, not consumer risk — hence
+      # --audit-level=high, matching SDK/CLI. The one CRITICAL (shell-quote
+      # GHSA-w7jw-789q-3m8p) is pinned to the patched ^1.8.4 via an override in
+      # docs/site/package.json, so this gate stays meaningful instead of being
+      # permanently red on an unshipped dev-server transitive.
+      - name: npm audit — Docs site
+        working-directory: docs/site
         run: npm audit --audit-level=high --omit=dev
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
