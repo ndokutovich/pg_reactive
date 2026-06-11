@@ -165,7 +165,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} pgStack contributors. PostgreSQL License.`,
+      copyright: `Copyright © ${new Date().getFullYear()} pgStack contributors. pg_reactive: PostgreSQL License · pgStack: Apache-2.0.`,
     },
     prism: {
       theme: prismThemes.github,

@@ -2,6 +2,7 @@
   "name": "pgstack-polyglot-engine-node",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "main": "main.js",
   "engines": { "node": ">=20" },
   "dependencies": {
