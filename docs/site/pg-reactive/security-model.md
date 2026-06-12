@@ -249,10 +249,19 @@ How the gate works:
   client may connect.
 - The proxy reads the audience from the transactional `pgr.subscription_meta()`
   — over the MVCC catalog, never the non-transactional `pgr.get_subscriptions()`
-  shmem view — on **every** WS connect, again right before the initial snapshot,
-  and on **every** delivered delta. A connection whose claims no longer satisfy
-  the current audience is disconnected, so a re-registration cannot leak to an
-  already-open socket (round 37/39).
+  shmem view — at WS connect and again, atomically, right before the initial
+  snapshot.
+- Open connections are protected by **generation binding**, not a per-delta
+  re-check. Every `pgr.subscribe`/`unsubscribe` bumps a monotonic *generation*
+  (stored in the catalog and the shmem entry), and the extension stamps it into
+  every notification (`gen` field — see [Wire Format](./wire-format.md)). The
+  proxy binds each connection to the generation it authorized against and
+  delivers a notification only on an **exact generation match**. So when a
+  subscription is re-registered under a different audience, every notification
+  computed afterwards carries the new generation and is dropped for the
+  connection authorized under the old one — even one produced before the
+  re-subscribe commits. A `resubscribed` control message then disconnects the
+  stale connection so its client reconnects and re-authorizes (round 37/39).
 
 The audience is stored in shared memory with a **512-byte** serialised cap, so
 keep it to the claims you actually gate on.

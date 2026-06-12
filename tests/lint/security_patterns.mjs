@@ -323,15 +323,20 @@ function checkProxyAudienceSource(file, text) {
   }
 }
 
-// Rule SEC-R39 — the live-query NOTIFY fan-out must re-authorize per delivery.
-//   SECURITY.md invariant #16. Audit round 39 F1 HIGH.
-//   Hub.Broadcast delivers to every subscriber WITHOUT re-checking the audience
-//   — fine for presence, but a stale-permission hole for live-query deltas: a
-//   connection authorized while a query was public keeps reading it after the
-//   subscription is re-registered as private. The NOTIFY-delta path must use
-//   Hub.BroadcastDelta (resolves the current audience, revokes connections that
-//   no longer qualify). This flags a regression to the plain Broadcast on that
-//   path. Scope: proxy-go/**/*.go.
+// Rule SEC-R39 — the WebSocket fan-out must stay generation-aware; a
+//   generation-blind broadcast is forbidden.
+//   SECURITY.md invariants #16 and #17. Audit round 39 batch-2 F1/F2 HIGH.
+//   The generation model (ext 0.1.6) binds each connection to the subscription
+//   generation it authorized against, and the extension stamps that generation
+//   into every NOTIFY. The ONLY valid fan-out method is Hub.BroadcastGen, which
+//   delivers a message only to subscribers whose generation EXACTLY matches —
+//   used for live-query deltas (gen from the NOTIFY payload) and presence/client
+//   broadcast (gen from the sender). A bare Hub.Broadcast — the generation-blind
+//   method this fix removed — would deliver a new epoch's data to a stale socket
+//   that a metadata change should have disconnected (F1/F-ORDER for deltas, F2
+//   for presence/broadcast). This flags any reintroduced bare `Broadcast(` (call
+//   or method definition); BroadcastGen is intentionally not matched. Scope:
+//   proxy-go/**/*.go.
 //   Override a verified-safe occurrence with `// lint:allow=SEC-R39`.
 function checkDeltaReauth(file, text) {
   const norm = file.replace(/\\/g, "/");
@@ -341,9 +346,11 @@ function checkDeltaReauth(file, text) {
     const line = lines[i];
     if (/lint:allow=SEC-R39/.test(line)) continue;
     if (/^\s*\/\//.test(line)) continue; // comment-only line
-    if (/\.Broadcast\(\s*msg\.QueryID/.test(line)) {
+    // `.Broadcast(` (call) or `) Broadcast(` (method def) — but NOT
+    // `.BroadcastDelta(` / `.BroadcastGen(`, which have chars before the paren.
+    if (/[.)]\s*Broadcast\(/.test(line)) {
       report(file, i + 1, "SEC-R39",
-        "live-query delta fan-out uses Hub.Broadcast (no per-delivery re-auth) — deltas must go through Hub.BroadcastDelta so an audience change revokes stale connections (SECURITY.md invariant 16, round-39 F1)");
+        "generation-blind Hub.Broadcast on the WebSocket fan-out — deltas must use Hub.BroadcastDelta (revoke-aware) and presence/broadcast must use Hub.BroadcastGen (generation-gated) so a metadata change disconnects stale connections (SECURITY.md invariants 16-17, round-39 batch-2 F1/F2)");
     }
   }
 }

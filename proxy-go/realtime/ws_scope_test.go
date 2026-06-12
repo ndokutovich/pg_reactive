@@ -13,13 +13,13 @@ func TestDispatchClientMessage_DropsNonPresence(t *testing.T) {
 	hub := NewHub()
 	const qid = "q1"
 	// Client B subscribes — we'll watch its channel.
-	sub := hub.Subscribe(qid, 4, nil)
+	sub := hub.Subscribe(qid, 4, 0)
 	ch := sub.ch
 	defer hub.Unsubscribe(qid, sub)
 
 	// Client A tries to forge a delta.
 	fake := []byte(`{"query_id":"q1","inserted":[{"forged":true}],"deleted":[]}`)
-	dispatchClientMessage(hub, qid, "client-A", fake)
+	dispatchClientMessage(hub, qid, "client-A", fake, 0)
 
 	select {
 	case got := <-ch:
@@ -31,13 +31,13 @@ func TestDispatchClientMessage_DropsNonPresence(t *testing.T) {
 
 func TestDispatchClientMessage_DropsMalformedJSON(t *testing.T) {
 	hub := NewHub()
-	sub := hub.Subscribe("q2", 4, nil)
+	sub := hub.Subscribe("q2", 4, 0)
 	ch := sub.ch
 	defer hub.Unsubscribe("q2", sub)
 
-	dispatchClientMessage(hub, "q2", "client-A", []byte(`not json`))
-	dispatchClientMessage(hub, "q2", "client-A", []byte(`{`))
-	dispatchClientMessage(hub, "q2", "client-A", []byte(``))
+	dispatchClientMessage(hub, "q2", "client-A", []byte(`not json`), 0)
+	dispatchClientMessage(hub, "q2", "client-A", []byte(`{`), 0)
+	dispatchClientMessage(hub, "q2", "client-A", []byte(``), 0)
 
 	select {
 	case got := <-ch:
@@ -48,7 +48,7 @@ func TestDispatchClientMessage_DropsMalformedJSON(t *testing.T) {
 
 func TestDispatchClientMessage_DropsUnknownTypes(t *testing.T) {
 	hub := NewHub()
-	sub := hub.Subscribe("q3", 4, nil)
+	sub := hub.Subscribe("q3", 4, 0)
 	ch := sub.ch
 	defer hub.Unsubscribe("q3", sub)
 
@@ -59,7 +59,7 @@ func TestDispatchClientMessage_DropsUnknownTypes(t *testing.T) {
 		`{"inserted":[{"x":1}]}`,
 		`{"type":""}`,
 	} {
-		dispatchClientMessage(hub, "q3", "client-A", []byte(msg))
+		dispatchClientMessage(hub, "q3", "client-A", []byte(msg), 0)
 	}
 
 	select {
@@ -74,12 +74,12 @@ func TestDispatchClientMessage_DropsUnknownTypes(t *testing.T) {
 func TestDispatchClientMessage_BroadcastIsWrappedAndDelivered(t *testing.T) {
 	hub := NewHub()
 	const qid = "q6"
-	sub := hub.Subscribe(qid, 4, nil)
+	sub := hub.Subscribe(qid, 4, 0)
 	ch := sub.ch
 	defer hub.Unsubscribe(qid, sub)
 
 	dispatchClientMessage(hub, qid, "peer-A",
-		[]byte(`{"type":"broadcast","payload":{"hello":"world"}}`))
+		[]byte(`{"type":"broadcast","payload":{"hello":"world"}}`), 0)
 
 	select {
 	case got := <-ch:
@@ -107,14 +107,14 @@ func TestDispatchClientMessage_PresenceStillWorks(t *testing.T) {
 	hub := NewHub()
 	const qid = "q4"
 	// Subscribe a watcher AFTER the join so we only see the update.
-	hub.PresenceJoin(qid, "client-A", json.RawMessage(`{"state":"initial"}`))
+	hub.PresenceJoin(qid, "client-A", json.RawMessage(`{"state":"initial"}`), 0)
 
-	sub := hub.Subscribe(qid, 4, nil)
+	sub := hub.Subscribe(qid, 4, 0)
 	ch := sub.ch
 	defer hub.Unsubscribe(qid, sub)
 
 	dispatchClientMessage(hub, qid, "client-A",
-		[]byte(`{"type":"presence","state":{"typing":true}}`))
+		[]byte(`{"type":"presence","state":{"typing":true}}`), 0)
 
 	select {
 	case got := <-ch:
@@ -142,7 +142,7 @@ func TestDispatchClientMessage_PresenceAlwaysUsesServerClientID(t *testing.T) {
 	const qid = "q5"
 
 	dispatchClientMessage(hub, qid, "real-peer-A",
-		[]byte(`{"type":"presence","client_id":"victim-B","state":{"impersonated":true}}`))
+		[]byte(`{"type":"presence","client_id":"victim-B","state":{"impersonated":true}}`), 0)
 
 	list := hub.PresenceList(qid)
 	if _, ok := list["victim-B"]; ok {

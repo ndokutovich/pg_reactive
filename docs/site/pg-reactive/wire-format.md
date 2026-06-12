@@ -54,6 +54,7 @@ the result set:
 {
   "query_id": "active_orders",
   "seq": 17,
+  "gen": 4,
   "inserted": [
     {"id": 42, "status": "active", "customer": "Jane Doe", "amount": 149.99}
   ],
@@ -65,6 +66,10 @@ the result set:
 
 - `inserted` — rows that newly appear in the result set.
 - `deleted` — rows that disappeared from the result set.
+- `gen` — the subscription *generation* this delta was computed under (see
+  [Generation](#generation-gen)). The proxy delivers it only to WebSocket
+  connections bound to the same generation, so a re-registered subscription's
+  rows never reach a connection authorized under the old registration.
 - An UPDATE that touches only columns **not** referenced by the query emits no
   message at all — the per-query `AFTER UPDATE OF <cols>` trigger never fires.
 - An UPDATE that changes a tracked value appears as the old row in `deleted`
@@ -76,7 +81,7 @@ the result set:
 Emitted in `delta` mode when a delta is oversize or the snapshot schema drifts. A delta is dropped and replaced with an overflow signal in two cases:
 
 ```json
-{"type": "overflow", "query_id": "active_orders", "seq": 18, "fetch": true}
+{"type": "overflow", "query_id": "active_orders", "seq": 18, "gen": 4, "fetch": true}
 ```
 
 **Case A — payload too large.** PostgreSQL caps a `NOTIFY` payload at 8000
@@ -109,12 +114,29 @@ snapshots entirely. Each trigger fire emits only a bare "something changed"
 signal — the client re-fetches on its own schedule:
 
 ```json
-{"type": "invalidated", "query_id": "active_orders", "seq": 19}
+{"type": "invalidated", "query_id": "active_orders", "seq": 19, "gen": 4}
 ```
 
 This is the cache-invalidation mode: cheap, no `EXCEPT`, no snapshot table, no
 row payload. You give up knowing *what* changed in exchange for near-zero
-server cost.
+server cost. It carries `gen` like every other payload so the proxy can scope
+it to the right generation.
+
+### Resubscribed (proxy-consumed control message)
+
+Every `pgr.subscribe`/`pgr.unsubscribe` emits one control message on the channel
+announcing the subscription's new generation:
+
+```json
+{"type": "resubscribed", "query_id": "active_orders", "gen": 5}
+```
+
+This is **not** a data notification and is never forwarded to WebSocket clients.
+The proxy consumes it to disconnect connections bound to an older generation
+(so their clients reconnect and re-authorize against the new registration). A
+raw `LISTEN` consumer will see it and should simply ignore it — the `gen` on
+the `delta`/`overflow`/`invalidated` messages is what scopes data; see
+[Generation](#generation-gen).
 
 ### Proxy welcome (not a channel message)
 
@@ -144,13 +166,37 @@ silently consumed. So a small gap can simply mean "a trigger fired but the resul
 set was unchanged." A large or persistent gap, by contrast, points at real
 NOTIFY queue pressure or a dropped message — treat that as a signal to re-fetch.
 
+## Generation (`gen`)
+
+Every data message (`delta`, `overflow`, `invalidated`) carries a `gen` field: a
+monotonic *generation* drawn from a sequence and bumped on every
+`pgr.subscribe`/`pgr.unsubscribe` for that `query_id`. It is the epoch the
+notification was computed under, and it is the proxy's security boundary for
+re-registered subscriptions.
+
+When a WebSocket client connects, the proxy binds it to the subscription's
+*current committed* generation. It then delivers a data message to that
+connection only if the message's `gen` **exactly matches** the connection's
+bound generation. The consequence: if a subscription is re-registered under a
+different audience (`public → private`, `tenant A → tenant B`), every
+notification computed afterwards carries the new generation and is **never**
+delivered to a connection that was authorized under the old one — even for a
+notification produced in the brief window before the re-subscribe transaction
+commits. A separate `resubscribed` control message then disconnects the stale
+connections so their clients reconnect and re-authorize.
+
+A raw `LISTEN` consumer that enforces its own access control can use `gen` the
+same way (track the generation it authorized a reader against, drop messages
+whose `gen` differs). A consumer that does not need this can ignore the field.
+
 ## Message reference
 
 | Shape | JSON | Mode | Source |
 |-------|------|------|--------|
-| Delta | `{"query_id":"...","seq":N,"inserted":[...],"deleted":[...]}` | `delta` | extension (channel) |
-| Overflow | `{"type":"overflow","query_id":"...","seq":N,"fetch":true}` | `delta` | extension (channel) |
-| Invalidated | `{"type":"invalidated","query_id":"...","seq":N}` | `notify` | extension (channel) |
+| Delta | `{"query_id":"...","seq":N,"gen":G,"inserted":[...],"deleted":[...]}` | `delta` | extension (channel) |
+| Overflow | `{"type":"overflow","query_id":"...","seq":N,"gen":G,"fetch":true}` | `delta` | extension (channel) |
+| Invalidated | `{"type":"invalidated","query_id":"...","seq":N,"gen":G}` | `notify` | extension (channel) |
+| Resubscribed | `{"type":"resubscribed","query_id":"...","gen":G}` | — | extension (channel; proxy-consumed, not forwarded) |
 | Subscribed | `{"type":"subscribed","query_id":"..."}` | — | proxy (WS only) |
 
 ## Consume it with no proxy
@@ -188,7 +234,7 @@ time `psql` checks its connection (e.g. you press Enter on an empty line, or run
 
 ```text
 Asynchronous notification "pgr" with payload
-"{"query_id":"active_orders","seq":1,"inserted":[{"id":42,"status":"active","amount":149.99}],"deleted":[]}"
+"{"query_id":"active_orders","seq":1,"gen":1,"inserted":[{"id":42,"status":"active","amount":149.99}],"deleted":[]}"
 received from server process with PID 1234.
 ```
 
@@ -223,8 +269,13 @@ client.on('notification', (msg) => {
     case 'invalidated':
       // notify-mode hint: re-fetch on your schedule
       break;
+    case 'resubscribed':
+      // control message: the subscription's generation changed. The proxy uses
+      // this to revoke stale connections; a bare listener can ignore it.
+      break;
     default:
-      // delta: apply payload.inserted / payload.deleted, track payload.seq
+      // delta: apply payload.inserted / payload.deleted, track payload.seq.
+      // payload.gen is the generation the rows belong to.
   }
 });
 

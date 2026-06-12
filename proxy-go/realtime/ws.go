@@ -154,7 +154,7 @@ func WSHandler(
 		// 404, and any DB error (permission denied, connection failure)
 		// returns 503. Earlier code defaulted to ("delta", "") on error,
 		// which silently disabled audience enforcement.
-		mode, audience, metaErr := subscriptionMeta(pool, queryID)
+		mode, audience, gen, metaErr := subscriptionMeta(pool, queryID)
 		if metaErr != nil {
 			if errors.Is(metaErr, ErrSubscriptionNotFound) {
 				writeWSError(w, http.StatusNotFound, "subscription not found")
@@ -191,7 +191,7 @@ func WSHandler(
 			return
 		}
 
-		go handleWebSocket(conn, queryID, mode, claims, isAnon, hub, pool, broadcastCapacity, semaphore)
+		go handleWebSocket(conn, queryID, mode, gen, hub, pool, broadcastCapacity, semaphore)
 	}
 }
 
@@ -203,8 +203,7 @@ func handleWebSocket(
 	conn *websocket.Conn,
 	queryID string,
 	mode string,
-	claims middleware.RequestClaims,
-	isAnon bool,
+	gen int64,
 	hub *Hub,
 	pool *pgxpool.Pool,
 	broadcastCapacity int,
@@ -225,34 +224,20 @@ func handleWebSocket(
 	// semaphore slot is released by the defer below.
 	bucket := newRateBucket(wsMsgRate, wsMsgBurst)
 
-	// authorize re-runs the connect-time audience gate against the CURRENT
-	// audience, so BroadcastDelta can revoke this connection if the
-	// subscription is re-registered under an audience it no longer satisfies
-	// (round 39 F1). Mirrors the handshake gate exactly.
-	authorize := func(audience string) bool {
-		if audience == "" {
-			return true // public subscription
-		}
-		if claims.Role == "service_role" {
-			return true // service_role bypasses audience
-		}
-		if isAnon {
-			return false // anon can never satisfy a non-NULL audience
-		}
-		return claimsSatisfyAudience(audience, claims.ClaimsJSON)
-	}
-
-	// Subscribe first so the channel is registered before the defer runs.
-	sub := hub.Subscribe(queryID, broadcastCapacity, authorize)
+	// Subscribe first so the channel is registered before the defer runs. The
+	// connection is bound to the generation it authorized against: a later
+	// re-registration (new generation) revokes it via Hub.RevokeStale, and only
+	// same-generation peers receive its presence/broadcast (round 39 batch-2).
+	sub := hub.Subscribe(queryID, broadcastCapacity, gen)
 	defer func() {
-		hub.PresenceLeave(queryID, clientID)
+		hub.PresenceLeave(queryID, clientID, gen)
 		conn.Close()
 		<-semaphore // release connection slot
 		hub.Unsubscribe(queryID, sub)
 	}()
 
 	// Register presence (empty initial state).
-	hub.PresenceJoin(queryID, clientID, []byte("{}"))
+	hub.PresenceJoin(queryID, clientID, []byte("{}"), gen)
 
 	log.Info().Str("query_id", queryID).Str("client_id", clientID).Msg("WebSocket connected")
 
@@ -262,6 +247,10 @@ func handleWebSocket(
 	safeSend := func(msgType int, data []byte) error {
 		wmu.Lock()
 		defer wmu.Unlock()
+		// Bound the write so a wedged socket cannot pin this goroutine past a
+		// revoke (round 39 batch-2 F-LIVENESS). A timed-out write returns an
+		// error the caller treats as a disconnect.
+		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 		return conn.WriteMessage(msgType, data)
 	}
 
@@ -275,21 +264,24 @@ func handleWebSocket(
 		return
 	}
 
-	// Re-check audience right before sending the snapshot: the gate ran at
-	// handshake, but the audience could flip to private in the window before we
-	// ship the current rows. Re-resolve from the transactional catalog and bail
-	// if this connection no longer qualifies — closing the snapshot TOCTOU
-	// (round 39 F1). Fail CLOSED, matching the listener's per-delta posture: a
-	// metadata error here means we cannot prove this connection still qualifies,
-	// so we must not ship the current rows (round 39 F-B). The client reconnects.
-	if _, curAud, err := subscriptionMeta(pool, queryID); err != nil || !authorize(curAud) {
-		log.Info().Str("query_id", queryID).Err(err).Msg("audience unverifiable/changed before snapshot; closing connection")
-		return
-	}
-
-	// Send initial snapshot — skip for notify-mode subscriptions (no _snap_ table exists by design).
-	if mode != "notify" {
-		if rows, err := fetchSnapshot(pool, queryID); err == nil && len(rows) > 0 {
+	// Send initial snapshot — skip notify-mode (no _snap_ table by design) and
+	// ad-hoc channels (no catalog row / no snapshot). The snapshot and the
+	// generation it belongs to are read ATOMICALLY in one transaction: if a
+	// re-registration landed during connect the generation no longer matches
+	// `gen` and we close instead of shipping rows from a generation this
+	// connection never authorized — closing the snapshot TOCTOU. Fail closed on
+	// any lookup error (round 39 batch-2 F3 / F-B). The client reconnects.
+	if mode != "notify" && !isAdHocChannel(queryID) {
+		rows, ok, err := snapshotForGeneration(pool, queryID, gen)
+		if err != nil {
+			log.Info().Str("query_id", queryID).Err(err).Msg("snapshot unverifiable; closing connection")
+			return
+		}
+		if !ok {
+			log.Info().Str("query_id", queryID).Msg("generation changed before snapshot; closing connection")
+			return
+		}
+		if len(rows) > 0 {
 			snap, _ := json.Marshal(map[string]any{
 				"query_id": queryID,
 				"inserted": rows,
@@ -301,7 +293,21 @@ func handleWebSocket(
 			}
 			log.Info().Str("query_id", queryID).Int("rows", len(rows)).Msg("sent initial snapshot")
 		}
-	} else {
+	} else if mode == "notify" && !isAdHocChannel(queryID) {
+		// Notify-mode ships no rows, so there is no snapshot to bind the
+		// generation to — but the same register-after-RevokeStale race applies:
+		// if a re-registration bumped the generation between the handshake read
+		// and hub.Subscribe above, the revoke sweep may have already passed,
+		// leaving this stale connection in the list to receive the new epoch's
+		// invalidation pings. Re-validate and close on mismatch (round 39
+		// batch-2 F1/F2, notify path). Fail closed on lookup error.
+		if ok, err := generationMatches(pool, queryID, gen); err != nil {
+			log.Info().Str("query_id", queryID).Err(err).Msg("notify generation unverifiable; closing connection")
+			return
+		} else if !ok {
+			log.Info().Str("query_id", queryID).Msg("generation changed before notify subscribe; closing connection")
+			return
+		}
 		log.Info().Str("query_id", queryID).Msg("notify-mode subscription: skipping snapshot fetch")
 	}
 
@@ -364,7 +370,7 @@ func handleWebSocket(
 						Msg("WS client exceeded message rate limit — disconnecting")
 					return
 				}
-				dispatchClientMessage(hub, queryID, clientID, msg.data)
+				dispatchClientMessage(hub, queryID, clientID, msg.data, gen)
 			case websocket.CloseMessage:
 				log.Info().Str("query_id", queryID).Msg("WebSocket disconnected (close frame)")
 				return
@@ -398,7 +404,7 @@ type wsMessage struct {
 // Anything else (unparseable, missing/unknown type, raw "{inserted:[...]}"
 // shapes) is dropped at debug level. Extracted so the policy is testable
 // without spinning up a real WebSocket.
-func dispatchClientMessage(hub *Hub, queryID, clientID string, data []byte) {
+func dispatchClientMessage(hub *Hub, queryID, clientID string, data []byte, gen int64) {
 	// In-package safety net for direct test calls bypassing SetReadLimit.
 	if len(data) > maxWSMessageBytes {
 		log.Warn().Str("query_id", queryID).Str("client_id", clientID).
@@ -423,14 +429,16 @@ func dispatchClientMessage(hub *Hub, queryID, clientID string, data []byte) {
 		// Always identify presence by the server-generated clientID. The
 		// client cannot overwrite another peer's state by sending a
 		// custom client_id in the frame (5th-pass review, 2026-05).
-		hub.PresenceUpdate(queryID, clientID, typed.State)
+		// Routed to the sender's generation so a stale peer never sees it
+		// (round 39 batch-2 F2).
+		hub.PresenceUpdate(queryID, clientID, typed.State, gen)
 	case "broadcast":
 		envelope, _ := json.Marshal(map[string]any{
 			"type":    "broadcast",
 			"from":    clientID,
 			"payload": typed.Payload,
 		})
-		hub.Broadcast(queryID, string(envelope))
+		hub.BroadcastGen(queryID, string(envelope), gen)
 	default:
 		log.Debug().Str("query_id", queryID).Str("client_id", clientID).
 			Str("type", typed.Type).Int("bytes", len(data)).
@@ -494,44 +502,42 @@ func isAdHocChannel(queryID string) bool {
 //   - Any other error (permission denied, connection failure, timeout)
 //     → err surfaced as-is. Caller responds 503; we DO NOT silently
 //     treat as public.
-func subscriptionMeta(pool *pgxpool.Pool, queryID string) (mode, audience string, err error) {
+func subscriptionMeta(pool *pgxpool.Pool, queryID string) (mode, audience string, generation int64, err error) {
 	if pool == nil {
 		// Nil pool only happens in tests. Treat like "not found" so the
 		// ad-hoc channel prefix bypass still works in test harnesses
 		// that don't spin up Postgres; production code never gets here.
 		if isAdHocChannel(queryID) {
-			return "delta", "", nil
+			return "delta", "", 0, nil
 		}
-		return "", "", ErrSubscriptionNotFound
+		return "", "", 0, ErrSubscriptionNotFound
 	}
 	var aud *string
-	// Round 37 F1: read the audience/mode gate from the TRANSACTIONAL catalog
-	// (pgr.subscription_meta over pgr.persisted_subscriptions), NOT from
-	// pgr.get_subscriptions() which reads the non-transactional shmem hash.
-	// pgr.subscribe() mutates shmem out-of-transaction, so reading shmem here
-	// would let a concurrent session's uncommitted (or rolled-back) re-subscribe
-	// flip an audience-bound subscription to public for the whole transaction
-	// window — an audience bypass. The catalog read sees only committed rows.
+	// Round 37 F1: read the audience/mode/generation gate from the TRANSACTIONAL
+	// catalog (pgr.subscription_meta over pgr.persisted_subscriptions), NOT from
+	// pgr.get_subscriptions() which reads the non-transactional shmem hash. The
+	// generation binds the connection so a later re-registration revokes it
+	// (round 39 batch-2). The catalog read sees only committed rows.
 	err = pool.QueryRow(context.Background(),
-		`SELECT mode, audience::text FROM pgr.subscription_meta($1)`,
-		queryID).Scan(&mode, &aud)
+		`SELECT mode, audience::text, generation FROM pgr.subscription_meta($1)`,
+		queryID).Scan(&mode, &aud, &generation)
 	if err == nil {
 		if aud != nil {
 			audience = *aud
 		}
-		return mode, audience, nil
+		return mode, audience, generation, nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		if isAdHocChannel(queryID) {
-			return "delta", "", nil
+			return "delta", "", 0, nil
 		}
-		return "", "", ErrSubscriptionNotFound
+		return "", "", 0, ErrSubscriptionNotFound
 	}
 	// Permission denied, connection failure, etc — surface to caller so it
 	// returns 503 instead of accepting the WS upgrade unprotected.
 	log.Warn().Str("query_id", queryID).Err(err).
 		Msg("subscription metadata lookup failed; rejecting WS to fail closed")
-	return "", "", fmt.Errorf("subscription metadata lookup: %w", err)
+	return "", "", 0, fmt.Errorf("subscription metadata lookup: %w", err)
 }
 
 // claimsSatisfyAudience returns true when every key in the audience JSON
@@ -621,6 +627,73 @@ func fetchSnapshot(pool *pgxpool.Pool, queryID string) ([]json.RawMessage, error
 	return result, rows.Err()
 }
 
+// snapshotForGeneration reads the current generation AND the snapshot rows for
+// queryID in ONE read-only transaction, so the audience the connection
+// authorized against and the rows it receives belong to the same generation —
+// closing the snapshot TOCTOU (round 39 batch-2 F3). It returns the rows only
+// if the subscription's current generation still equals boundGen; otherwise
+// ok=false (a re-registration landed during connect, so the connection must
+// close). A no-row / transient error returns a non-nil err so the caller fails
+// closed.
+func snapshotForGeneration(pool *pgxpool.Pool, queryID string, boundGen int64) (rows []json.RawMessage, ok bool, err error) {
+	if pool == nil || !safeQueryIDRe.MatchString(queryID) {
+		return nil, false, nil
+	}
+	ctx := context.Background()
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var curGen int64
+	if err = tx.QueryRow(ctx, `SELECT generation FROM pgr.subscription_meta($1)`, queryID).Scan(&curGen); err != nil {
+		return nil, false, err // no row (unsubscribed mid-connect) or transient → fail closed
+	}
+	if curGen != boundGen {
+		return nil, false, nil // re-registered during connect → close, do not ship rows
+	}
+
+	// query_id already validated by safeQueryIDRe above.
+	r, err := tx.Query(ctx, `SELECT row_to_json(t) AS doc FROM pgr."_snap_`+queryID+`" t`)
+	if err != nil {
+		return nil, false, err
+	}
+	defer r.Close()
+	for r.Next() {
+		var raw json.RawMessage
+		if err := r.Scan(&raw); err != nil {
+			continue
+		}
+		rows = append(rows, raw)
+	}
+	return rows, true, r.Err()
+}
+
+// generationMatches reports whether the subscription's current generation still
+// equals boundGen. The notify-mode path ships no snapshot, so it cannot use
+// snapshotForGeneration to detect a re-registration that landed AFTER the
+// RevokeStale sweep had already passed this connection by (register-after-sweep
+// race). It calls this instead and closes on mismatch — giving notify-mode the
+// same generation guard the delta path gets atomically with its snapshot
+// (round 39 batch-2 F1/F2, notify path). A missing row (unsubscribed mid-
+// connect) or transient error fails closed.
+func generationMatches(pool *pgxpool.Pool, queryID string, boundGen int64) (bool, error) {
+	if pool == nil {
+		return true, nil // test harness without PG; ad-hoc/test path
+	}
+	var curGen int64
+	err := pool.QueryRow(context.Background(),
+		`SELECT generation FROM pgr.subscription_meta($1)`, queryID).Scan(&curGen)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil // unsubscribed mid-connect → close
+		}
+		return false, err // transient → fail closed
+	}
+	return curGen == boundGen, nil
+}
+
 // generateClientID returns 16 random bytes hex-encoded as a unique client identifier.
 func generateClientID() string {
 	b := make([]byte, 16)
@@ -696,7 +769,7 @@ func PresenceHandler(cfg middleware.RLSConfig, pool *pgxpool.Pool, hub *Hub, req
 
 		// Audience gate — identical policy to WSHandler. Closes the
 		// "presence map is readable by knowing the channel name" hole.
-		_, audience, metaErr := subscriptionMeta(pool, channel)
+		_, audience, _, metaErr := subscriptionMeta(pool, channel)
 		if metaErr != nil {
 			if errors.Is(metaErr, ErrSubscriptionNotFound) {
 				writeJSONStatus(w, http.StatusNotFound, "channel not found")

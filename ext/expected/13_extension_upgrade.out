@@ -30,7 +30,7 @@ ALTER EXTENSION pg_reactive UPDATE;
 SELECT extversion AS version_after FROM pg_extension WHERE extname = 'pg_reactive';
  version_after 
 ---------------
- 0.1.5
+ 0.1.6
 (1 row)
 
 SELECT count(*)::int AS subscription_meta_after
@@ -46,5 +46,34 @@ SELECT has_function_privilege('public', 'pgr.subscription_meta(text)', 'EXECUTE'
  public_can_exec 
 -----------------
  f
+(1 row)
+
+-- 0.1.6 (round 39 batch-2): the same UPDATE must also land the generation
+-- machinery — a sequence, a generation column on persisted_subscriptions, and a
+-- subscription_meta that now returns the generation. A persistent database that
+-- upgrades but is missing any of these has an inert generation gate (stale
+-- WebSockets would never be revoked on an audience change).
+SELECT count(*)::int AS generation_seq
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'pgr' AND c.relname = 'subscription_generation_seq' AND c.relkind = 'S';
+ generation_seq 
+----------------
+              1
+(1 row)
+
+SELECT count(*)::int AS generation_column
+FROM information_schema.columns
+WHERE table_schema = 'pgr' AND table_name = 'persisted_subscriptions' AND column_name = 'generation';
+ generation_column 
+-------------------
+                 1
+(1 row)
+
+SELECT pg_get_function_result(p.oid) AS subscription_meta_result
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'pgr' AND p.proname = 'subscription_meta';
+              subscription_meta_result               
+-----------------------------------------------------
+ TABLE(mode text, audience jsonb, generation bigint)
 (1 row)
 

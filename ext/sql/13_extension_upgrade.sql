@@ -28,3 +28,18 @@ WHERE n.nspname = 'pgr' AND p.proname = 'subscription_meta';
 
 -- And it is default-denied (REVOKE'd from PUBLIC) like the other gate functions.
 SELECT has_function_privilege('public', 'pgr.subscription_meta(text)', 'EXECUTE') AS public_can_exec;
+
+-- 0.1.6 (round 39 batch-2): the same UPDATE must also land the generation
+-- machinery — a sequence, a generation column on persisted_subscriptions, and a
+-- subscription_meta that now returns the generation. A persistent database that
+-- upgrades but is missing any of these has an inert generation gate (stale
+-- WebSockets would never be revoked on an audience change).
+SELECT count(*)::int AS generation_seq
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'pgr' AND c.relname = 'subscription_generation_seq' AND c.relkind = 'S';
+SELECT count(*)::int AS generation_column
+FROM information_schema.columns
+WHERE table_schema = 'pgr' AND table_name = 'persisted_subscriptions' AND column_name = 'generation';
+SELECT pg_get_function_result(p.oid) AS subscription_meta_result
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'pgr' AND p.proname = 'subscription_meta';

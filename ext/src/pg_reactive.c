@@ -435,6 +435,7 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	char	   *mode_str;
 	char		mode_char;
 	char	   *audience_str = NULL;	/* serialised JSON, or NULL = no constraint */
+	int64		generation = 0;		/* epoch from pgr.subscription_generation_seq */
 	Oid			table_oids[PGR_MAX_DEPS_PER_QUERY];
 	uint64		col_masks[PGR_MAX_DEPS_PER_QUERY];
 	int			num_tables;
@@ -469,6 +470,16 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 							strlen(audience_str), PGR_AUDIENCE_LEN - 1),
 					 errhint("audience must be a small JSON object of claim predicates.")));
 	}
+
+	/*
+	 * Parse generation (bigint, optional, default 0). The SQL pgr.subscribe
+	 * wrapper draws it from pgr.subscription_generation_seq and passes it here
+	 * so the shmem entry — and therefore every NOTIFY this query emits — carries
+	 * the same epoch the catalog records. A 0 (legacy / restore-without-gen)
+	 * means "unversioned"; the proxy treats it as generation 0.
+	 */
+	if (PG_NARGS() >= 5 && !PG_ARGISNULL(4))
+		generation = PG_GETARG_INT64(4);
 
 	if (strcmp(mode_str, "delta") == 0)
 		mode_char = 'd';
@@ -521,7 +532,7 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 	/* Register in shared memory (only after snapshot succeeds).
 	 * If shmem is full, pgr_dep_add evicts the oldest entry. */
 	pgr_dep_add(query_id, query_str, table_oids, col_masks, num_tables,
-				mode_char, audience_str, &evicted);
+				mode_char, audience_str, generation, &evicted);
 
 	/* Clean up evicted subscription if one was evicted */
 	if (evicted.evicted)

@@ -44,8 +44,8 @@ func TestProperty_Presence_JoinLeaveRoundTrip(t *testing.T) {
 		clientID := genClientID(t, "client")
 		state := genState(t, "state")
 
-		h.PresenceJoin(channel, clientID, state)
-		h.PresenceLeave(channel, clientID)
+		h.PresenceJoin(channel, clientID, state, 0)
+		h.PresenceLeave(channel, clientID, 0)
 
 		list := h.PresenceList(channel)
 		if len(list) != 0 {
@@ -73,8 +73,8 @@ func TestProperty_Presence_JoinIdempotency(t *testing.T) {
 		state1 := genState(t, "state1")
 		state2 := genState(t, "state2")
 
-		h.PresenceJoin(channel, clientID, state1)
-		h.PresenceJoin(channel, clientID, state2)
+		h.PresenceJoin(channel, clientID, state1, 0)
+		h.PresenceJoin(channel, clientID, state2, 0)
 
 		list := h.PresenceList(channel)
 
@@ -110,7 +110,7 @@ func TestProperty_Presence_StatePreservation(t *testing.T) {
 		clientID := genClientID(t, "client")
 		state := genState(t, "state")
 
-		h.PresenceUpdate(channel, clientID, state)
+		h.PresenceUpdate(channel, clientID, state, 0)
 
 		list := h.PresenceList(channel)
 		got, ok := list[clientID]
@@ -151,7 +151,7 @@ func TestProperty_Presence_ChannelIsolation(t *testing.T) {
 		clientID := genClientID(t, "client")
 		state := genState(t, "state")
 
-		h.PresenceJoin(channelA, clientID, state)
+		h.PresenceJoin(channelA, clientID, state, 0)
 
 		listB := h.PresenceList(channelB)
 		if len(listB) != 0 {
@@ -178,7 +178,7 @@ func TestProperty_Presence_ListIsSnapshot(t *testing.T) {
 		clientID := genClientID(t, "client")
 		state := genState(t, "state")
 
-		h.PresenceJoin(channel, clientID, state)
+		h.PresenceJoin(channel, clientID, state, 0)
 
 		// Obtain the first snapshot and mutate it by adding a foreign key.
 		snapshot := h.PresenceList(channel)

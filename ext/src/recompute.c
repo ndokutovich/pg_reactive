@@ -25,7 +25,7 @@
 	((PGR_NOTIFY_PAYLOAD_LIMIT) - (int) strlen(ch) - PGR_NOTIFY_OVERHEAD)
 
 static char *pgr_build_delta_json(const char *query_id, const char *query_text,
-								  int64 seq, bool *needs_resync);
+								  int64 seq, int64 generation, bool *needs_resync);
 static char *pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 									TupleDesc tupdesc);
 /* pgr_json_escape_string declared extern in recompute.h */
@@ -53,6 +53,7 @@ pgr_recompute_query(const char *query_id)
 	char		local_qid[PGR_QUERY_ID_LEN];
 	char		local_qtext[PGR_QUERY_TEXT_LEN];
 	char		local_mode;
+	int64		local_gen;
 	char		*delta_json;
 	int64		seq;
 	int			max_payload;
@@ -102,6 +103,7 @@ pgr_recompute_query(const char *query_id)
 		strlcpy(local_qid, entry->query_id, PGR_QUERY_ID_LEN);
 		strlcpy(local_qtext, entry->query_text, PGR_QUERY_TEXT_LEN);
 		local_mode = entry->mode;
+		local_gen = entry->generation;
 		LWLockRelease(pgr_state->lock);
 	}
 
@@ -119,7 +121,9 @@ pgr_recompute_query(const char *query_id)
 		appendStringInfoString(&inv,
 							   "{\"type\":\"invalidated\",\"query_id\":");
 		pgr_json_escape_string(&inv, local_qid);
-		appendStringInfo(&inv, ",\"seq\":" INT64_FORMAT "}", seq);
+		appendStringInfo(&inv,
+						 ",\"seq\":" INT64_FORMAT ",\"gen\":" INT64_FORMAT "}",
+						 seq, local_gen);
 		Async_Notify(pgr_notify_channel, inv.data);
 		pfree(inv.data);
 		return;
@@ -130,7 +134,7 @@ pgr_recompute_query(const char *query_id)
 		bool		needs_resync = false;
 
 		delta_json = pgr_build_delta_json(local_qid, local_qtext, seq,
-										  &needs_resync);
+										  local_gen, &needs_resync);
 
 		/*
 		 * The snapshot's column layout drifted from the live query (count or
@@ -148,8 +152,9 @@ pgr_recompute_query(const char *query_id)
 								   "{\"type\":\"overflow\",\"query_id\":");
 			pgr_json_escape_string(&resync, local_qid);
 			appendStringInfo(&resync,
-							 ",\"seq\":" INT64_FORMAT ",\"fetch\":true}",
-							 seq);
+							 ",\"seq\":" INT64_FORMAT ",\"gen\":" INT64_FORMAT
+							 ",\"fetch\":true}",
+							 seq, local_gen);
 			Async_Notify(pgr_notify_channel, resync.data);
 			pfree(resync.data);
 		}
@@ -170,8 +175,9 @@ pgr_recompute_query(const char *query_id)
 								   "{\"type\":\"overflow\",\"query_id\":");
 			pgr_json_escape_string(&overflow, local_qid);
 			appendStringInfo(&overflow,
-							 ",\"seq\":" INT64_FORMAT ",\"fetch\":true}",
-							 seq);
+							 ",\"seq\":" INT64_FORMAT ",\"gen\":" INT64_FORMAT
+							 ",\"fetch\":true}",
+							 seq, local_gen);
 			Async_Notify(pgr_notify_channel, overflow.data);
 			pfree(overflow.data);
 		}
@@ -219,13 +225,13 @@ pgr_recompute_for_table(Oid table_oid)
  * The seq parameter is embedded in the payload so clients can detect gaps.
  *
  * Returns a palloc'd JSON string like:
- * {"query_id":"q1","seq":N,"inserted":[...],"deleted":[...]}
+ * {"query_id":"q1","seq":N,"gen":G,"inserted":[...],"deleted":[...]}
  *
  * Returns NULL if no changes detected.
  */
 static char *
 pgr_build_delta_json(const char *query_id, const char *query_text,
-					 int64 seq, bool *needs_resync)
+					 int64 seq, int64 generation, bool *needs_resync)
 {
 	StringInfoData	snap_name;
 	StringInfoData	sql;
@@ -425,13 +431,16 @@ pgr_build_delta_json(const char *query_id, const char *query_text,
 	SPI_execute("DROP TABLE IF EXISTS _pgr_recompute", false, 0);
 	SPI_execute("RESET client_min_messages", false, 0);
 
-	/* Build result JSON — include seq for gap detection */
+	/* Build result JSON — include seq for gap detection and gen (the epoch the
+	 * shmem entry carried at recompute time) so the proxy delivers a delta only
+	 * to connections bound to the same generation (round 39 batch-2 F-ORDER). */
 	initStringInfo(&result);
 	appendStringInfoString(&result, "{\"query_id\":");
 	pgr_json_escape_string(&result, query_id);
 	appendStringInfo(&result,
-					 ",\"seq\":" INT64_FORMAT ",\"inserted\":%s,\"deleted\":%s}",
-					 seq,
+					 ",\"seq\":" INT64_FORMAT ",\"gen\":" INT64_FORMAT
+					 ",\"inserted\":%s,\"deleted\":%s}",
+					 seq, generation,
 					 inserted_json ? inserted_json : "[]",
 					 deleted_json ? deleted_json : "[]");
 

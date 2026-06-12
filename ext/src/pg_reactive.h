@@ -55,6 +55,17 @@ typedef struct PgrDepEntry
 	char		mode;			/* 'd' = delta, 'n' = notify */
 	int64		notify_seq;		/* per-query sequence number for gap detection */
 	/*
+	 * generation: monotonic epoch from pgr.subscription_generation_seq, set by
+	 * pgr.subscribe on every (re-)registration and stamped into EVERY NOTIFY
+	 * payload at recompute time. The proxy binds each connection to the
+	 * generation it authorized against and delivers a message only on an exact
+	 * match, so a delta computed from a re-registered (new-epoch) query — even
+	 * one emitted in the non-transactional window before the subscribe commits —
+	 * is never delivered to a connection from the old epoch (round 39 batch-2
+	 * F-ORDER). 0 for entries restored without a generation.
+	 */
+	int64		generation;
+	/*
 	 * audience: optional JSON object enforced by the proxy at WS-connect time.
 	 * Empty string means "no audience constraint" (public; the legacy
 	 * behaviour). When non-empty, the proxy parses this JSON and requires
@@ -126,7 +137,7 @@ extern void pgr_dep_format_key(char *buf, Size buflen, const char *query_id);
 extern bool pgr_dep_add(const char *query_id, const char *query_text,
 						Oid *table_oids, uint64 *col_masks,
 						int num_tables, char mode,
-						const char *audience,
+						const char *audience, int64 generation,
 						PgrEvictedInfo *evicted);
 extern bool pgr_dep_remove(const char *query_id);
 extern bool pgr_dep_find(const char *query_id, PgrDepEntry *out);

@@ -7,27 +7,34 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// subscriber is one connected client's delivery slot. authorize re-evaluates
-// whether this client may still receive data under a (possibly changed)
-// audience; revoke is closed exactly once to force the connection to
-// disconnect when it no longer may (round 39 F1).
+// subscriber is one connected client's delivery slot. It is bound to the
+// subscription GENERATION it authorized against at connect; revoke is closed
+// exactly once to force the connection to disconnect when a re-registration
+// (new generation) makes its authorization stale (round 39 batch-2).
 type subscriber struct {
-	ch        chan string
-	authorize func(audience string) bool
-	revoke    chan struct{}
-	once      sync.Once
+	ch         chan string
+	generation int64
+	revoke     chan struct{}
+	once       sync.Once
 }
 
 // Revoke signals the connection to disconnect. Idempotent and concurrency-safe.
 func (s *subscriber) Revoke() { s.once.Do(func() { close(s.revoke) }) }
 
-// Hub provides fan-out delivery of NOTIFY payloads to multiple concurrent
-// WebSocket subscribers. Each subscriber gets its own buffered channel so
-// that a single NOTIFY message is delivered to ALL connected clients.
-//
-// A plain chan string cannot fan out: in Go, each channel receive consumes
-// the message, so only one goroutine would see it. Hub fixes this by
-// maintaining a slice of per-subscriber channels and writing to every one.
+func (s *subscriber) revoked() bool {
+	select {
+	case <-s.revoke:
+		return true
+	default:
+		return false
+	}
+}
+
+// Hub provides generation-aware fan-out delivery to concurrent WebSocket
+// subscribers. Authorization is bound to the generation: any subscribe/
+// unsubscribe bumps the subscription's generation, the proxy revokes every
+// connection older than the new generation, and every message is routed so a
+// stale connection can never receive data from a newer generation.
 type Hub struct {
 	mu   sync.RWMutex
 	subs map[string][]*subscriber
@@ -45,19 +52,13 @@ func NewHub() *Hub {
 	}
 }
 
-// Subscribe registers a new subscriber for queryID and returns its slot.
-// authorize is the connect-time audience gate, re-runnable against the CURRENT
-// audience so a re-registered subscription can revoke a now-unauthorized
-// connection (round 39 F1). The caller MUST call Unsubscribe when the
-// connection closes to avoid goroutine and memory leaks.
-func (h *Hub) Subscribe(queryID string, capacity int, authorize func(audience string) bool) *subscriber {
-	if authorize == nil {
-		authorize = func(string) bool { return true }
-	}
+// Subscribe registers a new subscriber for queryID bound to generation. The
+// caller MUST call Unsubscribe when the connection closes.
+func (h *Hub) Subscribe(queryID string, capacity int, generation int64) *subscriber {
 	s := &subscriber{
-		ch:        make(chan string, capacity),
-		authorize: authorize,
-		revoke:    make(chan struct{}),
+		ch:         make(chan string, capacity),
+		generation: generation,
+		revoke:     make(chan struct{}),
 	}
 	h.mu.Lock()
 	h.subs[queryID] = append(h.subs[queryID], s)
@@ -65,15 +66,13 @@ func (h *Hub) Subscribe(queryID string, capacity int, authorize func(audience st
 	return s
 }
 
-// Unsubscribe removes s from the subscriber list for queryID. It is safe
-// to call concurrently with Subscribe and Broadcast.
+// Unsubscribe removes s from the subscriber list for queryID.
 func (h *Hub) Unsubscribe(queryID string, s *subscriber) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	subs := h.subs[queryID]
 	for i, x := range subs {
 		if x == s {
-			// Remove by swapping with last element and shrinking.
 			last := len(subs) - 1
 			subs[i] = subs[last]
 			h.subs[queryID] = subs[:last]
@@ -85,7 +84,6 @@ func (h *Hub) Unsubscribe(queryID string, s *subscriber) {
 	}
 }
 
-// snapshot returns a copy of the subscriber slice for queryID under RLock.
 func (h *Hub) snapshot(queryID string) []*subscriber {
 	h.mu.RLock()
 	snap := make([]*subscriber, len(h.subs[queryID]))
@@ -94,51 +92,54 @@ func (h *Hub) snapshot(queryID string) []*subscriber {
 	return snap
 }
 
-// Broadcast delivers payload to every subscriber registered for queryID
-// WITHOUT re-checking authorization. Used for presence/channel events, not
-// live-query data — deltas go through BroadcastDelta.
-// Non-blocking per subscriber: if a subscriber's buffer is full the message
-// is silently dropped for that subscriber only; all others still receive it.
-func (h *Hub) Broadcast(queryID, payload string) {
-	snap := h.snapshot(queryID)
-	log.Debug().Str("query_id", queryID).Int("subscribers", len(snap)).Msg("Hub.Broadcast")
-	for _, s := range snap {
-		select {
-		case s.ch <- payload:
-		default:
-			// subscriber buffer full — message dropped for this subscriber only
-			log.Warn().Str("query_id", queryID).Msg("Hub.Broadcast: subscriber buffer full, dropping")
-		}
+func deliver(queryID string, s *subscriber, payload string) {
+	select {
+	case s.ch <- payload:
+	default:
+		log.Warn().Str("query_id", queryID).Msg("Hub: subscriber buffer full, dropping")
 	}
 }
 
-// BroadcastDelta delivers a live-query delta only to subscribers STILL
-// authorized under the subscription's CURRENT audience, and revokes (forces
-// the disconnect of) any whose authorization no longer holds. This closes the
-// stale-permission window where a connection authorized under an old audience
-// keeps reading a re-registered — e.g. now-private — subscription (round 39 F1
-// HIGH). The caller resolves the current audience from the transactional
-// catalog (subscription_meta) once per delta.
-func (h *Hub) BroadcastDelta(queryID, payload, audience string) {
-	snap := h.snapshot(queryID)
-	log.Debug().Str("query_id", queryID).Int("subscribers", len(snap)).Msg("Hub.BroadcastDelta")
-	for _, s := range snap {
-		if !s.authorize(audience) {
+// RevokeStale revokes (force-disconnects) every subscriber whose generation is
+// older than minGen. Called when a subscribe/unsubscribe announces a new
+// generation, so a metadata change disconnects stale connections IMMEDIATELY —
+// without waiting for a delta (round 39 batch-2 F1/F2).
+func (h *Hub) RevokeStale(queryID string, minGen int64) {
+	n := 0
+	for _, s := range h.snapshot(queryID) {
+		if s.generation < minGen {
 			s.Revoke()
+			n++
+		}
+	}
+	if n > 0 {
+		log.Info().Str("query_id", queryID).Int64("min_gen", minGen).Int("revoked", n).
+			Msg("Hub.RevokeStale: revoked stale-generation connections")
+	}
+}
+
+// BroadcastGen delivers a message to subscribers of EXACTLY generation `gen`,
+// skipping any that has been revoked. It is the ONLY fan-out path, used for both
+// live-query deltas (the extension stamps the shmem entry's generation into
+// every NOTIFY, so an old-epoch connection's generation will not match a
+// new-epoch delta — round 39 batch-2 F-ORDER) and proxy-originated events
+// (presence, client broadcast — F2: a stale connection never receives a current
+// peer's event). Generation matching, not message ordering, is the data
+// boundary; RevokeStale only adds liveness (disconnecting stale connections so
+// they reconnect at the new generation).
+func (h *Hub) BroadcastGen(queryID, payload string, gen int64) {
+	for _, s := range h.snapshot(queryID) {
+		if s.generation != gen || s.revoked() {
 			continue
 		}
-		select {
-		case s.ch <- payload:
-		default:
-			log.Warn().Str("query_id", queryID).Msg("Hub.BroadcastDelta: subscriber buffer full, dropping")
-		}
+		deliver(queryID, s, payload)
 	}
 }
 
 // ── Presence ────────────────────────────────────────────────────────────
 
-// PresenceJoin registers a client in the presence map and broadcasts a join event.
-func (h *Hub) PresenceJoin(channel, clientID string, state json.RawMessage) {
+// PresenceJoin registers a client and broadcasts a join event to its generation.
+func (h *Hub) PresenceJoin(channel, clientID string, state json.RawMessage, gen int64) {
 	h.pmu.Lock()
 	if h.presence[channel] == nil {
 		h.presence[channel] = make(map[string]json.RawMessage)
@@ -147,16 +148,14 @@ func (h *Hub) PresenceJoin(channel, clientID string, state json.RawMessage) {
 	h.pmu.Unlock()
 
 	event, _ := json.Marshal(map[string]any{
-		"type":      "presence_join",
-		"channel":   channel,
-		"client_id": clientID,
-		"state":     json.RawMessage(state),
+		"type": "presence_join", "channel": channel, "client_id": clientID,
+		"state": json.RawMessage(state),
 	})
-	h.Broadcast(channel, string(event))
+	h.BroadcastGen(channel, string(event), gen)
 }
 
-// PresenceLeave removes a client from the presence map and broadcasts a leave event.
-func (h *Hub) PresenceLeave(channel, clientID string) {
+// PresenceLeave removes a client and broadcasts a leave event to its generation.
+func (h *Hub) PresenceLeave(channel, clientID string, gen int64) {
 	h.pmu.Lock()
 	if m := h.presence[channel]; m != nil {
 		delete(m, clientID)
@@ -167,15 +166,13 @@ func (h *Hub) PresenceLeave(channel, clientID string) {
 	h.pmu.Unlock()
 
 	event, _ := json.Marshal(map[string]any{
-		"type":      "presence_leave",
-		"channel":   channel,
-		"client_id": clientID,
+		"type": "presence_leave", "channel": channel, "client_id": clientID,
 	})
-	h.Broadcast(channel, string(event))
+	h.BroadcastGen(channel, string(event), gen)
 }
 
-// PresenceUpdate updates a client's state and broadcasts the update.
-func (h *Hub) PresenceUpdate(channel, clientID string, state json.RawMessage) {
+// PresenceUpdate updates a client's state and broadcasts it to its generation.
+func (h *Hub) PresenceUpdate(channel, clientID string, state json.RawMessage, gen int64) {
 	h.pmu.Lock()
 	if h.presence[channel] == nil {
 		h.presence[channel] = make(map[string]json.RawMessage)
@@ -184,12 +181,10 @@ func (h *Hub) PresenceUpdate(channel, clientID string, state json.RawMessage) {
 	h.pmu.Unlock()
 
 	event, _ := json.Marshal(map[string]any{
-		"type":      "presence_state",
-		"channel":   channel,
-		"client_id": clientID,
-		"state":     json.RawMessage(state),
+		"type": "presence_state", "channel": channel, "client_id": clientID,
+		"state": json.RawMessage(state),
 	})
-	h.Broadcast(channel, string(event))
+	h.BroadcastGen(channel, string(event), gen)
 }
 
 // PresenceList returns the current presence state for a channel.
@@ -201,8 +196,6 @@ func (h *Hub) PresenceList(channel string) map[string]json.RawMessage {
 	if m == nil {
 		return make(map[string]json.RawMessage)
 	}
-
-	// Return a copy
 	result := make(map[string]json.RawMessage, len(m))
 	for k, v := range m {
 		result[k] = v

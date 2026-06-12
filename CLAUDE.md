@@ -195,10 +195,11 @@ Use `docker compose exec -T db bash -c '...'` with the command in quotes. Git Ba
 
 ### NOTIFY Wire Format
 
-Single channel for all queries, configurable via `pg_reactive.notify_channel` (default `pgr`; the Go proxy hardcodes `LISTEN pgr`, so only the default works end-to-end):
-- Delta: `{"query_id":"...","seq":N,"inserted":[...],"deleted":[]}`
-- Overflow: `{"type":"overflow","query_id":"...","seq":N,"fetch":true}`
-- Invalidated (mode='notify'): `{"type":"invalidated","query_id":"...","seq":N}`
+Single channel for all queries, configurable via `pg_reactive.notify_channel` (default `pgr`; the Go proxy hardcodes `LISTEN pgr`, so only the default works end-to-end). Every data payload carries `gen` — the subscription generation it was computed under; the proxy delivers a message only to connections bound to the same generation, so a re-registered subscription's data never reaches a connection authorized under the old generation (round 39 batch-2 F-ORDER):
+- Delta: `{"query_id":"...","seq":N,"gen":G,"inserted":[...],"deleted":[]}`
+- Overflow: `{"type":"overflow","query_id":"...","seq":N,"gen":G,"fetch":true}`
+- Invalidated (mode='notify'): `{"type":"invalidated","query_id":"...","seq":N,"gen":G}`
+- Resubscribed (subscribe/unsubscribe; proxy-consumed, not forwarded — drives RevokeStale): `{"type":"resubscribed","query_id":"...","gen":G}`
 - Proxy welcome: `{"type":"subscribed","query_id":"..."}`
 
 ### pg_regress Stats Tests

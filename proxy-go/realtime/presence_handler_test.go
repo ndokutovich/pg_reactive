@@ -95,7 +95,7 @@ func serveGetPresence(t *testing.T, url string, hub *Hub, requireAuthenticated b
 
 func TestPresenceHandler_AuthDisabledPublicChannel_OK(t *testing.T) {
 	hub := NewHub()
-	hub.PresenceJoin("_channel_lobby", "peer-1", json.RawMessage(`{"name":"alice"}`))
+	hub.PresenceJoin("_channel_lobby", "peer-1", json.RawMessage(`{"name":"alice"}`), 0)
 
 	rec := serveGetPresence(t, "/ws/_presence/_channel_lobby", hub, false, "", "")
 	if rec.Code != http.StatusOK {

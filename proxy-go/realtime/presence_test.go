@@ -12,7 +12,7 @@ func TestPresenceJoin_AddsClientToMap(t *testing.T) {
 	h := NewHub()
 	state := json.RawMessage(`{"status":"online"}`)
 
-	h.PresenceJoin("room-1", "client-a", state)
+	h.PresenceJoin("room-1", "client-a", state, 0)
 
 	list := h.PresenceList("room-1")
 	if len(list) != 1 {
@@ -29,11 +29,11 @@ func TestPresenceJoin_AddsClientToMap(t *testing.T) {
 
 func TestPresenceJoin_BroadcastsJoinEvent(t *testing.T) {
 	h := NewHub()
-	sub := h.Subscribe("room-1", 10, nil)
+	sub := h.Subscribe("room-1", 10, 0)
 	ch := sub.ch
 	defer h.Unsubscribe("room-1", sub)
 
-	h.PresenceJoin("room-1", "client-b", json.RawMessage(`{"x":1}`))
+	h.PresenceJoin("room-1", "client-b", json.RawMessage(`{"x":1}`), 0)
 
 	select {
 	case msg := <-ch:
@@ -59,8 +59,8 @@ func TestPresenceJoin_BroadcastsJoinEvent(t *testing.T) {
 
 func TestPresenceLeave_RemovesClient(t *testing.T) {
 	h := NewHub()
-	h.PresenceJoin("room-2", "client-c", json.RawMessage(`{}`))
-	h.PresenceLeave("room-2", "client-c")
+	h.PresenceJoin("room-2", "client-c", json.RawMessage(`{}`), 0)
+	h.PresenceLeave("room-2", "client-c", 0)
 
 	list := h.PresenceList("room-2")
 	if len(list) != 0 {
@@ -70,15 +70,15 @@ func TestPresenceLeave_RemovesClient(t *testing.T) {
 
 func TestPresenceLeave_BroadcastsLeaveEvent(t *testing.T) {
 	h := NewHub()
-	sub := h.Subscribe("room-2", 10, nil)
+	sub := h.Subscribe("room-2", 10, 0)
 	ch := sub.ch
 	defer h.Unsubscribe("room-2", sub)
 
 	// Drain the join event first.
-	h.PresenceJoin("room-2", "client-d", json.RawMessage(`{}`))
+	h.PresenceJoin("room-2", "client-d", json.RawMessage(`{}`), 0)
 	<-ch
 
-	h.PresenceLeave("room-2", "client-d")
+	h.PresenceLeave("room-2", "client-d", 0)
 
 	select {
 	case msg := <-ch:
@@ -99,8 +99,8 @@ func TestPresenceLeave_BroadcastsLeaveEvent(t *testing.T) {
 
 func TestPresenceLeave_RemovesChannelWhenLastClientLeaves(t *testing.T) {
 	h := NewHub()
-	h.PresenceJoin("room-3", "only-client", json.RawMessage(`{}`))
-	h.PresenceLeave("room-3", "only-client")
+	h.PresenceJoin("room-3", "only-client", json.RawMessage(`{}`), 0)
+	h.PresenceLeave("room-3", "only-client", 0)
 
 	// Internal map should no longer contain the channel key.
 	h.pmu.RLock()
@@ -114,10 +114,10 @@ func TestPresenceLeave_RemovesChannelWhenLastClientLeaves(t *testing.T) {
 
 func TestPresenceLeave_NoopForUnknownClient(t *testing.T) {
 	h := NewHub()
-	h.PresenceJoin("room-4", "client-e", json.RawMessage(`{}`))
+	h.PresenceJoin("room-4", "client-e", json.RawMessage(`{}`), 0)
 
 	// Should not panic or remove the existing client.
-	h.PresenceLeave("room-4", "nonexistent-client")
+	h.PresenceLeave("room-4", "nonexistent-client", 0)
 
 	list := h.PresenceList("room-4")
 	if len(list) != 1 {
@@ -129,8 +129,8 @@ func TestPresenceLeave_NoopForUnknownClient(t *testing.T) {
 
 func TestPresenceUpdate_UpdatesClientState(t *testing.T) {
 	h := NewHub()
-	h.PresenceJoin("room-5", "client-f", json.RawMessage(`{"status":"away"}`))
-	h.PresenceUpdate("room-5", "client-f", json.RawMessage(`{"status":"online"}`))
+	h.PresenceJoin("room-5", "client-f", json.RawMessage(`{"status":"away"}`), 0)
+	h.PresenceUpdate("room-5", "client-f", json.RawMessage(`{"status":"online"}`), 0)
 
 	list := h.PresenceList("room-5")
 	got, ok := list["client-f"]
@@ -144,15 +144,15 @@ func TestPresenceUpdate_UpdatesClientState(t *testing.T) {
 
 func TestPresenceUpdate_BroadcastsStateEvent(t *testing.T) {
 	h := NewHub()
-	sub := h.Subscribe("room-5", 10, nil)
+	sub := h.Subscribe("room-5", 10, 0)
 	ch := sub.ch
 	defer h.Unsubscribe("room-5", sub)
 
 	// Drain join broadcast.
-	h.PresenceJoin("room-5", "client-g", json.RawMessage(`{}`))
+	h.PresenceJoin("room-5", "client-g", json.RawMessage(`{}`), 0)
 	<-ch
 
-	h.PresenceUpdate("room-5", "client-g", json.RawMessage(`{"typing":true}`))
+	h.PresenceUpdate("room-5", "client-g", json.RawMessage(`{"typing":true}`), 0)
 
 	select {
 	case msg := <-ch:
@@ -174,7 +174,7 @@ func TestPresenceUpdate_BroadcastsStateEvent(t *testing.T) {
 func TestPresenceUpdate_CreatesEntryIfClientNotPreviouslyJoined(t *testing.T) {
 	h := NewHub()
 	// Update without a prior join — should still work (implementation creates the map entry).
-	h.PresenceUpdate("room-6", "late-joiner", json.RawMessage(`{"status":"busy"}`))
+	h.PresenceUpdate("room-6", "late-joiner", json.RawMessage(`{"status":"busy"}`), 0)
 
 	list := h.PresenceList("room-6")
 	if _, ok := list["late-joiner"]; !ok {
@@ -197,7 +197,7 @@ func TestPresenceList_EmptyForUnknownChannel(t *testing.T) {
 
 func TestPresenceList_ReturnsCopyNotReference(t *testing.T) {
 	h := NewHub()
-	h.PresenceJoin("room-7", "client-h", json.RawMessage(`{"v":1}`))
+	h.PresenceJoin("room-7", "client-h", json.RawMessage(`{"v":1}`), 0)
 
 	list1 := h.PresenceList("room-7")
 	// Mutate the copy.
@@ -213,12 +213,12 @@ func TestPresenceList_ReturnsCopyNotReference(t *testing.T) {
 
 func TestPresence_MultipleClientsOnSameChannel(t *testing.T) {
 	h := NewHub()
-	sub := h.Subscribe("room-8", 20, nil)
+	sub := h.Subscribe("room-8", 20, 0)
 	defer h.Unsubscribe("room-8", sub)
 
 	clients := []string{"c1", "c2", "c3"}
 	for _, id := range clients {
-		h.PresenceJoin("room-8", id, json.RawMessage(`{"id":"`+id+`"}`))
+		h.PresenceJoin("room-8", id, json.RawMessage(`{"id":"`+id+`"}`), 0)
 	}
 
 	list := h.PresenceList("room-8")
@@ -234,11 +234,11 @@ func TestPresence_MultipleClientsOnSameChannel(t *testing.T) {
 
 func TestPresence_RemovingOneClientLeavesOthers(t *testing.T) {
 	h := NewHub()
-	h.PresenceJoin("room-9", "keep-1", json.RawMessage(`{}`))
-	h.PresenceJoin("room-9", "keep-2", json.RawMessage(`{}`))
-	h.PresenceJoin("room-9", "leave-me", json.RawMessage(`{}`))
+	h.PresenceJoin("room-9", "keep-1", json.RawMessage(`{}`), 0)
+	h.PresenceJoin("room-9", "keep-2", json.RawMessage(`{}`), 0)
+	h.PresenceJoin("room-9", "leave-me", json.RawMessage(`{}`), 0)
 
-	h.PresenceLeave("room-9", "leave-me")
+	h.PresenceLeave("room-9", "leave-me", 0)
 
 	list := h.PresenceList("room-9")
 	if len(list) != 2 {

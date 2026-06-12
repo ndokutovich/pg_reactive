@@ -300,7 +300,8 @@ pgr_shmem_startup(void)
 bool
 pgr_dep_add(const char *query_id, const char *query_text,
 			Oid *table_oids, uint64 *col_masks, int num_tables,
-			char mode, const char *audience, PgrEvictedInfo *evicted)
+			char mode, const char *audience, int64 generation,
+			PgrEvictedInfo *evicted)
 {
 	PgrDepEntry *entry;
 	bool		found;
@@ -405,6 +406,11 @@ pgr_dep_add(const char *query_id, const char *query_text,
 	memcpy(entry->col_masks, col_masks, num_tables * sizeof(uint64));
 
 	entry->mode = mode;
+
+	/* generation: stamped into every NOTIFY so the proxy can drop a delta meant
+	 * for a newer/older epoch. Updated on every (re-)subscribe, like query_text;
+	 * the journal before-image above restores it if this (sub)txn aborts. */
+	entry->generation = generation;
 
 	/* audience: empty string = no constraint, NULL passed = no constraint. */
 	memset(entry->audience, 0, PGR_AUDIENCE_LEN);

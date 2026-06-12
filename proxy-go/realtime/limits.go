@@ -26,6 +26,14 @@ const (
 	// wsMsgBurst is the per-connection token-bucket capacity — short
 	// spikes (e.g. the join-time presence flurry) are absorbed.
 	wsMsgBurst = 20
+
+	// wsWriteWait bounds a single server-to-client write. Without a deadline a
+	// connection wedged on a slow/stuck TCP write blocks its goroutine
+	// indefinitely — so a revoked socket (RevokeStale) would not observe the
+	// revoke until the write returned, delaying disconnect and leaking the
+	// semaphore slot. The deadline turns a stuck write into an error the send
+	// loop treats as a disconnect (round 39 batch-2 F-LIVENESS).
+	wsWriteWait = 10 * time.Second
 )
 
 // rateBucket is a tiny per-connection token bucket. Not allocation-free,
