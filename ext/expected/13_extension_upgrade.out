@@ -30,7 +30,7 @@ ALTER EXTENSION pg_reactive UPDATE;
 SELECT extversion AS version_after FROM pg_extension WHERE extname = 'pg_reactive';
  version_after 
 ---------------
- 0.1.7
+ 0.1.8
 (1 row)
 
 SELECT count(*)::int AS subscription_meta_after

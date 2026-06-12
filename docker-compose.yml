@@ -48,6 +48,14 @@ services:
       # can flip it on for the adversarial-security suite without
       # editing compose (round 32 F2). Default in dev: empty (= false).
       REQUIRE_AUTHENTICATED_WS: ${REQUIRE_AUTHENTICATED_WS:-}
+      # Propagated from the host so the email-verification security E2E can flip
+      # it on without editing compose (mirrors REQUIRE_AUTHENTICATED_WS).
+      # REQUIRE_EMAIL_VERIFICATION=true also requires SMTP_* (the proxy refuses to
+      # boot otherwise); the test passes dummy values and injects tokens directly.
+      REQUIRE_EMAIL_VERIFICATION: ${REQUIRE_EMAIL_VERIFICATION:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
       PUBLIC_DIR: /public
       # EDGE_RUNTIME_URL: http://edge-runtime:9000  # uncomment to enable Deno functions
     ports:

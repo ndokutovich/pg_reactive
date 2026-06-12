@@ -73,7 +73,13 @@ CREATE TABLE IF NOT EXISTS pgstack.users (
   raw_app_meta jsonb DEFAULT '{}',
   provider text NOT NULL DEFAULT 'email',
   providers text[] DEFAULT '{email}',
-  email_confirmed_at timestamptz DEFAULT now(),
+  -- No DEFAULT: a new user is UNVERIFIED until a code path explicitly confirms
+  -- it. A DEFAULT now() auto-confirmed everyone, silently defeating
+  -- REQUIRE_EMAIL_VERIFICATION (signup never set it, so the login gate's
+  -- "email_confirmed_at IS NULL" check could never fire) — gemini audit P1.
+  -- signup sets now() only when verification is off; admin/OAuth set it
+  -- explicitly; email verification and email-change manage it.
+  email_confirmed_at timestamptz,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );

@@ -133,11 +133,20 @@ func Signup(d *Deps) http.HandlerFunc {
 		var createdAt, updatedAt time.Time
 		var emailConfirmedAt *time.Time
 
+		// A new user is confirmed immediately ONLY when verification is off; when
+		// REQUIRE_EMAIL_VERIFICATION is on it stays NULL so the login gate (and
+		// the email_confirmed_at IS NULL check) actually fires (gemini audit P1).
+		var signupConfirmedAt *time.Time
+		if !d.RequireEmailVerification {
+			now := time.Now().UTC()
+			signupConfirmedAt = &now
+		}
+
 		err = d.Pool.QueryRow(ctx, `
-			INSERT INTO pgstack.users (email, encrypted_password, raw_user_meta)
-			VALUES ($1, $2, $3)
+			INSERT INTO pgstack.users (email, encrypted_password, raw_user_meta, email_confirmed_at)
+			VALUES ($1, $2, $3, $4)
 			RETURNING id, role, created_at, updated_at, email_confirmed_at
-		`, body.Email, hashed, userMeta).Scan(&userID, &role, &createdAt, &updatedAt, &emailConfirmedAt)
+		`, body.Email, hashed, userMeta, signupConfirmedAt).Scan(&userID, &role, &createdAt, &updatedAt, &emailConfirmedAt)
 		if err != nil {
 			if isUniqueViolation(err) {
 				writeError(w, http.StatusConflict, "email already registered")
@@ -475,9 +484,20 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, "invalid email address")
 				return
 			}
-			_, err := d.Pool.Exec(ctx, `
-				UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2
-			`, newEmail, claims.Sub)
+			// The new address is unverified. When verification is required, CLEAR
+			// email_confirmed_at so the login gate refuses the new address until
+			// it is re-verified — otherwise the change silently inherits the old
+			// address's confirmed status (gemini audit P1).
+			var err error
+			if d.RequireEmailVerification {
+				_, err = d.Pool.Exec(ctx, `
+					UPDATE pgstack.users SET email = $1, email_confirmed_at = NULL, updated_at = now() WHERE id = $2
+				`, newEmail, claims.Sub)
+			} else {
+				_, err = d.Pool.Exec(ctx, `
+					UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2
+				`, newEmail, claims.Sub)
+			}
 			if err != nil {
 				if isUniqueViolation(err) {
 					writeError(w, http.StatusConflict, "email already in use")
@@ -486,6 +506,23 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 				log.Error().Err(err).Msg("update user email")
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
+			}
+			// Issue a fresh verification token for the new address so the user
+			// can re-confirm (and isn't locked out by the cleared status).
+			if d.RequireEmailVerification {
+				tok := generateHexToken()
+				exp := time.Now().UTC().Add(24 * time.Hour)
+				if _, terr := d.Pool.Exec(ctx, `
+					INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
+					VALUES ($1, $2, 'email_verification', $3)
+				`, claims.Sub, HashToken(tok), exp); terr != nil {
+					log.Error().Err(terr).Msg("create verification token on email change")
+				} else if d.Mailer != nil {
+					verifyURL := fmt.Sprintf("%s/auth/v1/verify?token=%s", d.SiteURL, tok)
+					if merr := d.Mailer.SendEmailVerification(r.Context(), newEmail, verifyURL); merr != nil {
+						log.Error().Err(merr).Msg("send verification email on email change")
+					}
+				}
 			}
 		}
 
@@ -509,6 +546,16 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 			`, hashed, claims.Sub)
 			if err != nil {
 				log.Error().Err(err).Msg("update user password")
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			// A password change invalidates every other session (gemini audit P1).
+			// The caller gets fresh tokens from this response flow; all previously
+			// issued refresh tokens are revoked.
+			if _, err = d.Pool.Exec(ctx, `
+				DELETE FROM pgstack.refresh_tokens WHERE user_id = $1
+			`, claims.Sub); err != nil {
+				log.Error().Err(err).Msg("revoke sessions after password change")
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
@@ -676,6 +723,19 @@ func RecoverConfirm(d *Deps) http.HandlerFunc {
 		`, hashed, userID)
 		if err != nil {
 			log.Error().Err(err).Msg("update password after recovery")
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		// Revoke every existing session: a password reset is the response to a
+		// compromise, so any refresh token issued before it must stop working
+		// (gemini audit P1 — otherwise a stolen 30-day refresh survives the reset
+		// and mints fresh access tokens). Done in the same tx as the password
+		// change so they commit atomically.
+		if _, err = tx.Exec(ctx, `
+			DELETE FROM pgstack.refresh_tokens WHERE user_id = $1
+		`, userID); err != nil {
+			log.Error().Err(err).Msg("revoke sessions after recovery")
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}

@@ -74,7 +74,7 @@ SELECT query_id, mode FROM pgr.get_subscriptions() ORDER BY query_id;
 -- 12. Invalid mode raises error
 SELECT pgr.subscribe('nm_q3', 'SELECT * FROM orders', 'invalid');
 ERROR:  invalid mode "invalid": must be 'delta' or 'notify'
-CONTEXT:  PL/pgSQL function pgr.subscribe(text,text,text,jsonb) line 20 at assignment
+CONTEXT:  PL/pgSQL function pgr.subscribe(text,text,text,jsonb) line 13 at assignment
 -- 13. Explicit delta mode works
 SELECT pgr.subscribe('nm_q4', 'SELECT * FROM orders', 'delta');
                                   subscribe                                  

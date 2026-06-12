@@ -593,6 +593,11 @@ func buildRouter(state *AppState) http.Handler {
 		r.Use(appMiddleware.EdgeFnTiming)
 		r.Get("/functions/v1/", functions.List(fnDeps))
 		r.Post("/functions/v1/_refresh", functions.Refresh(fnDeps))
+		// Edge-runtime readiness probe. Registered as a literal path so it takes
+		// precedence over the {name} wildcard — without this it fell through to
+		// InvokeGet as a function literally named "_health" and the dedicated,
+		// deadline-bounded handler was never reached (gemini audit P3).
+		r.Get("/functions/v1/_health", functions.DenoHealth(fnDeps))
 		r.Get("/functions/v1/{name}", functions.InvokeGet(fnDeps))
 		r.Post("/functions/v1/{name}", functions.Invoke(fnDeps))
 	})

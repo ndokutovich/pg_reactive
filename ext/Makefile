@@ -2,7 +2,7 @@ MODULE_big = pg_reactive
 OBJS = src/pg_reactive.o src/dependency.o src/invalidation.o src/recompute.o src/bgworker.o
 
 EXTENSION = pg_reactive
-DATA = pg_reactive--0.1.2.sql pg_reactive--0.1.1--0.1.2.sql pg_reactive--0.1.3.sql pg_reactive--0.1.2--0.1.3.sql pg_reactive--0.1.4.sql pg_reactive--0.1.3--0.1.4.sql pg_reactive--0.1.5.sql pg_reactive--0.1.4--0.1.5.sql pg_reactive--0.1.5--0.1.6.sql pg_reactive--0.1.6--0.1.7.sql
+DATA = pg_reactive--0.1.2.sql pg_reactive--0.1.1--0.1.2.sql pg_reactive--0.1.3.sql pg_reactive--0.1.2--0.1.3.sql pg_reactive--0.1.4.sql pg_reactive--0.1.3--0.1.4.sql pg_reactive--0.1.5.sql pg_reactive--0.1.4--0.1.5.sql pg_reactive--0.1.5--0.1.6.sql pg_reactive--0.1.6--0.1.7.sql pg_reactive--0.1.7--0.1.8.sql
 
 REGRESS = 00_setup 01_subscribe 02_invalidation 03_recompute 04_overflow 05_coverage 06_column_tracking 07_notify_mode 08_advanced_queries 09_batch_invalidation 10_audience 11_snapshot_drift 12_rollback_journal 13_extension_upgrade 14_generation 15_restore_privilege
 REGRESS_OPTS = --dbname=pg_reactive_test
