@@ -38,6 +38,11 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
+      # The proxy defaults to PGSTACK_ENV=production (fail-secure); this dev base
+      # uses dev-only secrets + ENABLE_SQL_ENDPOINT=true, so opt into development
+      # explicitly or it refuses to boot. examples/docker-compose.prod.yml sets
+      # PGSTACK_ENV=production with real secrets.
+      PGSTACK_ENV: ${PGSTACK_ENV:-development}
       ENABLE_SQL_ENDPOINT: "true"
       JWT_SECRET: dev-only-jwt-secret-do-not-use-in-production
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}

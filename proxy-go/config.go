@@ -189,7 +189,16 @@ func FromEnv() Config {
 
 	cfg.DatabaseURL = envOrDefault("DATABASE_URL", "postgres://postgres:postgres@db:5432/app")
 	cfg.ListenAddr = envOrDefault("LISTEN_ADDR", "0.0.0.0:8080")
+	// PGSTACK_ENV defaults to "production" (fail-secure): an operator who forgets
+	// to set it gets the strict validator (rejects dev-only secrets, refuses
+	// ENABLE_SQL_ENDPOINT, requires REQUIRE_AUTHENTICATED_WS, etc.) rather than
+	// silently booting an insecure dev posture in production (gemini audit P3).
+	// Dev/CI must opt into the relaxed posture explicitly with PGSTACK_ENV=
+	// development — the dev compose files do this.
 	cfg.PgstackEnv = strings.ToLower(os.Getenv("PGSTACK_ENV"))
+	if cfg.PgstackEnv == "" {
+		cfg.PgstackEnv = "production"
+	}
 
 	cfg.JWTSecret = os.Getenv("JWT_SECRET")
 

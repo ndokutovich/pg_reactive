@@ -293,6 +293,35 @@ function checkExtSDRevoke() {
     let text;
     try { text = readFileSync(fp, "utf-8"); } catch { continue; }
     auditSDRevoke(fp, text);
+    checkRestoreNotDefiner(fp, text);
+  }
+}
+
+// Rule SEC-R41 — pgr.restore_subscriptions() must be SECURITY INVOKER, never
+//   SECURITY DEFINER. SECURITY.md invariant 18 / gemini audit P1 CRITICAL.
+//   restore_subscriptions runs at every restart, invoked by the boot entrypoint
+//   as the superuser, and re-executes each persisted subscription's stored query
+//   (snapshot CREATE TABLE AS) under the registrant's saved search_path. To stop
+//   a subscription registered with an attacker-controlled search_path from
+//   escalating, it drops to the owner_role with SET LOCAL ROLE — which Postgres
+//   FORBIDS inside a SECURITY DEFINER function. So SECURITY DEFINER here means
+//   the privilege drop is absent and the function runs arbitrary stored SQL as
+//   the superuser. Scope: the extension's landing/full-install scripts.
+//   Override a verified-safe occurrence with `-- lint:allow=SEC-R41`.
+function checkRestoreNotDefiner(file, text) {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+pgr\.restore_subscriptions\b/i.test(lines[i])) continue;
+    if (/lint:allow=SEC-R41/.test(lines[i])) continue;
+    // Walk the function header up to the body delimiter (AS $...$).
+    for (let j = i; j < Math.min(i + 12, lines.length); j++) {
+      if (/\bAS\s+\$/i.test(lines[j])) break;
+      if (/SECURITY\s+DEFINER/i.test(lines[j])) {
+        report(file, j + 1, "SEC-R41",
+          "pgr.restore_subscriptions is SECURITY DEFINER — it re-executes each subscription's stored query at restart as the extension-owning superuser; it must be SECURITY INVOKER and SET LOCAL ROLE to each owner_role (SET ROLE is forbidden in SECURITY DEFINER), or a restart escalates an attacker-registered subscription (SECURITY.md invariant 18, gemini audit P1)");
+        break;
+      }
+    }
   }
 }
 

@@ -1,0 +1,57 @@
+-- 15_restore_privilege (gemini audit P1, CRITICAL): pgr.restore_subscriptions()
+-- runs at startup as the extension-owning superuser and re-executes each
+-- persisted subscription's stored query (via the snapshot CREATE TABLE AS) under
+-- the registrant's saved search_path. It MUST drop to the subscription's
+-- owner_role first, or a subscription registered with an attacker-controlled
+-- search_path + query escalates to the superuser at restart. The rebuilt
+-- snapshot's owner reveals which role restore executed the query as.
+CREATE EXTENSION pg_reactive;
+
+-- A low-privilege owner granted exactly what a role needs to register a delta
+-- subscription (own the watched table so its invalidation triggers can be
+-- installed; EXECUTE on the internal entry point and the trigger function;
+-- CREATE on pgr for the snapshot). This models a role that COULD have
+-- subscribed — the only kind that can own a persisted subscription.
+CREATE ROLE pgr_rp_owner;
+GRANT USAGE, CREATE ON SCHEMA pgr TO pgr_rp_owner;
+GRANT EXECUTE ON FUNCTION pgr._subscribe_internal(text, text, text, jsonb, bigint) TO pgr_rp_owner;
+GRANT EXECUTE ON FUNCTION pgr.trigger_func() TO pgr_rp_owner;
+
+CREATE TABLE rp_t (id int primary key);
+ALTER TABLE rp_t OWNER TO pgr_rp_owner;
+INSERT INTO rp_t VALUES (1), (2);
+
+-- Persist a subscription OWNED BY the low-priv role (as if it had registered it),
+-- then restore — which rebuilds the snapshot. Its owner shows which role restore
+-- executed the stored query as.
+INSERT INTO pgr.persisted_subscriptions
+  (query_id, query_text, mode, audience, owner_role, search_path, generation, created_at, updated_at)
+VALUES
+  ('rp_q', 'SELECT id FROM rp_t', 'delta', NULL, 'pgr_rp_owner', 'pg_catalog, pgr, public', 1, now(), now());
+
+SELECT pgr.restore_subscriptions();
+
+-- The snapshot MUST be owned by the subscription's owner, not the superuser that
+-- ran restore. Before the 0.1.7 fix this was the bootstrap superuser (escalation).
+SELECT tableowner AS snapshot_owner
+FROM pg_tables WHERE schemaname = 'pgr' AND tablename = '_snap_rp_q';
+
+-- A row with an empty owner fails closed: it is refused, not replayed as the
+-- superuser. (owner_role is NOT NULL, so the degenerate value is the empty
+-- string; the guard also covers NULL defensively.)
+INSERT INTO pgr.persisted_subscriptions
+  (query_id, query_text, mode, audience, owner_role, search_path, generation, created_at, updated_at)
+VALUES
+  ('rp_noowner', 'SELECT id FROM rp_t', 'delta', NULL, '', 'pg_catalog, pgr, public', 2, now(), now());
+SELECT pgr.restore_subscriptions();
+SELECT to_regclass('pgr._snap_rp_noowner') AS noowner_snapshot;  -- NULL: refused
+
+-- Cleanup.
+SELECT pgr.unsubscribe('rp_q');
+DELETE FROM pgr.persisted_subscriptions WHERE query_id IN ('rp_q', 'rp_noowner');
+DROP TABLE rp_t;
+REVOKE USAGE, CREATE ON SCHEMA pgr FROM pgr_rp_owner;
+REVOKE EXECUTE ON FUNCTION pgr._subscribe_internal(text, text, text, jsonb, bigint) FROM pgr_rp_owner;
+REVOKE EXECUTE ON FUNCTION pgr.trigger_func() FROM pgr_rp_owner;
+DROP ROLE pgr_rp_owner;
+DROP EXTENSION pg_reactive;

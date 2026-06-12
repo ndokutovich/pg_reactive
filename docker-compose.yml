@@ -35,6 +35,11 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
+      # Dev posture: the proxy defaults to PGSTACK_ENV=production (fail-secure),
+      # so this base — with dev-only secrets and ENABLE_SQL_ENDPOINT=true — must
+      # opt into development explicitly or it refuses to boot. Override on the
+      # host to run the dev compose under the strict validator.
+      PGSTACK_ENV: ${PGSTACK_ENV:-development}
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-do-not-use-in-production}
       ANON_KEY: ${ANON_KEY:-dev-only-anon-key-do-not-use-in-production}
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}

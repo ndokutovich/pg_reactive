@@ -1,14 +1,29 @@
 package functions
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"pgstack-proxy-go/rest"
+)
+
+// denoHealthTimeout / denoHealthClient bound the edge-runtime health probe.
+// http.DefaultClient has no timeout, so a Deno container that accepts the
+// connection but never responds would block the handler goroutine indefinitely —
+// a slow-loris DoS that leaks goroutines and connection slots (gemini audit P2).
+// A health check must be fast; 5s is generous. The bound is applied as a request
+// context deadline (denoHealthTimeout is a var so tests can shorten it). The
+// function-invoke reverse proxy is deliberately NOT bounded this way — it streams
+// and is tied to the client request context so long-running functions survive.
+var (
+	denoHealthTimeout = 5 * time.Second
+	denoHealthClient  = &http.Client{}
 )
 
 // proxyToDeno forwards the request to the Deno edge-runtime container
@@ -73,14 +88,17 @@ func DenoHealth(d *FunctionsDeps) http.HandlerFunc {
 			return
 		}
 
-		// Build a simple GET to the edge-runtime root (health check).
-		healthReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target.String(), nil)
+		// Build a simple GET to the edge-runtime root (health check), bounded by
+		// a deadline so a hung edge-runtime cannot wedge the goroutine.
+		ctx, cancel := context.WithTimeout(r.Context(), denoHealthTimeout)
+		defer cancel()
+		healthReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "failed to create health request")
 			return
 		}
 
-		resp, err := http.DefaultClient.Do(healthReq)
+		resp, err := denoHealthClient.Do(healthReq)
 		if err != nil {
 			log.Warn().Err(err).Msg("functions: deno health check failed")
 			writeJSONError(w, http.StatusBadGateway, "edge runtime unreachable")
