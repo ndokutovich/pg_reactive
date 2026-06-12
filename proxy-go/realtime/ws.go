@@ -281,6 +281,14 @@ func handleWebSocket(
 			log.Info().Str("query_id", queryID).Msg("generation changed before snapshot; closing connection")
 			return
 		}
+		// A re-registration may have revoked this connection between the snapshot
+		// read and here (RevokeStale runs off the listener goroutine). Do not ship
+		// even old-epoch rows to a revoked socket — re-check before sending
+		// (round 39 batch-2 snapshot TOCTOU, defense-in-depth).
+		if sub.revoked() {
+			log.Info().Str("query_id", queryID).Msg("revoked before snapshot send; closing connection")
+			return
+		}
 		if len(rows) > 0 {
 			snap, _ := json.Marshal(map[string]any{
 				"query_id": queryID,
@@ -640,11 +648,29 @@ func snapshotForGeneration(pool *pgxpool.Pool, queryID string, boundGen int64) (
 		return nil, false, nil
 	}
 	ctx := context.Background()
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	// RepeatableRead so the generation check and the row read observe ONE MVCC
+	// snapshot. Under READ COMMITTED (the default) each statement takes a fresh
+	// snapshot, so a re-subscribe committing between the two would let the gen
+	// check pass on the OLD generation while the rows are read from the NEW one
+	// (round 39 batch-2 snapshot TOCTOU, HIGH).
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Take ACCESS SHARE on the snapshot table up front. A re-subscribe rebuilds
+	// it under ACCESS EXCLUSIVE in the SAME transaction that bumps the
+	// generation (pgr.subscribe → pgr_snapshot_drop), so holding this lock blocks
+	// that re-subscribe from committing until we have read BOTH the generation
+	// and the rows — the gen check can never pass on an epoch whose rows are
+	// about to be swapped out. If the re-subscribe already committed, this lock
+	// resolves to the rebuilt table and the gen check below then sees the new
+	// generation and closes. If the table is gone (unsubscribed / mid-rebuild)
+	// the LOCK errors and we fail closed. query_id validated by safeQueryIDRe.
+	if _, err = tx.Exec(ctx, `LOCK TABLE pgr."_snap_`+queryID+`" IN ACCESS SHARE MODE`); err != nil {
+		return nil, false, err
+	}
 
 	var curGen int64
 	if err = tx.QueryRow(ctx, `SELECT generation FROM pgr.subscription_meta($1)`, queryID).Scan(&curGen); err != nil {

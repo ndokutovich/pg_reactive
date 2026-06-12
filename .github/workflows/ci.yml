@@ -462,6 +462,22 @@ jobs:
       - name: E2E — WS re-auth on audience change
         run: node tests/e2e_ws_reauth_test.mjs
 
+      # Round 39 batch-2: the generation model. Each guards a distinct leak the
+      # batch-1 per-delta re-check missed — keep them all on CI so a regression
+      # in generation binding, presence/broadcast gating, snapshot rebuild, or
+      # the snapshot TOCTOU fails the build instead of shipping silently.
+      - name: E2E — WS generation order (F-ORDER)
+        run: node tests/e2e_ws_forder_test.mjs
+
+      - name: E2E — WS presence/broadcast re-auth (F2)
+        run: node tests/e2e_ws_presence_reauth_test.mjs
+
+      - name: E2E — WS snapshot re-subscribe rebuild (F-SNAP)
+        run: node tests/e2e_ws_snapshot_reauth_test.mjs
+
+      - name: E2E — WS snapshot TOCTOU
+        run: node tests/e2e_ws_snapshot_toctou_test.mjs
+
       - name: E2E — Auth endpoints
         run: node tests/e2e_auth_test.mjs
 
