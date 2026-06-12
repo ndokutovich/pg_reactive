@@ -247,8 +247,12 @@ How the gate works:
 - `service_role` JWTs always bypass the audience gate.
 - A `NULL` audience preserves the pre-binding public behaviour — any authenticated
   client may connect.
-- The proxy reads the audience from `pgr.get_subscriptions()` on **every** WS
-  connect, so the check is live, not cached at subscribe time.
+- The proxy reads the audience from the transactional `pgr.subscription_meta()`
+  — over the MVCC catalog, never the non-transactional `pgr.get_subscriptions()`
+  shmem view — on **every** WS connect, again right before the initial snapshot,
+  and on **every** delivered delta. A connection whose claims no longer satisfy
+  the current audience is disconnected, so a re-registration cannot leak to an
+  already-open socket (round 37/39).
 
 The audience is stored in shared memory with a **512-byte** serialised cap, so
 keep it to the claims you actually gate on.

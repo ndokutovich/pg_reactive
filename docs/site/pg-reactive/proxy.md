@@ -47,7 +47,7 @@ The `{query_id}` must already be registered with [`pgr.subscribe()`](./subscribe
 When a client opens `ws://127.0.0.1:8080/ws/{query_id}`, the proxy:
 
 1. **Resolves auth claims** — honours a JWT, the service-role key, or the anon key (see [Auth](#auth-jwt-hs256) below). When `JWT_SECRET` is unset, auth is disabled and the connection is treated as `anon`.
-2. **Looks up subscription metadata** (mode and audience) from `pgr.get_subscriptions()`. An unknown `query_id` is rejected with `404` before the upgrade; a metadata lookup failure returns `503` (fail-closed).
+2. **Looks up subscription metadata** (mode and audience) from the transactional `pgr.subscription_meta()` — never `pgr.get_subscriptions()`, which reads non-transactional shmem and could expose an uncommitted or rolled-back audience. An unknown `query_id` is rejected with `404` before the upgrade; a metadata lookup failure returns `503` (fail-closed). The audience is re-checked before the snapshot and on every delivered delta, so a re-registration disconnects a now-unauthorized open connection.
 3. **Acquires a connection slot** from the semaphore. If the proxy is at capacity, it returns `503` and never upgrades.
 4. **Upgrades** the HTTP request to a WebSocket.
 5. **Sends the welcome message**: `{"type":"subscribed","query_id":"<id>"}`.

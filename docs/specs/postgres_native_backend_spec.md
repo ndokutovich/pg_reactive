@@ -686,7 +686,7 @@ All configuration is via environment variables:
 | **REST** | PostgREST-compatible | PostgREST | REST/gRPC | Convex functions | REST |
 | **Storage** | bytea (PostgreSQL) | S3 | GCS | Built-in | Filesystem |
 | **Edge Functions** | Planned | Deno | Cloud Functions | Convex actions | No |
-| **Open Source** | PostgreSQL | Apache 2.0 | No | BSL | MIT | <!-- lint:allow=license: last column is PocketBase (MIT), a competitor -->
+| **Open Source** | PostgreSQL + Apache-2.0 | Apache 2.0 | No | BSL | MIT | <!-- lint:allow=license: last column is PocketBase (MIT), a competitor -->
 | **Pricing** | Free (self-hosted) | Freemium | Pay-per-use | Freemium | Free |
 | **SQL Support** | Full PostgreSQL | Full PostgreSQL | No SQL | No SQL | SQLite |
 | **RLS** | PostgreSQL native | PostgreSQL native | Security Rules | Validators | No |

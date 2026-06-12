@@ -374,7 +374,7 @@ SELECT pgr.subscribe(
   '{"role":"admin","org":"acme"}'::jsonb);
 ```
 
-Audience is stored in shared memory (max 512 bytes serialised). The proxy reads the matching row from `pgr.get_subscriptions()` on every WS connect; mismatched claims surface as `403`. NULL audience preserves pre-0.1.2 public behaviour.
+Audience is persisted to `pgr.persisted_subscriptions` (and mirrored in shared memory, max 512 bytes serialised). The proxy reads it from the transactional `pgr.subscription_meta()` — never the non-transactional `pgr.get_subscriptions()` shmem view — on every WS connect, before the initial snapshot, and on every delivered delta; a connection whose claims no longer match the current audience is disconnected (round 37/39). Mismatched claims surface as `403`. NULL audience preserves pre-0.1.2 public behaviour.
 
 ### 9.2 Views
 
