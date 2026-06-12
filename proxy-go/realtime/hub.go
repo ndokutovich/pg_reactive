@@ -7,6 +7,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// subscriber is one connected client's delivery slot. authorize re-evaluates
+// whether this client may still receive data under a (possibly changed)
+// audience; revoke is closed exactly once to force the connection to
+// disconnect when it no longer may (round 39 F1).
+type subscriber struct {
+	ch        chan string
+	authorize func(audience string) bool
+	revoke    chan struct{}
+	once      sync.Once
+}
+
+// Revoke signals the connection to disconnect. Idempotent and concurrency-safe.
+func (s *subscriber) Revoke() { s.once.Do(func() { close(s.revoke) }) }
+
 // Hub provides fan-out delivery of NOTIFY payloads to multiple concurrent
 // WebSocket subscribers. Each subscriber gets its own buffered channel so
 // that a single NOTIFY message is delivered to ALL connected clients.
@@ -16,7 +30,7 @@ import (
 // maintaining a slice of per-subscriber channels and writing to every one.
 type Hub struct {
 	mu   sync.RWMutex
-	subs map[string][]chan string
+	subs map[string][]*subscriber
 
 	// Presence: channel → clientID → state
 	pmu      sync.RWMutex
@@ -26,30 +40,39 @@ type Hub struct {
 // NewHub creates an empty Hub.
 func NewHub() *Hub {
 	return &Hub{
-		subs:     make(map[string][]chan string),
+		subs:     make(map[string][]*subscriber),
 		presence: make(map[string]map[string]json.RawMessage),
 	}
 }
 
-// Subscribe registers a new subscriber for queryID and returns its personal
-// delivery channel. The caller MUST call Unsubscribe when the connection
-// closes to avoid goroutine and memory leaks.
-func (h *Hub) Subscribe(queryID string, capacity int) chan string {
-	ch := make(chan string, capacity)
+// Subscribe registers a new subscriber for queryID and returns its slot.
+// authorize is the connect-time audience gate, re-runnable against the CURRENT
+// audience so a re-registered subscription can revoke a now-unauthorized
+// connection (round 39 F1). The caller MUST call Unsubscribe when the
+// connection closes to avoid goroutine and memory leaks.
+func (h *Hub) Subscribe(queryID string, capacity int, authorize func(audience string) bool) *subscriber {
+	if authorize == nil {
+		authorize = func(string) bool { return true }
+	}
+	s := &subscriber{
+		ch:        make(chan string, capacity),
+		authorize: authorize,
+		revoke:    make(chan struct{}),
+	}
 	h.mu.Lock()
-	h.subs[queryID] = append(h.subs[queryID], ch)
+	h.subs[queryID] = append(h.subs[queryID], s)
 	h.mu.Unlock()
-	return ch
+	return s
 }
 
-// Unsubscribe removes ch from the subscriber list for queryID. It is safe
+// Unsubscribe removes s from the subscriber list for queryID. It is safe
 // to call concurrently with Subscribe and Broadcast.
-func (h *Hub) Unsubscribe(queryID string, ch chan string) {
+func (h *Hub) Unsubscribe(queryID string, s *subscriber) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	subs := h.subs[queryID]
-	for i, s := range subs {
-		if s == ch {
+	for i, x := range subs {
+		if x == s {
 			// Remove by swapping with last element and shrinking.
 			last := len(subs) - 1
 			subs[i] = subs[last]
@@ -62,21 +85,52 @@ func (h *Hub) Unsubscribe(queryID string, ch chan string) {
 	}
 }
 
-// Broadcast delivers payload to every subscriber registered for queryID.
+// snapshot returns a copy of the subscriber slice for queryID under RLock.
+func (h *Hub) snapshot(queryID string) []*subscriber {
+	h.mu.RLock()
+	snap := make([]*subscriber, len(h.subs[queryID]))
+	copy(snap, h.subs[queryID])
+	h.mu.RUnlock()
+	return snap
+}
+
+// Broadcast delivers payload to every subscriber registered for queryID
+// WITHOUT re-checking authorization. Used for presence/channel events, not
+// live-query data — deltas go through BroadcastDelta.
 // Non-blocking per subscriber: if a subscriber's buffer is full the message
 // is silently dropped for that subscriber only; all others still receive it.
 func (h *Hub) Broadcast(queryID, payload string) {
-	h.mu.RLock()
-	snap := make([]chan string, len(h.subs[queryID]))
-	copy(snap, h.subs[queryID])
-	h.mu.RUnlock()
+	snap := h.snapshot(queryID)
 	log.Debug().Str("query_id", queryID).Int("subscribers", len(snap)).Msg("Hub.Broadcast")
-	for _, ch := range snap {
+	for _, s := range snap {
 		select {
-		case ch <- payload:
+		case s.ch <- payload:
 		default:
 			// subscriber buffer full — message dropped for this subscriber only
 			log.Warn().Str("query_id", queryID).Msg("Hub.Broadcast: subscriber buffer full, dropping")
+		}
+	}
+}
+
+// BroadcastDelta delivers a live-query delta only to subscribers STILL
+// authorized under the subscription's CURRENT audience, and revokes (forces
+// the disconnect of) any whose authorization no longer holds. This closes the
+// stale-permission window where a connection authorized under an old audience
+// keeps reading a re-registered — e.g. now-private — subscription (round 39 F1
+// HIGH). The caller resolves the current audience from the transactional
+// catalog (subscription_meta) once per delta.
+func (h *Hub) BroadcastDelta(queryID, payload, audience string) {
+	snap := h.snapshot(queryID)
+	log.Debug().Str("query_id", queryID).Int("subscribers", len(snap)).Msg("Hub.BroadcastDelta")
+	for _, s := range snap {
+		if !s.authorize(audience) {
+			s.Revoke()
+			continue
+		}
+		select {
+		case s.ch <- payload:
+		default:
+			log.Warn().Str("query_id", queryID).Msg("Hub.BroadcastDelta: subscriber buffer full, dropping")
 		}
 	}
 }

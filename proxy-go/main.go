@@ -122,6 +122,7 @@ func main() {
 	go realtime.ListenLoop(
 		cfg.DatabaseURL,
 		state.Hub,
+		state.Pool,
 		&state.PGConnected,
 		cfg.PGReconnectMaxBackoff,
 		state.WebhookManager,

@@ -29,8 +29,9 @@ func TestPresenceJoin_AddsClientToMap(t *testing.T) {
 
 func TestPresenceJoin_BroadcastsJoinEvent(t *testing.T) {
 	h := NewHub()
-	ch := h.Subscribe("room-1", 10)
-	defer h.Unsubscribe("room-1", ch)
+	sub := h.Subscribe("room-1", 10, nil)
+	ch := sub.ch
+	defer h.Unsubscribe("room-1", sub)
 
 	h.PresenceJoin("room-1", "client-b", json.RawMessage(`{"x":1}`))
 
@@ -69,8 +70,9 @@ func TestPresenceLeave_RemovesClient(t *testing.T) {
 
 func TestPresenceLeave_BroadcastsLeaveEvent(t *testing.T) {
 	h := NewHub()
-	ch := h.Subscribe("room-2", 10)
-	defer h.Unsubscribe("room-2", ch)
+	sub := h.Subscribe("room-2", 10, nil)
+	ch := sub.ch
+	defer h.Unsubscribe("room-2", sub)
 
 	// Drain the join event first.
 	h.PresenceJoin("room-2", "client-d", json.RawMessage(`{}`))
@@ -142,8 +144,9 @@ func TestPresenceUpdate_UpdatesClientState(t *testing.T) {
 
 func TestPresenceUpdate_BroadcastsStateEvent(t *testing.T) {
 	h := NewHub()
-	ch := h.Subscribe("room-5", 10)
-	defer h.Unsubscribe("room-5", ch)
+	sub := h.Subscribe("room-5", 10, nil)
+	ch := sub.ch
+	defer h.Unsubscribe("room-5", sub)
 
 	// Drain join broadcast.
 	h.PresenceJoin("room-5", "client-g", json.RawMessage(`{}`))
@@ -210,8 +213,8 @@ func TestPresenceList_ReturnsCopyNotReference(t *testing.T) {
 
 func TestPresence_MultipleClientsOnSameChannel(t *testing.T) {
 	h := NewHub()
-	ch := h.Subscribe("room-8", 20)
-	defer h.Unsubscribe("room-8", ch)
+	sub := h.Subscribe("room-8", 20, nil)
+	defer h.Unsubscribe("room-8", sub)
 
 	clients := []string{"c1", "c2", "c3"}
 	for _, id := range clients {

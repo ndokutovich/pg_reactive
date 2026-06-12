@@ -13,8 +13,9 @@ func TestDispatchClientMessage_DropsNonPresence(t *testing.T) {
 	hub := NewHub()
 	const qid = "q1"
 	// Client B subscribes — we'll watch its channel.
-	ch := hub.Subscribe(qid, 4)
-	defer hub.Unsubscribe(qid, ch)
+	sub := hub.Subscribe(qid, 4, nil)
+	ch := sub.ch
+	defer hub.Unsubscribe(qid, sub)
 
 	// Client A tries to forge a delta.
 	fake := []byte(`{"query_id":"q1","inserted":[{"forged":true}],"deleted":[]}`)
@@ -30,8 +31,9 @@ func TestDispatchClientMessage_DropsNonPresence(t *testing.T) {
 
 func TestDispatchClientMessage_DropsMalformedJSON(t *testing.T) {
 	hub := NewHub()
-	ch := hub.Subscribe("q2", 4)
-	defer hub.Unsubscribe("q2", ch)
+	sub := hub.Subscribe("q2", 4, nil)
+	ch := sub.ch
+	defer hub.Unsubscribe("q2", sub)
 
 	dispatchClientMessage(hub, "q2", "client-A", []byte(`not json`))
 	dispatchClientMessage(hub, "q2", "client-A", []byte(`{`))
@@ -46,8 +48,9 @@ func TestDispatchClientMessage_DropsMalformedJSON(t *testing.T) {
 
 func TestDispatchClientMessage_DropsUnknownTypes(t *testing.T) {
 	hub := NewHub()
-	ch := hub.Subscribe("q3", 4)
-	defer hub.Unsubscribe("q3", ch)
+	sub := hub.Subscribe("q3", 4, nil)
+	ch := sub.ch
+	defer hub.Unsubscribe("q3", sub)
 
 	for _, msg := range []string{
 		`{"type":"delta","inserted":[1,2,3]}`,
@@ -71,8 +74,9 @@ func TestDispatchClientMessage_DropsUnknownTypes(t *testing.T) {
 func TestDispatchClientMessage_BroadcastIsWrappedAndDelivered(t *testing.T) {
 	hub := NewHub()
 	const qid = "q6"
-	ch := hub.Subscribe(qid, 4)
-	defer hub.Unsubscribe(qid, ch)
+	sub := hub.Subscribe(qid, 4, nil)
+	ch := sub.ch
+	defer hub.Unsubscribe(qid, sub)
 
 	dispatchClientMessage(hub, qid, "peer-A",
 		[]byte(`{"type":"broadcast","payload":{"hello":"world"}}`))
@@ -105,8 +109,9 @@ func TestDispatchClientMessage_PresenceStillWorks(t *testing.T) {
 	// Subscribe a watcher AFTER the join so we only see the update.
 	hub.PresenceJoin(qid, "client-A", json.RawMessage(`{"state":"initial"}`))
 
-	ch := hub.Subscribe(qid, 4)
-	defer hub.Unsubscribe(qid, ch)
+	sub := hub.Subscribe(qid, 4, nil)
+	ch := sub.ch
+	defer hub.Unsubscribe(qid, sub)
 
 	dispatchClientMessage(hub, qid, "client-A",
 		[]byte(`{"type":"presence","state":{"typing":true}}`))

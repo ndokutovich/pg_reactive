@@ -191,7 +191,7 @@ func WSHandler(
 			return
 		}
 
-		go handleWebSocket(conn, queryID, mode, hub, pool, broadcastCapacity, semaphore)
+		go handleWebSocket(conn, queryID, mode, claims, isAnon, hub, pool, broadcastCapacity, semaphore)
 	}
 }
 
@@ -203,6 +203,8 @@ func handleWebSocket(
 	conn *websocket.Conn,
 	queryID string,
 	mode string,
+	claims middleware.RequestClaims,
+	isAnon bool,
 	hub *Hub,
 	pool *pgxpool.Pool,
 	broadcastCapacity int,
@@ -223,13 +225,30 @@ func handleWebSocket(
 	// semaphore slot is released by the defer below.
 	bucket := newRateBucket(wsMsgRate, wsMsgBurst)
 
+	// authorize re-runs the connect-time audience gate against the CURRENT
+	// audience, so BroadcastDelta can revoke this connection if the
+	// subscription is re-registered under an audience it no longer satisfies
+	// (round 39 F1). Mirrors the handshake gate exactly.
+	authorize := func(audience string) bool {
+		if audience == "" {
+			return true // public subscription
+		}
+		if claims.Role == "service_role" {
+			return true // service_role bypasses audience
+		}
+		if isAnon {
+			return false // anon can never satisfy a non-NULL audience
+		}
+		return claimsSatisfyAudience(audience, claims.ClaimsJSON)
+	}
+
 	// Subscribe first so the channel is registered before the defer runs.
-	ch := hub.Subscribe(queryID, broadcastCapacity)
+	sub := hub.Subscribe(queryID, broadcastCapacity, authorize)
 	defer func() {
 		hub.PresenceLeave(queryID, clientID)
 		conn.Close()
 		<-semaphore // release connection slot
-		hub.Unsubscribe(queryID, ch)
+		hub.Unsubscribe(queryID, sub)
 	}()
 
 	// Register presence (empty initial state).
@@ -253,6 +272,18 @@ func handleWebSocket(
 	})
 	if err := safeSend(websocket.TextMessage, welcome); err != nil {
 		log.Error().Err(err).Msg("failed to send welcome")
+		return
+	}
+
+	// Re-check audience right before sending the snapshot: the gate ran at
+	// handshake, but the audience could flip to private in the window before we
+	// ship the current rows. Re-resolve from the transactional catalog and bail
+	// if this connection no longer qualifies — closing the snapshot TOCTOU
+	// (round 39 F1). Fail CLOSED, matching the listener's per-delta posture: a
+	// metadata error here means we cannot prove this connection still qualifies,
+	// so we must not ship the current rows (round 39 F-B). The client reconnects.
+	if _, curAud, err := subscriptionMeta(pool, queryID); err != nil || !authorize(curAud) {
+		log.Info().Str("query_id", queryID).Err(err).Msg("audience unverifiable/changed before snapshot; closing connection")
 		return
 	}
 
@@ -292,10 +323,27 @@ func handleWebSocket(
 	// Main event loop.
 	for {
 		select {
-		case payload, ok := <-ch:
+		case <-sub.revoke:
+			// The subscription was re-registered under an audience this
+			// connection no longer satisfies (round 39 F1) — disconnect so the
+			// client must reconnect and re-authorize.
+			log.Info().Str("query_id", queryID).Msg("audience changed; revoking WebSocket")
+			return
+
+		case payload, ok := <-sub.ch:
 			if !ok {
 				// Channel was closed (should not happen, but handle gracefully).
 				return
+			}
+			// A revoke that arrived while this payload sat in the buffer must win
+			// over draining it (round 39 F-A): select picks pseudo-randomly when
+			// both cases are ready, so an authorized-when-queued delta could
+			// otherwise be delivered after access was pulled. Never deliver once
+			// revoked.
+			select {
+			case <-sub.revoke:
+				return
+			default:
 			}
 			if err := safeSend(websocket.TextMessage, []byte(payload)); err != nil {
 				log.Info().Str("query_id", queryID).Err(err).Msg("WebSocket send error")

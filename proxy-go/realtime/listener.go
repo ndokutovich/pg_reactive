@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
@@ -19,11 +20,11 @@ import (
 //
 // The loop applies exponential back-off on failures: 1s → 2s → 4s → … up to
 // maxBackoff. On clean exit (context cancelled) it returns immediately.
-func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.Duration, webhookMgr *WebhookManager) {
+func ListenLoop(dbURL string, hub *Hub, pool *pgxpool.Pool, connected *atomic.Bool, maxBackoff time.Duration, webhookMgr *WebhookManager) {
 	backoff := time.Second
 	for {
 		connected.Store(false)
-		if err := listenOnce(context.Background(), dbURL, hub, connected, webhookMgr); err != nil {
+		if err := listenOnce(context.Background(), dbURL, hub, pool, connected, webhookMgr); err != nil {
 			log.Error().Err(err).Dur("retry_in", backoff).Msg("PG listener error, reconnecting")
 		} else {
 			log.Info().Msg("PG listener exited normally, reconnecting")
@@ -40,7 +41,7 @@ func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.
 
 // listenOnce opens a dedicated PG connection, executes LISTEN pgr and pumps
 // notifications until an error occurs or the context is cancelled.
-func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.Bool, webhookMgr *WebhookManager) error {
+func listenOnce(ctx context.Context, dbURL string, hub *Hub, pool *pgxpool.Pool, connected *atomic.Bool, webhookMgr *WebhookManager) error {
 	conn, err := pgx.Connect(ctx, dbURL)
 	if err != nil {
 		return err
@@ -87,6 +88,15 @@ func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.B
 			continue
 		}
 
-		hub.Broadcast(msg.QueryID, payload)
+		// Resolve the CURRENT audience from the transactional catalog and
+		// deliver only to still-authorized connections, revoking any whose
+		// access was removed by a re-registration (round 39 F1). Fail safe: on
+		// a resolve error, drop the delta rather than risk a stale leak.
+		_, aud, err := subscriptionMeta(pool, msg.QueryID)
+		if err != nil {
+			log.Warn().Str("query_id", msg.QueryID).Err(err).Msg("audience resolve failed; dropping delta")
+			continue
+		}
+		hub.BroadcastDelta(msg.QueryID, payload, aud)
 	}
 }

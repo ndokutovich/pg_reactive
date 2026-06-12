@@ -457,6 +457,11 @@ jobs:
       - name: E2E — JWT auth
         run: node tests/e2e_jwt_test.mjs
 
+      # Round 39 F1: an open socket must lose access when the subscription's
+      # audience changes (public->private, tenant A->tenant B).
+      - name: E2E — WS re-auth on audience change
+        run: node tests/e2e_ws_reauth_test.mjs
+
       - name: E2E — Auth endpoints
         run: node tests/e2e_auth_test.mjs
 

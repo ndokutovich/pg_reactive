@@ -323,6 +323,31 @@ function checkProxyAudienceSource(file, text) {
   }
 }
 
+// Rule SEC-R39 — the live-query NOTIFY fan-out must re-authorize per delivery.
+//   SECURITY.md invariant #16. Audit round 39 F1 HIGH.
+//   Hub.Broadcast delivers to every subscriber WITHOUT re-checking the audience
+//   — fine for presence, but a stale-permission hole for live-query deltas: a
+//   connection authorized while a query was public keeps reading it after the
+//   subscription is re-registered as private. The NOTIFY-delta path must use
+//   Hub.BroadcastDelta (resolves the current audience, revokes connections that
+//   no longer qualify). This flags a regression to the plain Broadcast on that
+//   path. Scope: proxy-go/**/*.go.
+//   Override a verified-safe occurrence with `// lint:allow=SEC-R39`.
+function checkDeltaReauth(file, text) {
+  const norm = file.replace(/\\/g, "/");
+  if (!/\/proxy-go\//.test(norm) || !/\.go$/.test(norm)) return;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/lint:allow=SEC-R39/.test(line)) continue;
+    if (/^\s*\/\//.test(line)) continue; // comment-only line
+    if (/\.Broadcast\(\s*msg\.QueryID/.test(line)) {
+      report(file, i + 1, "SEC-R39",
+        "live-query delta fan-out uses Hub.Broadcast (no per-delivery re-auth) — deltas must go through Hub.BroadcastDelta so an audience change revokes stale connections (SECURITY.md invariant 16, round-39 F1)");
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -339,6 +364,7 @@ function runAll() {
     checkRawTokenGrant(f, text);
     checkFrontendServiceRole(f, text);
     checkProxyAudienceSource(f, text);
+    checkDeltaReauth(f, text);
   }
 
   if (findings.length === 0) {
