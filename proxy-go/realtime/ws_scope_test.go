@@ -144,7 +144,7 @@ func TestDispatchClientMessage_PresenceAlwaysUsesServerClientID(t *testing.T) {
 	dispatchClientMessage(hub, qid, "real-peer-A",
 		[]byte(`{"type":"presence","client_id":"victim-B","state":{"impersonated":true}}`), 0)
 
-	list := hub.PresenceList(qid)
+	list := hub.PresenceList(qid, 0)
 	if _, ok := list["victim-B"]; ok {
 		t.Fatal("client_id from the frame must NOT be honoured — that's the spoof we are blocking")
 	}

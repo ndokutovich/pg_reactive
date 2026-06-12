@@ -14,7 +14,7 @@ func TestPresenceJoin_AddsClientToMap(t *testing.T) {
 
 	h.PresenceJoin("room-1", "client-a", state, 0)
 
-	list := h.PresenceList("room-1")
+	list := h.PresenceList("room-1", 0)
 	if len(list) != 1 {
 		t.Fatalf("expected 1 presence entry, got %d", len(list))
 	}
@@ -62,7 +62,7 @@ func TestPresenceLeave_RemovesClient(t *testing.T) {
 	h.PresenceJoin("room-2", "client-c", json.RawMessage(`{}`), 0)
 	h.PresenceLeave("room-2", "client-c", 0)
 
-	list := h.PresenceList("room-2")
+	list := h.PresenceList("room-2", 0)
 	if len(list) != 0 {
 		t.Fatalf("expected empty presence after leave, got %d entries", len(list))
 	}
@@ -119,7 +119,7 @@ func TestPresenceLeave_NoopForUnknownClient(t *testing.T) {
 	// Should not panic or remove the existing client.
 	h.PresenceLeave("room-4", "nonexistent-client", 0)
 
-	list := h.PresenceList("room-4")
+	list := h.PresenceList("room-4", 0)
 	if len(list) != 1 {
 		t.Fatalf("existing client should remain after unknown client leaves, got %d", len(list))
 	}
@@ -132,7 +132,7 @@ func TestPresenceUpdate_UpdatesClientState(t *testing.T) {
 	h.PresenceJoin("room-5", "client-f", json.RawMessage(`{"status":"away"}`), 0)
 	h.PresenceUpdate("room-5", "client-f", json.RawMessage(`{"status":"online"}`), 0)
 
-	list := h.PresenceList("room-5")
+	list := h.PresenceList("room-5", 0)
 	got, ok := list["client-f"]
 	if !ok {
 		t.Fatal("client-f not found after update")
@@ -176,7 +176,7 @@ func TestPresenceUpdate_CreatesEntryIfClientNotPreviouslyJoined(t *testing.T) {
 	// Update without a prior join — should still work (implementation creates the map entry).
 	h.PresenceUpdate("room-6", "late-joiner", json.RawMessage(`{"status":"busy"}`), 0)
 
-	list := h.PresenceList("room-6")
+	list := h.PresenceList("room-6", 0)
 	if _, ok := list["late-joiner"]; !ok {
 		t.Fatal("expected late-joiner to be added by PresenceUpdate")
 	}
@@ -186,7 +186,7 @@ func TestPresenceUpdate_CreatesEntryIfClientNotPreviouslyJoined(t *testing.T) {
 
 func TestPresenceList_EmptyForUnknownChannel(t *testing.T) {
 	h := NewHub()
-	list := h.PresenceList("channel-that-does-not-exist")
+	list := h.PresenceList("channel-that-does-not-exist", 0)
 	if list == nil {
 		t.Fatal("PresenceList must return a non-nil map, not nil")
 	}
@@ -199,13 +199,40 @@ func TestPresenceList_ReturnsCopyNotReference(t *testing.T) {
 	h := NewHub()
 	h.PresenceJoin("room-7", "client-h", json.RawMessage(`{"v":1}`), 0)
 
-	list1 := h.PresenceList("room-7")
+	list1 := h.PresenceList("room-7", 0)
 	// Mutate the copy.
 	list1["injected"] = json.RawMessage(`{}`)
 
-	list2 := h.PresenceList("room-7")
+	list2 := h.PresenceList("room-7", 0)
 	if _, ok := list2["injected"]; ok {
 		t.Fatal("PresenceList must return a copy: mutation of returned map should not affect internal state")
+	}
+}
+
+// Round 39 batch-2 gen-ordering audit: presence is stored with the writer's
+// generation, and a read is restricted to the caller's generation. A client
+// authorized for one epoch must never see presence written under another — even
+// when a stale-generation socket lingers (the gen-ordering race can leave it
+// un-revoked).
+func TestPresenceList_FiltersByGeneration(t *testing.T) {
+	h := NewHub()
+	h.PresenceJoin("room-gen", "old-client", json.RawMessage(`{"secret":"OLD"}`), 5)
+	h.PresenceJoin("room-gen", "new-client", json.RawMessage(`{"secret":"NEW"}`), 6)
+
+	list6 := h.PresenceList("room-gen", 6)
+	if _, ok := list6["old-client"]; ok {
+		t.Fatal("gen-5 presence leaked to a gen-6 reader")
+	}
+	if _, ok := list6["new-client"]; !ok {
+		t.Fatalf("gen-6 reader must see the gen-6 entry, got keys: %v", keys(list6))
+	}
+
+	list5 := h.PresenceList("room-gen", 5)
+	if _, ok := list5["new-client"]; ok {
+		t.Fatal("gen-6 presence leaked to a gen-5 reader")
+	}
+	if _, ok := list5["old-client"]; !ok {
+		t.Fatalf("gen-5 reader must see the gen-5 entry, got keys: %v", keys(list5))
 	}
 }
 
@@ -221,7 +248,7 @@ func TestPresence_MultipleClientsOnSameChannel(t *testing.T) {
 		h.PresenceJoin("room-8", id, json.RawMessage(`{"id":"`+id+`"}`), 0)
 	}
 
-	list := h.PresenceList("room-8")
+	list := h.PresenceList("room-8", 0)
 	if len(list) != len(clients) {
 		t.Fatalf("expected %d clients in presence, got %d", len(clients), len(list))
 	}
@@ -240,7 +267,7 @@ func TestPresence_RemovingOneClientLeavesOthers(t *testing.T) {
 
 	h.PresenceLeave("room-9", "leave-me", 0)
 
-	list := h.PresenceList("room-9")
+	list := h.PresenceList("room-9", 0)
 	if len(list) != 2 {
 		t.Fatalf("expected 2 remaining clients, got %d", len(list))
 	}

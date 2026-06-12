@@ -47,7 +47,7 @@ func TestProperty_Presence_JoinLeaveRoundTrip(t *testing.T) {
 		h.PresenceJoin(channel, clientID, state, 0)
 		h.PresenceLeave(channel, clientID, 0)
 
-		list := h.PresenceList(channel)
+		list := h.PresenceList(channel, 0)
 		if len(list) != 0 {
 			t.Fatalf(
 				"after Join then Leave, PresenceList must be empty: channel=%q client=%q got=%v",
@@ -76,7 +76,7 @@ func TestProperty_Presence_JoinIdempotency(t *testing.T) {
 		h.PresenceJoin(channel, clientID, state1, 0)
 		h.PresenceJoin(channel, clientID, state2, 0)
 
-		list := h.PresenceList(channel)
+		list := h.PresenceList(channel, 0)
 
 		count := 0
 		for k := range list {
@@ -112,7 +112,7 @@ func TestProperty_Presence_StatePreservation(t *testing.T) {
 
 		h.PresenceUpdate(channel, clientID, state, 0)
 
-		list := h.PresenceList(channel)
+		list := h.PresenceList(channel, 0)
 		got, ok := list[clientID]
 		if !ok {
 			t.Fatalf(
@@ -153,7 +153,7 @@ func TestProperty_Presence_ChannelIsolation(t *testing.T) {
 
 		h.PresenceJoin(channelA, clientID, state, 0)
 
-		listB := h.PresenceList(channelB)
+		listB := h.PresenceList(channelB, 0)
 		if len(listB) != 0 {
 			t.Fatalf(
 				"joining channel %q must not affect presence for channel %q: got %v",
@@ -181,12 +181,12 @@ func TestProperty_Presence_ListIsSnapshot(t *testing.T) {
 		h.PresenceJoin(channel, clientID, state, 0)
 
 		// Obtain the first snapshot and mutate it by adding a foreign key.
-		snapshot := h.PresenceList(channel)
+		snapshot := h.PresenceList(channel, 0)
 		injectedKey := "injected-by-test-" + clientID
 		snapshot[injectedKey] = json.RawMessage(`{"foreign":true}`)
 
 		// A second call must not see the injected key.
-		second := h.PresenceList(channel)
+		second := h.PresenceList(channel, 0)
 		if _, found := second[injectedKey]; found {
 			t.Fatalf(
 				"mutation of returned PresenceList map leaked into internal state: "+

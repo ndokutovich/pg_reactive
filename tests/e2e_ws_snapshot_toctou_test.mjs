@@ -33,13 +33,21 @@ const URL = 'ws://127.0.0.1:8080';
 const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// REJECTS on a non-zero exit so a failed locking/re-subscribe transaction cannot
+// make the test falsely pass (the secret simply never appears) — finding 2.
 function psqlAsync(sql) {
   const child = spawn(
     'docker',
     ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-v', 'ON_ERROR_STOP=1', '-c', sql],
-    { stdio: 'ignore' }
+    { stdio: ['ignore', 'ignore', 'pipe'] }
   );
-  return new Promise((resolve) => child.on('close', resolve));
+  let stderr = '';
+  child.stderr.on('data', (d) => { stderr += d.toString(); });
+  return new Promise((resolve, reject) => {
+    child.on('close', (code) => {
+      code === 0 ? resolve() : reject(new Error(`background psql exited ${code}: ${stderr.trim()}`));
+    });
+  });
 }
 
 function connect(queryID, query) {
@@ -74,13 +82,14 @@ await sleep(200);
 // Locking transaction: hold ACCESS EXCLUSIVE on the snapshot table so the
 // connection's row read blocks, then re-point the query_id to a private
 // tenant-B query (bumps generation + rebuilds snapshot) and commit.
+let txError = null;
 const txDone = psqlAsync(
   `BEGIN;
    LOCK TABLE pgr."_snap_${qid}" IN ACCESS EXCLUSIVE MODE;
    SELECT pg_sleep(2);
    SELECT pgr.subscribe('${qid}','SELECT id, secret FROM toctou_t WHERE tenant=''B''','delta',jsonb_build_object('sub','tenantB'));
    COMMIT;`
-);
+).catch((e) => { txError = e; });
 
 await sleep(500); // let the lock be held before anon connects
 
@@ -89,6 +98,12 @@ await sleep(500); // let the lock be held before anon connects
 const { ws, messages } = await connect(qid, `apikey=${ANON_KEY}`);
 
 await txDone;        // lock releases, re-subscribe commits, blocked read resumes
+// The TOCTOU only exists if the locking + re-subscribe transaction committed.
+// Surface a failed background tx and confirm the re-point took effect, so a
+// green result cannot come from the attack never having run (finding 2).
+check(!txError, `locking/re-subscribe transaction committed cleanly${txError ? ' — ' + txError.message : ''}`);
+const audAfter = psql(`SELECT audience::text FROM pgr.subscription_meta('${qid}');`).trim();
+check(audAfter.includes('tenantB'), `re-subscribe actually took effect (audience now ${audAfter || 'EMPTY'})`);
 await sleep(1000);
 
 const leaked = messages.some((m) => m.includes('SECRET_B'));

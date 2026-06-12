@@ -143,6 +143,34 @@ func TestBroadcastGen_DeliversOnlyToMatchingGeneration(t *testing.T) {
 	}
 }
 
+// Generation is an OPAQUE epoch, not a commit-ordered counter: nextval() runs
+// before the catalog write, so a LOWER generation can commit AFTER a higher one
+// (a stalled re-subscribe committing last). RevokeStale must therefore revoke
+// every socket whose generation != the announced one — not only lower ones —
+// or a high-generation socket survives when a lower generation is announced
+// last, and keeps reading / writing presence for an epoch that is no longer
+// current (round 39 batch-2 gen-ordering audit, HIGH).
+func TestRevokeStale_RevokesAnyNonMatchingGeneration(t *testing.T) {
+	h := NewHub()
+	const qid = "q-epoch"
+	high := h.Subscribe(qid, 4, 6) // bound to a HIGHER generation
+	keep := h.Subscribe(qid, 4, 5) // bound to the generation about to be announced
+
+	// The gen-5 re-subscribe committed last (its nextval was lower, but it
+	// committed after the gen-6 one). Everything not of gen 5 must be revoked.
+	h.RevokeStale(qid, 5)
+
+	select {
+	case <-high.revoke:
+		// expected: the higher-generation socket is revoked too
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("higher-generation socket was NOT revoked when a lower generation was announced last")
+	}
+	if keep.revoked() {
+		t.Fatal("the announced-generation socket must NOT be revoked")
+	}
+}
+
 // Revoke is idempotent and concurrency-safe: two re-registrations that both
 // find a subscriber stale must not double-close its revoke channel.
 func TestRevokeStale_IsIdempotent(t *testing.T) {

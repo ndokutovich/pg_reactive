@@ -37,13 +37,21 @@ const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-produc
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Fire a SQL script in its own backend WITHOUT blocking (used to hold a tx open).
+// REJECTS on a non-zero exit so a failed attack transaction cannot make the test
+// falsely pass (the secret simply never appears) — the caller must surface it.
 function psqlAsync(sql) {
   const child = spawn(
     'docker',
     ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-v', 'ON_ERROR_STOP=1', '-c', sql],
-    { stdio: 'ignore' }
+    { stdio: ['ignore', 'ignore', 'pipe'] }
   );
-  return new Promise((resolve) => child.on('close', resolve));
+  let stderr = '';
+  child.stderr.on('data', (d) => { stderr += d.toString(); });
+  return new Promise((resolve, reject) => {
+    child.on('close', (code) => {
+      code === 0 ? resolve() : reject(new Error(`background psql exited ${code}: ${stderr.trim()}`));
+    });
+  });
 }
 
 function connect(queryID, query) {
@@ -79,9 +87,10 @@ const { ws, messages, isClosed } = await connect(qid, `apikey=${ANON_KEY}`);
 // Hold the re-registration (public -> private) in an OPEN transaction: shmem
 // flips to the new generation immediately, but 'resubscribed' is not delivered
 // until COMMIT — so the anon is NOT yet revoked during pg_sleep.
+let txError = null;
 const txDone = psqlAsync(
   `BEGIN; SELECT pgr.subscribe('${qid}','${q}','delta',jsonb_build_object('sub','victim')); SELECT pg_sleep(3); COMMIT;`
-);
+).catch((e) => { txError = e; });
 
 await sleep(800); // let the re-subscribe execute (shmem now at the new generation)
 
@@ -95,6 +104,12 @@ const leakedDuringWindow = messages.some((m) => m.includes('TOP_SECRET'));
 check(!leakedDuringWindow, 'anon did NOT receive the new-epoch row in the pre-commit window');
 
 await txDone;        // tx commits -> 'resubscribed' -> RevokeStale
+// The attack is only meaningful if it actually committed. Surface a failed
+// background transaction and confirm the re-subscribe took effect, so a green
+// result cannot come from the secret never having been written (finding 2).
+check(!txError, `re-subscribe transaction committed cleanly${txError ? ' — ' + txError.message : ''}`);
+const audAfter = psql(`SELECT audience::text FROM pgr.subscription_meta('${qid}');`).trim();
+check(audAfter.includes('victim'), `re-subscribe actually took effect (audience now ${audAfter || 'EMPTY'})`);
 await sleep(800);
 check(isClosed(), 'anon was disconnected once the re-subscribe committed');
 const leakedEver = messages.some((m) => m.includes('TOP_SECRET'));

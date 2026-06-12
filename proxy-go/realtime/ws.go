@@ -795,7 +795,7 @@ func PresenceHandler(cfg middleware.RLSConfig, pool *pgxpool.Pool, hub *Hub, req
 
 		// Audience gate — identical policy to WSHandler. Closes the
 		// "presence map is readable by knowing the channel name" hole.
-		_, audience, _, metaErr := subscriptionMeta(pool, channel)
+		_, audience, currentGen, metaErr := subscriptionMeta(pool, channel)
 		if metaErr != nil {
 			if errors.Is(metaErr, ErrSubscriptionNotFound) {
 				writeJSONStatus(w, http.StatusNotFound, "channel not found")
@@ -809,7 +809,10 @@ func PresenceHandler(cfg middleware.RLSConfig, pool *pgxpool.Pool, hub *Hub, req
 			return
 		}
 
-		presenceMap := hub.PresenceList(channel)
+		// Restrict to the current committed generation: a reader authorized for
+		// this epoch must not see presence written by a connection of another
+		// epoch (round 39 batch-2 gen-ordering audit).
+		presenceMap := hub.PresenceList(channel, currentGen)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

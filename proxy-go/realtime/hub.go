@@ -30,25 +30,36 @@ func (s *subscriber) revoked() bool {
 	}
 }
 
+// presenceEntry is a presence row tagged with the generation of the connection
+// that wrote it. Reads filter on generation so a client authorized for the
+// current epoch never sees presence written by a connection of another epoch —
+// generation is an opaque token, NOT comparable by order (round 39 batch-2
+// gen-ordering audit).
+type presenceEntry struct {
+	state json.RawMessage
+	gen   int64
+}
+
 // Hub provides generation-aware fan-out delivery to concurrent WebSocket
 // subscribers. Authorization is bound to the generation: any subscribe/
 // unsubscribe bumps the subscription's generation, the proxy revokes every
-// connection older than the new generation, and every message is routed so a
-// stale connection can never receive data from a newer generation.
+// connection NOT of the announced generation, and every message — delta,
+// presence, or broadcast — is routed so a connection of one epoch can never
+// receive (or read the presence of) another epoch.
 type Hub struct {
 	mu   sync.RWMutex
 	subs map[string][]*subscriber
 
-	// Presence: channel → clientID → state
+	// Presence: channel → clientID → {state, generation}
 	pmu      sync.RWMutex
-	presence map[string]map[string]json.RawMessage
+	presence map[string]map[string]presenceEntry
 }
 
 // NewHub creates an empty Hub.
 func NewHub() *Hub {
 	return &Hub{
 		subs:     make(map[string][]*subscriber),
-		presence: make(map[string]map[string]json.RawMessage),
+		presence: make(map[string]map[string]presenceEntry),
 	}
 }
 
@@ -101,20 +112,24 @@ func deliver(queryID string, s *subscriber, payload string) {
 }
 
 // RevokeStale revokes (force-disconnects) every subscriber whose generation is
-// older than minGen. Called when a subscribe/unsubscribe announces a new
-// generation, so a metadata change disconnects stale connections IMMEDIATELY —
-// without waiting for a delta (round 39 batch-2 F1/F2).
-func (h *Hub) RevokeStale(queryID string, minGen int64) {
+// NOT keepGen — the generation a subscribe/unsubscribe just announced as the
+// committed-current epoch. It is `!= keepGen`, not `< keepGen`, on purpose:
+// generation comes from nextval() called BEFORE the catalog write, so a lower
+// generation can commit AFTER a higher one; an ordering test would leave the
+// higher-generation socket alive after a lower generation became current. Only
+// the exact announced generation survives; every other epoch is disconnected
+// (round 39 batch-2 gen-ordering audit, supersedes the `< minGen` form).
+func (h *Hub) RevokeStale(queryID string, keepGen int64) {
 	n := 0
 	for _, s := range h.snapshot(queryID) {
-		if s.generation < minGen {
+		if s.generation != keepGen {
 			s.Revoke()
 			n++
 		}
 	}
 	if n > 0 {
-		log.Info().Str("query_id", queryID).Int64("min_gen", minGen).Int("revoked", n).
-			Msg("Hub.RevokeStale: revoked stale-generation connections")
+		log.Info().Str("query_id", queryID).Int64("keep_gen", keepGen).Int("revoked", n).
+			Msg("Hub.RevokeStale: revoked connections not of the announced generation")
 	}
 }
 
@@ -142,9 +157,9 @@ func (h *Hub) BroadcastGen(queryID, payload string, gen int64) {
 func (h *Hub) PresenceJoin(channel, clientID string, state json.RawMessage, gen int64) {
 	h.pmu.Lock()
 	if h.presence[channel] == nil {
-		h.presence[channel] = make(map[string]json.RawMessage)
+		h.presence[channel] = make(map[string]presenceEntry)
 	}
-	h.presence[channel][clientID] = state
+	h.presence[channel][clientID] = presenceEntry{state: state, gen: gen}
 	h.pmu.Unlock()
 
 	event, _ := json.Marshal(map[string]any{
@@ -175,9 +190,9 @@ func (h *Hub) PresenceLeave(channel, clientID string, gen int64) {
 func (h *Hub) PresenceUpdate(channel, clientID string, state json.RawMessage, gen int64) {
 	h.pmu.Lock()
 	if h.presence[channel] == nil {
-		h.presence[channel] = make(map[string]json.RawMessage)
+		h.presence[channel] = make(map[string]presenceEntry)
 	}
-	h.presence[channel][clientID] = state
+	h.presence[channel][clientID] = presenceEntry{state: state, gen: gen}
 	h.pmu.Unlock()
 
 	event, _ := json.Marshal(map[string]any{
@@ -187,18 +202,23 @@ func (h *Hub) PresenceUpdate(channel, clientID string, state json.RawMessage, ge
 	h.BroadcastGen(channel, string(event), gen)
 }
 
-// PresenceList returns the current presence state for a channel.
-func (h *Hub) PresenceList(channel string) map[string]json.RawMessage {
+// PresenceList returns the presence state for a channel, restricted to entries
+// written by connections of generation `gen`. A reader authorized for the
+// current epoch must never see presence written under a different one (the
+// presence map outlives a connection's revocation by a window, and under the
+// gen-ordering race a stale-generation socket may not be revoked at all), so the
+// caller passes the channel's current committed generation and gets only that
+// epoch's rows (round 39 batch-2 gen-ordering audit).
+func (h *Hub) PresenceList(channel string, gen int64) map[string]json.RawMessage {
 	h.pmu.RLock()
 	defer h.pmu.RUnlock()
 
 	m := h.presence[channel]
-	if m == nil {
-		return make(map[string]json.RawMessage)
-	}
 	result := make(map[string]json.RawMessage, len(m))
 	for k, v := range m {
-		result[k] = v
+		if v.gen == gen {
+			result[k] = v.state
+		}
 	}
 	return result
 }
