@@ -19,7 +19,6 @@ SELECT (pgr.subscribe('j_aud', 'SELECT id FROM jt', 'delta', '{"sub":"42"}'))->>
 -- uncommitted public value.
 BEGIN;
 SELECT (pgr.subscribe('j_aud', 'SELECT id FROM jt', 'delta', NULL))->>'status' AS reaudience;
-NOTICE:  relation "_snap_j_aud" already exists, skipping
  reaudience 
 ------------
  subscribed

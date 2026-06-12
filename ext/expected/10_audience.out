@@ -72,7 +72,6 @@ SELECT pgr.subscribe(
   'SELECT id, val FROM inv WHERE player_id = ''42''',
   'delta',
   '{"sub":"99"}'::jsonb);
-NOTICE:  relation "_snap_aud_42" already exists, skipping
                                   subscribe                                   
 ------------------------------------------------------------------------------
  {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "aud_42"}

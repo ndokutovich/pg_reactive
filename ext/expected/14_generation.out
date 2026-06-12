@@ -24,7 +24,6 @@ SELECT generation AS gen_a1 FROM pgr.subscription_meta('gen_a') \gset
 -- generation strictly upward — this is the metadata change that must revoke
 -- every connection authorized against the previous generation.
 SELECT pgr.subscribe('gen_a', 'SELECT id, v FROM g', 'delta', '{"sub":"42"}'::jsonb);
-NOTICE:  relation "_snap_gen_a" already exists, skipping
                                   subscribe                                  
 -----------------------------------------------------------------------------
  {"mode": "delta", "status": "subscribed", "tables": 1, "query_id": "gen_a"}

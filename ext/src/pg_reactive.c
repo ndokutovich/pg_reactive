@@ -525,9 +525,24 @@ pgr_subscribe(PG_FUNCTION_ARGS)
 
 	/* Create snapshot table for delta mode — validates the query and fails
 	 * early if the query is invalid (before we touch shared memory).
-	 * Notify mode skips snapshot creation entirely. */
+	 * Notify mode skips snapshot creation entirely.
+	 *
+	 * Drop first so a re-subscribe that repoints an existing query_id to a
+	 * DIFFERENT query rebuilds the snapshot from the current query. Without the
+	 * drop, pgr_snapshot_create's CREATE ... IF NOT EXISTS is a no-op and the
+	 * snapshot keeps the OLD query's rows — which a fresh connection would then
+	 * read via snapshotForGeneration. The generation matches (the re-subscribe
+	 * bumped both the connection's bound gen and the snapshot's epoch), so the
+	 * proxy gate cannot catch it: a tenant-B client would receive tenant-A's
+	 * rows in its initial snapshot (round 39 batch-2 F-SNAP). The drop is a
+	 * no-op on a first subscribe and rolls back with the transaction on abort;
+	 * the generation model already disconnects every old connection on a
+	 * re-subscribe, so nothing depends on the stale snapshot surviving. */
 	if (mode_char == 'd')
+	{
+		pgr_snapshot_drop(query_id);
 		pgr_snapshot_create(query_id, query_str);
+	}
 
 	/* Register in shared memory (only after snapshot succeeds).
 	 * If shmem is full, pgr_dep_add evicts the oldest entry. */

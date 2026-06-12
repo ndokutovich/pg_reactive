@@ -7,7 +7,6 @@ subscribed
 (1 row)
 
 step s1_begin: BEGIN;
-s1: NOTICE:  relation "_snap_aud_q" already exists, skipping
 step s1_repub: SELECT (pgr.subscribe('aud_q', 'SELECT id FROM aud_t', 'delta', NULL))->>'status' AS repub;
 repub     
 ----------
