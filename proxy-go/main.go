@@ -516,7 +516,10 @@ func buildRouter(state *AppState) http.Handler {
 		r.Post("/rest/v1/batch", rest.Batch(restDeps, state.Config.MaxBatchOperations))
 
 		// RLS debug
-		r.Get("/rest/v1/rls-debug", routes.RLSDebug(state.Pool, rlsCfg))
+		// rls-debug is service_role-only, and the data pool's authenticator role
+		// can no longer SET LOCAL ROLE service_role (finding 6) — run it on the
+		// admin pool (authenticator_admin) like the other service_role paths.
+		r.Get("/rest/v1/rls-debug", routes.RLSDebug(state.AdminPool, rlsCfg))
 
 		// Webhooks CRUD (must be before {table} wildcard)
 		// Webhook CRUD is service_role-gated at the HTTP layer and writes
