@@ -14,5 +14,9 @@ RUN make -C /tmp/ext clean && make -C /tmp/ext && make -C /tmp/ext install \
 # Bootstrap pgstack schema, auth tables, and roles on first start
 COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
 
+# Make the `authenticator` role LOGIN-able from AUTHENTICATOR_PASSWORD so the
+# proxy connects as a non-superuser (gemini audit P2). Runs after 01-init.sql.
+COPY --chmod=0755 docker/20-authenticator-login.sh /docker-entrypoint-initdb.d/20-authenticator-login.sh
+
 # Copy example setup scripts (used by the setup service)
 COPY examples/ /examples/

@@ -8,6 +8,10 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
+      # 20-authenticator-login.sh makes the powerless `authenticator` role
+      # LOGIN-able with this, so the proxy connects as a non-superuser (gemini
+      # audit P2). Dev value; matches the proxy's DATABASE_URL below.
+      AUTHENTICATOR_PASSWORD: ${AUTHENTICATOR_PASSWORD:-authenticator-dev-pw}
     ports:
       - "${PG_PORT:-15432}:5432"
     command: >
@@ -36,7 +40,10 @@ services:
         # 404'd every doc asset on the reactive.pgstack.org subdomain.
         DOCS_BASE_URL: ${DOCS_BASE_URL:-/docs/}
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
+      # Connect as the powerless `authenticator` role (not the superuser): the
+      # proxy SET ROLEs per request, so a compromise can't bypass RLS by default,
+      # COPY ... FROM PROGRAM, drop the db, or read pg_authid (gemini audit P2).
+      DATABASE_URL: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator-dev-pw}@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
       # The proxy defaults to PGSTACK_ENV=production (fail-secure); this dev base
       # uses dev-only secrets + ENABLE_SQL_ENDPOINT=true, so opt into development

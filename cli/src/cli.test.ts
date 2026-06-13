@@ -90,7 +90,10 @@ describe("pgstack init", () => {
   it("generates .env with DATABASE_URL", () => {
     pgstack("init", "dbapp");
     const env = readFileSync(join(tempDir, "dbapp", ".env"), "utf-8");
+    // CLI tooling (migration/generate) connects directly as the superuser for DDL.
     expect(env).toContain("DATABASE_URL=postgres://postgres:postgres@127.0.0.1:15432/app");
+    // The proxy's authenticator login password is generated into .env too.
+    expect(env).toMatch(/AUTHENTICATOR_PASSWORD=[0-9a-f]{48}/);
   });
 
   it("generates docker-compose.yml with proxy and db services", () => {
@@ -113,6 +116,11 @@ describe("pgstack init", () => {
     expect(dc).toContain("JWT_SECRET");
     expect(dc).toContain("ANON_KEY");
     expect(dc).toContain("SERVICE_ROLE_KEY");
+    // gemini audit P2 / SECURITY.md invariant 22: the network-exposed proxy
+    // must connect as the powerless `authenticator` role, never the superuser.
+    expect(dc).toContain("postgres://authenticator:");
+    expect(dc).not.toContain("DATABASE_URL: postgres://postgres:");
+    expect(dc).toContain("AUTHENTICATOR_PASSWORD");
   });
 
   it("creates bootstrap migration with auth schema", () => {

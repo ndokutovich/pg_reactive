@@ -3,7 +3,7 @@ import { resolve, join, basename, dirname } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
-import { generateJwtSecret, generateApiKey } from "../lib/crypto.js";
+import { generateJwtSecret, generateApiKey, randomHex } from "../lib/crypto.js";
 // Bootstrap core is the security-critical part of the migration —
 // roles, schemas, auth tables, RLS, default-deny grants, function-
 // execute revoke. It lives in cli/templates/bootstrap-core.sql,
@@ -46,10 +46,13 @@ export function registerInitCommand(program) {
         const jwtSecret = generateJwtSecret();
         const anonKey = generateApiKey();
         const serviceRoleKey = generateApiKey();
+        // Login password for the powerless `authenticator` role the proxy
+        // connects as (not the superuser). Hex so it is URL-safe in the DSN.
+        const authenticatorPassword = randomHex(24);
         // Write docker-compose.yml
         await writeFile(join(projectDir, "docker-compose.yml"), generateDockerCompose());
         // Write .env
-        await writeFile(join(projectDir, ".env"), generateEnv({ jwtSecret, anonKey, serviceRoleKey }));
+        await writeFile(join(projectDir, ".env"), generateEnv({ jwtSecret, anonKey, serviceRoleKey, authenticatorPassword }));
         // Write .env.example (without secrets)
         await writeFile(join(projectDir, ".env.example"), generateEnvExample());
         // Write pgstack.config.json
@@ -91,6 +94,10 @@ function generateDockerCompose() {
     environment:
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: \${POSTGRES_DB:-${DEFAULT_DB_NAME}}
+      # Makes the powerless 'authenticator' role LOGIN-able (the image's
+      # 20-authenticator-login.sh applies it) so the proxy connects as a
+      # non-superuser. Must match the proxy's DATABASE_URL below.
+      AUTHENTICATOR_PASSWORD: \${AUTHENTICATOR_PASSWORD:?AUTHENTICATOR_PASSWORD required in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
     command: >
@@ -109,7 +116,10 @@ function generateDockerCompose() {
     ports:
       - "\${PROXY_PORT:-${DEFAULT_PROXY_PORT}}:${DEFAULT_PROXY_PORT}"
     environment:
-      DATABASE_URL: postgres://postgres:\${POSTGRES_PASSWORD:-postgres}@db:5432/\${POSTGRES_DB:-${DEFAULT_DB_NAME}}
+      # Connect as the powerless 'authenticator' role (NOT the superuser): the
+      # proxy SET ROLEs per request, so a compromise cannot bypass RLS by
+      # default, COPY ... FROM PROGRAM, drop the database, or read pg_authid.
+      DATABASE_URL: postgres://authenticator:\${AUTHENTICATOR_PASSWORD}@db:5432/\${POSTGRES_DB:-${DEFAULT_DB_NAME}}
       JWT_SECRET: \${JWT_SECRET}
       ANON_KEY: \${ANON_KEY}
       SERVICE_ROLE_KEY: \${SERVICE_ROLE_KEY}
@@ -134,6 +144,11 @@ POSTGRES_PASSWORD=postgres
 POSTGRES_DB=${DEFAULT_DB_NAME}
 PG_PORT=${DEFAULT_DB_PORT}
 
+# Login password for the powerless 'authenticator' role the PROXY connects as
+# (not the superuser). Used by both the db and proxy services in
+# docker-compose.yml. URL-safe.
+AUTHENTICATOR_PASSWORD=${keys.authenticatorPassword}
+
 # Proxy
 PROXY_PORT=${DEFAULT_PROXY_PORT}
 
@@ -142,7 +157,10 @@ JWT_SECRET=${keys.jwtSecret}
 ANON_KEY=${keys.anonKey}
 SERVICE_ROLE_KEY=${keys.serviceRoleKey}
 
-# Derived (used by CLI and proxy)
+# Direct admin connection used by the CLI tooling ONLY (pgstack migration /
+# generate — these run DDL, so they connect as the superuser). The network-
+# exposed proxy does NOT use this; it connects as 'authenticator' (see
+# docker-compose.yml).
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:${DEFAULT_DB_PORT}/${DEFAULT_DB_NAME}
 
 # OAuth (uncomment and fill to enable)
@@ -167,6 +185,11 @@ POSTGRES_PASSWORD=<openssl rand -base64 32>
 POSTGRES_DB=${DEFAULT_DB_NAME}
 PG_PORT=${DEFAULT_DB_PORT}
 PROXY_PORT=${DEFAULT_PROXY_PORT}
+
+# Login password for the powerless 'authenticator' role the proxy connects as
+# (not the superuser). Must be URL-safe (it lands in the proxy DATABASE_URL):
+#   openssl rand -hex 24
+AUTHENTICATOR_PASSWORD=<openssl rand -hex 24>
 
 JWT_SECRET=<openssl rand -base64 32>
 ANON_KEY=<openssl rand -base64 32>

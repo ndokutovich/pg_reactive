@@ -28,15 +28,18 @@ services:
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in production}
       POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      # Override the dev base's default — in prod the authenticator login
+      # password is required, never the publicly-known dev value.
+      AUTHENTICATOR_PASSWORD: ${AUTHENTICATOR_PASSWORD:?AUTHENTICATOR_PASSWORD is required in production}
 
   proxy:
     restart: unless-stopped
     ports: !reset []
     environment:
-      # Override the dev DATABASE_URL (which hard-codes postgres:postgres).
-      # Without this, scram-sha-256 + a random POSTGRES_PASSWORD would
-      # leave the proxy unable to connect to its own DB.
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?required}@db:5432/pg_reactive_test
+      # Connect as the powerless `authenticator` role, not the superuser
+      # (gemini audit P2). The base sets a dev default for the password; prod
+      # requires a real one (db service above). Must match it.
+      DATABASE_URL: postgres://authenticator:${AUTHENTICATOR_PASSWORD:?required}@db:5432/pg_reactive_test
       # Hardening: anon-key holders cannot open live-query WebSockets —
       # only real JWTs. The dev base keeps this off so public live queries
       # in tutorials work without auth.

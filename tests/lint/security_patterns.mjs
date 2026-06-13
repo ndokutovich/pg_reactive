@@ -400,6 +400,7 @@ function checkDeltaReauth(file, text) {
 function checkProxyNotSuperuser() {
   const targets = [
     join(ROOT, "docker-compose.prod.yml"),
+    join(ROOT, "examples", "docker-compose.prod.yml"),
     join(ROOT, "docker", "all-in-one-entrypoint.sh"),
   ];
   const deployTpl = [];
