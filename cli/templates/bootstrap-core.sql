@@ -142,6 +142,12 @@ CREATE TABLE IF NOT EXISTS pgstack.email_tokens (
     user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
     token_hash  text NOT NULL UNIQUE,
     token_type  text NOT NULL CHECK (token_type IN ('email_verification', 'recovery', 'magiclink')),
+    -- The email an 'email_verification' token confirms, bound at issue time so a
+    -- token minted for address X can never confirm a later address Y (gemini
+    -- audit finding 2). NULL for recovery/magiclink (identity is the user_id).
+    -- /verify sets email_confirmed_at only when this still equals the user's
+    -- current email, and an email change revokes outstanding verification tokens.
+    email       text,
     used_at     timestamptz,
     expires_at  timestamptz NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()

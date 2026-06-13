@@ -33,7 +33,9 @@ const userId = (email) => psql(`SELECT id FROM pgstack.users WHERE email='${emai
 // Inject a verification token and confirm via the real endpoint.
 async function verify(email) {
   const plain = `verify-${crypto.randomBytes(8).toString('hex')}`;
-  psql(`INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at) VALUES ('${userId(email)}', '${sha256hex(plain)}', 'email_verification', now() + interval '1 hour');`);
+  // Bind the token to the address it confirms — the proxy now requires the
+  // token's email to still match the user's current email (gemini finding 2).
+  psql(`INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, email, expires_at) VALUES ('${userId(email)}', '${sha256hex(plain)}', 'email_verification', '${email}', now() + interval '1 hour');`);
   return api('GET', `/auth/v1/verify?token=${plain}`);
 }
 

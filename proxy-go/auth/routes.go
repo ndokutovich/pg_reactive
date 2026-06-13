@@ -48,7 +48,7 @@ func generateHexToken() string {
 // (do not leak which condition matched). Audit F6.
 func consumeEmailToken(ctx context.Context, q interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}, tokenHash, tokenType string) (userID string, err error) {
+}, tokenHash, tokenType string) (userID string, tokenEmail *string, err error) {
 	err = q.QueryRow(ctx, `
 		UPDATE pgstack.email_tokens
 		SET used_at = now()
@@ -56,9 +56,9 @@ func consumeEmailToken(ctx context.Context, q interface {
 		  AND token_type = $2
 		  AND used_at IS NULL
 		  AND expires_at > now()
-		RETURNING user_id
-	`, tokenHash, tokenType).Scan(&userID)
-	return userID, err
+		RETURNING user_id, email
+	`, tokenHash, tokenType).Scan(&userID, &tokenEmail)
+	return userID, tokenEmail, err
 }
 
 // generateTokenPair mints a JWT access token and an opaque refresh token,
@@ -161,9 +161,9 @@ func Signup(d *Deps) http.HandlerFunc {
 			tok := generateHexToken()
 			exp := time.Now().UTC().Add(24 * time.Hour)
 			_, err = d.Pool.Exec(ctx, `
-				INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
-				VALUES ($1, $2, 'email_verification', $3)
-			`, userID, HashToken(tok), exp)
+				INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, email, expires_at)
+				VALUES ($1, $2, 'email_verification', $3, $4)
+			`, userID, HashToken(tok), body.Email, exp)
 			if err != nil {
 				log.Error().Err(err).Msg("create email verification token")
 			}
@@ -478,9 +478,26 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 
 		ctx := r.Context()
 
+		// Every mutation runs in ONE transaction so a partial failure can never
+		// leave the account inconsistent — a new password active while old
+		// refresh tokens still mint access tokens (finding 4), or an email
+		// changed without its verification re-armed / old tokens revoked
+		// (finding 2). gemini audit.
+		tx, err := d.Pool.Begin(ctx)
+		if err != nil {
+			log.Error().Err(err).Msg("begin user update tx")
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		// Captured to send the verification mail AFTER commit — never for a
+		// change that then rolls back.
+		var pendingVerifyEmail, pendingVerifyToken string
+
 		if body.Email != nil {
 			newEmail := strings.TrimSpace(strings.ToLower(*body.Email))
-			if _, err := mail.ParseAddress(newEmail); err != nil {
+			if _, perr := mail.ParseAddress(newEmail); perr != nil {
 				writeError(w, http.StatusBadRequest, "invalid email address")
 				return
 			}
@@ -488,13 +505,12 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 			// email_confirmed_at so the login gate refuses the new address until
 			// it is re-verified — otherwise the change silently inherits the old
 			// address's confirmed status (gemini audit P1).
-			var err error
 			if d.RequireEmailVerification {
-				_, err = d.Pool.Exec(ctx, `
+				_, err = tx.Exec(ctx, `
 					UPDATE pgstack.users SET email = $1, email_confirmed_at = NULL, updated_at = now() WHERE id = $2
 				`, newEmail, claims.Sub)
 			} else {
-				_, err = d.Pool.Exec(ctx, `
+				_, err = tx.Exec(ctx, `
 					UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2
 				`, newEmail, claims.Sub)
 			}
@@ -507,22 +523,29 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
-			// Issue a fresh verification token for the new address so the user
-			// can re-confirm (and isn't locked out by the cleared status).
 			if d.RequireEmailVerification {
+				// Revoke every outstanding verification token: one minted for the
+				// OLD address must not survive to confirm the new one (finding 2).
+				if _, err = tx.Exec(ctx, `
+					DELETE FROM pgstack.email_tokens
+					WHERE user_id = $1 AND token_type = 'email_verification' AND used_at IS NULL
+				`, claims.Sub); err != nil {
+					log.Error().Err(err).Msg("revoke stale verification tokens on email change")
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
+				}
+				// Issue a fresh token BOUND to the new address.
 				tok := generateHexToken()
 				exp := time.Now().UTC().Add(24 * time.Hour)
-				if _, terr := d.Pool.Exec(ctx, `
-					INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
-					VALUES ($1, $2, 'email_verification', $3)
-				`, claims.Sub, HashToken(tok), exp); terr != nil {
-					log.Error().Err(terr).Msg("create verification token on email change")
-				} else if d.Mailer != nil {
-					verifyURL := fmt.Sprintf("%s/auth/v1/verify?token=%s", d.SiteURL, tok)
-					if merr := d.Mailer.SendEmailVerification(r.Context(), newEmail, verifyURL); merr != nil {
-						log.Error().Err(merr).Msg("send verification email on email change")
-					}
+				if _, err = tx.Exec(ctx, `
+					INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, email, expires_at)
+					VALUES ($1, $2, 'email_verification', $3, $4)
+				`, claims.Sub, HashToken(tok), newEmail, exp); err != nil {
+					log.Error().Err(err).Msg("create verification token on email change")
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
 				}
+				pendingVerifyEmail, pendingVerifyToken = newEmail, tok
 			}
 		}
 
@@ -535,24 +558,23 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, "password must be at most 256 characters")
 				return
 			}
-			hashed, err := HashPassword(*body.Password)
-			if err != nil {
-				log.Error().Err(err).Msg("hash new password")
+			hashed, herr := HashPassword(*body.Password)
+			if herr != nil {
+				log.Error().Err(herr).Msg("hash new password")
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
-			_, err = d.Pool.Exec(ctx, `
+			if _, err = tx.Exec(ctx, `
 				UPDATE pgstack.users SET encrypted_password = $1, updated_at = now() WHERE id = $2
-			`, hashed, claims.Sub)
-			if err != nil {
+			`, hashed, claims.Sub); err != nil {
 				log.Error().Err(err).Msg("update user password")
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
-			// A password change invalidates every other session (gemini audit P1).
-			// The caller gets fresh tokens from this response flow; all previously
-			// issued refresh tokens are revoked.
-			if _, err = d.Pool.Exec(ctx, `
+			// Revoke every session in the SAME transaction as the password update
+			// so a fault cannot leave the new password active while old refresh
+			// tokens still mint access tokens (gemini audit finding 4).
+			if _, err = tx.Exec(ctx, `
 				DELETE FROM pgstack.refresh_tokens WHERE user_id = $1
 			`, claims.Sub); err != nil {
 				log.Error().Err(err).Msg("revoke sessions after password change")
@@ -562,13 +584,27 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 		}
 
 		if len(body.Data) > 0 && string(body.Data) != "null" {
-			_, err := d.Pool.Exec(ctx, `
+			if _, err = tx.Exec(ctx, `
 				UPDATE pgstack.users SET raw_user_meta = $1, updated_at = now() WHERE id = $2
-			`, body.Data, claims.Sub)
-			if err != nil {
+			`, body.Data, claims.Sub); err != nil {
 				log.Error().Err(err).Msg("update user metadata")
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
+			}
+		}
+
+		if err = tx.Commit(ctx); err != nil {
+			log.Error().Err(err).Msg("commit user update")
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		// After-commit: send the verification mail for a changed address (kept
+		// out of the tx so a send never races a rolled-back change).
+		if pendingVerifyToken != "" && d.Mailer != nil {
+			verifyURL := fmt.Sprintf("%s/auth/v1/verify?token=%s", d.SiteURL, pendingVerifyToken)
+			if merr := d.Mailer.SendEmailVerification(r.Context(), pendingVerifyEmail, verifyURL); merr != nil {
+				log.Error().Err(merr).Msg("send verification email on email change")
 			}
 		}
 
@@ -707,7 +743,7 @@ func RecoverConfirm(d *Deps) http.HandlerFunc {
 		// Atomic consume (F6) — UPDATE returning user_id is the only path
 		// that observes / marks the token; two parallel confirmations of
 		// the same token can never both pass the WHERE clause.
-		userID, err := consumeEmailToken(ctx, tx, HashToken(body.Token), "recovery")
+		userID, _, err := consumeEmailToken(ctx, tx, HashToken(body.Token), "recovery")
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				writeError(w, http.StatusBadRequest, "invalid or expired token")
@@ -831,7 +867,7 @@ func MagiclinkVerify(d *Deps) http.HandlerFunc {
 		defer func() { _ = tx.Rollback(ctx) }()
 
 		// Atomic consume (F6).
-		userID, err := consumeEmailToken(ctx, tx, HashToken(tok), "magiclink")
+		userID, _, err := consumeEmailToken(ctx, tx, HashToken(tok), "magiclink")
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				writeError(w, http.StatusBadRequest, "invalid or expired token")
@@ -902,7 +938,7 @@ func VerifyEmail(d *Deps) http.HandlerFunc {
 		defer func() { _ = tx.Rollback(ctx) }()
 
 		// Atomic consume (F6).
-		userID, err := consumeEmailToken(ctx, tx, HashToken(tok), "email_verification")
+		userID, tokenEmail, err := consumeEmailToken(ctx, tx, HashToken(tok), "email_verification")
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				writeError(w, http.StatusBadRequest, "invalid or expired token")
@@ -913,14 +949,30 @@ func VerifyEmail(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		_, err = tx.Exec(ctx, `
+		// Confirm ONLY the address the token was issued for, and only if it is
+		// still the user's current email (gemini audit finding 2). A token minted
+		// for address X must never confirm a later address Y. tokenEmail is NULL
+		// for tokens issued before email-binding existed — those no longer match
+		// and are rejected (re-request verification). The token is already
+		// consumed above, so a rejected attempt cannot be replayed.
+		if tokenEmail == nil {
+			writeError(w, http.StatusBadRequest, "verification link is no longer valid")
+			return
+		}
+		ct, err := tx.Exec(ctx, `
 			UPDATE pgstack.users
 			SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
-			WHERE id = $1
-		`, userID)
+			WHERE id = $1 AND email = $2
+		`, userID, *tokenEmail)
 		if err != nil {
 			log.Error().Err(err).Msg("confirm email")
 			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if ct.RowsAffected() == 0 {
+			// The token's email is no longer the user's current address — the
+			// email was changed after this token was issued. Refuse.
+			writeError(w, http.StatusBadRequest, "verification link is no longer valid")
 			return
 		}
 

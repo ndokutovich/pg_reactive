@@ -10,11 +10,18 @@ env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
 
+# Runner policy (gemini audit finding 3): PR-triggered runs execute UNTRUSTED
+# code, so they must NOT land on the self-hosted runner that also runs deploy/
+# release — a malicious PR could otherwise persist on the box and steal
+# publish/VPS credentials from a later trusted run. Every job below selects its
+# runner via `github.event_name`: `pull_request` -> ephemeral GitHub-hosted
+# (fresh VM, destroyed after the job); `push`/`workflow_dispatch` (trusted) ->
+# the self-hosted runner. deploy.yml / release.yml never trigger on PRs.
 jobs:
   # ─── Extension tests (pg_regress + isolation) ───────────────────────────────
   test-extension:
     name: Extension tests
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,7 +70,7 @@ jobs:
   # Audit round 32 F1.
   test-proxy-go:
     name: Proxy (Go)
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -95,7 +102,7 @@ jobs:
   # depend on test-proxy-go above.
   test-proxy:
     name: Proxy (Rust, reference)
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -132,7 +139,7 @@ jobs:
   # ─── TypeScript SDK ──────────────────────────────────────────────────────────
   test-sdk:
     name: SDK (TypeScript)
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -173,7 +180,7 @@ jobs:
   # ─── CLI ────────────────────────────────────────────────────────────────────
   test-cli:
     name: CLI (TypeScript)
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -249,7 +256,7 @@ jobs:
   # such test behind, per the SECURITY.md ritual.
   test-security:
     name: Adversarial security
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@v4
@@ -318,7 +325,7 @@ jobs:
   # deploy to a public VPS to discover the prod posture is broken.
   test-prod-validator:
     name: Production validator
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@v4
@@ -422,7 +429,7 @@ jobs:
   # ─── E2E tests (full stack) ──────────────────────────────────────────────────
   test-e2e:
     name: E2E tests
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension, test-proxy-go, test-sdk]
     steps:
       - uses: actions/checkout@v4
@@ -499,6 +506,26 @@ jobs:
       - name: E2E — SDK integration
         run: node tests/e2e_sdk_test.mjs
 
+      # Password reset/change must revoke every refresh token, in one tx
+      # (gemini findings: round-2 P1 + this round's #4 atomicity). Verify-off.
+      - name: E2E — session revoke on password reset/change
+        run: node tests/e2e_auth_session_revoke_test.mjs
+
+      # The email-verification tests need REQUIRE_EMAIL_VERIFICATION=true (+ dummy
+      # SMTP, or the proxy refuses to boot). Recreate proxy-go with that env AFTER
+      # the verify-off suite above, then run the verify-on tests.
+      - name: E2E — recreate proxy with email verification
+        run: |
+          REQUIRE_EMAIL_VERIFICATION=true SMTP_HOST=dummy SMTP_USER=u SMTP_PASS=p \
+            docker compose up -d proxy-go
+          timeout 60 bash -c 'until docker compose exec -T proxy-go curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
+
+      - name: E2E — email verification enforced
+        run: node tests/e2e_auth_email_verify_test.mjs
+
+      - name: E2E — stale verification token cannot confirm a different email (finding 2)
+        run: node tests/e2e_auth_stale_verify_token_test.mjs
+
       - name: Collect logs on failure
         if: failure()
         run: docker compose logs > docker-logs.txt
@@ -513,7 +540,7 @@ jobs:
   # ─── Integration tests ───────────────────────────────────────────────────────
   test-integration:
     name: Integration tests
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension]
     steps:
       - uses: actions/checkout@v4
@@ -539,7 +566,7 @@ jobs:
   # ─── Security audit ──────────────────────────────────────────────────────────
   security:
     name: Security audit
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@v4
 

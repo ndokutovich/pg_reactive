@@ -228,10 +228,37 @@ Live query snapshot tables (`pgr._snap_*`) are UNLOGGED — ordinary on-disk tab
 
 ## Upgrade procedure
 
+Apply schema migrations to the database **before** the new proxy starts — a new
+proxy may depend on schema or roles a migration creates, and an existing data
+volume never re-runs `docker/init.sql`. Bring up the database alone first, then
+migrate, then swap the rest:
+
 1. Review the changelog for breaking changes
 2. Test the upgrade in a staging environment
 3. Take a database backup
 4. Pull new images: `docker compose -f docker-compose.prod.yml pull`
-5. Apply the update: `docker compose -f docker-compose.prod.yml up -d`
-6. Run any new migrations: `pgstack migration run`
-7. Verify the health endpoint and spot-check API responses
+5. Start **only the database** on the new image: `docker compose -f docker-compose.prod.yml up -d db`
+6. Run new migrations against it: `pgstack migration run`
+7. Apply any one-time role/credential steps the changelog calls out (see below)
+8. Bring up the rest: `docker compose -f docker-compose.prod.yml up -d`
+9. Verify the health endpoint and spot-check API responses
+
+### One-time: upgrading to the non-superuser proxy connection
+
+Releases that move the proxy off the PostgreSQL superuser onto the `authenticator`
+role (gemini audit P2) need an extra step on an **existing** volume — `init.sql`
+and `docker/20-authenticator-login.sh` create and credential that role only at
+first init, so they never fire on a populated volume:
+
+```bash
+# After step 6 (migration 20260613120000 created the authenticator role NOLOGIN
+# plus the service_role grants), give it the login password the proxy will use.
+# It MUST equal AUTHENTICATOR_PASSWORD in your .env.
+docker compose -f docker-compose.prod.yml exec -T db \
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -v apw="$AUTHENTICATOR_PASSWORD" -c "ALTER ROLE authenticator LOGIN PASSWORD :'apw'"
+```
+
+Only then bring up the proxy (step 8) — its `DATABASE_URL` now points at
+`authenticator`, which finally exists and can log in. Skipping this leaves the
+proxy unable to connect.

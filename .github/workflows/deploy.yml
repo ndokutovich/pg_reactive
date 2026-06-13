@@ -23,7 +23,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         with:
@@ -74,6 +74,17 @@ jobs:
               -f examples/docker-compose.yml \
               -f examples/docker-compose.prod.yml \
               build --parallel
+            # Recreate the DB volume each deploy. The proxy now connects as the
+            # NON-superuser `authenticator` role, which docker/init.sql creates
+            # (and docker/20-authenticator-login.sh gives a password) only at
+            # FIRST init — an existing pre-authenticator volume would leave the
+            # proxy unable to connect (gemini audit findings 1 & 5). The examples
+            # are seeded demos: the `setup` service re-seeds on boot, so PG data
+            # is ephemeral here, exactly like the polyglot deploy.
+            docker compose --env-file .env \
+              -f examples/docker-compose.yml \
+              -f examples/docker-compose.prod.yml \
+              down -v --remove-orphans || true
             docker compose --env-file .env \
               -f examples/docker-compose.yml \
               -f examples/docker-compose.prod.yml \
@@ -101,7 +112,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Deploy polyglot showcase via SSH
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
