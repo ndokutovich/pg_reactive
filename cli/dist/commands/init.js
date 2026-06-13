@@ -46,13 +46,15 @@ export function registerInitCommand(program) {
         const jwtSecret = generateJwtSecret();
         const anonKey = generateApiKey();
         const serviceRoleKey = generateApiKey();
-        // Login password for the powerless `authenticator` role the proxy
-        // connects as (not the superuser). Hex so it is URL-safe in the DSN.
+        // Login passwords for the two powerless proxy roles (not the superuser),
+        // split so a data-plane compromise can't reach service_role (finding 6).
+        // Hex so they are URL-safe in the DSNs.
         const authenticatorPassword = randomHex(24);
+        const authenticatorAdminPassword = randomHex(24);
         // Write docker-compose.yml
         await writeFile(join(projectDir, "docker-compose.yml"), generateDockerCompose());
         // Write .env
-        await writeFile(join(projectDir, ".env"), generateEnv({ jwtSecret, anonKey, serviceRoleKey, authenticatorPassword }));
+        await writeFile(join(projectDir, ".env"), generateEnv({ jwtSecret, anonKey, serviceRoleKey, authenticatorPassword, authenticatorAdminPassword }));
         // Write .env.example (without secrets)
         await writeFile(join(projectDir, ".env.example"), generateEnvExample());
         // Write pgstack.config.json
@@ -94,10 +96,12 @@ function generateDockerCompose() {
     environment:
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: \${POSTGRES_DB:-${DEFAULT_DB_NAME}}
-      # Makes the powerless 'authenticator' role LOGIN-able (the image's
-      # 20-authenticator-login.sh applies it) so the proxy connects as a
-      # non-superuser. Must match the proxy's DATABASE_URL below.
+      # The image's 20-authenticator-login.sh makes the two powerless proxy
+      # roles LOGIN-able: 'authenticator' (data) + 'authenticator_admin' (admin,
+      # member of service_role), split so a data-plane compromise can't escalate.
+      # Must match the proxy DSNs below.
       AUTHENTICATOR_PASSWORD: \${AUTHENTICATOR_PASSWORD:?AUTHENTICATOR_PASSWORD required in .env}
+      AUTHENTICATOR_ADMIN_PASSWORD: \${AUTHENTICATOR_ADMIN_PASSWORD:?AUTHENTICATOR_ADMIN_PASSWORD required in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
     command: >
@@ -120,6 +124,9 @@ function generateDockerCompose() {
       # proxy SET ROLEs per request, so a compromise cannot bypass RLS by
       # default, COPY ... FROM PROGRAM, drop the database, or read pg_authid.
       DATABASE_URL: postgres://authenticator:\${AUTHENTICATOR_PASSWORD}@db:5432/\${POSTGRES_DB:-${DEFAULT_DB_NAME}}
+      # Admin pool: separate login role (member of service_role) so a data-plane
+      # compromise can't escalate (finding 6).
+      ADMIN_DATABASE_URL: postgres://authenticator_admin:\${AUTHENTICATOR_ADMIN_PASSWORD}@db:5432/\${POSTGRES_DB:-${DEFAULT_DB_NAME}}
       JWT_SECRET: \${JWT_SECRET}
       ANON_KEY: \${ANON_KEY}
       SERVICE_ROLE_KEY: \${SERVICE_ROLE_KEY}
@@ -144,10 +151,13 @@ POSTGRES_PASSWORD=postgres
 POSTGRES_DB=${DEFAULT_DB_NAME}
 PG_PORT=${DEFAULT_DB_PORT}
 
-# Login password for the powerless 'authenticator' role the PROXY connects as
-# (not the superuser). Used by both the db and proxy services in
-# docker-compose.yml. URL-safe.
+# Login passwords for the two powerless proxy roles (not the superuser), split
+# so a data-plane compromise can't reach service_role. Used by the db and proxy
+# services in docker-compose.yml. URL-safe.
+#   AUTHENTICATOR_PASSWORD        — data plane (anon/authenticated)
+#   AUTHENTICATOR_ADMIN_PASSWORD  — admin plane (service_role)
 AUTHENTICATOR_PASSWORD=${keys.authenticatorPassword}
+AUTHENTICATOR_ADMIN_PASSWORD=${keys.authenticatorAdminPassword}
 
 # Proxy
 PROXY_PORT=${DEFAULT_PROXY_PORT}
@@ -186,10 +196,11 @@ POSTGRES_DB=${DEFAULT_DB_NAME}
 PG_PORT=${DEFAULT_DB_PORT}
 PROXY_PORT=${DEFAULT_PROXY_PORT}
 
-# Login password for the powerless 'authenticator' role the proxy connects as
-# (not the superuser). Must be URL-safe (it lands in the proxy DATABASE_URL):
-#   openssl rand -hex 24
+# Login passwords for the two powerless proxy roles (not the superuser), split
+# so a data-plane compromise can't reach service_role. URL-safe (they land in
+# the proxy DSNs): openssl rand -hex 24
 AUTHENTICATOR_PASSWORD=<openssl rand -hex 24>
+AUTHENTICATOR_ADMIN_PASSWORD=<openssl rand -hex 24>
 
 JWT_SECRET=<openssl rand -base64 32>
 ANON_KEY=<openssl rand -base64 32>

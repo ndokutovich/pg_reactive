@@ -8,10 +8,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
-      # 20-authenticator-login.sh makes the powerless `authenticator` role
-      # LOGIN-able with this, so the proxy connects as a non-superuser (gemini
-      # audit P2). Dev value; matches the proxy's DATABASE_URL below.
+      # 20-authenticator-login.sh makes the two powerless proxy roles LOGIN-able:
+      # `authenticator` (data: anon/authenticated) + `authenticator_admin` (admin:
+      # service_role), split so a data-plane compromise can't escalate (gemini
+      # audit P2 + finding 6). Dev values; match the proxy DSNs below.
       AUTHENTICATOR_PASSWORD: ${AUTHENTICATOR_PASSWORD:-authenticator-dev-pw}
+      AUTHENTICATOR_ADMIN_PASSWORD: ${AUTHENTICATOR_ADMIN_PASSWORD:-authenticator-admin-dev-pw}
     ports:
       - "${PG_PORT:-15432}:5432"
     command: >
@@ -44,6 +46,9 @@ services:
       # proxy SET ROLEs per request, so a compromise can't bypass RLS by default,
       # COPY ... FROM PROGRAM, drop the db, or read pg_authid (gemini audit P2).
       DATABASE_URL: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator-dev-pw}@db:5432/pg_reactive_test
+      # Admin pool: separate login role (member of service_role) so a data-plane
+      # compromise can't escalate (finding 6).
+      ADMIN_DATABASE_URL: postgres://authenticator_admin:${AUTHENTICATOR_ADMIN_PASSWORD:-authenticator-admin-dev-pw}@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
       # The proxy defaults to PGSTACK_ENV=production (fail-secure); this dev base
       # uses dev-only secrets + ENABLE_SQL_ENDPOINT=true, so opt into development

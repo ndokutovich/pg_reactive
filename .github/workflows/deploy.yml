@@ -1,36 +1,39 @@
 name: Deploy to VPS
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'examples/**'
-      - 'proxy-go/**'
-      - 'public/**'
-      - 'ext/**'
-      - 'docker/**'
-      - 'docs/site/**'
-      - 'studio/**'
-      - 'deploy/**'
-      - 'scripts/**'
-      - 'apps/polyglot/**'
-      - 'docker-compose.yml'
-      - '.github/workflows/deploy.yml'
+  # Deploy only a CI-VERIFIED commit. Fire when the CI workflow finishes, then
+  # gate (job `if` below) on success + a trusted master push, and deploy that
+  # exact SHA. workflow_dispatch is the always-available manual fallback.
+  # (gemini audit finding 7 — was: push, running in parallel with CI and
+  # git-resetting to a moving master, so unverified/newer code could ship.)
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: [self-hosted, Linux, X64]
+    # Only when CI passed on a trusted master push (NOT a PR-triggered CI run),
+    # or on a manual dispatch.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'master')
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # The exact commit CI validated (workflow_run), or current master for a
+          # manual dispatch. Deployed verbatim — never a moving branch ref.
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: GH_TOKEN
+          envs: GH_TOKEN,DEPLOY_SHA
           script_stop: true
           script: |
             set -euo pipefail
@@ -55,10 +58,11 @@ jobs:
             # Force the persisted remote URL to be tokenless even if a
             # previous deploy embedded credentials in it.
             git remote set-url origin "$TOKENLESS_URL"
-            # Fetch via the authenticated URL (one-shot, not persisted)
-            # and reset the local branch to the fetched ref.
-            git fetch "$AUTH_URL" master
-            git reset --hard FETCH_HEAD
+            # Fetch the EXACT CI-verified commit (one-shot authenticated URL,
+            # not persisted) and reset to it — never a moving branch ref.
+            git fetch "$AUTH_URL" "$DEPLOY_SHA"
+            git reset --hard "$DEPLOY_SHA"
+            echo "deploying $DEPLOY_SHA"
 
             # Idempotent secret bootstrap: first run generates .env with
             # cryptographically random values for every required secret;

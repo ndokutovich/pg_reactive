@@ -34,9 +34,28 @@ type RequestClaims struct {
 
 // RestDeps is the dependency bundle passed to all handler constructors.
 type RestDeps struct {
-	Pool          *pgxpool.Pool
+	// Pool is the data plane: connects as `authenticator` (member of anon +
+	// authenticated only) and SET LOCAL ROLEs per request.
+	Pool *pgxpool.Pool
+	// AdminPool is the admin plane: connects as `authenticator_admin` (member of
+	// service_role). service_role-key requests are routed here so the data
+	// plane's login role need not be a member of service_role — a data-plane
+	// compromise then cannot escalate (gemini audit finding 6). Nil falls back to
+	// Pool (legacy single-role).
+	AdminPool     *pgxpool.Pool
 	Catalog       *Catalog
 	ResolveClaims func(r *http.Request) (*RequestClaims, error)
+}
+
+// poolFor returns the pool a request of the given role must run on. service_role
+// requests use the admin pool (whose login role can assume service_role); every
+// other role uses the data pool. Falls back to the data pool when no admin pool
+// is wired (legacy single-role deployments).
+func (d *RestDeps) poolFor(role string) *pgxpool.Pool {
+	if role == "service_role" && d.AdminPool != nil {
+		return d.AdminPool
+	}
+	return d.Pool
 }
 
 // validRoles is the whitelist for SET LOCAL ROLE to prevent SQL injection.

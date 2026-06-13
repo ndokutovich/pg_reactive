@@ -92,8 +92,9 @@ describe("pgstack init", () => {
     const env = readFileSync(join(tempDir, "dbapp", ".env"), "utf-8");
     // CLI tooling (migration/generate) connects directly as the superuser for DDL.
     expect(env).toContain("DATABASE_URL=postgres://postgres:postgres@127.0.0.1:15432/app");
-    // The proxy's authenticator login password is generated into .env too.
+    // Both proxy-role login passwords are generated (URL-safe hex) into .env.
     expect(env).toMatch(/AUTHENTICATOR_PASSWORD=[0-9a-f]{48}/);
+    expect(env).toMatch(/AUTHENTICATOR_ADMIN_PASSWORD=[0-9a-f]{48}/);
   });
 
   it("generates docker-compose.yml with proxy and db services", () => {
@@ -121,6 +122,11 @@ describe("pgstack init", () => {
     expect(dc).toContain("postgres://authenticator:");
     expect(dc).not.toContain("DATABASE_URL: postgres://postgres:");
     expect(dc).toContain("AUTHENTICATOR_PASSWORD");
+    // finding 6: a separate admin login role + DSN, so the data plane can't
+    // escalate to service_role.
+    expect(dc).toContain("postgres://authenticator_admin:");
+    expect(dc).toContain("ADMIN_DATABASE_URL");
+    expect(dc).toContain("AUTHENTICATOR_ADMIN_PASSWORD");
   });
 
   it("creates bootstrap migration with auth schema", () => {

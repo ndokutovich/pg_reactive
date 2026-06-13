@@ -59,7 +59,7 @@ func Select(d *RestDeps) http.HandlerFunc {
 			return
 		}
 
-		tx, err := beginRLSTx(r.Context(), d.Pool, claims)
+		tx, err := beginRLSTx(r.Context(), d.poolFor(claims.Role), claims)
 		if err != nil {
 			log.Error().Err(err).Msg("select: begin RLS transaction")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")
@@ -262,7 +262,7 @@ func Insert(d *RestDeps) http.HandlerFunc {
 			return
 		}
 
-		tx, err := beginRLSTx(r.Context(), d.Pool, claims)
+		tx, err := beginRLSTx(r.Context(), d.poolFor(claims.Role), claims)
 		if err != nil {
 			log.Error().Err(err).Msg("insert: begin RLS transaction")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")
@@ -420,7 +420,7 @@ func Update(d *RestDeps) http.HandlerFunc {
 			return
 		}
 
-		tx, err := beginRLSTx(r.Context(), d.Pool, claims)
+		tx, err := beginRLSTx(r.Context(), d.poolFor(claims.Role), claims)
 		if err != nil {
 			log.Error().Err(err).Msg("update: begin RLS transaction")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")
@@ -493,7 +493,7 @@ func Delete(d *RestDeps) http.HandlerFunc {
 			return
 		}
 
-		tx, err := beginRLSTx(r.Context(), d.Pool, claims)
+		tx, err := beginRLSTx(r.Context(), d.poolFor(claims.Role), claims)
 		if err != nil {
 			log.Error().Err(err).Msg("delete: begin RLS transaction")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")

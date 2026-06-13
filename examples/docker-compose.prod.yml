@@ -28,9 +28,10 @@ services:
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in production}
       POSTGRES_HOST_AUTH_METHOD: scram-sha-256
-      # Override the dev base's default — in prod the authenticator login
-      # password is required, never the publicly-known dev value.
+      # Override the dev base's defaults — in prod both proxy-role login
+      # passwords are required, never the publicly-known dev values.
       AUTHENTICATOR_PASSWORD: ${AUTHENTICATOR_PASSWORD:?AUTHENTICATOR_PASSWORD is required in production}
+      AUTHENTICATOR_ADMIN_PASSWORD: ${AUTHENTICATOR_ADMIN_PASSWORD:?AUTHENTICATOR_ADMIN_PASSWORD is required in production}
 
   proxy:
     restart: unless-stopped

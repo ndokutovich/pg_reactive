@@ -100,8 +100,8 @@ func Batch(d *RestDeps, maxOps int) http.HandlerFunc {
 			return
 		}
 
-		// Open a single RLS transaction.
-		tx, err := beginRLSTx(ctx, d.Pool, claims)
+		// Open a single RLS transaction (service_role routes to the admin pool).
+		tx, err := beginRLSTx(ctx, d.poolFor(claims.Role), claims)
 		if err != nil {
 			log.Error().Err(err).Msg("batch: begin RLS transaction")
 			writeJSONError(w, http.StatusInternalServerError, "internal database error")

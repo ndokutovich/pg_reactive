@@ -14,7 +14,13 @@ import (
 type Config struct {
 	// Core
 	DatabaseURL string
-	ListenAddr  string
+	// AdminDatabaseURL is the DSN for the trusted ADMIN pool. When set it should
+	// point at the `authenticator_admin` login role (member of service_role); the
+	// data pool's `authenticator` role is NOT a member of service_role, so a
+	// data-plane compromise cannot escalate (gemini audit finding 6). Empty falls
+	// back to DatabaseURL (legacy single-role model).
+	AdminDatabaseURL string
+	ListenAddr       string
 
 	// PgstackEnv flips the strict-production validator. When equal to
 	// "production", any of the following becomes a fatal startup error
@@ -188,6 +194,9 @@ func FromEnv() Config {
 	cfg := Config{}
 
 	cfg.DatabaseURL = envOrDefault("DATABASE_URL", "postgres://postgres:postgres@db:5432/app")
+	// Empty => admin pool falls back to DatabaseURL (single-role). Set to the
+	// authenticator_admin DSN for the finding-6 data/admin login-role split.
+	cfg.AdminDatabaseURL = envOrDefault("ADMIN_DATABASE_URL", "")
 	cfg.ListenAddr = envOrDefault("LISTEN_ADDR", "0.0.0.0:8080")
 	// PGSTACK_ENV defaults to "production" (fail-secure): an operator who forgets
 	// to set it gets the strict validator (rejects dev-only secrets, refuses

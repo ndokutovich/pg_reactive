@@ -84,7 +84,17 @@ func main() {
 	// backend operations that do not SET ROLE themselves (auth, catalog
 	// introspection, SQL endpoint, edge-fn catalog, realtime gate) run on this
 	// pool instead of relying on a superuser connection (gemini audit P2).
-	adminPool, err := buildPoolAs("service_role", cfg.DatabaseURL, cfg.PGPoolMaxConns, cfg.PGPoolMinConns, cfg.PGPoolMaxConnIdleTime)
+	// The admin pool prefers ADMIN_DATABASE_URL (the authenticator_admin login
+	// role, member of service_role). When unset it falls back to DATABASE_URL —
+	// the legacy single-role model, where authenticator itself is a member of
+	// service_role. Splitting the two login roles (finding 6) means a data-plane
+	// compromise (data pool = authenticator, NOT a member of service_role) cannot
+	// SET ROLE service_role even after RESET ROLE.
+	adminDSN := cfg.AdminDatabaseURL
+	if adminDSN == "" {
+		adminDSN = cfg.DatabaseURL
+	}
+	adminPool, err := buildPoolAs("service_role", adminDSN, cfg.PGPoolMaxConns, cfg.PGPoolMinConns, cfg.PGPoolMaxConnIdleTime)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to build admin (service_role) pool")
 	}
@@ -358,8 +368,9 @@ func buildRouter(state *AppState) http.Handler {
 		log.Info().Msg("REST catalog loaded")
 	}
 	restDeps := &rest.RestDeps{
-		Pool:    state.Pool,
-		Catalog: state.Catalog,
+		Pool:      state.Pool,
+		AdminPool: state.AdminPool,
+		Catalog:   state.Catalog,
 		ResolveClaims: func(r *http.Request) (*rest.RequestClaims, error) {
 			claims, err := appMiddleware.ResolveClaims(r, rlsCfg)
 			if err != nil {
@@ -603,7 +614,8 @@ func buildRouter(state *AppState) http.Handler {
 		log.Info().Msg("edge functions catalog loaded")
 	}
 	fnDeps := &functions.FunctionsDeps{
-		Pool: state.Pool,
+		Pool:      state.Pool,
+		AdminPool: state.AdminPool,
 		ResolveClaims: func(r *http.Request) (*rest.RequestClaims, error) {
 			claims, err := appMiddleware.ResolveClaims(r, rlsCfg)
 			if err != nil {

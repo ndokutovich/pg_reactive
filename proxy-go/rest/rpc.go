@@ -136,7 +136,7 @@ func execRPC(w http.ResponseWriter, r *http.Request, d *RestDeps, fnName string,
 		return
 	}
 
-	tx, err := beginRLSTx(ctx, d.Pool, claims)
+	tx, err := beginRLSTx(ctx, d.poolFor(claims.Role), claims)
 	if err != nil {
 		log.Error().Err(err).Msg("rpc: begin RLS transaction")
 		writeJSONError(w, http.StatusInternalServerError, "internal database error")

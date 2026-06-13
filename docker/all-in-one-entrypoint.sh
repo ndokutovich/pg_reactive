@@ -133,7 +133,25 @@ if [ "$(psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='authenticator'" 2>/dev/
 ALTER ROLE authenticator LOGIN PASSWORD :'apw';
 EOSQL
   export DATABASE_URL="postgres://authenticator:${AUTHPW}@127.0.0.1:5432/${PGDATABASE}"
-  echo "==> proxy DSN role = authenticator (NOSUPERUSER; SET ROLE per request)"
+  echo "==> proxy DSN role = authenticator (data plane; NOSUPERUSER, SET ROLE per request)"
+
+  # Admin plane (finding 6): the data role authenticator is NOT a member of
+  # service_role, so the admin pool uses a SEPARATE login role authenticator_admin
+  # (member of service_role) via ADMIN_DATABASE_URL. Present on a fresh CORE
+  # volume; absent on an old volume (then ADMIN_DATABASE_URL stays unset and the
+  # admin pool falls back to DATABASE_URL, where the legacy authenticator was a
+  # service_role member).
+  if [ "$(psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='authenticator_admin'" 2>/dev/null || true)" = "1" ]; then
+    ADMINPW="${AUTHENTICATOR_ADMIN_PASSWORD:-}"
+    if [ -z "$ADMINPW" ]; then
+      ADMINPW="$(openssl rand -hex 24 2>/dev/null || tr -dc 'a-f0-9' < /dev/urandom | head -c 48)"
+    fi
+    psql -v ON_ERROR_STOP=1 -v apw="$ADMINPW" > /dev/null <<'EOSQL'
+ALTER ROLE authenticator_admin LOGIN PASSWORD :'apw';
+EOSQL
+    export ADMIN_DATABASE_URL="postgres://authenticator_admin:${ADMINPW}@127.0.0.1:5432/${PGDATABASE}"
+    echo "==> proxy admin DSN role = authenticator_admin (admin plane; member of service_role)"
+  fi
 else
   # Sanctioned superuser fallback: no `authenticator` role means standalone
   # pg_reactive without the pgStack CORE, so there is no RLS model to guard and

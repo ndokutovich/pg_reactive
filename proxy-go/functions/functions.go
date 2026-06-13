@@ -25,7 +25,12 @@ var fnNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]{0,62}$`)
 
 // FunctionsDeps is the dependency bundle passed to all handler constructors.
 type FunctionsDeps struct {
-	Pool           *pgxpool.Pool
+	Pool *pgxpool.Pool
+	// AdminPool runs service_role invocations: the data Pool's `authenticator`
+	// role is not a member of service_role, so a service_role function must run
+	// on the admin pool's `authenticator_admin` login role (gemini audit finding
+	// 6). Nil falls back to Pool (legacy single-role).
+	AdminPool      *pgxpool.Pool
 	ResolveClaims  func(r *http.Request) (*rest.RequestClaims, error)
 	Catalog        *FunctionsCatalog
 	DatabaseURL    string // passed to functions as PGSTACK_DB_URL env hint
@@ -35,6 +40,16 @@ type FunctionsDeps struct {
 	// upstreams). Zero or negative means no proxy-imposed deadline (only the
 	// HTTP server's own ReadTimeout/WriteTimeout still apply).
 	EdgeFnTimeout time.Duration
+}
+
+// poolFor routes service_role invocations to the admin pool (whose login role
+// can assume service_role) and everything else to the data pool. Falls back to
+// the data pool when no admin pool is wired (legacy single-role).
+func (d *FunctionsDeps) poolFor(role string) *pgxpool.Pool {
+	if role == "service_role" && d.AdminPool != nil {
+		return d.AdminPool
+	}
+	return d.Pool
 }
 
 // Invoke returns an http.HandlerFunc for POST /functions/v1/{name}.
@@ -95,7 +110,7 @@ func invoke(d *FunctionsDeps, w http.ResponseWriter, r *http.Request) {
 
 	switch fm.Runtime {
 	case "embedded":
-		result, execErr := executeEmbedded(ctx, fm.Code, bodyBytes, claims, d.Pool)
+		result, execErr := executeEmbedded(ctx, fm.Code, bodyBytes, claims, d.poolFor(claims.Role))
 		if execErr != nil {
 			log.Error().Err(execErr).Str("fn", fnName).Msg("functions: embedded execution failed")
 			writeJSONError(w, http.StatusInternalServerError, "function execution failed")
@@ -164,7 +179,7 @@ func invokePLRuntime(d *FunctionsDeps, w http.ResponseWriter, ctx context.Contex
 		rest.QuoteIdent(pgFnName),
 	)
 
-	tx, err := beginRLSTx(ctx, d.Pool, claims)
+	tx, err := beginRLSTx(ctx, d.poolFor(claims.Role), claims)
 	if err != nil {
 		log.Error().Err(err).Str("fn", fnName).Msg("functions: begin RLS transaction")
 		writeJSONError(w, http.StatusInternalServerError, "internal database error")

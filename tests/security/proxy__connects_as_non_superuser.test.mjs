@@ -24,6 +24,7 @@
 import { execFileSync as runProc } from "node:child_process";
 
 const PW = process.env.AUTHENTICATOR_PASSWORD ?? "authenticator-dev-pw";
+const ADMIN_PW = process.env.AUTHENTICATOR_ADMIN_PASSWORD ?? "authenticator-admin-dev-pw";
 const DB = process.env.PG_DB ?? "pg_reactive_test";
 
 let pass = 0;
@@ -41,6 +42,20 @@ function asAuthenticator(sql) {
     const out = runProc("docker", [
       "compose", "exec", "-T", "-e", `PGPASSWORD=${PW}`, "db",
       "psql", `host=127.0.0.1 user=authenticator dbname=${DB}`,
+      "-v", "ON_ERROR_STOP=1", "-tAc", sql,
+    ], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+    return { ok: true, out: (out ?? "").trim() };
+  } catch (e) {
+    return { ok: false, out: ((e.stdout ?? "") + (e.stderr ?? "")).trim() };
+  }
+}
+
+// Same, but AS the admin login role authenticator_admin (member of service_role).
+function asAdmin(sql) {
+  try {
+    const out = runProc("docker", [
+      "compose", "exec", "-T", "-e", `PGPASSWORD=${ADMIN_PW}`, "db",
+      "psql", `host=127.0.0.1 user=authenticator_admin dbname=${DB}`,
       "-v", "ON_ERROR_STOP=1", "-tAc", sql,
     ], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
     return { ok: true, out: (out ?? "").trim() };
@@ -77,13 +92,34 @@ function main() {
   check(!noRole.ok && /permission denied/i.test(noRole.out),
     "pgstack.users is denied without SET ROLE (NOINHERIT = powerless by default)");
 
-  // 5. But SET ROLE service_role works (membership) — so the proxy's admin pool
-  //    can still do its job. The model reduces power; it doesn't remove function.
-  const setRole = asAuthenticator("SET ROLE service_role; SELECT 1");
-  check(setRole.ok && setRole.out.includes("1"),
-    "SET ROLE service_role succeeds (proxy admin pool remains functional)");
+  // 5. The data role CANNOT reach service_role — not directly, and not via
+  //    RESET ROLE (back to the session role authenticator, which is NOT a member
+  //    of service_role). This is the finding-6 boundary: a SQL injection on the
+  //    data plane cannot escalate to BYPASSRLS / app-admin.
+  const escalate = asAuthenticator("SET ROLE service_role");
+  check(!escalate.ok && /permission denied to set role/i.test(escalate.out),
+    "data role authenticator CANNOT SET ROLE service_role (no escalation)");
+  const resetEscalate = asAuthenticator("RESET ROLE; SET ROLE service_role");
+  check(!resetEscalate.ok && /permission denied to set role/i.test(resetEscalate.out),
+    "data role cannot reach service_role via RESET ROLE either");
+  // It can still assume the request roles it serves.
+  const setAuthd = asAuthenticator("SET ROLE authenticated; SELECT 1");
+  check(setAuthd.ok && setAuthd.out.includes("1"),
+    "data role can still SET ROLE authenticated (serves anon/authenticated)");
 
-  console.log(`\nProxy non-superuser invariant: ${pass} passed, ${fail} failed`);
+  // 6. The SEPARATE admin login role authenticator_admin CAN assume service_role
+  //    — so the admin pool still works. Power is split, not removed.
+  const adminWho = asAdmin("SELECT current_user");
+  check(adminWho.ok && adminWho.out === "authenticator_admin",
+    `admin login role is 'authenticator_admin' (got ${JSON.stringify(adminWho.out)})`);
+  const adminSuper = asAdmin("SELECT rolsuper FROM pg_roles WHERE rolname=current_user");
+  check(adminSuper.ok && adminSuper.out === "f",
+    "authenticator_admin is NOSUPERUSER (admin plane is still not the superuser)");
+  const adminSetRole = asAdmin("SET ROLE service_role; SELECT 1");
+  check(adminSetRole.ok && adminSetRole.out.includes("1"),
+    "authenticator_admin CAN SET ROLE service_role (admin pool functional)");
+
+  console.log(`\nProxy login-role isolation invariant: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }
 

@@ -8,10 +8,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
-      # docker/20-authenticator-login.sh ALTERs the powerless `authenticator`
-      # role LOGIN with this password at init, so the proxy (DATABASE_URL below)
-      # connects as a non-superuser. Dev value only; prod injects a real one.
+      # docker/20-authenticator-login.sh ALTERs the two powerless proxy roles
+      # LOGIN with these passwords at init: `authenticator` (data plane, anon/
+      # authenticated) and `authenticator_admin` (admin plane, service_role) —
+      # split so a data-plane compromise can't reach service_role (finding 6).
+      # Dev values only; prod injects real ones.
       AUTHENTICATOR_PASSWORD: authenticator-dev-pw
+      AUTHENTICATOR_ADMIN_PASSWORD: authenticator-admin-dev-pw
     ports:
       - "127.0.0.1:${PG_PORT:-15432}:5432"
     command: >
@@ -46,6 +49,9 @@ services:
       # DATABASE, or read pg_authid (gemini audit P2). Dev password set by
       # docker/init.sql; production injects a real one via bootstrap-env.sh.
       DATABASE_URL: postgres://authenticator:authenticator-dev-pw@db:5432/pg_reactive_test
+      # Admin pool: separate login role (authenticator_admin, member of
+      # service_role) so a data-plane compromise can't escalate (finding 6).
+      ADMIN_DATABASE_URL: postgres://authenticator_admin:authenticator-admin-dev-pw@db:5432/pg_reactive_test
       LISTEN_ADDR: "0.0.0.0:8080"
       # Dev posture: the proxy defaults to PGSTACK_ENV=production (fail-secure),
       # so this base — with dev-only secrets and ENABLE_SQL_ENDPOINT=true — must

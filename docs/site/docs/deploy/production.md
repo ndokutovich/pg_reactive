@@ -262,3 +262,24 @@ docker compose -f docker-compose.prod.yml exec -T db \
 Only then bring up the proxy (step 8) — its `DATABASE_URL` now points at
 `authenticator`, which finally exists and can log in. Skipping this leaves the
 proxy unable to connect.
+
+#### Two-login-role split (admin plane)
+
+To also split the admin plane onto its own login role (so a data-plane
+compromise cannot reach `service_role` — gemini audit finding 6), after the
+above and after migration `20260613140000` created `authenticator_admin`:
+
+```bash
+# 1. Give the admin role a login password (= AUTHENTICATOR_ADMIN_PASSWORD in .env)
+docker compose -f docker-compose.prod.yml exec -T db \
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -v apw="$AUTHENTICATOR_ADMIN_PASSWORD" -c "ALTER ROLE authenticator_admin LOGIN PASSWORD :'apw'"
+# 2. Set ADMIN_DATABASE_URL=postgres://authenticator_admin:<pw>@db:5432/<db> in .env,
+#    then recreate the proxy so its admin pool uses it.
+# 3. ONLY THEN drop the data role's escalation path:
+docker compose -f docker-compose.prod.yml exec -T db \
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "REVOKE service_role FROM authenticator"
+```
+
+Doing step 3 before step 2 breaks the admin pool (it would still be assuming
+`service_role` through `authenticator`).

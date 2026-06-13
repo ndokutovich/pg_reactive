@@ -90,6 +90,10 @@ add POSTGRES_PASSWORD       "$(v_or_rand       POSTGRES_PASSWORD)"
 # lands in the proxy's DATABASE_URL. The db image's 20-authenticator-login.sh
 # applies it; both the db and proxy services read this one value.
 add AUTHENTICATOR_PASSWORD  "$(v_or_rand       AUTHENTICATOR_PASSWORD)"
+# Admin-plane login role (authenticator_admin, member of service_role) — a
+# separate credential from the data role so a data-plane compromise can't
+# escalate (gemini audit finding 6). URL-safe; lands in ADMIN_DATABASE_URL.
+add AUTHENTICATOR_ADMIN_PASSWORD "$(v_or_rand  AUTHENTICATOR_ADMIN_PASSWORD)"
 add JWT_SECRET              "$(v_or_rand       JWT_SECRET)"
 add ANON_KEY                "$(v_or_rand       ANON_KEY)"
 add SERVICE_ROLE_KEY        "$(v_or_rand       SERVICE_ROLE_KEY)"

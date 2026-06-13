@@ -21,16 +21,28 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
     CREATE ROLE service_role NOLOGIN BYPASSRLS;
   END IF;
-  -- authenticator: the role the PROXY connects as. NON-superuser, cannot create
-  -- roles/databases, and NOINHERIT — so it holds NONE of its member roles'
-  -- privileges until it explicitly SET ROLEs. This replaces connecting as the
-  -- superuser, which bypasses RLS entirely and can run COPY ... FROM PROGRAM (OS
-  -- exec), DROP DATABASE, and read pg_authid (gemini audit P2). NOLOGIN in the
-  -- core backbone: each deployment grants LOGIN + a real password to its own
-  -- proxy credential (this repo's dev does it below; prod via bootstrap-env) so
-  -- the synced CLI template never ships a login-able role with a known password.
+  -- TWO proxy login roles, split so the data plane cannot escalate to the admin
+  -- plane (gemini audit finding 6). Both are NON-superuser, cannot create
+  -- roles/databases, and NOINHERIT — they hold NONE of their member roles'
+  -- privileges until they explicitly SET ROLE. This replaces connecting as the
+  -- superuser (P2: RLS bypass, COPY ... FROM PROGRAM, DROP DATABASE, pg_authid).
+  --
+  --   authenticator        — the REQUEST-facing data plane. Member of anon +
+  --                          authenticated ONLY, so a SQL injection here can
+  --                          RESET ROLE back to authenticator but STILL cannot
+  --                          reach service_role / BYPASSRLS.
+  --   authenticator_admin  — the trusted admin plane (auth, catalog, storage,
+  --                          webhooks, realtime gate, service_role-key REST).
+  --                          Member of service_role; a SEPARATE login + password.
+  --
+  -- Both NOLOGIN in the core backbone: each deployment grants LOGIN + a real
+  -- password to its own credentials (dev below; prod via bootstrap-env), so the
+  -- synced CLI template never ships a login-able role with a known password.
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticator') THEN
     CREATE ROLE authenticator NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticator_admin') THEN
+    CREATE ROLE authenticator_admin NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
   END IF;
 END $$;
 
@@ -39,10 +51,11 @@ GRANT anon TO postgres;
 GRANT authenticated TO postgres;
 GRANT service_role TO postgres;
 
--- authenticator may ASSUME (SET ROLE) the request roles for the RLS-bound data
--- plane and service_role for the trusted admin plane. NOINHERIT means it has
--- none of their rights until it switches — a powerless default connection.
-GRANT anon, authenticated, service_role TO authenticator;
+-- Data plane: authenticator may ASSUME (SET ROLE) only the request roles. It is
+-- deliberately NOT a member of service_role — that is the finding-6 boundary.
+GRANT anon, authenticated TO authenticator;
+-- Admin plane: a separate login role that can assume service_role (and only it).
+GRANT service_role TO authenticator_admin;
 
 -- Auth schema
 CREATE SCHEMA IF NOT EXISTS pgstack;
