@@ -85,6 +85,11 @@ v_or_rand_aes32() { local k="$1"; printf '%s' "${!k:-$(rand_aes32_b64)}"; }
 v_or_lit()        { local k="$1" def="$2"; printf '%s' "${!k:-$def}"; }
 
 add POSTGRES_PASSWORD       "$(v_or_rand       POSTGRES_PASSWORD)"
+# Login password for the powerless `authenticator` role the proxy connects as
+# (gemini audit P2). URL-safe (same generator as POSTGRES_PASSWORD) because it
+# lands in the proxy's DATABASE_URL. The db image's 20-authenticator-login.sh
+# applies it; both the db and proxy services read this one value.
+add AUTHENTICATOR_PASSWORD  "$(v_or_rand       AUTHENTICATOR_PASSWORD)"
 add JWT_SECRET              "$(v_or_rand       JWT_SECRET)"
 add ANON_KEY                "$(v_or_rand       ANON_KEY)"
 add SERVICE_ROLE_KEY        "$(v_or_rand       SERVICE_ROLE_KEY)"

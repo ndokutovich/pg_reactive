@@ -25,12 +25,28 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
     CREATE ROLE service_role NOLOGIN BYPASSRLS;
   END IF;
+  -- authenticator: the role the PROXY connects as. NON-superuser, cannot create
+  -- roles/databases, and NOINHERIT — so it holds NONE of its member roles'
+  -- privileges until it explicitly SET ROLEs. This replaces connecting as the
+  -- superuser, which bypasses RLS entirely and can run COPY ... FROM PROGRAM (OS
+  -- exec), DROP DATABASE, and read pg_authid (gemini audit P2). NOLOGIN in the
+  -- core backbone: each deployment grants LOGIN + a real password to its own
+  -- proxy credential (this repo's dev does it below; prod via bootstrap-env) so
+  -- the synced CLI template never ships a login-able role with a known password.
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticator') THEN
+    CREATE ROLE authenticator NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
+  END IF;
 END $$;
 
 -- Let postgres switch to these roles
 GRANT anon TO postgres;
 GRANT authenticated TO postgres;
 GRANT service_role TO postgres;
+
+-- authenticator may ASSUME (SET ROLE) the request roles for the RLS-bound data
+-- plane and service_role for the trusted admin plane. NOINHERIT means it has
+-- none of their rights until it switches — a powerless default connection.
+GRANT anon, authenticated, service_role TO authenticator;
 
 -- Auth schema
 CREATE SCHEMA IF NOT EXISTS pgstack;
@@ -267,6 +283,24 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON pgstack.storage_objects TO authenticated
 GRANT SELECT ON pgstack.storage_objects TO anon;
 GRANT SELECT ON pgstack.users TO authenticated;
 
+-- service_role is the trusted backend role the proxy's ADMIN connection assumes
+-- (SET ROLE) for auth and admin operations. These DML grants were implicit when
+-- the proxy connected as the superuser; an authenticator/service_role connection
+-- needs them explicitly (gemini audit P2). BYPASSRLS on service_role lets the
+-- auth writes through pgstack.users' RLS.
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  pgstack.users, pgstack.refresh_tokens, pgstack.oauth_sessions, pgstack.email_tokens
+  TO service_role;
+-- Storage runs on the proxy's admin (service_role) connection: bucket/object
+-- ownership is enforced in the handler + owner-locked upsert SQL, not by RLS,
+-- so service_role needs full DML here too (gemini audit P2). Without these the
+-- authenticator-based connection cannot touch storage at all once it stops
+-- riding the superuser.
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  pgstack.storage_buckets, pgstack.storage_objects
+  TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA pgstack TO service_role;
+
 -- ── Schema usage ─────────────────────────────────────────────────────────────
 -- USAGE on the public schema is needed for any access at all; grants on
 -- individual tables/functions still gate what each role can DO.
@@ -276,6 +310,12 @@ GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 -- service_role is the admin role used by the proxy when impersonating "no RLS"
 -- via JWT role=service_role. It needs blanket privileges so internal
 -- maintenance (catalog refresh, batch ops, migrations) keeps working.
+-- CREATE on public is required for DDL through the (service_role-gated) /api/sql
+-- endpoint and CLI migrations: creating tables/functions/policies. When the
+-- proxy connected as the superuser this was implicit; the authenticator→
+-- service_role model needs it explicit (gemini audit P2). This stays strictly
+-- short of superuser — no COPY ... FROM PROGRAM, DROP DATABASE, or pg_authid.
+GRANT CREATE ON SCHEMA public TO service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO service_role;
@@ -376,3 +416,53 @@ CREATE EVENT TRIGGER pgstack_revoke_public_execute
     ON ddl_command_end
     WHEN TAG IN ('CREATE FUNCTION', 'CREATE PROCEDURE')
     EXECUTE FUNCTION pgstack.revoke_public_execute_on_new_function();
+
+-- Grant the proxy's trusted backend role (service_role) the access its realtime
+-- gate needs on pg_reactive objects, WITHOUT coupling the pg_reactive extension
+-- to pgstack's role model. The proxy now runs the WS/presence gate on its admin
+-- (service_role) connection instead of a superuser, so service_role must be able
+-- to EXECUTE pgr.subscription_meta and SELECT the per-query pgr._snap_* snapshot
+-- tables (the snapshot read + its ACCESS SHARE lock). Those objects exist only
+-- AFTER CREATE EXTENSION and the _snap tables are created at runtime by subscribe,
+-- so a one-shot grant in this file cannot cover them — a DDL event trigger does.
+-- No-op when service_role or the pgr schema is absent, so pg_reactive stays
+-- usable standalone (gemini audit P2).
+CREATE OR REPLACE FUNCTION pgstack.grant_pgr_access_to_service_role()
+RETURNS event_trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+    obj record;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN RETURN; END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'pgr') THEN RETURN; END IF;
+    FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
+        BEGIN
+            IF obj.command_tag IN ('CREATE EXTENSION', 'ALTER EXTENSION') THEN
+                -- (re)grant after install or an extension upgrade that drops+recreates
+                -- subscription_meta.
+                EXECUTE 'GRANT USAGE ON SCHEMA pgr TO service_role';
+                IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                           WHERE n.nspname = 'pgr' AND p.proname = 'subscription_meta') THEN
+                    EXECUTE 'GRANT EXECUTE ON FUNCTION pgr.subscription_meta(text) TO service_role';
+                END IF;
+                EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA pgr TO service_role';
+            ELSIF obj.command_tag IN ('CREATE TABLE', 'CREATE TABLE AS') AND obj.schema_name = 'pgr' THEN
+                -- per-query snapshot table just created by pgr.subscribe. It is
+                -- built with CREATE UNLOGGED TABLE ... AS, whose command tag is
+                -- 'CREATE TABLE AS' (NOT 'CREATE TABLE') — both are matched.
+                EXECUTE format('GRANT SELECT ON %s TO service_role', obj.object_identity);
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            NULL;  -- never let a grant failure abort the triggering DDL
+        END;
+    END LOOP;
+END $$;
+
+DROP EVENT TRIGGER IF EXISTS pgstack_grant_pgr_to_service;
+CREATE EVENT TRIGGER pgstack_grant_pgr_to_service
+    ON ddl_command_end
+    WHEN TAG IN ('CREATE EXTENSION', 'ALTER EXTENSION', 'CREATE TABLE', 'CREATE TABLE AS')
+    EXECUTE FUNCTION pgstack.grant_pgr_access_to_service_role();

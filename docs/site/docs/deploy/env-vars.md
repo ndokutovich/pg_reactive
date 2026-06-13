@@ -35,8 +35,9 @@ These must be set for production. In development, the compose file provides inse
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `POSTGRES_DB` | `app` | Database name. |
-| `POSTGRES_USER` | `postgres` | PostgreSQL superuser username. |
-| `DATABASE_URL` | *(constructed)* | Full connection string. Constructed automatically by the compose file. Override to use an external PostgreSQL instance. |
+| `POSTGRES_USER` | `postgres` | PostgreSQL superuser username. Used only to bootstrap the database — the proxy does **not** connect as this role. |
+| `AUTHENTICATOR_PASSWORD` | *(required in prod)* | Login password for the powerless `authenticator` role the proxy connects as (**not** the superuser) — see [SECURITY.md invariant 22]. The db image's `20-authenticator-login.sh` applies it at init; the proxy's `DATABASE_URL` uses it. Must be URL-safe. `bootstrap-env.sh` generates it; the production compose fails fast if it is unset. |
+| `DATABASE_URL` | *(constructed)* | Full connection string, constructed by the compose file as `postgres://authenticator:$AUTHENTICATOR_PASSWORD@db:5432/$POSTGRES_DB`. The proxy connects as `authenticator` (NOSUPERUSER, NOINHERIT) and `SET ROLE`s per request, so a compromise cannot bypass RLS by default, run `COPY … FROM PROGRAM`, drop the database, or read `pg_authid`. Override only to point at an external PostgreSQL — keep the non-superuser role. |
 
 ## Proxy variables
 

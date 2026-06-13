@@ -384,12 +384,54 @@ function checkDeltaReauth(file, text) {
   }
 }
 
+// Rule SEC-R42 — the pgStack proxy must not connect to PostgreSQL as the
+//   superuser in production deployment configs. SECURITY.md invariant #22 /
+//   gemini audit P2.
+//   The proxy connects as the powerless `authenticator` role (NOSUPERUSER,
+//   NOINHERIT) and SET ROLEs per request, so a compromise cannot bypass RLS by
+//   default, COPY ... FROM PROGRAM, DROP DATABASE, or read pg_authid. A
+//   production DATABASE_URL pointed at the `postgres` superuser — or
+//   ${POSTGRES_USER}/${PGUSER}, conventionally the superuser — re-opens all of
+//   that. Scope: the production deployment configs only. The dev compose's Rust
+//   *reference* proxy and the bench stack are not production and are out of
+//   scope (they are not in this fixed target list). The all-in-one's documented
+//   standalone-pg_reactive fallback DSN is marked lint:allow=SEC-R42.
+//   Override a verified-safe occurrence with `# lint:allow=SEC-R42`.
+function checkProxyNotSuperuser() {
+  const targets = [
+    join(ROOT, "docker-compose.prod.yml"),
+    join(ROOT, "docker", "all-in-one-entrypoint.sh"),
+  ];
+  const deployTpl = [];
+  walk(join(ROOT, "deploy", "templates"), deployTpl);
+  for (const f of deployTpl) if (/docker-compose\.ya?ml$/.test(f)) targets.push(f);
+
+  // A DATABASE_URL whose role component is the conventional superuser.
+  const superuserDSN =
+    /DATABASE_URL.*:\/\/(?:postgres:|\$\{POSTGRES_USER|\$\{PGUSER\b|\$PGUSER\b)/;
+  for (const fp of targets) {
+    let text;
+    try { text = readFileSync(fp, "utf-8"); } catch { continue; }
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/lint:allow=SEC-R42/.test(line)) continue;
+      if (/^\s*(?:#|--|\/\/)/.test(line)) continue; // comment-only line
+      if (superuserDSN.test(line)) {
+        report(fp, i + 1, "SEC-R42",
+          "production proxy DATABASE_URL connects as the PostgreSQL superuser — the proxy must connect as the powerless `authenticator` role (or a per-app non-superuser) and SET ROLE per request, else a compromise bypasses RLS / runs COPY ... FROM PROGRAM / reads pg_authid (SECURITY.md invariant 22, gemini audit P2)");
+      }
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
     walk(join(ROOT, r), files);
   }
   checkExtSDRevoke();
+  checkProxyNotSuperuser();
 
   for (const f of files) {
     let text;

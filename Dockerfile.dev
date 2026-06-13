@@ -23,6 +23,11 @@ COPY --chown=postgres:postgres examples/ /examples/
 # stacks that don't want the demo schema.
 COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
 
+# Runs after 01-init.sql: makes `authenticator` LOGIN-able from
+# AUTHENTICATOR_PASSWORD so the proxy connects as a non-superuser (gemini audit
+# P2). No-op (role stays NOLOGIN, fail-closed) when the env var is absent.
+COPY --chmod=0755 docker/20-authenticator-login.sh /docker-entrypoint-initdb.d/20-authenticator-login.sh
+
 COPY docker/entrypoint-dev.sh /usr/local/bin/entrypoint-dev.sh
 RUN chmod +x /usr/local/bin/entrypoint-dev.sh
 

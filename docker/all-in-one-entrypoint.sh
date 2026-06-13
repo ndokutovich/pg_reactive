@@ -113,9 +113,37 @@ if [ -x /app/post-init.sh ]; then
   /app/post-init.sh 2>&1 | tee "$LOG_DIR/post-init.log"
 fi
 
+# ── Point the proxy at the powerless `authenticator` role, NOT the superuser ─
+# gemini audit P2: connecting the proxy as the bootstrap superuser means a
+# compromised proxy could bypass RLS by default, COPY ... FROM PROGRAM (OS exec),
+# DROP DATABASE, or read pg_authid. `authenticator` is NOSUPERUSER NOINHERIT and
+# SET ROLEs per request, so it holds no privileges by default. We give it a login
+# password here — generated when the operator didn't pin AUTHENTICATOR_PASSWORD,
+# which is safe because PostgreSQL is loopback-only inside this container.
+# Fall back to the superuser DSN ONLY when the role is absent (standalone
+# pg_reactive without the pgStack CORE) — there is no RLS model to guard there.
+if [ "$(psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='authenticator'" 2>/dev/null || true)" = "1" ]; then
+  AUTHPW="${AUTHENTICATOR_PASSWORD:-}"
+  if [ -z "$AUTHPW" ]; then
+    AUTHPW="$(openssl rand -hex 24 2>/dev/null || tr -dc 'a-f0-9' < /dev/urandom | head -c 48)"
+  fi
+  # psql :'apw' substitution safely quotes the value — but interpolation only
+  # happens when reading SQL from stdin/-f, NOT with -c, so feed it via heredoc.
+  psql -v ON_ERROR_STOP=1 -v apw="$AUTHPW" > /dev/null <<'EOSQL'
+ALTER ROLE authenticator LOGIN PASSWORD :'apw';
+EOSQL
+  export DATABASE_URL="postgres://authenticator:${AUTHPW}@127.0.0.1:5432/${PGDATABASE}"
+  echo "==> proxy DSN role = authenticator (NOSUPERUSER; SET ROLE per request)"
+else
+  # Sanctioned superuser fallback: no `authenticator` role means standalone
+  # pg_reactive without the pgStack CORE, so there is no RLS model to guard and
+  # the proxy needs a working connection.
+  export DATABASE_URL="postgres://${PGUSER}:${PGPASSWORD}@127.0.0.1:5432/${PGDATABASE}"  # lint:allow=SEC-R42
+  echo "==> WARNING: 'authenticator' role absent — proxy connects as ${PGUSER} (no RLS isolation; standalone pg_reactive)"
+fi
+
 # ── Start the pgstack proxy (lifecycle leader) ──────────────────────────────
 echo "==> Starting pgstack proxy..."
-export DATABASE_URL="postgres://${PGUSER}:${PGPASSWORD}@127.0.0.1:5432/${PGDATABASE}"
 pgstack-proxy 2>&1 | tee "$LOG_DIR/proxy.log" &
 PROXY_PID=$!
 

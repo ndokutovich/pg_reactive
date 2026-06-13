@@ -16,6 +16,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-app}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required (random 32+ bytes)}
+      # docker/20-authenticator-login.sh (in the pgstack-postgres image) uses
+      # this to make the powerless `authenticator` role LOGIN-able, so the proxy
+      # connects as a non-superuser (gemini audit P2). MUST match the proxy's
+      # DATABASE_URL below. Applied at first init only — to rotate on an existing
+      # volume, ALTER ROLE authenticator PASSWORD manually and update both here.
+      AUTHENTICATOR_PASSWORD: ${AUTHENTICATOR_PASSWORD:?AUTHENTICATOR_PASSWORD required (random 32+ bytes, URL-safe)}
       POSTGRES_HOST_AUTH_METHOD: scram-sha-256
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
     volumes:
@@ -45,7 +51,10 @@ services:
     image: ghcr.io/ndokutovich/pgstack-proxy:latest
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?required}@db:5432/${POSTGRES_DB:-app}
+      # Connect as the powerless `authenticator` role (NOT the superuser): the
+      # proxy SET ROLEs per request so a compromise cannot bypass RLS by default,
+      # COPY ... FROM PROGRAM, DROP DATABASE, or read pg_authid (gemini audit P2).
+      DATABASE_URL: postgres://authenticator:${AUTHENTICATOR_PASSWORD:?AUTHENTICATOR_PASSWORD required (random 32+ bytes, URL-safe)}@db:5432/${POSTGRES_DB:-app}
       LISTEN_ADDR: "0.0.0.0:8080"
       # Production marker: the Go proxy's Validate() refuses to start when
       # any of these are left as publicly-known dev defaults, when

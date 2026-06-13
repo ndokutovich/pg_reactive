@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -77,7 +78,18 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to connect to PostgreSQL")
 	}
 	defer pool.Close()
-	log.Info().Msg("PG connection pool ready")
+	log.Info().Msg("PG connection pool ready (data plane — RLS-bound)")
+
+	// Admin pool: same DSN, but every connection assumes service_role. Trusted
+	// backend operations that do not SET ROLE themselves (auth, catalog
+	// introspection, SQL endpoint, edge-fn catalog, realtime gate) run on this
+	// pool instead of relying on a superuser connection (gemini audit P2).
+	adminPool, err := buildPoolAs("service_role", cfg.DatabaseURL, cfg.PGPoolMaxConns, cfg.PGPoolMinConns, cfg.PGPoolMaxConnIdleTime)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to build admin (service_role) pool")
+	}
+	defer adminPool.Close()
+	log.Info().Msg("PG admin pool ready (service_role)")
 
 	// Initialize secret box from SECRETS_ENCRYPTION_KEY env. Nil when unset —
 	// features that need encryption (edge function env vars, webhook signing
@@ -92,7 +104,7 @@ func main() {
 		log.Info().Msg("SECRETS_ENCRYPTION_KEY loaded — at-rest secret encryption enabled (edge function env vars, webhook signing secrets)")
 	}
 
-	state := NewAppState(cfg, pool, secretBox)
+	state := NewAppState(cfg, pool, adminPool, secretBox)
 
 	// Start rate limiter cleanup goroutine (H5: prevent unbounded memory growth).
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
@@ -102,7 +114,7 @@ func main() {
 
 	// Start expired-token reaper for pgstack.email_tokens and
 	// pgstack.refresh_tokens (L3: stale rows would accumulate forever).
-	go auth.StartExpiredTokenCleanup(cleanupCtx, state.Pool)
+	go auth.StartExpiredTokenCleanup(cleanupCtx, state.AdminPool)
 
 	// One-shot orphan sweep for disk-backend storage (audit F1 round 19):
 	// removes .pgstack-upload-* / .pgstack-backup-* files left behind by
@@ -271,8 +283,18 @@ func httpToHTTPSRedirect() http.Handler {
 	})
 }
 
-// buildPool creates a pgxpool.Pool for request-handler use.
+// buildPool creates a pgxpool.Pool for the RLS-bound data plane.
 func buildPool(dbURL string, maxConns, minConns int32, maxIdleTime time.Duration) (*pgxpool.Pool, error) {
+	return buildPoolAs("", dbURL, maxConns, minConns, maxIdleTime)
+}
+
+// buildPoolAs creates a pool that, when assumeRole is non-empty, runs
+// `SET ROLE <assumeRole>` on every new connection — so the whole pool operates
+// as that role for its lifetime. This is how the proxy connects as the powerless
+// `authenticator` role yet still performs trusted backend work: the admin pool
+// assumes service_role at connect time (gemini audit P2). assumeRole is a fixed
+// internal constant, but it is identifier-quoted regardless.
+func buildPoolAs(assumeRole, dbURL string, maxConns, minConns int32, maxIdleTime time.Duration) (*pgxpool.Pool, error) {
 	poolCfg, err := pgxpool.ParseConfig(dbURL)
 	if err != nil {
 		return nil, err
@@ -280,6 +302,13 @@ func buildPool(dbURL string, maxConns, minConns int32, maxIdleTime time.Duration
 	poolCfg.MaxConns = maxConns
 	poolCfg.MinConns = minConns
 	poolCfg.MaxConnIdleTime = maxIdleTime
+	if assumeRole != "" {
+		setRole := "SET ROLE " + pgx.Identifier{assumeRole}.Sanitize()
+		poolCfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+			_, err := c.Exec(ctx, setRole)
+			return err
+		}
+	}
 	return pgxpool.NewWithConfig(context.Background(), poolCfg)
 }
 
@@ -296,7 +325,7 @@ func buildRouter(state *AppState) http.Handler {
 	}
 
 	authDeps := &auth.Deps{
-		Pool:                     state.Pool,
+		Pool:                     state.AdminPool,
 		JWTSecret:                state.Config.JWTSecret,
 		AnonKey:                  state.Config.AnonKey,
 		ServiceRoleKey:           state.Config.ServiceRoleKey,
@@ -323,7 +352,7 @@ func buildRouter(state *AppState) http.Handler {
 	}
 
 	// Load REST catalog (already allocated in state; refresh from DB here).
-	if err := state.Catalog.Refresh(context.Background(), state.Pool); err != nil {
+	if err := state.Catalog.Refresh(context.Background(), state.AdminPool); err != nil {
 		log.Warn().Err(err).Msg("initial catalog load failed — REST endpoints may return 404 until refreshed")
 	} else {
 		log.Info().Msg("REST catalog loaded")
@@ -408,7 +437,7 @@ func buildRouter(state *AppState) http.Handler {
 			// even though presence doesn't consume a slot).
 			r.Get("/ws/{queryID}", realtime.WSHandler(
 				rlsCfg,
-				state.Pool,
+				state.AdminPool,
 				state.Hub,
 				state.WSSemaphore,
 				state.Config.BroadcastCapacity,
@@ -423,7 +452,7 @@ func buildRouter(state *AppState) http.Handler {
 		// side channel into private rooms. Outside the wsLimiter group
 		// because presence reads don't consume a WebSocket slot.
 		r.Get("/ws/_presence/{channel}", realtime.PresenceHandler(
-			rlsCfg, state.Pool, state.Hub, state.Config.RequireAuthenticatedWS,
+			rlsCfg, state.AdminPool, state.Hub, state.Config.RequireAuthenticatedWS,
 		))
 
 		// ── Auth routes ───────────────────────────────────────────────────
@@ -479,8 +508,11 @@ func buildRouter(state *AppState) http.Handler {
 		r.Get("/rest/v1/rls-debug", routes.RLSDebug(state.Pool, rlsCfg))
 
 		// Webhooks CRUD (must be before {table} wildcard)
+		// Webhook CRUD is service_role-gated at the HTTP layer and writes
+		// pgstack.webhooks + installs triggers with no per-request SET ROLE —
+		// it runs on the admin (service_role) pool, not the RLS data plane.
 		webhookDeps := &routes.WebhookDeps{
-			Pool: state.Pool,
+			Pool: state.AdminPool,
 			ResolveClaims: func(r *http.Request) (appMiddleware.RequestClaims, error) {
 				return appMiddleware.ResolveClaims(r, rlsCfg)
 			},
@@ -503,12 +535,12 @@ func buildRouter(state *AppState) http.Handler {
 		// defence: even a leaked SERVICE_ROLE_KEY cannot reach SQL
 		// execution unless the operator explicitly opted in at boot.
 		if state.Config.EnableSQLEndpoint {
-			r.Post("/api/sql", routes.SQL(state.Pool, routes.SQLConfig{
+			r.Post("/api/sql", routes.SQL(state.AdminPool, routes.SQLConfig{
 				EnableSQLEndpoint: state.Config.EnableSQLEndpoint,
 				ServiceRoleKey:    state.Config.ServiceRoleKey,
 				RLS:               rlsCfg,
 				CatalogRefreshFn: func() error {
-					return state.Catalog.Refresh(context.Background(), state.Pool)
+					return state.Catalog.Refresh(context.Background(), state.AdminPool)
 				},
 			}))
 		}
@@ -517,15 +549,18 @@ func buildRouter(state *AppState) http.Handler {
 		// or a service_role key is configured (in which case the handler still
 		// requires that key on every request).
 		if state.Config.EnableDemoEndpoint || state.Config.ServiceRoleKey != "" {
+			// Demo mutates seed tables in public with no SET ROLE; it is
+			// service_role-key gated and runs on the admin pool (service_role
+			// holds GRANT ALL on public tables).
 			r.Post("/api/demo", routes.Demo(
-				state.Pool,
+				state.AdminPool,
 				state.Config.EnableDemoEndpoint,
 				state.Config.ServiceRoleKey,
 			))
 		}
 
 		r.Post("/api/catalog/refresh", routes.CatalogRefresh(
-			state.Pool,
+			state.AdminPool,
 			rlsCfg,
 			func(pool *pgxpool.Pool) error {
 				return state.Catalog.Refresh(context.Background(), pool)
@@ -537,8 +572,11 @@ func buildRouter(state *AppState) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.SecurityHeaders)
 
+		// Storage enforces bucket/object ownership in the handler + owner-locked
+		// upsert SQL (not PG RLS), so it runs on the admin (service_role) pool.
+		// service_role has BYPASSRLS + explicit DML grants on the storage tables.
 		storageDeps := &routes.StorageDeps{
-			Pool: state.Pool,
+			Pool: state.AdminPool,
 			ResolveClaims: func(r *http.Request) (appMiddleware.RequestClaims, error) {
 				return appMiddleware.ResolveClaims(r, rlsCfg)
 			},
@@ -559,7 +597,7 @@ func buildRouter(state *AppState) http.Handler {
 
 	// ── Edge Functions routes (/functions/v1/) ───────────────────────────
 	fnCatalog := functions.NewFunctionsCatalog(state.SecretBox)
-	if err := fnCatalog.Refresh(context.Background(), state.Pool); err != nil {
+	if err := fnCatalog.Refresh(context.Background(), state.AdminPool); err != nil {
 		log.Warn().Err(err).Msg("initial edge functions catalog load failed — functions may return 404 until refreshed")
 	} else {
 		log.Info().Msg("edge functions catalog loaded")
@@ -586,7 +624,7 @@ func buildRouter(state *AppState) http.Handler {
 
 	// Auto-refresh the functions catalog via NOTIFY whenever a function is
 	// deployed, updated, or deleted (trigger fires pg_notify('pgstack_fn_changed')).
-	fnCatalog.StartAutoRefresh(context.Background(), state.Config.DatabaseURL, state.Pool, nil)
+	fnCatalog.StartAutoRefresh(context.Background(), state.Config.DatabaseURL, state.AdminPool, nil)
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.SecurityHeaders)
 		r.Use(appMiddleware.BodyLimit(state.Config.MaxBodySize))
