@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -116,6 +117,14 @@ func main() {
 
 	state := NewAppState(cfg, pool, adminPool, secretBox)
 
+	// Verify the finding-6 two-login-role split before serving traffic: the data
+	// pool must NOT be able to reach service_role, and the admin pool MUST be
+	// able to assume it. A broken split (e.g. the cutover REVOKE was skipped, or
+	// ADMIN_DATABASE_URL is missing/wrong) is fatal in production rather than
+	// silently booting an insecure or non-functional admin plane (gemini audit
+	// R4-1 / R4-2).
+	verifyPoolRoles(context.Background(), cfg.PgstackEnv == "production", pool, adminPool)
+
 	// Start rate limiter cleanup goroutine (H5: prevent unbounded memory growth).
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
 	defer cleanupCancel()
@@ -125,6 +134,27 @@ func main() {
 	// Start expired-token reaper for pgstack.email_tokens and
 	// pgstack.refresh_tokens (L3: stale rows would accumulate forever).
 	go auth.StartExpiredTokenCleanup(cleanupCtx, state.AdminPool)
+
+	// Admin-pool health prober (gemini audit R4-2): keep state.AdminConnected
+	// fresh so /health degrades if the admin pool stops being able to assume
+	// service_role at runtime (e.g. the admin role's password is rotated).
+	state.AdminConnected.Store(true)
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-cleanupCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			pctx, pcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			var role string
+			err := state.AdminPool.QueryRow(pctx, "SELECT current_user").Scan(&role)
+			pcancel()
+			state.AdminConnected.Store(err == nil && role == "service_role")
+		}
+	}()
 
 	// One-shot orphan sweep for disk-backend storage (audit F1 round 19):
 	// removes .pgstack-upload-* / .pgstack-backup-* files left behind by
@@ -322,6 +352,49 @@ func buildPoolAs(assumeRole, dbURL string, maxConns, minConns int32, maxIdleTime
 	return pgxpool.NewWithConfig(context.Background(), poolCfg)
 }
 
+// verifyPoolRoles checks the finding-6 two-login-role split at startup. The data
+// pool's login role must NOT be a member of service_role (so a data-plane
+// compromise cannot RESET ROLE + SET ROLE service_role), and the admin pool must
+// successfully assume service_role (its AfterConnect SET ROLE works). A violation
+// is fatal in production; otherwise it is a warning. This is a runtime check, so
+// it catches an incomplete cutover (REVOKE skipped) and a missing/wrong
+// ADMIN_DATABASE_URL even when the config-level validator passed.
+func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *pgxpool.Pool) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	report := func(msg string) {
+		if production {
+			log.Fatal().Msg(msg) // exits the process
+		}
+		log.Warn().Msg(msg + " (PGSTACK_ENV != production — warning only; FATAL in production)")
+	}
+
+	// Data pool: its login role must not be a member of service_role.
+	var dataUser string
+	var dataCanAdmin bool
+	if err := dataPool.QueryRow(ctx,
+		"SELECT session_user, pg_has_role(session_user, 'service_role', 'MEMBER')").
+		Scan(&dataUser, &dataCanAdmin); err != nil {
+		report("data pool: cannot verify role membership at startup: " + err.Error())
+	} else if dataCanAdmin {
+		report(fmt.Sprintf("data pool login role %q IS a member of service_role — a data-plane compromise could SET ROLE service_role (finding 6). Finish the cutover: set ADMIN_DATABASE_URL to authenticator_admin and `REVOKE service_role FROM %s`.", dataUser, dataUser))
+	} else {
+		log.Info().Str("role", dataUser).Msg("data pool: login role cannot reach service_role (finding-6 split verified)")
+	}
+
+	// Admin pool: AfterConnect runs SET ROLE service_role; a failure surfaces on
+	// the first query. The effective role must be service_role.
+	var adminCurrent string
+	if err := adminPool.QueryRow(ctx, "SELECT current_user").Scan(&adminCurrent); err != nil {
+		report("admin pool: cannot assume service_role at connect (is ADMIN_DATABASE_URL the authenticator_admin role, and can it assume service_role?): " + err.Error())
+	} else if adminCurrent != "service_role" {
+		report(fmt.Sprintf("admin pool effective role is %q, expected service_role — ADMIN_DATABASE_URL must point at a role that assumes service_role", adminCurrent))
+	} else {
+		log.Info().Msg("admin pool: connections assume service_role (verified)")
+	}
+}
+
 // buildRouter assembles the chi router with all middleware and route handlers.
 // The structure mirrors the Rust proxy's build_router function:
 //   - Studio SPA routes (relaxed CSP)
@@ -432,7 +505,7 @@ func buildRouter(state *AppState) http.Handler {
 		r.Use(appMiddleware.BodyLimit(state.Config.MaxBodySize))
 
 		// Health
-		r.Get("/health", routes.Health(&state.PGConnected))
+		r.Get("/health", routes.Health(&state.PGConnected, &state.AdminConnected))
 
 		// WebSocket routes — wrapped in a per-IP connection limiter so a
 		// single client cannot exhaust the WSSemaphore. The limiter

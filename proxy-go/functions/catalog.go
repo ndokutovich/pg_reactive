@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
@@ -157,10 +158,17 @@ func (c *FunctionsCatalog) StartAutoRefresh(ctx context.Context, dbURL string, p
 					return // context cancelled — clean exit
 				}
 				log.Warn().Err(err).Msg("functions catalog LISTEN loop error — retrying in 5s")
+				// Actually wait 5s before retrying. A bare select-with-default
+				// fell through immediately, so a persistently failing acquire
+				// (e.g. a broken admin pool) spun a tight error loop logging
+				// ~100 warnings/sec (gemini audit finding 2). NewTimer (not
+				// time.After) so the timer is released when ctx wins the race.
+				timer := time.NewTimer(5 * time.Second)
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					return
-				default:
+				case <-timer.C:
 				}
 			}
 			if ctx.Err() != nil {

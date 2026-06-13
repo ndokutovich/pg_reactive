@@ -435,6 +435,16 @@ func (c Config) Validate() []string {
 		if len(c.SecretsEncryptionKey) == 0 {
 			errs = append(errs, "PGSTACK_ENV=production: SECRETS_ENCRYPTION_KEY is required (at-rest encryption for edge function env vars AND webhook signing secrets)")
 		}
+		// The admin pool MUST use its own login role (authenticator_admin, member
+		// of service_role), separate from the data pool. Without ADMIN_DATABASE_URL
+		// the admin pool falls back to the data DSN — which, once the data role is
+		// split off from service_role (finding 6), can no longer assume
+		// service_role, leaving auth/catalog/storage broken while /health still
+		// reports ok. The runtime startup check (main.go) additionally verifies
+		// the data role cannot reach service_role and the admin pool can.
+		if c.AdminDatabaseURL == "" {
+			errs = append(errs, "PGSTACK_ENV=production: ADMIN_DATABASE_URL is required — point it at the authenticator_admin login role so the admin plane is a separate credential from the data plane (gemini audit findings 6 & R4-2)")
+		}
 		// Audit round 26 F5: dev-mode mailer writes recovery / magiclink /
 		// verification URLs to the console (anyone with log access can
 		// read a victim's reset token). In production, SMTP is required —

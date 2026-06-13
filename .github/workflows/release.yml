@@ -9,24 +9,50 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # ─── Require green CI for the tagged commit ──────────────────────────────────
+  # Release triggers on a v* tag, and CI does not run on tags — so without this
+  # gate a tag on an unverified (or red) commit would still publish Docker/npm
+  # artifacts and a GitHub release (gemini audit R4-4). Every publish job needs
+  # this one, so a missing/failed CI run for the tagged SHA aborts the release.
+  ci-gate:
+    name: Require green CI for the tagged commit
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Verify a successful CI run exists for ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          n=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${{ github.sha }}&status=completed" \
+            --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')
+          if [ "${n:-0}" -lt 1 ]; then
+            echo "::error::No successful CI run for ${{ github.sha }} (tag ${{ github.ref_name }}). Only tag a commit that is green on master." >&2
+            exit 1
+          fi
+          echo "CI is green for ${{ github.sha }} (${n} successful run(s)) — proceeding."
+
   # ─── Build and push Docker images ────────────────────────────────────────────
   docker-proxy:
     name: Docker — pgstack-proxy
+    needs: ci-gate
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up QEMU (multi-platform)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -34,7 +60,7 @@ jobs:
 
       - name: Extract version
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-proxy
           tags: |
@@ -43,7 +69,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push proxy image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           file: ./proxy-go/Dockerfile
@@ -56,21 +82,22 @@ jobs:
 
   docker-postgres:
     name: Docker — pgstack-postgres
+    needs: ci-gate
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -78,7 +105,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-postgres
           tags: |
@@ -88,7 +115,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push postgres image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           file: ./Dockerfile.dev
@@ -102,14 +129,15 @@ jobs:
   # ─── Publish npm packages ────────────────────────────────────────────────────
   npm-sdk:
     name: npm — @pgstack/sdk
+    needs: ci-gate
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
@@ -126,14 +154,15 @@ jobs:
 
   npm-cli:
     name: npm — pgstack CLI
+    needs: ci-gate
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
@@ -156,14 +185,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           generate_release_notes: true
           body: |

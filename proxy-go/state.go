@@ -34,6 +34,11 @@ type AppState struct {
 	// PGConnected is true when the dedicated LISTEN connection is healthy.
 	PGConnected atomic.Bool
 
+	// AdminConnected is true when the admin pool can serve a query (it can
+	// assume service_role). A background prober updates it; /health degrades
+	// when it is false so a broken admin plane isn't reported healthy (R4-2).
+	AdminConnected atomic.Bool
+
 	// Hub manages fan-out delivery from PG NOTIFY to WebSocket subscribers.
 	// Each subscriber gets its own channel; Broadcast sends to all of them.
 	Hub *realtime.Hub

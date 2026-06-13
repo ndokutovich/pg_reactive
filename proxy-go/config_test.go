@@ -315,6 +315,28 @@ func TestValidate_JWTSecretTooShort(t *testing.T) {
 	}
 }
 
+func TestValidate_ProductionRequiresAdminDatabaseURL(t *testing.T) {
+	// PGSTACK_ENV=production without ADMIN_DATABASE_URL must error — the admin
+	// pool would otherwise fall back to the data DSN, which can't assume
+	// service_role once the data role is split off (gemini audit R4-2). Only the
+	// ADMIN_DATABASE_URL value is toggled; other production errors are irrelevant
+	// to the substring assertions.
+	base := Config{
+		PgstackEnv:     "production",
+		TLSMode:        "off",
+		GzipLevel:      5,
+		MaxConnections: 1,
+		PGPoolMaxConns: 1,
+	}
+	if errs := base.Validate(); !containsError(errs, "ADMIN_DATABASE_URL") {
+		t.Errorf("expected ADMIN_DATABASE_URL error in production, got: %v", errs)
+	}
+	base.AdminDatabaseURL = "postgres://authenticator_admin:pw@db:5432/app"
+	if errs := base.Validate(); containsError(errs, "ADMIN_DATABASE_URL") {
+		t.Errorf("did not expect ADMIN_DATABASE_URL error once set, got: %v", errs)
+	}
+}
+
 func TestValidate_AllValid(t *testing.T) {
 	cfg := Config{
 		JWTSecret:             "this-is-a-long-enough-secret-for-jwt-auth",

@@ -239,7 +239,10 @@ func Refresh(d *FunctionsDeps) http.HandlerFunc {
 			writeJSONError(w, http.StatusForbidden, "functions refresh requires service_role")
 			return
 		}
-		if err := d.Catalog.Refresh(r.Context(), d.Pool); err != nil {
+		// service_role-only, and the catalog reads pgstack.edge_functions which
+		// the data pool's authenticator role cannot (finding 6 split) — refresh
+		// on the admin pool, like the initial load and auto-refresh (finding 3).
+		if err := d.Catalog.Refresh(r.Context(), d.poolFor(claims.Role)); err != nil {
 			log.Error().Err(err).Msg("functions: catalog refresh failed")
 			writeJSONError(w, http.StatusInternalServerError, "catalog refresh failed")
 			return
