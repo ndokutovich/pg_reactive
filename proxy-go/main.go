@@ -457,8 +457,70 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			report(fmt.Sprintf("%s login role %q owns objects or holds direct ACL grants (%d object dependency/ies) — a proxy login role must be powerless so a RESET ROLE grants nothing (gemini audit R7-1); REVOKE its grants and reassign any owned objects", label, su, directDeps))
 		}
 
-		if len(bad) == 0 && len(unexpected) == 0 && directDeps == 0 {
-			log.Info().Str("pool", label).Str("role", su).Msg("login role verified: non-privileged, NOINHERIT, no direct grants/ownership, memberships within allowlist")
+		// Membership EDGE options. The allowlist above bounds WHICH roles are
+		// reachable; pg_auth_members also carries per-grant options that bound HOW
+		// each membership behaves, and those are NOT covered by the role attributes
+		// or the allowlist (gemini audit R8):
+		//   - inherit_option=true (PG16 per-membership, overrides the role's
+		//     rolinherit): the login role holds its member's privileges with NO
+		//     SET ROLE — a NOINHERIT data role that is granted `authenticated WITH
+		//     INHERIT TRUE` reads RLS tables ambiently, defeating the whole
+		//     "powerless until SET ROLE" model (R8-1);
+		//   - admin_option=true: the login role can GRANT the membership to other
+		//     roles without holding CREATEROLE — a delegation/persistence path,
+		//     and on the admin plane it can hand out service_role (R8-2);
+		//   - set_option=false: the proxy can never assume the role via SET LOCAL
+		//     ROLE, so per-request RLS is broken — fail closed at boot.
+		// Healthy bootstrap grants are plain (admin=f, inherit=f, set=t). The
+		// inherit_option/set_option columns are PG16+; on older servers rolinherit
+		// (checked above) governs inheritance and SET ROLE is always permitted, so
+		// only admin_option is read.
+		var verNum int
+		if err := pool.QueryRow(ctx, "SELECT current_setting('server_version_num')::int").Scan(&verNum); err != nil {
+			report(label + ": cannot read server version at startup: " + err.Error())
+			return
+		}
+		edgeSQL := "SELECT r.rolname, m.admin_option, false, true FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = session_user)"
+		if verNum >= 160000 {
+			edgeSQL = "SELECT r.rolname, m.admin_option, m.inherit_option, m.set_option FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = session_user)"
+		}
+		erows, err := pool.Query(ctx, edgeSQL)
+		if err != nil {
+			report(label + ": cannot read membership edge options at startup: " + err.Error())
+			return
+		}
+		var unsafeEdges []string
+		for erows.Next() {
+			var roleName string
+			var adminOpt, inheritOpt, setOpt bool
+			if err := erows.Scan(&roleName, &adminOpt, &inheritOpt, &setOpt); err != nil {
+				continue
+			}
+			var flags []string
+			if adminOpt {
+				flags = append(flags, "ADMIN OPTION")
+			}
+			if inheritOpt {
+				flags = append(flags, "INHERIT TRUE")
+			}
+			if !setOpt {
+				flags = append(flags, "SET FALSE")
+			}
+			if len(flags) > 0 {
+				unsafeEdges = append(unsafeEdges, fmt.Sprintf("%s: %s", roleName, strings.Join(flags, "+")))
+			}
+		}
+		erows.Close()
+		if rerr := erows.Err(); rerr != nil {
+			report(label + ": error reading membership edge options: " + rerr.Error())
+			return
+		}
+		if len(unsafeEdges) > 0 {
+			report(fmt.Sprintf("%s login role %q has membership grant(s) with unsafe options [%s] — every grant to a proxy login role must be plain so privileges need an explicit SET ROLE (NO INHERIT, even per-membership on PG16), cannot be re-delegated (NO ADMIN OPTION), and can actually be assumed (WITH SET); re-issue as plain GRANT (gemini audit R8-1/R8-2)", label, su, strings.Join(unsafeEdges, "; ")))
+		}
+
+		if len(bad) == 0 && len(unexpected) == 0 && directDeps == 0 && len(unsafeEdges) == 0 {
+			log.Info().Str("pool", label).Str("role", su).Msg("login role verified: non-privileged, NOINHERIT, no direct grants/ownership, memberships within allowlist with safe edge options")
 		}
 	}
 

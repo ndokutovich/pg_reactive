@@ -426,6 +426,33 @@ function checkProxyNotSuperuser() {
   }
 }
 
+// Rule SEC-R43 — a bootstrap GRANT to a proxy LOGIN role must be plain.
+//   SECURITY.md invariant #24 / gemini audit R8. The runtime verifyPoolRoles
+//   check (proxy-go/main.go) rejects a login role whose membership edge carries
+//   WITH ADMIN OPTION / INHERIT TRUE / SET FALSE; this rule catches the
+//   self-inflicted version of that mistake — such an option added to a GRANT of
+//   anon / authenticated / service_role TO authenticator / authenticator_admin in
+//   our own SQL (init.sql, migrations, cli bootstrap). On PG16 INHERIT/SET are
+//   per-membership, so an unsafe edge re-introduces ambient privilege (despite
+//   the role's NOINHERIT attribute) or role delegation. The runtime check still
+//   covers external/attacker DSNs this static rule cannot see.
+//   Override a verified-safe occurrence with `-- lint:allow=SEC-R43`.
+function checkProxyRoleGrantOptions(file, text) {
+  if (!/\.sql$/.test(file)) return;
+  const lines = text.split(/\r?\n/);
+  const re =
+    /\bGRANT\b.*\b(?:anon|authenticated|service_role)\b.*\bTO\b.*\b(?:authenticator|authenticator_admin)\b.*\bWITH\b.*(?:ADMIN\s+OPTION|INHERIT\s+TRUE|SET\s+FALSE)/i;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/lint:allow=SEC-R43/.test(line)) continue;
+    if (/^\s*--/.test(line)) continue; // comment-only line
+    if (re.test(line)) {
+      report(file, i + 1, "SEC-R43",
+        "a GRANT to a proxy login role (authenticator/authenticator_admin) carries an unsafe membership option (WITH ADMIN OPTION / INHERIT TRUE / SET FALSE) — proxy-role grants must be plain so privileges need an explicit SET ROLE, cannot be re-delegated, and can be assumed (SECURITY.md invariant 24, gemini audit R8; verifyPoolRoles rejects it at startup)");
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -444,6 +471,7 @@ function runAll() {
     checkFrontendServiceRole(f, text);
     checkProxyAudienceSource(f, text);
     checkDeltaReauth(f, text);
+    checkProxyRoleGrantOptions(f, text);
   }
 
   if (findings.length === 0) {

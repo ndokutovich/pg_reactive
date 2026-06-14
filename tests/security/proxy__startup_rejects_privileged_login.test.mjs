@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// SECURITY.md invariant 24 (R5-1 / R6-1 / R7-1) — the startup role check is
-// fail-closed against EVERY way a proxy login role could hold or reach a
+// SECURITY.md invariant 24 (R5-1 / R6-1 / R7-1 / R8-1 / R8-2) — the startup role
+// check is fail-closed against EVERY way a proxy login role could hold or reach a
 // privilege it must not. verifyPoolRoles (main.go) must reject a login role that:
 //   - has any dangerous attribute: SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB,
 //     INHERIT, REPLICATION;
@@ -9,7 +9,14 @@
 //     dangerous predefined role like pg_execute_server_program, or service_role
 //     reached through an intermediate role);
 //   - owns any object or holds any DIRECT ACL grant (those apply with no SET
-//     ROLE — including after a RESET ROLE — even under NOINHERIT).
+//     ROLE — including after a RESET ROLE — even under NOINHERIT);
+//   - holds an allowlisted membership whose EDGE OPTIONS are unsafe (R8): the
+//     allowlist bounds WHICH roles are reachable, but pg_auth_members also carries
+//     per-grant options that bound HOW. WITH INHERIT TRUE (PG16 per-membership)
+//     hands the role its member's privileges with NO SET ROLE despite a NOINHERIT
+//     attribute; WITH ADMIN OPTION lets a login role without CREATEROLE delegate
+//     the membership to other roles; WITH SET FALSE means the proxy cannot assume
+//     the role at all. Healthy bootstrap grants are plain: admin=f inherit=f set=t.
 //
 // This test creates login roles exhibiting each property, boots the proxy
 // one-off in PGSTACK_ENV=production pointed at them, and asserts it refuses to
@@ -73,10 +80,31 @@ function setup() {
       CREATE ROLE r7_trans LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
       GRANT anon, authenticated TO r7_trans; GRANT r7_mid TO r7_trans;
     END IF;
+    -- R8: allowlisted membership, but the EDGE carries an unsafe option.
+    -- WITH INHERIT TRUE → ambient authenticated privileges despite NOINHERIT (PG16).
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r8_inherit') THEN
+      CREATE ROLE r8_inherit LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
+      GRANT anon TO r8_inherit; GRANT authenticated TO r8_inherit WITH INHERIT TRUE;
+    END IF;
+    -- WITH ADMIN OPTION → can GRANT authenticated to other roles without CREATEROLE.
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r8_admin') THEN
+      CREATE ROLE r8_admin LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
+      GRANT anon TO r8_admin; GRANT authenticated TO r8_admin WITH ADMIN OPTION;
+    END IF;
+    -- WITH SET FALSE → the proxy cannot SET LOCAL ROLE authenticated (fail-closed).
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r8_setfalse') THEN
+      CREATE ROLE r8_setfalse LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
+      GRANT anon TO r8_setfalse; GRANT authenticated TO r8_setfalse WITH SET FALSE;
+    END IF;
+    -- admin plane: ADMIN OPTION on service_role = delegation / persistence path.
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r8_admin_svc') THEN
+      CREATE ROLE r8_admin_svc LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
+      GRANT service_role TO r8_admin_svc WITH ADMIN OPTION;
+    END IF;
   END $$;`);
 }
 function teardown() {
-  const roles = "r7_execprog,r7_inherit,r7_bypass,r7_attrs,r7_acl,r7_owner,r7_trans,r7_mid";
+  const roles = "r7_execprog,r7_inherit,r7_bypass,r7_attrs,r7_acl,r7_owner,r7_trans,r7_mid,r8_inherit,r8_admin,r8_setfalse,r8_admin_svc";
   try { psql(`DROP OWNED BY ${roles} CASCADE;`); } catch { /* ignore */ }
   try { psql(`DROP ROLE IF EXISTS ${roles};`); } catch { /* ignore */ }
 }
@@ -109,6 +137,11 @@ const cases = [
   { name: "direct ACL grant (SELECT on pgstack.users)",   env: withAdmin("DATABASE_URL", dsn("r7_acl")),    re: /owns objects or holds direct ACL grants/i },
   { name: "object ownership",                             env: withAdmin("DATABASE_URL", dsn("r7_owner")),  re: /owns objects or holds direct ACL grants/i },
   { name: "SUPERUSER admin DSN",                          env: [["ADMIN_DATABASE_URL", dsn("postgres")]],   re: /admin pool.*SUPERUSER/i },
+  // R8 — allowlisted membership, unsafe edge option.
+  { name: "data edge WITH INHERIT TRUE (ambient despite NOINHERIT)", env: withAdmin("DATABASE_URL", dsn("r8_inherit")),  re: /data pool.*unsafe options.*INHERIT TRUE/i },
+  { name: "data edge WITH ADMIN OPTION (can delegate authenticated)", env: withAdmin("DATABASE_URL", dsn("r8_admin")),     re: /data pool.*unsafe options.*ADMIN OPTION/i },
+  { name: "data edge WITH SET FALSE (proxy cannot assume the role)",  env: withAdmin("DATABASE_URL", dsn("r8_setfalse")),  re: /data pool.*unsafe options.*SET FALSE/i },
+  { name: "admin edge service_role WITH ADMIN OPTION",               env: [["ADMIN_DATABASE_URL", dsn("r8_admin_svc")]],  re: /admin pool.*unsafe options.*ADMIN OPTION/i },
 ];
 
 let fail = 0;
@@ -133,4 +166,4 @@ if (fail > 0) {
   console.error(`\nFAIL: ${fail} — an over-privileged login role was NOT rejected at startup.`);
   process.exit(1);
 }
-console.log("\nPASS: attributes, dangerous/transitive memberships, direct ACLs and ownership all rejected fail-closed.");
+console.log("\nPASS: attributes, dangerous/transitive memberships, direct ACLs/ownership, and unsafe membership edge options all rejected fail-closed.");
