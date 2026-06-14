@@ -77,17 +77,19 @@ function parseJobs(text) {
   for (const line of text.split(/\r?\n/)) {
     if (/^jobs:\s*$/.test(line)) { inJobs = true; continue; }
     if (!inJobs) continue;
-    const head = line.match(/^ {2}([A-Za-z_][\w-]*):\s*$/);
-    if (head) { cur = head[1]; jobs[cur] = { block: "", needs: [] }; continue; }
+    // Job id may be quoted ("rogue-publisher":) or bare — both are valid YAML.
+    const head = line.match(/^ {2}(?:"([^"]+)"|'([^']+)'|([\w-]+)):\s*$/);
+    if (head) { cur = head[1] || head[2] || head[3]; jobs[cur] = { block: "", needs: [] }; continue; }
     if (/^\S/.test(line)) { inJobs = false; cur = null; continue; } // back to column 0
     if (!cur) continue;
     jobs[cur].block += line + "\n";
     const nm = line.match(/^\s+needs:\s*(.+)$/);
     if (nm) {
       const v = nm[1].trim();
+      const strip = (s) => s.trim().replace(/^['"]|['"]$/g, "");
       jobs[cur].needs = v.startsWith("[")
-        ? v.replace(/[[\]]/g, "").split(",").map((s) => s.trim()).filter(Boolean)
-        : [v];
+        ? v.replace(/[[\]]/g, "").split(",").map(strip).filter(Boolean)
+        : [strip(v)];
     }
   }
   return jobs;

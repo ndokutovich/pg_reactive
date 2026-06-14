@@ -28,7 +28,7 @@ jobs:
       - name: Start PostgreSQL container
         run: |
           docker compose up -d --build db
-          docker compose exec -T db bash -c 'until pg_isready -U postgres; do sleep 1; done'
+          docker compose exec -T db bash -c 'until pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done'
 
       - name: Build extension
         run: |
@@ -152,7 +152,7 @@ jobs:
       - name: Start PostgreSQL for integration tests
         run: |
           docker compose up -d --build db
-          docker compose exec -T db bash -c 'until pg_isready -U postgres; do sleep 1; done'
+          docker compose exec -T db bash -c 'until pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done'
           # Self-hosted: join the compose network so the runner can reach
           # `db:5432` directly without going through host port mapping
           # (which 127.0.0.1 in this container can't see).
@@ -404,7 +404,7 @@ jobs:
           # Bring up the db so the validator's downstream pool probe
           # doesn't masquerade as a validator failure.
           docker compose up -d --build db
-          docker compose exec -T db bash -c 'until pg_isready -U postgres; do sleep 1; done'
+          docker compose exec -T db bash -c 'until pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done'
 
           # The dev docker-compose.yml sets ENABLE_SQL_ENDPOINT=true
           # so the e2e suite can use the raw SQL gateway. The
@@ -568,7 +568,7 @@ jobs:
           # The dev image compiles the extension in its entrypoint before
           # PostgreSQL starts; a cold compile + initdb + bootstrap can take
           # ~40s, so allow generous headroom (was 30s, which it now exceeds).
-          timeout 120 bash -c 'until docker compose exec -T db pg_isready -U postgres; do sleep 1; done'
+          timeout 120 bash -c 'until docker compose exec -T db pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done'
 
       - name: Shared memory pressure test
         run: |
@@ -596,7 +596,7 @@ jobs:
           docker compose run -d --build --name pgr_async_${{ github.run_id }}_${{ github.run_attempt }} --no-deps db \
             postgres -c shared_preload_libraries=pg_reactive -c log_min_messages=warning \
             -c pg_reactive.async_recompute=on -c pg_reactive.database=pg_reactive_test
-          timeout 150 bash -c 'until docker exec pgr_async_${{ github.run_id }}_${{ github.run_attempt }} pg_isready -U postgres -d pg_reactive_test; do sleep 3; done'
+          timeout 150 bash -c 'until docker exec pgr_async_${{ github.run_id }}_${{ github.run_attempt }} pg_isready -h 127.0.0.1 -U postgres -d pg_reactive_test; do sleep 3; done'
 
       - name: Run async-recompute integration test
         run: |
