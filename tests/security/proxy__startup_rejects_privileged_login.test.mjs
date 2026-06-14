@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SECURITY.md invariant 24 (R5-1 / R6-1 / R7-1 / R8-1 / R8-2 / R9-1 / R10-1 / R10-2) — the startup role
+// SECURITY.md invariant 24 (R5-1 / R6-1 / R7-1 / R8-1 / R8-2 / R9-1 / R10-1 / R10-2 / R11-2 / R11-3 / R12-2) — the startup role
 // check is fail-closed against EVERY way a proxy login role could hold or reach a
 // privilege it must not. verifyPoolRoles (main.go) must reject a login role that:
 //   - has any dangerous attribute: SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB,
@@ -203,6 +203,14 @@ const cases = [
     pre: "ALTER ROLE service_role NOBYPASSRLS",
     post: "ALTER ROLE service_role BYPASSRLS",
     re: /admin pool.*service_role:NOBYPASSRLS/i },
+  // R12-2 — a completely ABSENT required target role must be fatal in production,
+  // not a false-healthy "verified". Revoke the membership first so the allowlist
+  // passes, then rename the role away; post reverts both.
+  { name: "data: required target role authenticated does not exist",
+    env: withAdmin("DATABASE_URL", dsn("authenticator")),
+    pre: "REVOKE authenticated FROM authenticator; ALTER ROLE authenticated RENAME TO authenticated_r12tmp",
+    post: "ALTER ROLE authenticated_r12tmp RENAME TO authenticated; GRANT authenticated TO authenticator",
+    re: /data pool.*do not exist.*authenticated/i },
 ];
 
 let fail = 0;

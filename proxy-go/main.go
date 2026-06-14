@@ -420,14 +420,15 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			return
 		}
 		var unexpected []string
-			actual := map[string]bool{}
+		actual := map[string]bool{}
 		for rows.Next() {
 			var m string
 			if err := rows.Scan(&m); err != nil {
-				continue
+				report(label + ": error scanning role membership row: " + err.Error())
+				return
 			}
 			actual[m] = true
-				if !allowedSet[m] {
+			if !allowedSet[m] {
 				unexpected = append(unexpected, m)
 			}
 		}
@@ -441,27 +442,32 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 		}
 
 		// Required memberships PRESENT. The allowlist above bounds the membership set
-			// from above (no extras); this bounds it from below (no gaps). The proxy SET
-			// ROLEs into every allowed role, so it must actually be a member of each that
-			// EXISTS — a missing one is not an escalation but a "healthy" startup that
-			// breaks at runtime (the data role cannot SET ROLE authenticated, so those
-			// requests 500) (gemini audit R11-2).
-			var missing []string
-			for _, target := range allowed {
-				var texists bool
-				if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", target).Scan(&texists); err != nil {
-					report(label + ": cannot check required membership " + target + " at startup: " + err.Error())
-					return
-				}
-				if texists && !actual[target] {
-					missing = append(missing, target)
-				}
+		// from above (no extras); this bounds it from below (no gaps). The proxy SET
+		// ROLEs into every allowed role, so it must actually be a member of each that
+		// EXISTS — a missing one is not an escalation but a "healthy" startup that
+		// breaks at runtime (the data role cannot SET ROLE authenticated, so those
+		// requests 500) (gemini audit R11-2).
+		var missing, absent []string
+		for _, target := range allowed {
+			var texists bool
+			if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", target).Scan(&texists); err != nil {
+				report(label + ": cannot check required membership " + target + " at startup: " + err.Error())
+				return
 			}
-			if len(missing) > 0 {
-				report(fmt.Sprintf("%s login role %q is NOT a member of required role(s) [%s] — it must be a member of every role it SET ROLEs into ([%s]); without it those requests fail at runtime though startup looked healthy (gemini audit R11-2)", label, su, strings.Join(missing, ","), strings.Join(allowed, ",")))
+			if !texists {
+				absent = append(absent, target)
+			} else if !actual[target] {
+				missing = append(missing, target)
 			}
+		}
+		if len(absent) > 0 {
+			report(fmt.Sprintf("%s required SET ROLE target role(s) do not exist [%s] — the pgStack core roles (anon/authenticated/service_role) must be bootstrapped before the proxy connects; for standalone pg_reactive WITHOUT pgStack run with PGSTACK_ENV=development (absent roles are fatal only in production) (gemini audit R12-2)", label, strings.Join(absent, ",")))
+		}
+		if len(missing) > 0 {
+			report(fmt.Sprintf("%s login role %q is NOT a member of required role(s) [%s] — it must be a member of every role it SET ROLEs into ([%s]); without it those requests fail at runtime though startup looked healthy (gemini audit R11-2)", label, su, strings.Join(missing, ","), strings.Join(allowed, ",")))
+		}
 
-			// No direct privileges: the login role must own no objects and hold no
+		// No direct privileges: the login role must own no objects and hold no
 		// direct ACL grants. NOINHERIT drops privileges inherited via membership,
 		// but a DIRECT grant (GRANT SELECT ON pgstack.users TO <role>) or object
 		// ownership applies whenever the role is current — including after a
@@ -517,7 +523,8 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			var roleName string
 			var adminOpt, inheritOpt, setOpt bool
 			if err := erows.Scan(&roleName, &adminOpt, &inheritOpt, &setOpt); err != nil {
-				continue
+				report(label + ": error scanning membership edge row: " + err.Error())
+				return
 			}
 			var flags []string
 			if adminOpt {
@@ -563,7 +570,8 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 		for trows.Next() {
 			var m string
 			if err := trows.Scan(&m); err != nil {
-				continue
+				report(label + ": error scanning reachable-role row: " + err.Error())
+				return
 			}
 			nonTerminal = append(nonTerminal, m)
 		}
@@ -633,7 +641,7 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			report(fmt.Sprintf("%s SET ROLE target role(s) have an unexpected privilege profile [%s] — anon/authenticated must be NOSUPERUSER NOBYPASSRLS NOLOGIN and own nothing (an owner bypasses RLS); service_role must be BYPASSRLS (admin contract) but NOSUPERUSER NOLOGIN; the proxy assumes these roles per request (gemini audit R10-1/R10-2/R11-3)", label, strings.Join(targetBad, ", ")))
 		}
 
-		if len(bad) == 0 && len(unexpected) == 0 && directDeps == 0 && len(unsafeEdges) == 0 && len(nonTerminal) == 0 && len(missing) == 0 && len(targetBad) == 0 {
+		if len(bad) == 0 && len(unexpected) == 0 && directDeps == 0 && len(unsafeEdges) == 0 && len(nonTerminal) == 0 && len(missing) == 0 && len(absent) == 0 && len(targetBad) == 0 {
 			log.Info().Str("pool", label).Str("role", su).Msg("login role verified: non-privileged, NOINHERIT, no direct grants/ownership, allowlisted+terminal memberships, target roles have the expected profile")
 		}
 	}
