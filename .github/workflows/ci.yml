@@ -250,6 +250,11 @@ jobs:
       - name: License consistency guard
         run: node tests/license_consistency_test.mjs
 
+      # The supply-chain guard parses workflow YAML with js-yaml (tests/package.json).
+      # Lockfile-strict (npm ci) so a tampered dep tree fails rather than resolving.
+      - name: Install tests/ deps (js-yaml for the supply-chain guard)
+        run: npm ci --prefix tests
+
       # Locks the deploy/release supply-chain hardening (gemini R3-R7): the
       # workflow_run deploy gate, release ci-gate, and action SHA-pinning.
       - name: CI/CD supply-chain gating guard (FR-B.11.3)
