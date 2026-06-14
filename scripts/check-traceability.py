@@ -36,6 +36,15 @@ DEFAULTS = {
     # status: line is followed by indented `<dim>: <rank-name>` pairs, and
     # the gate compares each dimension against the baseline independently.
     "status_dimensions": "",
+    # Spec completeness (gemini audit R10-3). `spec_sources` maps each spec file
+    # to the FR prefix derived from its §-sections: `<path>=<prefix>,...`. The
+    # gate extracts every `### N.M` (and every standalone `## N` with no `###`
+    # child), derives `<prefix>.N.M` / `<prefix>.N`, and fails if such an FR is
+    # absent from the matrix — so a NEW spec section cannot go untracked.
+    # `spec_skip` lists section-derived ids that are intentionally NOT FRs
+    # (narrative sections: Overview, Comparison, Source File Reference, …).
+    "spec_sources": "",
+    "spec_skip": "",
 }
 
 # Header keys we recognise (any unknown key is ignored).
@@ -47,7 +56,9 @@ _STATUS_DIM_RE = re.compile(r"^    ([a-z_]+):\s*(\S+)\s*$")
 _TESTS_RE = re.compile(r"^  tests:\s*$")
 _TRACES_RE = re.compile(r"^  traces:\s*$")
 _LIST_FILE_RE = re.compile(r"^\s+-\s+file:\s*(.+)$")
+_LIST_SYMBOL_RE = re.compile(r"^\s+symbol:\s*(.+)$")
 _HEADER_KV_RE = re.compile(r"^#\s*([a-z_]+):\s*(.+?)\s*$")
+_IDENT_RE = re.compile(r"^[A-Za-z_][\w.]*$")  # code-ish symbol (skip descriptive labels)
 
 
 def read_config(text: str) -> dict[str, str]:
@@ -104,7 +115,10 @@ def parse_matrix(
     bucket: str | None = None
     in_status_block = False
     bucket_re = re.compile(rf"^    ({'|'.join(re.escape(b) for b in buckets)}):\s*(.*)$")
-    default_status = next(iter(STATUS_RANKS_GLOBAL))
+    # Fail closed: an FR with no status line takes the LOWEST rank, never the
+    # first dict key (which had been 'implemented' — a missing status silently
+    # passing as fully done). gemini audit R9-2.
+    default_status = min(STATUS_RANKS_GLOBAL, key=STATUS_RANKS_GLOBAL.get)
     multi = bool(dimensions)
     for raw in text.splitlines():
         line = raw.rstrip("\r")
@@ -172,9 +186,14 @@ def parse_matrix(
         m = _LIST_FILE_RE.match(line)
         if m:
             if block == "traces":
-                cur["traces"].append(m.group(1).strip())
+                cur["traces"].append({"file": m.group(1).strip(), "symbol": None})
             elif block == "tests" and bucket:
                 cur["tests"][bucket].append(m.group(1).strip())
+            continue
+        # symbol line inside a trace item (tests' symbols are intentionally ignored)
+        m = _LIST_SYMBOL_RE.match(line)
+        if m and block == "traces" and cur["traces"]:
+            cur["traces"][-1]["symbol"] = m.group(1).strip().strip('"')
     if cur is not None:
         frs[cur["id"]] = cur
     return frs
@@ -287,6 +306,132 @@ def write_baseline(frs: dict[str, dict]) -> None:
     print(f"baseline written: {BASELINE.relative_to(ROOT)}")
 
 
+def check_integrity(
+    frs: dict[str, dict],
+    status_ranks: dict[str, int],
+    buckets: list[str],
+    dimensions: list[str],
+) -> list[str]:
+    """Verify the matrix is internally honest, not just non-regressed.
+
+    The status-vs-baseline diff alone lets a matrix claim `implemented` with no
+    traces, no tests, or dangling symbols (gemini audit R9-2). This pass catches:
+      - an FR above the floor with no traces (code mapping);
+      - an `implemented` (top-rank) FR with no tests in any bucket;
+      - an unknown status name (typo);
+      - a trace whose file does not exist, or whose code-ish symbol is absent
+        from that file.
+    Single-status shape rules are skipped for multi-dim matrices (their per-dim
+    floor is enforced by the baseline), but trace file/symbol verification runs
+    for every FR regardless.
+    """
+    errors: list[str] = []
+    if not status_ranks:
+        return errors
+    lowest = min(status_ranks.values())
+    top = max(status_ranks.values())
+    for fid in sorted(frs):
+        f = frs[fid]
+        traces = f.get("traces", [])
+        has_trace = len(traces) > 0
+        has_test = any(f["tests"].get(b) for b in buckets)
+        st = f["status"]
+        if not isinstance(st, dict):
+            if st not in status_ranks:
+                errors.append(f"{fid}: unknown status {st!r} (not in status_ranks)")
+            else:
+                rank = status_ranks[st]
+                if rank > lowest and not has_trace:
+                    errors.append(f"{fid}: status '{st}' but no traces — a non-floor FR must map to code")
+                if rank == top and not has_test:
+                    errors.append(
+                        f"{fid}: status '{st}' but no tests in any bucket [{','.join(buckets)}]"
+                    )
+        for t in traces:
+            fp = ROOT / t["file"]
+            if not fp.exists():
+                errors.append(f"{fid}: trace file does not exist: {t['file']}")
+                continue
+            sym = t.get("symbol")
+            if sym and _IDENT_RE.match(sym):
+                try:
+                    body = fp.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                tok = sym.split(".")[-1]
+                if sym not in body and tok not in body:
+                    errors.append(f"{fid}: trace symbol absent in {t['file']}: {sym}")
+        for b in buckets:
+            for tf in f["tests"].get(b, []):
+                if not (ROOT / tf).exists():
+                    errors.append(f"{fid}: {b} test file does not exist: {tf}")
+    return errors
+
+
+def duplicate_frs(text: str, fr_re: "re.Pattern[str]") -> list[str]:
+    """FR ids that appear more than once. parse_matrix() collapses a duplicate
+    into the last definition (silently dropping the first) — reject instead."""
+    seen: set[str] = set()
+    dups: list[str] = []
+    for raw in text.splitlines():
+        m = fr_re.match(raw.rstrip("\r"))
+        if m:
+            fid = m.group(1)
+            if fid in seen and fid not in dups:
+                dups.append(fid)
+            seen.add(fid)
+    return dups
+
+
+def _expected_frs_from_spec(path: str, prefix: str) -> set[str] | None:
+    """Derive the FR ids a spec implies: `### N.M` → <prefix>.N.M, and every
+    standalone `## N` (no `### N.x` child) → <prefix>.N. None if unreadable."""
+    try:
+        text = (ROOT / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    subs: set[str] = set()
+    secs: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.rstrip("\r")
+        m = re.match(r"^###\s+(\d+(?:\.\d+)+)\b", line)
+        if m:
+            subs.add(m.group(1))
+        m = re.match(r"^##\s+(\d+)\b", line)
+        if m:
+            secs.add(m.group(1))
+    expected = {f"{prefix}.{s}" for s in subs}
+    for n in secs:
+        if not any(s.startswith(n + ".") for s in subs):
+            expected.add(f"{prefix}.{n}")
+    return expected
+
+
+def check_completeness(frs: dict[str, dict], spec_sources: str, spec_skip: str) -> list[str]:
+    """Every section-implied FR must exist in the matrix (or be skip-listed), so
+    a new spec section can't go untracked (gemini audit R10-3)."""
+    errors: list[str] = []
+    if not spec_sources.strip():
+        return errors
+    skip = {s.strip() for s in spec_skip.split(",") if s.strip()}
+    for pair in spec_sources.split(","):
+        pair = pair.strip()
+        if "=" not in pair:
+            continue
+        path, _, prefix = pair.partition("=")
+        path, prefix = path.strip(), prefix.strip()
+        expected = _expected_frs_from_spec(path, prefix)
+        if expected is None:
+            errors.append(f"spec_sources: cannot read spec file {path}")
+            continue
+        for e in sorted(expected):
+            if e not in frs and e not in skip:
+                errors.append(
+                    f"spec {path}: section implies FR {e}, absent from the matrix (add it, or list it in spec_skip)"
+                )
+    return errors
+
+
 # Global filled by main() — read_config result. The parse_matrix function
 # needs this for its default-status fallback.
 STATUS_RANKS_GLOBAL: dict[str, int] = {}
@@ -307,6 +452,17 @@ def main(argv: list[str]) -> int:
 
     frs = parse_matrix(text, fr_re, buckets, dimensions)
     print_summary(frs, status_ranks, buckets, dimensions)
+
+    # Integrity runs on EVERY invocation (incl. --write-baseline) so a broken
+    # matrix is never pinned and never passes for lack of a baseline (R9-2).
+    integrity = check_integrity(frs, status_ranks, buckets, dimensions)
+    integrity += [f"duplicate FR id {d!r} (IDs must be unique; a dup silently overwrites the first)" for d in duplicate_frs(text, fr_re)]
+    integrity += check_completeness(frs, cfg["spec_sources"], cfg["spec_skip"])
+    if integrity:
+        print("\nMATRIX INTEGRITY ERRORS (internally inconsistent / incomplete vs spec):")
+        for e in integrity:
+            print(f"  - {e}")
+        return 1
 
     if "--write-baseline" in argv:
         write_baseline(frs)

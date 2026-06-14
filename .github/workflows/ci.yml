@@ -250,6 +250,11 @@ jobs:
       - name: License consistency guard
         run: node tests/license_consistency_test.mjs
 
+      # Locks the deploy/release supply-chain hardening (gemini R3-R7): the
+      # workflow_run deploy gate, release ci-gate, and action SHA-pinning.
+      - name: CI/CD supply-chain gating guard (FR-B.11.3)
+        run: node tests/ci_supply_chain_test.mjs
+
       # project-trace: docs/traceability.yaml maps every spec FR (pg_reactive_spec
       # + postgres_native_backend_spec) to code symbols + tests. The gate fails if
       # any FR regresses below the pinned floor in docs/traceability.baseline.json.
@@ -574,6 +579,34 @@ jobs:
         run: |
           docker compose exec -T db bash -c \
             'cd /ext && python3 tests/integration/test_notify_throughput.py'
+
+  # ─── Async-recompute background worker (FR-R.12) ─────────────────────────────
+  # The worker is PGC_POSTMASTER + off by default, so it can't run in the normal
+  # stack or pg_regress (CLAUDE.md). Boot a one-off PostgreSQL with it enabled and
+  # assert the worker connects + delivers an async delta. gemini audit R9-3.
+  test-async-bgworker:
+    name: Async recompute bgworker
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    needs: [test-extension]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Boot PostgreSQL with the async-recompute worker enabled
+        run: |
+          docker compose run -d --build --name pgr_async_${{ github.run_id }}_${{ github.run_attempt }} --no-deps db \
+            postgres -c shared_preload_libraries=pg_reactive -c log_min_messages=warning \
+            -c pg_reactive.async_recompute=on -c pg_reactive.database=pg_reactive_test
+          timeout 150 bash -c 'until docker exec pgr_async_${{ github.run_id }}_${{ github.run_attempt }} pg_isready -U postgres -d pg_reactive_test; do sleep 3; done'
+
+      - name: Run async-recompute integration test
+        run: |
+          docker exec pgr_async_${{ github.run_id }}_${{ github.run_attempt }} psql -U postgres -d pg_reactive_test -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS pg_reactive"
+          docker exec pgr_async_${{ github.run_id }}_${{ github.run_attempt }} python3 /ext/tests/integration/test_async_recompute.py
+
+      - name: Teardown
+        if: always()
+        run: docker rm -f pgr_async_${{ github.run_id }}_${{ github.run_attempt }} || true
 
   # ─── Security audit ──────────────────────────────────────────────────────────
   security:

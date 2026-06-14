@@ -11,6 +11,8 @@
 # fr_pattern:     ^(FR-[A-Za-z0-9_.]+):$
 # status_ranks:   implemented:3,partial:2,not_implemented:1
 # test_buckets:   unit,integration,e2e,security
+# spec_sources:   docs/specs/pg_reactive_spec.md=FR-R, docs/specs/postgres_native_backend_spec.md=FR-B
+# spec_skip:      FR-R.1, FR-R.13, FR-R.15, FR-R.16, FR-B.1, FR-B.2, FR-B.10
 #
 # === conventions ===
 # - status: implemented (traces + >=1 test bucket) · partial (traces, no test) · not_implemented (no traces)
@@ -1123,6 +1125,8 @@ FR-B.11.3:
     unit: []
     integration: []
     e2e: []
-    security: []
-  manual_check: "Self-verifying: the workflows run on every push; SEC-R42 lint + the role-isolation tests guard the deployed posture"
+    security:
+      - file: tests/ci_supply_chain_test.mjs
+        symbol: "ci supply-chain gating (workflow_run gate + ci-gate + action SHA-pinning)"
+  manual_check: ""
   notes: ""
