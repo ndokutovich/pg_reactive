@@ -1,3 +1,7 @@
+# project-trace: standalone viewer is regenerated on demand (scripts/bundle-trace-viewer.py),
+# never committed. The source viewer docs/trace-viewer.html IS tracked.
+docs/trace-viewer.standalone.html
+
 # C build artifacts
 *.o
 *.so

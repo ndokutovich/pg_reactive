@@ -1,0 +1,1128 @@
+# pg_reactive / pgStack traceability matrix — spec → code → tests
+#
+# Schema: v2 (project-trace skill)
+# Source-of-truth requirements:
+#   docs/specs/pg_reactive_spec.md            → FR-R.*  (C extension + proxy + SDK core)
+#   docs/specs/postgres_native_backend_spec.md → FR-B.*  (pgStack backend: auth/REST/RLS/storage/SDK)
+# FR ids derive from the spec's §-section numbers (e.g. FR-R.2.1 = pg_reactive_spec §2.1).
+# Created: 2026-06-14
+#
+# === gate config (read by scripts/check-traceability.py) ===
+# fr_pattern:     ^(FR-[A-Za-z0-9_.]+):$
+# status_ranks:   implemented:3,partial:2,not_implemented:1
+# test_buckets:   unit,integration,e2e,security
+#
+# === conventions ===
+# - status: implemented (traces + >=1 test bucket) · partial (traces, no test) · not_implemented (no traces)
+# - test buckets: unit = pg_regress(ext/sql) + Go *_test.go + vitest; integration = isolation .spec + tests/integration/*.py;
+#   e2e = tests/e2e_*.mjs; security = tests/security/*.test.mjs. (perf suite tests/perf/ maps into integration (Python) + e2e (.mjs) under FR-R.14.)
+# - Rename rule: if an FR id changes, add `_renamed: <old-id>` and refresh the baseline.
+
+# =====================================================================
+# § 2  pg_reactive — Core Mechanism (FR-R.2.*)
+# =====================================================================
+
+FR-R.2.1:
+  title: "Subscribe flow — pgr.subscribe parses query, extracts table OIDs/column masks, installs triggers, builds snapshot"
+  status: implemented
+  traces:
+    - file: ext/src/pg_reactive.c
+      symbol: pgr_subscribe
+      role: "Parse SELECT, extract dependencies, register in shmem, install triggers"
+    - file: ext/pg_reactive--0.1.4.sql
+      symbol: pgr.subscribe
+      role: "SECURITY INVOKER SQL wrapper that captures current_user and calls _subscribe_internal"
+  tests:
+    unit:
+      - file: ext/sql/01_subscribe.sql
+        symbol: "01_subscribe"
+    integration:
+      - file: ext/specs/concurrent_subscribe.spec
+        symbol: "concurrent_subscribe"
+    e2e:
+      - file: tests/e2e_ws_test.mjs
+        symbol: "e2e_ws"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.2.2:
+  title: "Delta computation (recompute) — EXCEPT-based diff vs UNLOGGED snapshot, JSON NOTIFY emit"
+  status: implemented
+  traces:
+    - file: ext/src/recompute.c
+      symbol: pgr_recompute_query
+      role: "EXCEPT delta vs pgr._snap_<id>, serialize inserted/deleted to JSON, NOTIFY"
+    - file: ext/src/recompute.c
+      symbol: pgr_snapshot_create
+      role: "Build the UNLOGGED snapshot table the delta is computed against"
+  tests:
+    unit:
+      - file: ext/sql/03_recompute.sql
+        symbol: "03_recompute"
+    integration:
+      - file: tests/integration/test_notify_throughput.py
+        symbol: "test_notify_throughput"
+    e2e:
+      - file: tests/e2e_ws_test.mjs
+        symbol: "e2e_ws delta"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.2.3:
+  title: "Unsubscribe flow — remove triggers, drop snapshot, free shmem slot"
+  status: implemented
+  traces:
+    - file: ext/src/pg_reactive.c
+      symbol: pgr_unsubscribe
+      role: "Remove per-query triggers, drop _snap table, release dependency entry"
+  tests:
+    unit:
+      - file: ext/sql/01_subscribe.sql
+        symbol: "01_subscribe (unsubscribe leg)"
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_test.mjs
+        symbol: "e2e_ws unsubscribe"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.2.4:
+  title: "Subscription modes — delta (default) vs notify (invalidation-only)"
+  status: implemented
+  traces:
+    - file: ext/src/recompute.c
+      symbol: pgr_recompute_query
+      role: "Emits delta payload or, in notify mode, an invalidation marker"
+  tests:
+    unit:
+      - file: ext/sql/07_notify_mode.sql
+        symbol: "07_notify_mode"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 3  pg_reactive — Shared Memory Architecture (FR-R.3.*)
+# =====================================================================
+
+FR-R.3.1:
+  title: "Shared-memory data structures — query_id→deps hash, reverse table_oid→query_ids index"
+  status: implemented
+  traces:
+    - file: ext/src/dependency.c
+      symbol: pgr_dep_add
+      role: "ShmemInitHash entry mapping query_id to table dependencies + reverse index"
+    - file: ext/src/pg_reactive.h
+      symbol: PgrDepEntry
+      role: "Shared dependency entry struct (generation, tables, column masks)"
+  tests:
+    unit:
+      - file: ext/sql/05_coverage.sql
+        symbol: "05_coverage (shmem counters)"
+    integration:
+      - file: tests/integration/test_shmem_pressure.py
+        symbol: "test_shmem_pressure"
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.3.2:
+  title: "Memory layout — fixed-size shmem hash sized by pg_reactive.max_subscriptions (PGC_POSTMASTER)"
+  status: implemented
+  traces:
+    - file: ext/src/dependency.c
+      symbol: pgr_shmem_startup
+      role: "shmem_request_hook + shmem_startup_hook allocate the dependency hash"
+  tests:
+    unit: []
+    integration:
+      - file: tests/integration/test_shmem_pressure.py
+        symbol: "test_shmem_pressure (capacity limit)"
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.3.3:
+  title: "Concurrency control — LWLock protecting the shmem hash under concurrent DML/subscribe"
+  status: implemented
+  traces:
+    - file: ext/src/dependency.c
+      symbol: pgr_state->lock
+      role: "Named-tranche LWLock (RequestNamedLWLockTranche) guarding all shmem hash mutations and reads"
+  tests:
+    unit: []
+    integration:
+      - file: ext/specs/concurrent_dml.spec
+        symbol: "concurrent_dml"
+      - file: ext/specs/concurrent_invalidation.spec
+        symbol: "concurrent_invalidation"
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 4  pg_reactive — Column-Level Tracking (FR-R.4.*)
+# =====================================================================
+
+FR-R.4.1:
+  title: "Column bitmask design — uint64 column masks per query for change relevance"
+  status: implemented
+  traces:
+    - file: ext/src/invalidation.c
+      symbol: col_mask
+      role: "uint64 col_mask per query (PGR_COL_MASK_ALL sentinel); only masked columns arm recompute"
+  tests:
+    unit:
+      - file: ext/sql/06_column_tracking.sql
+        symbol: "06_column_tracking"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.4.2:
+  title: "Per-query UPDATE triggers — pgr_upd_<oid>_<qid> with query_id tgarg"
+  status: implemented
+  traces:
+    - file: ext/src/invalidation.c
+      symbol: pgr_install_update_trigger
+      role: "Per-query AFTER UPDATE trigger carrying query_id, fires only on overlapping columns"
+  tests:
+    unit:
+      - file: ext/sql/06_column_tracking.sql
+        symbol: "06_column_tracking (UPDATE leg)"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.4.3:
+  title: "Column overlap check — skip recompute when changed columns don't intersect the query mask"
+  status: implemented
+  traces:
+    - file: ext/src/invalidation.h
+      symbol: columns_overlap
+      role: "Inline bitmask intersection deciding whether a change is relevant"
+  tests:
+    unit:
+      - file: ext/sql/06_column_tracking.sql
+        symbol: "06_column_tracking (overlap)"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 5-6  pg_reactive — Batch Invalidation & DDL Handling (FR-R.5, FR-R.6)
+# =====================================================================
+
+FR-R.5:
+  title: "Batch invalidation — defer recompute to pre-commit, one recompute per query per txn"
+  status: implemented
+  traces:
+    - file: ext/src/invalidation.c
+      symbol: pgr_xact_callback
+      role: "Per-transaction dirty list flushed once at pre-commit (pg_reactive.batch_invalidation)"
+  tests:
+    unit:
+      - file: ext/sql/09_batch_invalidation.sql
+        symbol: "09_batch_invalidation"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.6:
+  title: "DDL handling — ProcessUtility hook auto-unsubscribes on TRUNCATE/ALTER/DROP"
+  status: implemented
+  traces:
+    - file: ext/src/invalidation.c
+      symbol: pgr_ProcessUtility
+      role: "ProcessUtility_hook detecting DDL on subscribed tables and auto-unsubscribing"
+  tests:
+    unit:
+      - file: ext/sql/02_invalidation.sql
+        symbol: "02_invalidation (DDL leg)"
+      - file: ext/sql/13_extension_upgrade.sql
+        symbol: "13_extension_upgrade"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 7  pg_reactive — NOTIFY Wire Format (FR-R.7.*)
+# =====================================================================
+
+FR-R.7.1:
+  title: "Delta message — {query_id,seq,gen,inserted[],deleted[]} on the pgr channel"
+  status: implemented
+  traces:
+    - file: ext/src/recompute.c
+      symbol: pgr_build_delta_json
+      role: "Build the delta JSON (inserted/deleted) that pgr_recompute_query stamps with seq+gen and NOTIFYs"
+  tests:
+    unit:
+      - file: ext/sql/03_recompute.sql
+        symbol: "03_recompute"
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_test.mjs
+        symbol: "e2e_ws (delta shape)"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.7.2:
+  title: "Overflow message — {type:overflow,fetch:true} when payload exceeds the NOTIFY limit"
+  status: implemented
+  traces:
+    - file: ext/src/recompute.c
+      symbol: pgr_recompute_query
+      role: "Emits the overflow marker (inline) when delta JSON exceeds the per-channel NOTIFY budget"
+  tests:
+    unit:
+      - file: ext/sql/04_overflow.sql
+        symbol: "04_overflow"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.7.3:
+  title: "Invalidation message (notify mode) — {type:invalidated,seq,gen}"
+  status: implemented
+  traces:
+    - file: ext/src/recompute.c
+      symbol: pgr_recompute_query
+      role: "Emits the invalidation marker (inline) in notify mode (no row payload)"
+  tests:
+    unit:
+      - file: ext/sql/07_notify_mode.sql
+        symbol: "07_notify_mode"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.7.4:
+  title: "Sequence numbers — monotonic seq per query for gap detection; generation tag per payload"
+  status: implemented
+  traces:
+    - file: ext/src/recompute.c
+      symbol: pgr_recompute_query
+      role: "Stamps seq + shmem generation into every NOTIFY payload"
+  tests:
+    unit:
+      - file: ext/sql/14_generation.sql
+        symbol: "14_generation"
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_forder_test.mjs
+        symbol: "e2e_ws_forder (generation)"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.7.5:
+  title: "Proxy welcome message — {type:subscribed,query_id} on WS upgrade"
+  status: implemented
+  traces:
+    - file: proxy-go/realtime/ws.go
+      symbol: WSHandler
+      role: "Sends the subscribed welcome frame after the audience/generation gate passes"
+  tests:
+    unit: []
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_test.mjs
+        symbol: "e2e_ws (subscribed frame)"
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 8-12  pg_reactive — GUCs, SQL Interface, Query Types, LRU, bgworker (FR-R.8..12)
+# =====================================================================
+
+FR-R.8:
+  title: "GUC parameters — max_subscriptions, async_recompute, database, batch_invalidation, notify_channel"
+  status: implemented
+  traces:
+    - file: ext/src/pg_reactive.c
+      symbol: _PG_init
+      role: "DefineCustomVariable for all five GUCs with correct contexts"
+  tests:
+    unit:
+      - file: ext/sql/00_setup.sql
+        symbol: "00_setup (GUC-dependent setup)"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: "GUC defaults documented in CLAUDE.md; POSTMASTER GUCs set via docker-compose command flags"
+  notes: ""
+
+FR-R.9.1:
+  title: "SQL functions — pgr.subscribe/unsubscribe/get_subscriptions/restore_subscriptions/subscription_meta"
+  status: implemented
+  traces:
+    - file: ext/pg_reactive--0.1.4.sql
+      symbol: pgr.subscribe
+      role: "Public SQL surface (INVOKER wrappers + internal SECURITY DEFINER helpers)"
+  tests:
+    unit:
+      - file: ext/sql/01_subscribe.sql
+        symbol: "01_subscribe"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.9.2:
+  title: "SQL views — pgr.get_subscriptions() over the shmem hash; subscription_meta over the catalog"
+  status: implemented
+  traces:
+    - file: ext/pg_reactive--0.1.5.sql
+      symbol: pgr.subscription_meta
+      role: "Transactional catalog lookup the proxy gate reads (not shmem); added in 0.1.5"
+  tests:
+    unit:
+      - file: ext/sql/05_coverage.sql
+        symbol: "05_coverage (get_subscriptions)"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.9.3:
+  title: "Trigger function — pgr.trigger_func() drives AFTER STATEMENT invalidation"
+  status: implemented
+  traces:
+    - file: ext/src/invalidation.c
+      symbol: pgr_trigger_func
+      role: "Shared AFTER STATEMENT trigger; per-query vs base via tgnargs"
+  tests:
+    unit:
+      - file: ext/sql/02_invalidation.sql
+        symbol: "02_invalidation"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.9.4:
+  title: "Permissions — SECURITY DEFINER pins, default-deny grants, restore replays as owner_role"
+  status: implemented
+  traces:
+    - file: ext/pg_reactive--0.1.4.sql
+      symbol: pgr.restore_subscriptions
+      role: "SECURITY INVOKER restore that SET LOCAL ROLE owner_role per subscription"
+  tests:
+    unit:
+      - file: ext/sql/15_restore_privilege.sql
+        symbol: "15_restore_privilege"
+    integration: []
+    e2e: []
+    security:
+      - file: tests/security/rpc__public_execute_default_denied.test.mjs
+        symbol: "rpc public-execute default-deny"
+  manual_check: ""
+  notes: ""
+
+FR-R.10:
+  title: "Supported query types — GROUP BY, window, HAVING, JOINs, cross-table dependency extraction"
+  status: implemented
+  traces:
+    - file: ext/src/recompute.c
+      symbol: pgr_recompute_query
+      role: "Re-executes arbitrary user SELECT via SPI for the EXCEPT delta"
+  tests:
+    unit:
+      - file: ext/sql/08_advanced_queries.sql
+        symbol: "08_advanced_queries"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.11:
+  title: "LRU eviction — evict least-recently-used subscription when shmem slots are exhausted"
+  status: implemented
+  traces:
+    - file: ext/src/dependency.c
+      symbol: pgr_dep_add
+      role: "Inline LRU eviction (oldest by subscribed_at) when at capacity, inside pgr_dep_add"
+  tests:
+    unit: []
+    integration:
+      - file: tests/integration/test_lru_eviction.py
+        symbol: "test_lru_eviction"
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-R.12:
+  title: "Background worker (optional) — async recompute via dirty queue (pg_reactive.async_recompute)"
+  status: implemented
+  traces:
+    - file: ext/src/bgworker.c
+      symbol: pgr_bgworker_main
+      role: "Optional bgworker draining a dirty queue for async recompute"
+  tests:
+    unit: []
+    integration:
+      - file: tests/integration/test_async_recompute.py
+        symbol: "test_async_recompute (worker connected + async delta delivered)"
+    e2e: []
+    security: []
+  manual_check: "Worker is PGC_POSTMASTER + off by default; the test runs against a throwaway instance booted with pg_reactive.async_recompute=on (see test header), not the default stack/CI buckets"
+  notes: ""
+
+FR-R.14:
+  title: "Performance baselines — documented TPS/latency/fan-out targets"
+  status: implemented
+  traces:
+    - file: tests/perf/runner.sh
+      symbol: perf-runner
+      role: "P1-P7 perf suite with PASS/FAIL thresholds vs the documented baselines"
+  tests:
+    unit: []
+    integration:
+      - file: tests/perf/p1_write_throughput.py
+        symbol: "p1_write_throughput"
+      - file: tests/perf/p2_snapshot_stress.py
+        symbol: "p2_snapshot_stress"
+      - file: tests/perf/p6_cascade.py
+        symbol: "p6_cascade"
+    e2e:
+      - file: tests/perf/p3_e2e_latency.mjs
+        symbol: "p3_e2e_latency"
+      - file: tests/perf/p4_fanout_scale.mjs
+        symbol: "p4_fanout_scale"
+      - file: tests/perf/p7_concurrent_subscribe.mjs
+        symbol: "p7_concurrent_subscribe"
+    security: []
+  manual_check: "Run via tests/perf/runner.sh (P1-P7, PASS/FAIL thresholds); long-running, not on every CI push"
+  notes: "Perf suite lives in tests/perf/; container Python tests map to integration, host .mjs tests to e2e."
+
+# =====================================================================
+# § 3  pgStack backend — Authentication (FR-B.3.*)
+# =====================================================================
+
+FR-B.3.1:
+  title: "Auth flow — signup, password/refresh token grants, reuse detection, logout"
+  status: implemented
+  traces:
+    - file: proxy-go/auth/routes.go
+      symbol: Signup
+      role: "Signup + Token (password/refresh) + Logout handlers"
+  tests:
+    unit:
+      - file: proxy-go/auth/property_test.go
+        symbol: "TestAuth property"
+    integration: []
+    e2e:
+      - file: tests/e2e_auth_test.mjs
+        symbol: "e2e_auth"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.3.2:
+  title: "Supported auth methods — email/password, anonymous, OAuth (Google/GitHub/Apple/Microsoft/OIDC)"
+  status: implemented
+  traces:
+    - file: proxy-go/auth/oauth.go
+      symbol: Authorize
+      role: "OAuth Authorize + Callback handlers (anonymous signin handled separately)"
+  tests:
+    unit:
+      - file: proxy-go/auth/oauth_test.go
+        symbol: "TestOAuth"
+      - file: proxy-go/auth/anonymous_test.go
+        symbol: "TestAnonymous"
+    integration: []
+    e2e:
+      - file: tests/e2e_oauth_test.mjs
+        symbol: "e2e_oauth"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.3.3:
+  title: "JWT structure — HS256, sub/role/email claims, fail-closed on empty secret, max age"
+  status: implemented
+  traces:
+    - file: proxy-go/auth/jwt.go
+      symbol: GenerateToken
+      role: "HS256 mint/validate; empty-secret fail-closed; non-empty sub gate"
+  tests:
+    unit:
+      - file: proxy-go/auth/jwt_empty_secret_test.go
+        symbol: "TestJWTEmptySecret"
+      - file: proxy-go/auth/tokenhash_test.go
+        symbol: "TestTokenHash"
+    integration: []
+    e2e:
+      - file: tests/e2e_jwt_test.mjs
+        symbol: "e2e_jwt"
+    security:
+      - file: tests/security/auth__jwt_manipulation.test.mjs
+        symbol: "jwt manipulation"
+      - file: tests/security/auth__jwt_empty_secret_refuses.test.mjs
+        symbol: "jwt empty-secret refuses"
+  manual_check: ""
+  notes: ""
+
+FR-B.3.4:
+  title: "Admin API — list/create/delete users; email verification + password-reset session revocation"
+  status: implemented
+  traces:
+    - file: proxy-go/auth/routes.go
+      symbol: UpdateUser
+      role: "Admin CRUD + UpdateUser (transactional email/password/token-revoke)"
+  tests:
+    unit:
+      - file: proxy-go/auth/service_role_test.go
+        symbol: "TestServiceRole"
+    integration: []
+    e2e:
+      - file: tests/e2e_auth_session_revoke_test.mjs
+        symbol: "e2e_auth_session_revoke"
+      - file: tests/e2e_auth_email_verify_test.mjs
+        symbol: "e2e_auth_email_verify"
+      - file: tests/e2e_auth_stale_verify_token_test.mjs
+        symbol: "e2e_auth_stale_verify_token"
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 4  pgStack backend — REST API (FR-B.4.*)
+# =====================================================================
+
+FR-B.4.1:
+  title: "PostgREST compatibility — CRUD, filters, ordering, pagination, Content-Range, or/and"
+  status: implemented
+  traces:
+    - file: proxy-go/rest/handlers.go
+      symbol: Select
+      role: "Select/Insert/Update/Delete with PostgREST filter parser + query builder"
+  tests:
+    unit:
+      - file: proxy-go/rest/property_test.go
+        symbol: "TestREST property"
+    integration: []
+    e2e:
+      - file: tests/e2e_rest_test.mjs
+        symbol: "e2e_rest"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.4.2:
+  title: "RPC — POST/GET /rest/v1/rpc/{fn}; scalar vs set-returning via proretset; embedding"
+  status: implemented
+  traces:
+    - file: proxy-go/rest/rpc.go
+      symbol: RPCPost
+      role: "Function lookup (proretset), arg binding, scalar/set JSON shaping"
+  tests:
+    unit: []
+    integration: []
+    e2e:
+      - file: tests/e2e_rpc_test.mjs
+        symbol: "e2e_rpc"
+      - file: tests/e2e_embed_rpc_test.mjs
+        symbol: "e2e_embed_rpc"
+    security:
+      - file: tests/security/rpc__public_execute_default_denied.test.mjs
+        symbol: "rpc public-execute default-deny"
+  manual_check: ""
+  notes: ""
+
+FR-B.4.3:
+  title: "RLS enforcement — SET LOCAL ROLE per request + request.jwt.claims; service_role routed to admin pool"
+  status: implemented
+  traces:
+    - file: proxy-go/middleware/rls.go
+      symbol: RLSTransaction
+      role: "Per-request SET LOCAL ROLE + jwt claims GUC so PG RLS applies"
+    - file: proxy-go/rest/rest.go
+      symbol: beginRLSTx
+      role: "REST/RPC RLS tx; poolFor routes service_role to the admin pool"
+  tests:
+    unit: []
+    integration: []
+    e2e:
+      - file: tests/e2e_rls_test.mjs
+        symbol: "e2e_rls"
+    security:
+      - file: tests/security/rest__sql_injection.test.mjs
+        symbol: "rest sql-injection"
+  manual_check: ""
+  notes: ""
+
+FR-B.4.4:
+  title: "Catalog introspection — pg_catalog metadata cache driving REST type casts + OpenAPI"
+  status: implemented
+  traces:
+    - file: proxy-go/rest/catalog.go
+      symbol: Catalog.Refresh
+      role: "Loads table/column/type metadata for the filter parser + casts"
+  tests:
+    unit: []
+    integration: []
+    e2e:
+      - file: tests/e2e_rest_test.mjs
+        symbol: "e2e_rest (catalog-driven casts)"
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 5  pgStack backend — Realtime (FR-B.5.*)
+# =====================================================================
+
+FR-B.5.1:
+  title: "Realtime — proxy LISTENs pgr, fans out to WS via generation-gated Hub.BroadcastGen"
+  status: implemented
+  traces:
+    - file: proxy-go/realtime/ws.go
+      symbol: WSHandler
+      role: "WS upgrade, audience/generation gate, snapshot, delta fan-out"
+  tests:
+    unit:
+      - file: proxy-go/realtime/ws_audience_test.go
+        symbol: "TestWSAudience"
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_test.mjs
+        symbol: "e2e_ws"
+      - file: tests/e2e_fanout_test.mjs
+        symbol: "e2e_fanout"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.5.2:
+  title: "Realtime client integration — SDK LiveQuery / RealtimeChannel / useLiveQuery"
+  status: implemented
+  traces:
+    - file: sdk/src/index.ts
+      symbol: LiveQuery
+      role: "Client subscription with local snapshot management"
+  tests:
+    unit:
+      - file: sdk/src/pgstack.test.ts
+        symbol: "pgstack client"
+    integration: []
+    e2e:
+      - file: tests/e2e_sdk_test.mjs
+        symbol: "e2e_sdk"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.5.3:
+  title: "General-purpose channels — presence + client broadcast, generation-gated"
+  status: implemented
+  traces:
+    - file: proxy-go/realtime/ws.go
+      symbol: PresenceHandler
+      role: "Presence join/leave/update + broadcast over BroadcastGen, generation-filtered"
+  tests:
+    unit:
+      - file: proxy-go/realtime/presence_test.go
+        symbol: "TestPresence"
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_presence_reauth_test.mjs
+        symbol: "e2e_ws_presence_reauth"
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 6  pgStack backend — Storage (FR-B.6.*)
+# =====================================================================
+
+FR-B.6.1:
+  title: "Storage architecture — buckets/objects in pgstack tables, app-layer ownership, disk|db backend"
+  status: implemented
+  traces:
+    - file: proxy-go/routes/storage.go
+      symbol: StorageDeps
+      role: "Bucket/object handlers with owner-locked upserts; admin pool"
+  tests:
+    unit:
+      - file: proxy-go/routes/storage_disk_test.go
+        symbol: "TestStorageDisk"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.6.2:
+  title: "Storage API — create/list/delete bucket; upload/list/download/delete object"
+  status: implemented
+  traces:
+    - file: proxy-go/routes/storage.go
+      symbol: UploadObject
+      role: "Object CRUD with owner gate + MaxBytesReader streaming"
+  tests:
+    unit:
+      - file: proxy-go/routes/storage_path_test.go
+        symbol: "TestStoragePath"
+    integration: []
+    e2e:
+      - file: tests/e2e_static_hosting_test.mjs
+        symbol: "e2e_static_hosting"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.6.3:
+  title: "Storage tradeoffs — disk backend orphan sweep; RLS-enabled storage tables"
+  status: implemented
+  traces:
+    - file: proxy-go/routes/storage.go
+      symbol: SweepDiskOrphans
+      role: "Disk-backend orphan cleanup of partial uploads"
+  tests:
+    unit:
+      - file: proxy-go/routes/storage_disk_test.go
+        symbol: "TestStorageDisk (orphans)"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 7  pgStack backend — Developer Experience (FR-B.7.*)
+# =====================================================================
+
+FR-B.7.1:
+  title: "Getting started — pgstack init scaffolds project (compose, .env, bootstrap migration)"
+  status: implemented
+  traces:
+    - file: cli/src/commands/init.ts
+      symbol: registerInitCommand
+      role: "Scaffold docker-compose.yml/.env/bootstrap-core migration"
+  tests:
+    unit:
+      - file: cli/src/cli.test.ts
+        symbol: "pgstack init"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.7.2:
+  title: "TypeScript SDK — createClient, query builder, auth, functions, batch, DBOS"
+  status: implemented
+  traces:
+    - file: sdk/src/pgstack.ts
+      symbol: createClient
+      role: "Supabase-compatible client (rest/auth/realtime/functions/batch)"
+  tests:
+    unit:
+      - file: sdk/src/index.test.ts
+        symbol: "sdk index"
+      - file: sdk/src/query-builder.property.test.ts
+        symbol: "query-builder property"
+    integration: []
+    e2e:
+      - file: tests/e2e_sdk_test.mjs
+        symbol: "e2e_sdk"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.7.3:
+  title: "React hooks — useLiveQuery, useAuth, useRpc"
+  status: implemented
+  traces:
+    - file: sdk/src/react.ts
+      symbol: useLiveQuery
+      role: "React hooks: useLiveQuery (live snapshot), useAuth (session), useRpc (RPC) over the SDK"
+  tests:
+    unit:
+      - file: sdk/src/react.test.ts
+        symbol: "react hooks (useAuth/useLiveQuery/useRpc, jsdom env)"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.7.4:
+  title: "CLI commands — init, dev, migration, db, generate, status, studio, functions"
+  status: implemented
+  traces:
+    - file: cli/src/commands/db.ts
+      symbol: registerDbCommand
+      role: "db reset/seed/shell/checkout + migration run/create/list/rollback"
+  tests:
+    unit:
+      - file: cli/src/commands/db.test.ts
+        symbol: "db commands"
+      - file: cli/src/cli.test.ts
+        symbol: "cli end-to-end"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 8  pgStack backend — Security Model (FR-B.8.*)
+# =====================================================================
+
+FR-B.8.1:
+  title: "Authentication layer — JWT validation, apikey, non-empty sub gate, JWT-over-apikey priority"
+  status: implemented
+  traces:
+    - file: proxy-go/middleware/rls.go
+      symbol: ResolveClaims
+      role: "Resolve role/sub from JWT (validated first) or apikey"
+  tests:
+    unit:
+      - file: proxy-go/auth/jwt_empty_secret_test.go
+        symbol: "TestJWTEmptySecret"
+    integration: []
+    e2e: []
+    security:
+      - file: tests/security/auth__jwt_manipulation.test.mjs
+        symbol: "jwt manipulation"
+  manual_check: ""
+  notes: ""
+
+FR-B.8.2:
+  title: "Authorization layer — RLS via SET LOCAL ROLE; proxy connects as powerless authenticator (two-role split)"
+  status: implemented
+  traces:
+    - file: proxy-go/main.go
+      symbol: verifyPoolRoles
+      role: "Startup fail-closed check: data role powerless + admin role assumes service_role"
+  tests:
+    unit:
+      - file: proxy-go/config_test.go
+        symbol: "TestValidate_ProductionRequiresAdminDatabaseURL"
+    integration: []
+    e2e:
+      - file: tests/e2e_rls_test.mjs
+        symbol: "e2e_rls"
+    security:
+      - file: tests/security/proxy__connects_as_non_superuser.test.mjs
+        symbol: "proxy non-superuser + role isolation"
+      - file: tests/security/proxy__startup_rejects_privileged_login.test.mjs
+        symbol: "startup rejects privileged login"
+  manual_check: ""
+  notes: ""
+
+FR-B.8.3:
+  title: "Rate limiting — per-IP auth-endpoint limiter, trusted-proxy-aware real IP"
+  status: implemented
+  traces:
+    - file: proxy-go/middleware/rate_limit.go
+      symbol: RateLimiter
+      role: "Token-bucket per-IP limiter for auth endpoints"
+  tests:
+    unit:
+      - file: proxy-go/middleware/rate_limit_realip_test.go
+        symbol: "TestRateLimitRealIP"
+    integration: []
+    e2e: []
+    security:
+      - file: tests/security/rate_limit__spoofed_xff_does_not_bypass.test.mjs
+        symbol: "spoofed XFF does not bypass"
+  manual_check: ""
+  notes: ""
+
+FR-B.8.4:
+  title: "Security headers — HSTS (self-gating), CSP, no chiMiddleware.RealIP"
+  status: implemented
+  traces:
+    - file: proxy-go/middleware/security.go
+      symbol: HSTSHeaders
+      role: "HSTS/CSP headers; RealIP intentionally never added"
+  tests:
+    unit:
+      - file: proxy-go/middleware/security_test.go
+        symbol: "TestSecurityHeaders"
+      - file: proxy-go/middleware/composition_test.go
+        symbol: "TestComposition (RealIP negative pin)"
+    integration: []
+    e2e: []
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.8.5:
+  title: "Input validation — parameterized casts, 22xxx/23xxx → 4xx, sql-injection resistance"
+  status: implemented
+  traces:
+    - file: proxy-go/rest/rest.go
+      symbol: pgHTTPStatus
+      role: "Map PG data/constraint errors to 4xx; all params bound + cast"
+  tests:
+    unit:
+      - file: proxy-go/rest/property_test.go
+        symbol: "TestREST property"
+    integration: []
+    e2e: []
+    security:
+      - file: tests/security/rest__sql_injection.test.mjs
+        symbol: "rest sql-injection"
+  manual_check: ""
+  notes: ""
+
+FR-B.8.6:
+  title: "WebSocket message scope — client cannot subscribe/broadcast outside its authorized channel"
+  status: implemented
+  traces:
+    - file: proxy-go/realtime/ws.go
+      symbol: subscriptionMeta
+      role: "Per-connection scope binding; ad-hoc channel namespace reserved"
+  tests:
+    unit:
+      - file: proxy-go/realtime/ws_scope_test.go
+        symbol: "TestWSScope"
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_forder_test.mjs
+        symbol: "e2e_ws_forder"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.8.7:
+  title: "Realtime authorization — generation-bound delivery, RevokeStale, snapshot TOCTOU safety"
+  status: implemented
+  traces:
+    - file: proxy-go/realtime/ws.go
+      symbol: snapshotForGeneration
+      role: "REPEATABLE READ + ACCESS SHARE snapshot read bound to the committed generation"
+  tests:
+    unit:
+      - file: proxy-go/realtime/ws_reauth_test.go
+        symbol: "TestWSReauth"
+      - file: proxy-go/realtime/ws_failclosed_test.go
+        symbol: "TestWSFailClosed"
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_reauth_test.mjs
+        symbol: "e2e_ws_reauth"
+      - file: tests/e2e_ws_snapshot_toctou_test.mjs
+        symbol: "e2e_ws_snapshot_toctou"
+    security:
+      - file: tests/security/ws__anon_refused_when_required.test.mjs
+        symbol: "anon refused when required"
+  manual_check: ""
+  notes: ""
+
+# =====================================================================
+# § 9, 11  pgStack backend — Proxy Configuration & Deployment (FR-B.9, FR-B.11.*)
+# =====================================================================
+
+FR-B.9:
+  title: "Proxy configuration — timeouts, gzip, pool tuning, TLS modes, PGSTACK_ENV production validator"
+  status: implemented
+  traces:
+    - file: proxy-go/config.go
+      symbol: Config.Validate
+      role: "Strict production validator (secrets, ADMIN_DATABASE_URL, flags)"
+  tests:
+    unit:
+      - file: proxy-go/config_test.go
+        symbol: "TestValidate"
+      - file: proxy-go/tls_test.go
+        symbol: "TestTLS"
+      - file: proxy-go/gzip_test.go
+        symbol: "TestGzip"
+    integration: []
+    e2e:
+      - file: tests/e2e_gzip_test.mjs
+        symbol: "e2e_gzip"
+    security: []
+  manual_check: ""
+  notes: ""
+
+FR-B.11.1:
+  title: "Development deployment — docker compose (PG tmpfs + ext COPY + proxy)"
+  status: implemented
+  traces:
+    - file: docker-compose.yml
+      symbol: db+proxy-go services
+      role: "Dev stack; authenticator/authenticator_admin DSNs"
+  tests:
+    unit: []
+    integration: []
+    e2e:
+      - file: tests/e2e_ws_test.mjs
+        symbol: "whole e2e suite runs against this stack"
+    security: []
+  manual_check: "Every e2e/security test boots against the dev compose; no standalone deployment test"
+  notes: ""
+
+FR-B.11.2:
+  title: "Production deployment — prod compose + all-in-one; non-superuser proxy; fail-secure posture"
+  status: implemented
+  traces:
+    - file: docker-compose.prod.yml
+      symbol: db+proxy services
+      role: "Prod stack; ADMIN_DATABASE_URL required; PGSTACK_ENV=production"
+    - file: docker/all-in-one-entrypoint.sh
+      symbol: entrypoint
+      role: "All-in-one: generates authenticator/admin passwords, two DSNs, superuser fallback only when role absent"
+  tests:
+    unit: []
+    integration: []
+    e2e: []
+    security:
+      - file: tests/security/proxy__startup_rejects_privileged_login.test.mjs
+        symbol: "production validator + role check (fail-closed)"
+  manual_check: "reactive.pgstack.org runs the prod posture; verified live via the prod startup checks"
+  notes: ""
+
+FR-B.11.3:
+  title: "CI/CD — CI gate (PR isolation), deploy gated on CI + SHA, release gated on CI + pinned actions"
+  status: implemented
+  traces:
+    - file: .github/workflows/deploy.yml
+      symbol: deploy+deploy-polyglot
+      role: "workflow_run-gated deploy of the CI-verified SHA; pinned ssh-action"
+    - file: .github/workflows/release.yml
+      symbol: ci-gate
+      role: "Require green CI (push/master) for the tagged SHA before publishing; pinned actions"
+  tests:
+    unit: []
+    integration: []
+    e2e: []
+    security: []
+  manual_check: "Self-verifying: the workflows run on every push; SEC-R42 lint + the role-isolation tests guard the deployed posture"
+  notes: ""

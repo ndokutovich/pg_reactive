@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>pg_reactive / pgStack Traceability Matrix</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; }
+  h1 { color: #f0f6fc; font-size: 20px; margin-bottom: 8px; }
+  .subtitle { color: #8b949e; font-size: 13px; margin-bottom: 24px; }
+
+  .stats { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stat { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 20px; text-align: center; min-width: 120px; }
+  .stat .n { font-size: 28px; font-weight: 700; }
+  .stat .label { font-size: 11px; color: #8b949e; margin-top: 4px; }
+  .stat.ok .n { color: #7ee787; }
+  .stat.partial .n { color: #f0883e; }
+  .stat.missing .n { color: #f85149; }
+  .stat.undoc .n { color: #bc8cff; }
+
+  .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  .filters button { background: #21262d; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 6px 14px; cursor: pointer; font-size: 12px; }
+  .filters button:hover { border-color: #58a6ff; }
+  .filters button.active { background: #58a6ff20; border-color: #58a6ff; color: #58a6ff; }
+  .search { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 6px 12px; font-size: 12px; width: 280px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #161b22; color: #8b949e; text-align: left; padding: 8px 12px; border-bottom: 1px solid #30363d; position: sticky; top: 0; }
+  td { padding: 8px 12px; border-bottom: 1px solid #21262d; vertical-align: top; }
+  tr:hover { background: #161b2280; }
+
+  .fr-id { font-weight: 600; color: #58a6ff; white-space: nowrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; }
+  .fr-title { color: #c9d1d9; font-size: 12px; margin-top: 2px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  /* Status badges — class name == status name (must match status_ranks). */
+  .badge.implemented { background: #7ee78720; color: #7ee787; }
+  .badge.partial { background: #f0883e20; color: #f0883e; }
+  .badge.not_implemented { background: #f8514920; color: #f85149; }
+  .badge.not_applicable { background: #8b949e20; color: #8b949e; }
+  /* Multi-dim status stack — three small dimension:badge rows */
+  .status-stack { display: grid; gap: 4px; grid-template-columns: max-content 1fr; align-items: center; }
+  .status-stack .dim { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: #8b949e; }
+  .status-stack .badge { font-size: 10.5px; padding: 1px 6px; }
+  .badge.blocked { background: #db61a220; color: #db61a2; }
+  .badge.deferred { background: #f0883e20; color: #f0883e; }
+  .badge.done { background: #7ee78720; color: #7ee787; }
+  .badge.todo { background: #f8514920; color: #f85149; }
+  .badge.wip { background: #f0883e20; color: #f0883e; }
+
+  .trace-file { color: #7ee787; font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; }
+  .trace-symbol { color: #f0883e; font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; }
+  .trace-role { color: #8b949e; font-size: 11px; }
+  .trace-entry { margin: 3px 0; }
+  .note { color: #f0883e; font-style: italic; font-size: 11px; margin-top: 4px; white-space: pre-wrap; }
+
+  .group-header td { background: #161b22; font-weight: 600; color: #f0f6fc; font-size: 13px; padding: 12px; border-bottom: 2px solid #30363d; }
+
+  .test-chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; font-family: 'Cascadia Code', Consolas, monospace; }
+  .test-chip.has { background: #7ee78720; color: #7ee787; cursor: help; }
+  .test-chip.none { color: #4a525c; }
+  .manual-check { font-size: 11px; color: #8b949e; }
+  .manual-check.empty { color: #4a525c; }
+
+  #loading { text-align: center; padding: 48px; color: #8b949e; font-size: 14px; }
+  #error { text-align: center; padding: 48px; color: #f85149; font-size: 14px; line-height: 1.6; }
+  #error code, .subtitle code { background: #161b22; padding: 2px 6px; border-radius: 4px; font-family: 'Cascadia Code', Consolas, monospace; color: #c9d1d9; }
+</style>
+</head>
+<body>
+
+<h1>pg_reactive / pgStack Traceability Matrix</h1>
+<div class="subtitle">Spec <code>docs/specs/pg_reactive_spec.md + postgres_native_backend_spec.md</code> &rarr; code &rarr; tests. Loaded from <code>traceability.yaml</code> alongside this viewer.</div>
+
+<!--
+  Embedded YAML slot. Empty in the committed/source viewer — the JS below
+  falls through to fetch('traceability.yaml') from the same directory.
+  When the project-trace bundler runs (`python scripts/bundle-trace-viewer.py`),
+  the matrix gets inlined between the BEGIN/END markers below, producing a
+  single-file standalone HTML that works via double-click (no HTTP server,
+  no fetch). The markers are LOAD-BEARING — don't reformat them.
+-->
+<script type="text/x-traceability-yaml" id="embedded-matrix">
+<!-- PROJECT_TRACE_BUNDLE_BEGIN -->
+<!-- PROJECT_TRACE_BUNDLE_END -->
+</script>
+
+<div id="loading">Loading traceability.yaml...</div>
+<div id="error" style="display:none"></div>
+
+<div id="app" style="display:none">
+  <div class="stats" id="stats"></div>
+  <div class="filters" id="filters">
+    <button class="active" data-filter="all">All</button>
+    <input class="search" placeholder="Search id, title, file, symbol, note..." id="search">
+  </div>
+
+  <table>
+    <thead><tr id="thead-row">
+      <th style="width:220px">ID</th>
+      <th style="width:90px">Status</th>
+      <th>Code Traces</th>
+      <!-- Test bucket columns are inserted by JS based on the matrix header config. -->
+      <th style="width:120px">Manual check</th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<script>
+// =====================================================================
+// project-trace universal viewer
+//
+// Config read from `# key: value` lines at the top of traceability.yaml.
+// Falls back to the defaults below.
+// =====================================================================
+const DEFAULTS = {
+  fr_pattern: '^([A-Z]+-[A-Za-z0-9_.]+)$',
+  status_ranks: 'implemented:3,partial:2,not_implemented:1',
+  test_buckets: 'unit,ui,e2e,manual',
+  // Empty → single-status; comma list → multi-dim mode (e.g. "frontend,backend,test")
+  status_dimensions: '',
+};
+
+// Strip surrounding quotes from a YAML scalar value.
+const stripQ = s => s.trim().replace(/^"/, '').replace(/"$/, '');
+
+// Parse `# key: value` lines from the matrix header.
+function readConfig(text) {
+  const cfg = Object.assign({}, DEFAULTS);
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (!line.startsWith('#')) {
+      if (line.trim()) break;  // header ends at first non-comment, non-blank line
+      continue;
+    }
+    const m = line.match(/^#\s*([a-z_]+):\s*(.+?)\s*$/);
+    if (m && (m[1] in DEFAULTS)) {
+      cfg[m[1]] = m[2];
+    }
+  }
+  return cfg;
+}
+
+// Parse "implemented:3,partial:2,not_implemented:1" → {name:rank}
+function parseStatusRanks(value) {
+  const out = {};
+  for (const tok of value.split(',')) {
+    const [name, rank] = tok.split(':').map(s => s.trim());
+    if (name && rank) out[name] = parseInt(rank, 10);
+  }
+  return out;
+}
+
+// Group key for a full FR id. We strip the prefix (FR-, US-, …) and
+// keep the first segment as the group key. § 4-style projects with
+// dense sub-sections can override this by editing the FR_GROUPS map
+// at the bottom of this file.
+function groupOf(id) {
+  // Handle three common id shapes:
+  //   PREFIX-NUM           e.g. UC-01            -> group = "PREFIX"
+  //   PREFIX-FAM-NUM       e.g. BR-MOD-01,
+  //                            DC-C01-02,
+  //                            QA-C13-03        -> group = "PREFIX-FAM"
+  //   PREFIX-FAM.subpart   e.g. FR-3.4.semantic  -> group = "PREFIX-3"
+  const m = id.match(/^([A-Z]+)-([A-Za-z0-9]+)(?:[-.]|$)/);
+  if (!m) return id;
+  const prefix = m[1];
+  const second = m[2];
+  // Pure-digit second segment (UC-01, FR-3) — single-letter family
+  if (/^\d+$/.test(second)) return prefix;
+  return prefix + '-' + second;
+}
+
+// Tolerant YAML-ish parser tailored to traceability.yaml's shape.
+function parseTraceYaml(text, frRe, buckets, dimensions) {
+  // bucket name → object property: tu, tui, te, tm — but generalised to t_<name>.
+  const bucketProp = b => 't_' + b;
+  const multi = dimensions && dimensions.length > 0;
+  const frs = [];
+  const lines = text.split('\n');
+  let current = null;
+  let currentTrace = null;
+  let currentTestItem = null;
+  let block = null;
+  let bucket = null;
+  let inNotes = false;
+  let inStatusBlock = false;
+  let notesIndent = 4;
+  const bucketRe = new RegExp('^    (' + buckets.map(b => b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + '):\\s*(.*)$');
+  const statusDimRe = /^    ([a-z_]+):\s*(\S+)\s*$/;
+
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, '');
+
+    if (inNotes && current) {
+      if (line.trim() === '') { current.n = (current.n || '') + '\n'; continue; }
+      const ind = (line.match(/^(\s*)/) || [''])[1].length;
+      if (ind >= notesIndent) {
+        const stripped = line.slice(notesIndent);
+        current.n = (current.n || '') + (current.n ? '\n' : '') + stripped;
+        continue;
+      } else { inNotes = false; }
+    }
+
+    if (/^\s*#/.test(line) || !line.trim()) continue;
+
+    const frMatch = line.match(frRe);
+    if (frMatch) {
+      if (current) frs.push(current);
+      const defaultStatus = multi ? Object.fromEntries(dimensions.map(d => [d, 'unknown'])) : 'unknown';
+      current = { id: frMatch[1], title: '', s: defaultStatus, t: [], n: null, mc: '' };
+      for (const b of buckets) current[bucketProp(b)] = [];
+      currentTrace = null; currentTestItem = null; block = null; bucket = null; inNotes = false; inStatusBlock = false;
+      continue;
+    }
+    if (!current) continue;
+
+    const titleMatch = line.match(/^  title:\s*(.+)$/);
+    if (titleMatch) { current.title = stripQ(titleMatch[1]); block = null; bucket = null; inStatusBlock = false; continue; }
+
+    // Inline status — legacy single-dim format. Keep for back-compat.
+    const statusInline = line.match(/^  status:\s*(\S.*)$/);
+    if (statusInline) {
+      if (multi) current.s[dimensions[0]] = statusInline[1].trim();
+      else current.s = statusInline[1].trim();
+      block = null; bucket = null; inStatusBlock = false;
+      currentTrace = null; currentTestItem = null; continue;
+    }
+    // Block status (multi-dim): `  status:` then indented dim:value lines.
+    if (/^  status:\s*$/.test(line)) {
+      inStatusBlock = true;
+      block = null; bucket = null;
+      currentTrace = null; currentTestItem = null;
+      continue;
+    }
+    if (inStatusBlock) {
+      const dimMatch = line.match(statusDimRe);
+      if (dimMatch) {
+        const name = dimMatch[1], value = dimMatch[2];
+        if (multi && dimensions.includes(name)) current.s[name] = value;
+        continue;
+      }
+      inStatusBlock = false;
+    }
+
+    const notesHead = line.match(/^  notes:\s*(\|?)(.*)$/);
+    if (notesHead) {
+      if (notesHead[1] === '|') { inNotes = true; notesIndent = 4; current.n = ''; }
+      else current.n = stripQ(notesHead[2]);
+      block = null; bucket = null;
+      continue;
+    }
+    const mcMatch = line.match(/^  manual_check:\s*(.*)$/);
+    if (mcMatch) { current.mc = stripQ(mcMatch[1]); block = null; bucket = null; continue; }
+
+    if (/^  traces:\s*\[\s*\]\s*$/.test(line)) { block = null; bucket = null; continue; }
+    if (/^  traces:\s*$/.test(line)) { block = 'traces'; bucket = null; currentTrace = null; continue; }
+    if (/^  tests:\s*$/.test(line)) { block = 'tests'; bucket = null; currentTestItem = null; continue; }
+
+    if (block === 'tests') {
+      const bm = line.match(bucketRe);
+      if (bm) { bucket = bm[1]; currentTestItem = null; continue; }
+    }
+
+    const listFile = line.match(/^\s+-\s+file:\s*(.+)$/);
+    if (listFile) {
+      const f = stripQ(listFile[1]);
+      if (block === 'traces') {
+        currentTrace = { f, sym: '', r: '' };
+        current.t.push(currentTrace);
+        currentTestItem = null;
+      } else if (block === 'tests' && bucket) {
+        currentTestItem = { f, sym: '' };
+        current[bucketProp(bucket)].push(currentTestItem);
+        currentTrace = null;
+      }
+      continue;
+    }
+
+    const symMatch = line.match(/^\s+symbol:\s*(.+)$/);
+    if (symMatch) {
+      const v = stripQ(symMatch[1]);
+      if (currentTrace) currentTrace.sym = v;
+      else if (currentTestItem) currentTestItem.sym = v;
+      continue;
+    }
+    const roleMatch = line.match(/^\s+role:\s*(.+)$/);
+    if (roleMatch && currentTrace) { currentTrace.r = stripQ(roleMatch[1]); continue; }
+  }
+  if (current) frs.push(current);
+  return frs;
+}
+
+function render(frs, statusRanks, buckets, filter, search, dimensions) {
+  const tbody = document.getElementById('tbody');
+  const statsEl = document.getElementById('stats');
+  tbody.textContent = '';
+
+  let lastGroup = '';
+  // In multi-dim mode counts[dim][name]; in single-dim mode counts[name].
+  const multi = dimensions.length > 0;
+  const counts = multi ? Object.fromEntries(dimensions.map(d => [d, Object.fromEntries(Object.keys(statusRanks).map(n => [n, 0]))]))
+                       : Object.fromEntries(Object.keys(statusRanks).map(n => [n, 0]));
+  let visibleCount = 0;
+  const bucketProp = b => 't_' + b;
+
+  for (const fr of frs) {
+    if (multi) {
+      for (const d of dimensions) {
+        const v = (fr.s && typeof fr.s === 'object') ? fr.s[d] : null;
+        if (v && counts[d][v] !== undefined) counts[d][v] += 1;
+      }
+    } else {
+      counts[fr.s] = (counts[fr.s] || 0) + 1;
+    }
+    // Filter: in multi-dim, "filter=X" matches if ANY dimension has that status.
+    if (filter !== 'all') {
+      if (multi) {
+        const matches = dimensions.some(d => fr.s && typeof fr.s === 'object' && fr.s[d] === filter);
+        if (!matches) continue;
+      } else if (fr.s !== filter) continue;
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      const inItems = arr => (arr || []).some(it => ((it.f || '') + (it.sym || '') + (it.r || '')).toLowerCase().includes(q));
+      let matches = fr.id.toLowerCase().includes(q) ||
+        (fr.title || '').toLowerCase().includes(q) ||
+        inItems(fr.t) ||
+        (fr.mc && fr.mc.toLowerCase().includes(q)) ||
+        (fr.n && fr.n.toLowerCase().includes(q));
+      if (!matches) {
+        for (const b of buckets) { if (inItems(fr[bucketProp(b)])) { matches = true; break; } }
+      }
+      if (!matches) continue;
+    }
+    visibleCount++;
+
+    const group = groupOf(fr.id);
+    if (group !== lastGroup) {
+      lastGroup = group;
+      const gtr = document.createElement('tr');
+      gtr.classList.add('group-header');
+      const gtd = document.createElement('td');
+      gtd.setAttribute('colspan', String(3 + buckets.length + 1));
+      gtd.textContent = group;
+      gtr.appendChild(gtd);
+      tbody.appendChild(gtr);
+    }
+
+    const tr = document.createElement('tr');
+
+    const tdId = document.createElement('td');
+    const idLine = document.createElement('div');
+    idLine.classList.add('fr-id');
+    idLine.textContent = fr.id;
+    tdId.appendChild(idLine);
+    if (fr.title) {
+      const titleLine = document.createElement('div');
+      titleLine.classList.add('fr-title');
+      titleLine.textContent = fr.title;
+      tdId.appendChild(titleLine);
+    }
+    tr.appendChild(tdId);
+
+    const tdStatus = document.createElement('td');
+    if (dimensions.length) {
+      const stack = document.createElement('div');
+      stack.classList.add('status-stack');
+      for (const d of dimensions) {
+        const dimLabel = document.createElement('span');
+        dimLabel.classList.add('dim');
+        dimLabel.textContent = d;
+        const val = (fr.s && typeof fr.s === 'object') ? (fr.s[d] || 'unknown') : 'unknown';
+        const b = document.createElement('span');
+        b.classList.add('badge', val);
+        b.textContent = val.replace(/_/g, ' ');
+        stack.appendChild(dimLabel);
+        stack.appendChild(b);
+      }
+      tdStatus.appendChild(stack);
+    } else {
+      const badge = document.createElement('span');
+      badge.classList.add('badge', fr.s);
+      badge.textContent = fr.s;
+      tdStatus.appendChild(badge);
+    }
+    tr.appendChild(tdStatus);
+
+    const tdTraces = document.createElement('td');
+    if (!fr.t.length && !fr.n) {
+      const empty = document.createElement('span');
+      empty.classList.add('trace-role');
+      empty.textContent = '—';
+      tdTraces.appendChild(empty);
+    }
+    for (const t of fr.t) {
+      const div = document.createElement('div');
+      div.classList.add('trace-entry');
+      const fileSpan = document.createElement('span');
+      fileSpan.classList.add('trace-file');
+      fileSpan.textContent = t.f;
+      div.appendChild(fileSpan);
+      if (t.sym) {
+        const symSpan = document.createElement('span');
+        symSpan.classList.add('trace-symbol');
+        symSpan.textContent = '  ' + t.sym;
+        div.appendChild(symSpan);
+      }
+      if (t.r) {
+        const roleSpan = document.createElement('span');
+        roleSpan.classList.add('trace-role');
+        roleSpan.textContent = ' — ' + t.r;
+        div.appendChild(roleSpan);
+      }
+      tdTraces.appendChild(div);
+    }
+    if (fr.n) {
+      const note = document.createElement('div');
+      note.classList.add('note');
+      note.textContent = fr.n;
+      tdTraces.appendChild(note);
+    }
+    tr.appendChild(tdTraces);
+
+    for (const b of buckets) {
+      const items = fr[bucketProp(b)] || [];
+      const td = document.createElement('td');
+      const span = document.createElement('span');
+      if (items.length) {
+        span.classList.add('test-chip', 'has');
+        span.textContent = String(items.length);
+        span.title = items.map(it => '• ' + it.f + (it.sym ? '  — ' + it.sym : '')).join('\n');
+      } else {
+        span.classList.add('test-chip', 'none');
+        span.textContent = '—';
+      }
+      td.appendChild(span);
+      tr.appendChild(td);
+    }
+
+    const tdMc = document.createElement('td');
+    const mcSpan = document.createElement('span');
+    mcSpan.classList.add('manual-check');
+    if (fr.mc && fr.mc.trim()) mcSpan.textContent = fr.mc;
+    else { mcSpan.classList.add('empty'); mcSpan.textContent = '—'; }
+    tdMc.appendChild(mcSpan);
+    tr.appendChild(tdMc);
+
+    tbody.appendChild(tr);
+  }
+
+  // Stats — show counts for every configured status, plus per-bucket coverage.
+  statsEl.textContent = '';
+  const total = frs.length;
+  const topStatus = Object.keys(statusRanks).sort((a, b) => statusRanks[b] - statusRanks[a])[0];
+  const sortedStatuses = Object.keys(statusRanks).sort((a, b) => statusRanks[b] - statusRanks[a]);
+  let statusItems;
+  if (multi) {
+    // One row of cards per (dimension, status) cell — fewer rows but per-dim values.
+    statusItems = [];
+    for (const d of dimensions) {
+      for (const name of sortedStatuses) {
+        const cls = name === topStatus ? 'ok' : (statusRanks[name] === 1 ? 'missing' : 'partial');
+        statusItems.push({ n: counts[d][name] || 0, l: `${d}: ${name.replace(/_/g, ' ')}`, c: cls });
+      }
+    }
+  } else {
+    statusItems = sortedStatuses.map(name => {
+      const cls = name === topStatus ? 'ok' : (statusRanks[name] === 1 ? 'missing' : 'partial');
+      return { n: counts[name] || 0, l: name.replace(/_/g, ' '), c: cls };
+    });
+  }
+  const bucketItems = buckets.map(b => ({
+    n: frs.filter(f => (f[bucketProp(b)] || []).length > 0).length,
+    l: `≥1 ${b}`,
+    c: '',
+  }));
+  for (const s of [...statusItems, { n: total, l: 'Total', c: '' }, ...bucketItems]) {
+    const div = document.createElement('div');
+    div.classList.add('stat');
+    if (s.c) div.classList.add(s.c);
+    const n = document.createElement('div');
+    n.classList.add('n');
+    n.textContent = s.n;
+    const label = document.createElement('div');
+    label.classList.add('label');
+    label.textContent = s.l;
+    div.appendChild(n);
+    div.appendChild(label);
+    statsEl.appendChild(div);
+  }
+
+  if (visibleCount === 0 && (filter !== 'all' || search)) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.setAttribute('colspan', String(3 + buckets.length + 1));
+    td.style.textAlign = 'center';
+    td.style.padding = '24px';
+    td.style.color = '#8b949e';
+    td.textContent = 'No entries match the current filter / search.';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+}
+
+function showError(msg) {
+  document.getElementById('loading').style.display = 'none';
+  const err = document.getElementById('error');
+  err.style.display = '';
+  err.textContent = '';
+  const head = document.createElement('div');
+  head.textContent = 'Error: ' + msg;
+  err.appendChild(head);
+  const hint = document.createElement('div');
+  hint.style.marginTop = '12px';
+  hint.appendChild(document.createTextNode('Open this file via a local HTTP server so the browser can fetch traceability.yaml:'));
+  err.appendChild(hint);
+  const cmd = document.createElement('div');
+  cmd.style.marginTop = '8px';
+  const code = document.createElement('code');
+  code.textContent = 'cd docs && python -m http.server 8080';
+  cmd.appendChild(code);
+  err.appendChild(cmd);
+  const visit = document.createElement('div');
+  visit.style.marginTop = '8px';
+  visit.appendChild(document.createTextNode('then visit '));
+  const c2 = document.createElement('code');
+  c2.textContent = 'http://localhost:8080/trace-viewer.html';
+  visit.appendChild(c2);
+  err.appendChild(visit);
+}
+
+function buildTheadAndFilters(statusRanks, buckets) {
+  const thead = document.getElementById('thead-row');
+  // Remove existing bucket columns + manual-check column to rebuild cleanly.
+  while (thead.children.length > 3) thead.removeChild(thead.lastChild);
+  for (const b of buckets) {
+    const th = document.createElement('th');
+    th.style.width = '60px';
+    th.textContent = b;
+    th.title = `tests in the "${b}" bucket`;
+    thead.appendChild(th);
+  }
+  const thMc = document.createElement('th');
+  thMc.style.width = '120px';
+  thMc.title = 'Hand-verification status — analyst-filled string';
+  thMc.textContent = 'Manual check';
+  thead.appendChild(thMc);
+
+  const filters = document.getElementById('filters');
+  // Add a button per status, in rank order.
+  const search = document.getElementById('search');
+  const existing = Array.from(filters.querySelectorAll('button'));
+  for (const btn of existing) if (btn.dataset.filter !== 'all') btn.remove();
+  for (const name of Object.keys(statusRanks).sort((a, b) => statusRanks[b] - statusRanks[a])) {
+    const btn = document.createElement('button');
+    btn.dataset.filter = name;
+    btn.textContent = name.replace(/_/g, ' ');
+    filters.insertBefore(btn, search);
+  }
+}
+
+// Read the embedded matrix from the <script type="text/x-traceability-yaml">
+// block. Returns null if the bundle markers aren't filled (source viewer mode).
+function readEmbeddedMatrix() {
+  const slot = document.getElementById('embedded-matrix');
+  if (!slot) return null;
+  const raw = slot.textContent || '';
+  const begin = raw.indexOf('PROJECT_TRACE_BUNDLE_BEGIN');
+  const end = raw.indexOf('PROJECT_TRACE_BUNDLE_END');
+  if (begin < 0 || end < 0 || end <= begin) return null;
+  // Cut text between the markers; trim the comment-line tails around each.
+  const afterBegin = raw.indexOf('\n', begin);
+  const beforeEnd = raw.lastIndexOf('\n', end);
+  if (afterBegin < 0 || beforeEnd < 0 || beforeEnd <= afterBegin) return null;
+  const inside = raw.slice(afterBegin + 1, beforeEnd);
+  // If the slot only contains the markers (no real matrix), treat as empty.
+  if (!inside.trim()) return null;
+  // The bundler escapes any script-end-tag (encoded as <\/script> in the
+  // YAML payload) so the embedded slot can't close prematurely; reverse
+  // it here so the parsed text matches the source file byte-for-byte.
+  // (Both the regex and the replacement use \x3c instead of a literal `<`
+  // because this entire <script> element is in HTML "raw text" mode —
+  // a literal end-tag anywhere in the JS source, including in strings
+  // and comments, would terminate the script.)
+  return inside.replace(/\x3c\\\/script\x3e/gi, '\x3c/script\x3e');
+}
+
+(async () => {
+  try {
+    // 1. Prefer the embedded matrix (set by the bundler). Works via file://.
+    // 2. Fall back to fetching traceability.yaml from the same directory.
+    //    This path requires an HTTP server because file:// blocks fetch on
+    //    most browsers.
+    let text = readEmbeddedMatrix();
+    if (text === null) {
+      const res = await fetch('traceability.yaml');
+      if (!res.ok) throw new Error('Failed to load traceability.yaml: HTTP ' + res.status);
+      text = await res.text();
+    }
+    const cfg = readConfig(text);
+    const statusRanks = parseStatusRanks(cfg.status_ranks);
+    const buckets = cfg.test_buckets.split(',').map(b => b.trim()).filter(Boolean);
+    const dimensions = (cfg.status_dimensions || '').split(',').map(d => d.trim()).filter(Boolean);
+    // Build the FR-line regex from the config pattern. Two valid pattern
+    // shapes are accepted:
+    //   • ^<PREFIX>-[A-Za-z0-9_.]+$    — id only
+    //   • ^<PREFIX>-[A-Za-z0-9_.]+:$   — full YAML key line (what the
+    //                                    Python gate uses as-is)
+    // We normalise both to the id portion, then append `:$` so the JS
+    // matches YAML key lines like `FR-3.4:`.
+    const idPattern = cfg.fr_pattern
+      .replace(/^\^/, '')
+      .replace(/\$$/, '')
+      .replace(/:$/, '');
+    const frRe = new RegExp('^' + idPattern + ':$');
+    const frs = parseTraceYaml(text, frRe, buckets, dimensions);
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = '';
+
+    buildTheadAndFilters(statusRanks, buckets);
+
+    let activeFilter = 'all';
+    const searchInput = document.getElementById('search');
+    const doRender = () => render(frs, statusRanks, buckets, activeFilter, searchInput.value, dimensions);
+
+    document.querySelectorAll('.filters button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filters button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeFilter = btn.dataset.filter;
+        doRender();
+      });
+    });
+    searchInput.addEventListener('input', doRender);
+    doRender();
+  } catch (e) {
+    showError(e.message);
+  }
+})();
+</script>
+</body>
+</html>
