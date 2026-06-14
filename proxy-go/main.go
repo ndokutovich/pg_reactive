@@ -370,64 +370,91 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 		log.Warn().Msg(msg + " (PGSTACK_ENV != production — warning only; FATAL in production)")
 	}
 
-	// checkLoginAttrs verifies a pool's session_user (the LOGIN role) carries NONE
-	// of the dangerous role attributes. Without this a misconfigured DSN pointing
-	// at a SUPERUSER or BYPASSRLS role would pass the membership / effective-role
-	// checks below yet still let a `RESET ROLE` back to the session role escalate
-	// to full privileges (gemini audit R5-1: e.g. a data role with BYPASSRLS but
-	// no service_role membership, or an admin DSN = postgres that SET ROLEs to
-	// service_role but RESET ROLEs to the superuser). Returns the session_user.
-	checkLoginAttrs := func(pool *pgxpool.Pool, label string) string {
+	// checkLoginRole verifies a pool's session_user (the LOGIN role) is safe to
+	// connect as: it carries NONE of the dangerous role attributes, and it is a
+	// (transitive) member of ONLY the roles in `allowed`. Each gap below is a real
+	// bypass of the "powerless until SET ROLE" model:
+	//   - SUPERUSER/BYPASSRLS/CREATEROLE/CREATEDB: a RESET ROLE hands back full
+	//     privileges even if the membership/effective-role checks pass (R5-1).
+	//   - INHERIT: the role holds its members' privileges with NO SET ROLE at all
+	//     (a data role that INHERITs `authenticated` reads RLS tables directly).
+	//   - REPLICATION: can stream out the whole database via replication.
+	//   - membership in a dangerous predefined role (pg_execute_server_program →
+	//     COPY ... TO PROGRAM, pg_read_all_data → RLS bypass) or in service_role on
+	//     the data plane is an escalation path the attribute checks miss (R6-1).
+	checkLoginRole := func(pool *pgxpool.Pool, label string, allowed []string) {
+		allowedSet := make(map[string]bool, len(allowed))
+		for _, a := range allowed {
+			allowedSet[a] = true
+		}
+
 		var su string
-		var super, bypassrls, createrole, createdb bool
+		var super, bypassrls, createrole, createdb, inherit, replication bool
 		if err := pool.QueryRow(ctx,
-			"SELECT session_user, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = session_user").
-			Scan(&su, &super, &bypassrls, &createrole, &createdb); err != nil {
+			"SELECT session_user, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolinherit, rolreplication FROM pg_roles WHERE rolname = session_user").
+			Scan(&su, &super, &bypassrls, &createrole, &createdb, &inherit, &replication); err != nil {
 			report(label + ": cannot read login-role attributes at startup: " + err.Error())
-			return ""
+			return
 		}
 		var bad []string
-		if super {
-			bad = append(bad, "SUPERUSER")
-		}
-		if bypassrls {
-			bad = append(bad, "BYPASSRLS")
-		}
-		if createrole {
-			bad = append(bad, "CREATEROLE")
-		}
-		if createdb {
-			bad = append(bad, "CREATEDB")
+		for _, a := range []struct {
+			on   bool
+			name string
+		}{
+			{super, "SUPERUSER"}, {bypassrls, "BYPASSRLS"}, {createrole, "CREATEROLE"},
+			{createdb, "CREATEDB"}, {inherit, "INHERIT"}, {replication, "REPLICATION"},
+		} {
+			if a.on {
+				bad = append(bad, a.name)
+			}
 		}
 		if len(bad) > 0 {
-			report(fmt.Sprintf("%s login role %q has dangerous attribute(s) [%s] — proxy login roles must be NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB so a RESET ROLE cannot escalate", label, su, strings.Join(bad, ",")))
+			report(fmt.Sprintf("%s login role %q has dangerous attribute(s) [%s] — proxy login roles must be NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT NOREPLICATION so privileges are never held or inherited without an explicit SET ROLE", label, su, strings.Join(bad, ",")))
 		}
-		return su
+
+		// Transitive membership allowlist.
+		rows, err := pool.Query(ctx,
+			"SELECT r.rolname FROM pg_roles r WHERE r.rolname <> session_user AND pg_has_role(session_user, r.oid, 'MEMBER')")
+		if err != nil {
+			report(label + ": cannot read role memberships at startup: " + err.Error())
+			return
+		}
+		var unexpected []string
+		for rows.Next() {
+			var m string
+			if err := rows.Scan(&m); err != nil {
+				continue
+			}
+			if !allowedSet[m] {
+				unexpected = append(unexpected, m)
+			}
+		}
+		rows.Close()
+		if rerr := rows.Err(); rerr != nil {
+			report(label + ": error reading role memberships: " + rerr.Error())
+			return
+		}
+		if len(unexpected) > 0 {
+			report(fmt.Sprintf("%s login role %q is a member of unexpected role(s) [%s] — it must belong only to [%s]; a membership in e.g. service_role, pg_execute_server_program, or pg_read_all_data is an escalation path", label, su, strings.Join(unexpected, ","), strings.Join(allowed, ",")))
+		}
+		if len(bad) == 0 && len(unexpected) == 0 {
+			log.Info().Str("pool", label).Str("role", su).Msg("login role verified: non-privileged, NOINHERIT, memberships within allowlist")
+		}
 	}
 
-	// Data pool: a non-privileged login role that is NOT a member of service_role.
-	dataUser := checkLoginAttrs(dataPool, "data pool")
-	var dataCanAdmin bool
-	if err := dataPool.QueryRow(ctx,
-		"SELECT pg_has_role(session_user, 'service_role', 'MEMBER')").Scan(&dataCanAdmin); err != nil {
-		report("data pool: cannot verify service_role membership at startup: " + err.Error())
-	} else if dataCanAdmin {
-		report(fmt.Sprintf("data pool login role %q IS a member of service_role — a data-plane compromise could SET ROLE service_role (finding 6). Finish the cutover: set ADMIN_DATABASE_URL to authenticator_admin and `REVOKE service_role FROM %s`.", dataUser, dataUser))
-	} else {
-		log.Info().Str("role", dataUser).Msg("data pool: non-privileged login role that cannot reach service_role (verified)")
-	}
+	// Data plane: member of ONLY anon + authenticated (so it cannot reach
+	// service_role / BYPASSRLS, directly or transitively).
+	checkLoginRole(dataPool, "data pool", []string{"anon", "authenticated"})
 
-	// Admin pool: a non-privileged login role (checked above) that ASSUMES
-	// service_role via its AfterConnect SET ROLE (so current_user is service_role,
-	// while session_user stays the unprivileged login role).
-	checkLoginAttrs(adminPool, "admin pool")
+	// Admin plane: member of ONLY service_role, AND its connections actually
+	// assume it (AfterConnect SET ROLE makes current_user = service_role while
+	// session_user stays the unprivileged login role).
+	checkLoginRole(adminPool, "admin pool", []string{"service_role"})
 	var adminCurrent string
 	if err := adminPool.QueryRow(ctx, "SELECT current_user").Scan(&adminCurrent); err != nil {
 		report("admin pool: cannot assume service_role at connect (is ADMIN_DATABASE_URL the authenticator_admin role, and can it assume service_role?): " + err.Error())
 	} else if adminCurrent != "service_role" {
 		report(fmt.Sprintf("admin pool effective role is %q, expected service_role — ADMIN_DATABASE_URL must point at a role that assumes service_role", adminCurrent))
-	} else {
-		log.Info().Msg("admin pool: non-privileged login role that assumes service_role (verified)")
 	}
 }
 
