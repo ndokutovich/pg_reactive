@@ -437,8 +437,28 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 		if len(unexpected) > 0 {
 			report(fmt.Sprintf("%s login role %q is a member of unexpected role(s) [%s] — it must belong only to [%s]; a membership in e.g. service_role, pg_execute_server_program, or pg_read_all_data is an escalation path", label, su, strings.Join(unexpected, ","), strings.Join(allowed, ",")))
 		}
-		if len(bad) == 0 && len(unexpected) == 0 {
-			log.Info().Str("pool", label).Str("role", su).Msg("login role verified: non-privileged, NOINHERIT, memberships within allowlist")
+
+		// No direct privileges: the login role must own no objects and hold no
+		// direct ACL grants. NOINHERIT drops privileges inherited via membership,
+		// but a DIRECT grant (GRANT SELECT ON pgstack.users TO <role>) or object
+		// ownership applies whenever the role is current — including after a
+		// RESET ROLE — so a "powerless" login role must have none (gemini audit
+		// R7-1). pg_shdepend records a role's ownership ('o') and ACL ('a')
+		// dependencies across all databases; pg_roles (not pg_authid) is used to
+		// resolve the OID so the query works as a non-superuser.
+		var directDeps int
+		if err := pool.QueryRow(ctx,
+			"SELECT count(*) FROM pg_shdepend WHERE refclassid = 'pg_authid'::regclass AND refobjid = (SELECT oid FROM pg_roles WHERE rolname = session_user) AND deptype IN ('o','a')").
+			Scan(&directDeps); err != nil {
+			report(label + ": cannot check direct privileges/ownership at startup: " + err.Error())
+			return
+		}
+		if directDeps > 0 {
+			report(fmt.Sprintf("%s login role %q owns objects or holds direct ACL grants (%d object dependency/ies) — a proxy login role must be powerless so a RESET ROLE grants nothing (gemini audit R7-1); REVOKE its grants and reassign any owned objects", label, su, directDeps))
+		}
+
+		if len(bad) == 0 && len(unexpected) == 0 && directDeps == 0 {
+			log.Info().Str("pool", label).Str("role", su).Msg("login role verified: non-privileged, NOINHERIT, no direct grants/ownership, memberships within allowlist")
 		}
 	}
 
