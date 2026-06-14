@@ -217,11 +217,11 @@ let fail = 0;
 const check = (ok, msg) => { ok ? console.log(`  ✓ ${msg}`) : (console.error(`  ✗ ${msg}`), fail++); };
 
 console.log("\n=== startup rejects every privileged / over-privileged login role ===");
-setup();
 try {
+  setup(); // INSIDE try so a partial setup() still runs teardown() (gemini R15-3)
   for (const c of cases) {
-    if (c.pre) psql(c.pre);
     try {
+      if (c.pre) psql(c.pre); // INSIDE try so the finally cleanup always runs, even on a partial pre
       const extra = c.env.flatMap(([k, v]) => ["-e", `${k}=${v}`]);
       const { status, out } = runProxy(extra);
       const exited = status !== 0 && status !== null; // null = timeout-killed = still running = bad
@@ -229,11 +229,33 @@ try {
       check(ok, `${c.name} → rejected fail-closed (exit ${status})`);
       if (!ok) console.error(out.split("\n").filter((l) => /fatal|dangerous|unexpected|owns|terminal|error/i.test(l)).slice(-4).join("\n"));
     } finally {
-      if (c.post) { try { psql(c.post); } catch { /* best-effort revoke of the shared-role mutation */ } }
+      // Cleanup is MANDATORY: a swallowed REVOKE/restore would leave a shared role
+      // mutated (service_role SUPERUSER, authenticated renamed, a membership
+      // revoked) while the test still reports PASS (gemini audit R13-2).
+      if (c.post) {
+        try { psql(c.post); }
+        catch (e) { check(false, `${c.name}: CLEANUP FAILED — ${String(e.message || e).split("\n")[0]}`); }
+      }
     }
   }
 } finally {
   teardown();
+}
+
+// Reference-state assertion: every shared role the cases mutate must be back to
+// its bootstrap profile, or a silently-broken DB could still pass (gemini R13-2).
+try {
+  const out = psql(`SELECT CASE WHEN
+    (SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcanlogin FROM pg_roles WHERE rolname='anon')
+    AND (SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcanlogin FROM pg_roles WHERE rolname='authenticated')
+    AND (SELECT NOT rolsuper AND rolbypassrls AND NOT rolcanlogin FROM pg_roles WHERE rolname='service_role')
+    AND pg_has_role('authenticator','anon','MEMBER') AND pg_has_role('authenticator','authenticated','MEMBER')
+    AND pg_has_role('authenticator_admin','service_role','MEMBER')
+    AND NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated_r12tmp')
+    THEN 'REFSTATE_OK' ELSE 'REFSTATE_BROKEN' END`);
+  check(out.includes("REFSTATE_OK"), "reference role state restored after all cases (attrs + memberships intact)");
+} catch (e) {
+  check(false, `reference-state check FAILED to run — ${String(e.message || e).split("\n")[0]}`);
 }
 
 if (fail > 0) {
