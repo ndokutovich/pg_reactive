@@ -25,9 +25,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Require a CI run that concluded SUCCESS for this exact SHA AND was a
+          # push to master — not a fork/PR run that merely shares the SHA (gemini
+          # audit R5-2). Both the API query and the jq enforce event+branch.
           n=$(gh api \
-            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${{ github.sha }}&status=completed" \
-            --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')
+            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${{ github.sha }}&status=completed&event=push&branch=master" \
+            --jq '[.workflow_runs[] | select(.conclusion=="success" and .event=="push" and .head_branch=="master")] | length')
           if [ "${n:-0}" -lt 1 ]; then
             echo "::error::No successful CI run for ${{ github.sha }} (tag ${{ github.ref_name }}). Only tag a commit that is green on master." >&2
             exit 1

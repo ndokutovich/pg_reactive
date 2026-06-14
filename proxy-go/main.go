@@ -370,28 +370,64 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 		log.Warn().Msg(msg + " (PGSTACK_ENV != production — warning only; FATAL in production)")
 	}
 
-	// Data pool: its login role must not be a member of service_role.
-	var dataUser string
+	// checkLoginAttrs verifies a pool's session_user (the LOGIN role) carries NONE
+	// of the dangerous role attributes. Without this a misconfigured DSN pointing
+	// at a SUPERUSER or BYPASSRLS role would pass the membership / effective-role
+	// checks below yet still let a `RESET ROLE` back to the session role escalate
+	// to full privileges (gemini audit R5-1: e.g. a data role with BYPASSRLS but
+	// no service_role membership, or an admin DSN = postgres that SET ROLEs to
+	// service_role but RESET ROLEs to the superuser). Returns the session_user.
+	checkLoginAttrs := func(pool *pgxpool.Pool, label string) string {
+		var su string
+		var super, bypassrls, createrole, createdb bool
+		if err := pool.QueryRow(ctx,
+			"SELECT session_user, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = session_user").
+			Scan(&su, &super, &bypassrls, &createrole, &createdb); err != nil {
+			report(label + ": cannot read login-role attributes at startup: " + err.Error())
+			return ""
+		}
+		var bad []string
+		if super {
+			bad = append(bad, "SUPERUSER")
+		}
+		if bypassrls {
+			bad = append(bad, "BYPASSRLS")
+		}
+		if createrole {
+			bad = append(bad, "CREATEROLE")
+		}
+		if createdb {
+			bad = append(bad, "CREATEDB")
+		}
+		if len(bad) > 0 {
+			report(fmt.Sprintf("%s login role %q has dangerous attribute(s) [%s] — proxy login roles must be NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB so a RESET ROLE cannot escalate", label, su, strings.Join(bad, ",")))
+		}
+		return su
+	}
+
+	// Data pool: a non-privileged login role that is NOT a member of service_role.
+	dataUser := checkLoginAttrs(dataPool, "data pool")
 	var dataCanAdmin bool
 	if err := dataPool.QueryRow(ctx,
-		"SELECT session_user, pg_has_role(session_user, 'service_role', 'MEMBER')").
-		Scan(&dataUser, &dataCanAdmin); err != nil {
-		report("data pool: cannot verify role membership at startup: " + err.Error())
+		"SELECT pg_has_role(session_user, 'service_role', 'MEMBER')").Scan(&dataCanAdmin); err != nil {
+		report("data pool: cannot verify service_role membership at startup: " + err.Error())
 	} else if dataCanAdmin {
 		report(fmt.Sprintf("data pool login role %q IS a member of service_role — a data-plane compromise could SET ROLE service_role (finding 6). Finish the cutover: set ADMIN_DATABASE_URL to authenticator_admin and `REVOKE service_role FROM %s`.", dataUser, dataUser))
 	} else {
-		log.Info().Str("role", dataUser).Msg("data pool: login role cannot reach service_role (finding-6 split verified)")
+		log.Info().Str("role", dataUser).Msg("data pool: non-privileged login role that cannot reach service_role (verified)")
 	}
 
-	// Admin pool: AfterConnect runs SET ROLE service_role; a failure surfaces on
-	// the first query. The effective role must be service_role.
+	// Admin pool: a non-privileged login role (checked above) that ASSUMES
+	// service_role via its AfterConnect SET ROLE (so current_user is service_role,
+	// while session_user stays the unprivileged login role).
+	checkLoginAttrs(adminPool, "admin pool")
 	var adminCurrent string
 	if err := adminPool.QueryRow(ctx, "SELECT current_user").Scan(&adminCurrent); err != nil {
 		report("admin pool: cannot assume service_role at connect (is ADMIN_DATABASE_URL the authenticator_admin role, and can it assume service_role?): " + err.Error())
 	} else if adminCurrent != "service_role" {
 		report(fmt.Sprintf("admin pool effective role is %q, expected service_role — ADMIN_DATABASE_URL must point at a role that assumes service_role", adminCurrent))
 	} else {
-		log.Info().Msg("admin pool: connections assume service_role (verified)")
+		log.Info().Msg("admin pool: non-privileged login role that assumes service_role (verified)")
 	}
 }
 
