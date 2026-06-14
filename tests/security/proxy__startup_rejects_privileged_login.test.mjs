@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SECURITY.md invariant 24 (R5-1 / R6-1 / R7-1 / R8-1 / R8-2) — the startup role
+// SECURITY.md invariant 24 (R5-1 / R6-1 / R7-1 / R8-1 / R8-2 / R9-1 / R10-1 / R10-2) — the startup role
 // check is fail-closed against EVERY way a proxy login role could hold or reach a
 // privilege it must not. verifyPoolRoles (main.go) must reject a login role that:
 //   - has any dangerous attribute: SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB,
@@ -17,6 +17,16 @@
 //     attribute; WITH ADMIN OPTION lets a login role without CREATEROLE delegate
 //     the membership to other roles; WITH SET FALSE means the proxy cannot assume
 //     the role at all. Healthy bootstrap grants are plain: admin=f inherit=f set=t.
+//   - can reach an allowlisted role that is itself NON-TERMINAL (R9): the direct-
+//     edge check only inspects session_user's own edges, so a safe direct edge
+//     (authenticator -> anon, f/f/t) hides a transitive one (anon -> authenticated
+//     WITH INHERIT TRUE) that grants ambient privilege after SET ROLE. anon /
+//     authenticated / service_role must be members of nothing (terminal).
+//   - SET ROLEs into a TARGET role with an unexpected profile (R10): the proxy
+//     assumes anon/authenticated/service_role per request, so THEIR attributes
+//     and ownership matter too. anon/authenticated must be NOSUPERUSER NOBYPASSRLS
+//     NOLOGIN and own nothing (an owner bypasses its table's RLS); service_role
+//     may be BYPASSRLS (by design) but must be NOSUPERUSER NOLOGIN.
 //
 // This test creates login roles exhibiting each property, boots the proxy
 // one-off in PGSTACK_ENV=production pointed at them, and asserts it refuses to
@@ -142,6 +152,57 @@ const cases = [
   { name: "data edge WITH ADMIN OPTION (can delegate authenticated)", env: withAdmin("DATABASE_URL", dsn("r8_admin")),     re: /data pool.*unsafe options.*ADMIN OPTION/i },
   { name: "data edge WITH SET FALSE (proxy cannot assume the role)",  env: withAdmin("DATABASE_URL", dsn("r8_setfalse")),  re: /data pool.*unsafe options.*SET FALSE/i },
   { name: "admin edge service_role WITH ADMIN OPTION",               env: [["ADMIN_DATABASE_URL", dsn("r8_admin_svc")]],  re: /admin pool.*unsafe options.*ADMIN OPTION/i },
+  // R9 — a reachable allowlisted role is itself non-terminal: its OWN outgoing
+  // edge (anon -> authenticated WITH INHERIT TRUE) grants ambient privilege
+  // after SET ROLE, past the DIRECT-edge check. The proxy's real authenticator /
+  // authenticator_admin are used; pre/post temporarily mutate the shared base
+  // role and revoke it again (the only way to exercise a transitive edge, since
+  // the allowlist is anon/authenticated/service_role).
+  { name: "data: reachable anon non-terminal (anon -> authenticated INHERIT TRUE)",
+    env: withAdmin("DATABASE_URL", dsn("authenticator")),
+    pre: "GRANT authenticated TO anon WITH INHERIT TRUE",
+    post: "REVOKE authenticated FROM anon",
+    re: /data pool.*TERMINAL/i },
+  // service_role's only allowlisted peer is itself, so ANY outgoing edge makes
+  // authenticator_admin reach a non-allowlisted role (anon); the transitive
+  // allowlist catches it before the terminal check even runs. Either rejection
+  // is correct — assert the admin-plane transitive edge is refused.
+  { name: "admin: service_role outgoing edge rejected (reaches non-allowlisted anon)",
+    env: [],
+    pre: "GRANT anon TO service_role WITH INHERIT TRUE",
+    post: "REVOKE anon FROM service_role",
+    re: /admin pool.*unexpected role.*anon/i },
+  // R10 — the SET ROLE TARGET roles' OWN attributes/ownership are part of the
+  // trust boundary (the proxy assumes them per request). pre/post mutate the
+  // shared base role and revert it.
+  { name: "data: target authenticated is BYPASSRLS (would read deny-all RLS rows)",
+    env: withAdmin("DATABASE_URL", dsn("authenticator")),
+    pre: "ALTER ROLE authenticated BYPASSRLS",
+    post: "ALTER ROLE authenticated NOBYPASSRLS",
+    re: /data pool.*authenticated:BYPASSRLS/i },
+  { name: "admin: target service_role is SUPERUSER",
+    env: [],
+    pre: "ALTER ROLE service_role SUPERUSER",
+    post: "ALTER ROLE service_role NOSUPERUSER",
+    re: /admin pool.*service_role:SUPERUSER/i },
+  { name: "data: target authenticated owns a table (owner bypasses its RLS)",
+    env: withAdmin("DATABASE_URL", dsn("authenticator")),
+    pre: "CREATE TABLE IF NOT EXISTS r10_owned(id int); ALTER TABLE r10_owned OWNER TO authenticated",
+    post: "DROP TABLE IF EXISTS r10_owned",
+    re: /data pool.*authenticated:owns/i },
+  // R11 — required membership must be PRESENT (not just no extras), and the
+  // service_role admin contract requires BYPASSRLS (a NOBYPASSRLS service_role is
+  // a false-healthy startup that silently RLS-filters trusted backend ops).
+  { name: "data: login role missing a REQUIRED membership (authenticated revoked)",
+    env: withAdmin("DATABASE_URL", dsn("authenticator")),
+    pre: "REVOKE authenticated FROM authenticator",
+    post: "GRANT authenticated TO authenticator",
+    re: /data pool.*not a member of required.*authenticated/i },
+  { name: "admin: target service_role is NOBYPASSRLS (admin contract requires BYPASSRLS)",
+    env: [],
+    pre: "ALTER ROLE service_role NOBYPASSRLS",
+    post: "ALTER ROLE service_role BYPASSRLS",
+    re: /admin pool.*service_role:NOBYPASSRLS/i },
 ];
 
 let fail = 0;
@@ -151,12 +212,17 @@ console.log("\n=== startup rejects every privileged / over-privileged login role
 setup();
 try {
   for (const c of cases) {
-    const extra = c.env.flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-    const { status, out } = runProxy(extra);
-    const exited = status !== 0 && status !== null; // null = timeout-killed = still running = bad
-    const ok = exited && c.re.test(out);
-    check(ok, `${c.name} → rejected fail-closed (exit ${status})`);
-    if (!ok) console.error(out.split("\n").filter((l) => /fatal|dangerous|unexpected|owns|error/i.test(l)).slice(-4).join("\n"));
+    if (c.pre) psql(c.pre);
+    try {
+      const extra = c.env.flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+      const { status, out } = runProxy(extra);
+      const exited = status !== 0 && status !== null; // null = timeout-killed = still running = bad
+      const ok = exited && c.re.test(out);
+      check(ok, `${c.name} → rejected fail-closed (exit ${status})`);
+      if (!ok) console.error(out.split("\n").filter((l) => /fatal|dangerous|unexpected|owns|terminal|error/i.test(l)).slice(-4).join("\n"));
+    } finally {
+      if (c.post) { try { psql(c.post); } catch { /* best-effort revoke of the shared-role mutation */ } }
+    }
   }
 } finally {
   teardown();
@@ -166,4 +232,4 @@ if (fail > 0) {
   console.error(`\nFAIL: ${fail} — an over-privileged login role was NOT rejected at startup.`);
   process.exit(1);
 }
-console.log("\nPASS: attributes, dangerous/transitive memberships, direct ACLs/ownership, and unsafe membership edge options all rejected fail-closed.");
+console.log("\nPASS: login-role attributes/memberships/ACLs/ownership/edge-options/terminality AND target-role attributes/ownership all rejected fail-closed.");

@@ -420,12 +420,14 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			return
 		}
 		var unexpected []string
+			actual := map[string]bool{}
 		for rows.Next() {
 			var m string
 			if err := rows.Scan(&m); err != nil {
 				continue
 			}
-			if !allowedSet[m] {
+			actual[m] = true
+				if !allowedSet[m] {
 				unexpected = append(unexpected, m)
 			}
 		}
@@ -438,7 +440,28 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			report(fmt.Sprintf("%s login role %q is a member of unexpected role(s) [%s] — it must belong only to [%s]; a membership in e.g. service_role, pg_execute_server_program, or pg_read_all_data is an escalation path", label, su, strings.Join(unexpected, ","), strings.Join(allowed, ",")))
 		}
 
-		// No direct privileges: the login role must own no objects and hold no
+		// Required memberships PRESENT. The allowlist above bounds the membership set
+			// from above (no extras); this bounds it from below (no gaps). The proxy SET
+			// ROLEs into every allowed role, so it must actually be a member of each that
+			// EXISTS — a missing one is not an escalation but a "healthy" startup that
+			// breaks at runtime (the data role cannot SET ROLE authenticated, so those
+			// requests 500) (gemini audit R11-2).
+			var missing []string
+			for _, target := range allowed {
+				var texists bool
+				if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", target).Scan(&texists); err != nil {
+					report(label + ": cannot check required membership " + target + " at startup: " + err.Error())
+					return
+				}
+				if texists && !actual[target] {
+					missing = append(missing, target)
+				}
+			}
+			if len(missing) > 0 {
+				report(fmt.Sprintf("%s login role %q is NOT a member of required role(s) [%s] — it must be a member of every role it SET ROLEs into ([%s]); without it those requests fail at runtime though startup looked healthy (gemini audit R11-2)", label, su, strings.Join(missing, ","), strings.Join(allowed, ",")))
+			}
+
+			// No direct privileges: the login role must own no objects and hold no
 		// direct ACL grants. NOINHERIT drops privileges inherited via membership,
 		// but a DIRECT grant (GRANT SELECT ON pgstack.users TO <role>) or object
 		// ownership applies whenever the role is current — including after a
@@ -519,8 +542,99 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			report(fmt.Sprintf("%s login role %q has membership grant(s) with unsafe options [%s] — every grant to a proxy login role must be plain so privileges need an explicit SET ROLE (NO INHERIT, even per-membership on PG16), cannot be re-delegated (NO ADMIN OPTION), and can actually be assumed (WITH SET); re-issue as plain GRANT (gemini audit R8-1/R8-2)", label, su, strings.Join(unsafeEdges, "; ")))
 		}
 
-		if len(bad) == 0 && len(unexpected) == 0 && directDeps == 0 && len(unsafeEdges) == 0 {
-			log.Info().Str("pool", label).Str("role", su).Msg("login role verified: non-privileged, NOINHERIT, no direct grants/ownership, memberships within allowlist with safe edge options")
+		// Reachable roles must be TERMINAL. The edge-option check above only
+		// inspects session_user's DIRECT edges. A direct edge can be safe (e.g.
+		// authenticator -> anon, f/f/t) while a reachable role carries its OWN
+		// unsafe outgoing edge: `anon` granted `authenticated WITH INHERIT TRUE`
+		// means a request that SET ROLEs anon ambiently gains authenticated's
+		// privileges — a transitive bypass the direct check never sees (gemini
+		// audit R9-1). The transitive allowlist already confines the reachable
+		// set to anon/authenticated (data) / service_role (admin); those base
+		// privilege roles MUST be members of nothing, so the graph below
+		// session_user is flat and no transitive edge can exist. Requiring them
+		// terminal closes the whole class without per-edge option logic.
+		trows, err := pool.Query(ctx,
+			"SELECT r.rolname FROM pg_roles r WHERE r.rolname <> session_user AND pg_has_role(session_user, r.oid, 'MEMBER') AND EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid)")
+		if err != nil {
+			report(label + ": cannot check transitive role memberships at startup: " + err.Error())
+			return
+		}
+		var nonTerminal []string
+		for trows.Next() {
+			var m string
+			if err := trows.Scan(&m); err != nil {
+				continue
+			}
+			nonTerminal = append(nonTerminal, m)
+		}
+		trows.Close()
+		if rerr := trows.Err(); rerr != nil {
+			report(label + ": error checking transitive memberships: " + rerr.Error())
+			return
+		}
+		if len(nonTerminal) > 0 {
+			report(fmt.Sprintf("%s login role %q can reach role(s) [%s] that are themselves members of other roles — anon/authenticated/service_role must be TERMINAL (members of nothing) so a SET ROLE cannot pick up ambient privileges or delegation through a transitive edge the direct-edge check does not see (gemini audit R9-1)", label, su, strings.Join(nonTerminal, ",")))
+		}
+
+		// Target-role profile. The proxy SET ROLEs INTO the allowlisted roles per
+		// request, so THEIR attributes and ownership are part of the trust boundary,
+		// not just the login role's (gemini audit R10). anon/authenticated are
+		// RLS-SUBJECT roles: NOSUPERUSER, NOBYPASSRLS (a BYPASSRLS authenticated
+		// reads deny-all tables), NOLOGIN (no password foothold), and they must OWN
+		// nothing — a table's owner bypasses its RLS unless FORCE ROW LEVEL SECURITY.
+		// service_role is the trusted backend role, BYPASSRLS BY DESIGN (invariant
+		// 22) but still NOSUPERUSER / NOLOGIN. None may hold CREATEROLE/CREATEDB/
+		// REPLICATION. Absent target roles (standalone pg_reactive, no pgStack core)
+		// are skipped.
+		var targetBad []string
+		for _, target := range allowed {
+			var texists bool
+			if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", target).Scan(&texists); err != nil {
+				report(label + ": cannot check target role " + target + " at startup: " + err.Error())
+				return
+			}
+			if !texists {
+				continue
+			}
+			var tsuper, tbypass, tcrole, tcdb, trepl, tlogin bool
+			if err := pool.QueryRow(ctx,
+				"SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication, rolcanlogin FROM pg_roles WHERE rolname = $1", target).
+				Scan(&tsuper, &tbypass, &tcrole, &tcdb, &trepl, &tlogin); err != nil {
+				report(label + ": cannot read target role attributes for " + target + ": " + err.Error())
+				return
+			}
+			bypassOK := target == "service_role"
+			for _, a := range []struct {
+				on   bool
+				name string
+			}{
+				{tsuper, "SUPERUSER"}, {tbypass && !bypassOK, "BYPASSRLS"}, {bypassOK && !tbypass, "NOBYPASSRLS"},
+				{tcrole, "CREATEROLE"}, {tcdb, "CREATEDB"}, {trepl, "REPLICATION"}, {tlogin, "LOGIN"},
+			} {
+				if a.on {
+					targetBad = append(targetBad, target+":"+a.name)
+				}
+			}
+			if !bypassOK { // RLS-subject role must own nothing (an owner bypasses RLS)
+				var owned int
+				// Fail CLOSED on a query error: a transient failure must not let the
+				// proxy boot assuming the role owns nothing (gemini audit R11-1).
+				if err := pool.QueryRow(ctx,
+					"SELECT count(*) FROM pg_shdepend WHERE refclassid = 'pg_authid'::regclass AND refobjid = (SELECT oid FROM pg_roles WHERE rolname = $1) AND deptype = 'o'", target).
+					Scan(&owned); err != nil {
+					report(label + ": cannot check target role ownership for " + target + ": " + err.Error())
+					return
+				} else if owned > 0 {
+					targetBad = append(targetBad, fmt.Sprintf("%s:owns %d object(s)", target, owned))
+				}
+			}
+		}
+		if len(targetBad) > 0 {
+			report(fmt.Sprintf("%s SET ROLE target role(s) have an unexpected privilege profile [%s] — anon/authenticated must be NOSUPERUSER NOBYPASSRLS NOLOGIN and own nothing (an owner bypasses RLS); service_role must be BYPASSRLS (admin contract) but NOSUPERUSER NOLOGIN; the proxy assumes these roles per request (gemini audit R10-1/R10-2/R11-3)", label, strings.Join(targetBad, ", ")))
+		}
+
+		if len(bad) == 0 && len(unexpected) == 0 && directDeps == 0 && len(unsafeEdges) == 0 && len(nonTerminal) == 0 && len(missing) == 0 && len(targetBad) == 0 {
+			log.Info().Str("pool", label).Str("role", su).Msg("login role verified: non-privileged, NOINHERIT, no direct grants/ownership, allowlisted+terminal memberships, target roles have the expected profile")
 		}
 	}
 
