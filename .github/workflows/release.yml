@@ -37,6 +37,30 @@ jobs:
           fi
           echo "CI is green for ${{ github.sha }} (${n} successful run(s)) — proceeding."
 
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # The git tag is the single source of truth for the release version. Reject a
+      # non-SemVer tag and require the published SDK/CLI versions to MATCH it — else
+      # `npm publish` would ship whatever stale version sits in package.json (e.g.
+      # 0.1.1) under tag v0.2.0, decoupling the npm release from the git tag (gemini
+      # findings 2/3). Every publish job needs ci-gate, so a mismatch aborts the
+      # whole release before any Docker tag or npm version is published.
+      - name: Validate the tag is strict SemVer and matches SDK/CLI versions
+        run: |
+          set -euo pipefail
+          V="${GITHUB_REF_NAME#v}"
+          if ! printf '%s' "$V" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not a strict vMAJOR.MINOR.PATCH[-prerelease] (no leading zeros, no +build metadata)"; exit 1
+          fi
+          SDK_V=$(jq -r .version sdk/package.json)
+          CLI_V=$(jq -r .version cli/package.json)
+          if [ "$SDK_V" != "$V" ] || [ "$CLI_V" != "$V" ]; then
+            echo "::error::tag ${V} != sdk@${SDK_V} / cli@${CLI_V} — bump BOTH package.json versions to ${V} before tagging"; exit 1
+          fi
+          echo "tag ${V} is valid SemVer and matches sdk + cli package.json"
+
   # ─── Build and push Docker images ────────────────────────────────────────────
   docker-proxy:
     name: Docker — pgstack-proxy
@@ -46,11 +70,6 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up QEMU (multi-platform)
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -61,27 +80,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-proxy
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-
-      - name: Build and push proxy image
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
-        with:
-          context: .
-          file: ./proxy-go/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # Promote the EXACT image CI built and tested for this commit — never a
+      # rebuild from a moving base (gemini finding 7). The sha-<sha> staging tag
+      # was pushed by ci.yml's build-publish-images on the green master push for
+      # this SHA; imagetools resolves it to a digest and copies that manifest
+      # (multi-arch) onto the release tags. No Dockerfile, no second base pull.
+      # If no staged image exists for the tagged commit (one predating this
+      # pipeline), imagetools inspect errors and the release fails closed.
+      - name: Promote the CI-built digest to release tags
+        run: |
+          set -euo pipefail
+          REPO="${REGISTRY}/${{ github.repository_owner }}/pgstack-proxy"
+          SRC="${REPO}:sha-${{ github.sha }}"
+          # `{{ .Manifest.Digest }}` prints the whole human-readable inspect on
+          # current Buildx, not the digest (buildx #1175) — extract from JSON.
+          DIGEST="$(docker buildx imagetools inspect "$SRC" --format '{{json .Manifest}}' | jq -r '.digest')"
+          case "$DIGEST" in sha256:*) ;; *) echo "::error::could not resolve digest for $SRC (got '$DIGEST')"; exit 1 ;; esac
+          # ci-gate already validated strict SemVer + sdk/cli version match; here
+          # only the pre-release check decides whether to move the floating tags.
+          V="${GITHUB_REF_NAME#v}"
+          TAGS=(-t "${REPO}:${V}")
+          case "$V" in *-*) ;; *) TAGS+=(-t "${REPO}:${V%.*}" -t "${REPO}:latest") ;; esac
+          echo "promoting ${SRC} (${DIGEST}) as: ${TAGS[*]}"
+          docker buildx imagetools create "${TAGS[@]}" "${REPO}@${DIGEST}"
 
   docker-postgres:
     name: Docker — pgstack-postgres
@@ -91,11 +112,6 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -106,28 +122,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-postgres
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=16
-            type=raw,value=latest
-
-      - name: Build and push postgres image
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
-        with:
-          context: .
-          file: ./Dockerfile.dev
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # Promote the EXACT image CI built and tested for this commit (gemini
+      # finding 7) — see the docker-proxy job for the rationale. pgstack-postgres
+      # additionally carries the `16` major tag.
+      - name: Promote the CI-built digest to release tags
+        run: |
+          set -euo pipefail
+          REPO="${REGISTRY}/${{ github.repository_owner }}/pgstack-postgres"
+          SRC="${REPO}:sha-${{ github.sha }}"
+          # `{{ .Manifest.Digest }}` prints the whole human-readable inspect on
+          # current Buildx, not the digest (buildx #1175) — extract from JSON.
+          DIGEST="$(docker buildx imagetools inspect "$SRC" --format '{{json .Manifest}}' | jq -r '.digest')"
+          case "$DIGEST" in sha256:*) ;; *) echo "::error::could not resolve digest for $SRC (got '$DIGEST')"; exit 1 ;; esac
+          # ci-gate already validated strict SemVer + sdk/cli version match; here
+          # only the pre-release check decides whether to move the floating tags.
+          V="${GITHUB_REF_NAME#v}"
+          TAGS=(-t "${REPO}:${V}")
+          # `16` is the PostgreSQL major (a constant for this image), still only for
+          # final releases — a pre-release must not move :16 / :latest.
+          case "$V" in *-*) ;; *) TAGS+=(-t "${REPO}:${V%.*}" -t "${REPO}:16" -t "${REPO}:latest") ;; esac
+          echo "promoting ${SRC} (${DIGEST}) as: ${TAGS[*]}"
+          docker buildx imagetools create "${TAGS[@]}" "${REPO}@${DIGEST}"
 
   # ─── Publish npm packages ────────────────────────────────────────────────────
   npm-sdk:
@@ -139,6 +154,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -151,7 +168,11 @@ jobs:
 
       - name: Publish
         working-directory: sdk
-        run: npm publish --provenance --access public
+        run: |
+          # Pre-release tags (v1.2.3-rc.1) must NOT take the npm dist-tag `latest`,
+          # or `npm install <pkg>` hands everyone the RC. Final → latest (gemini #2).
+          case "${GITHUB_REF_NAME#v}" in *-*) NPM_TAG=next ;; *) NPM_TAG=latest ;; esac
+          npm publish --provenance --access public --tag "$NPM_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -164,6 +185,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -176,7 +199,11 @@ jobs:
 
       - name: Publish
         working-directory: cli
-        run: npm publish --provenance --access public
+        run: |
+          # Pre-release tags (v1.2.3-rc.1) must NOT take the npm dist-tag `latest`,
+          # or `npm install <pkg>` hands everyone the RC. Final → latest (gemini #2).
+          case "${GITHUB_REF_NAME#v}" in *-*) NPM_TAG=next ;; *) NPM_TAG=latest ;; esac
+          npm publish --provenance --access public --tag "$NPM_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -189,6 +216,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Extract version from tag
         id: version

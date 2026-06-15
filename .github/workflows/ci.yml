@@ -10,6 +10,12 @@ env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
 
+# Least-privilege default GITHUB_TOKEN: read-only contents for every job (a job
+# that needs more, e.g. packages: write, opts in locally). Untrusted PR code thus
+# cannot use the token to write to the repo (gemini audit R17-5).
+permissions:
+  contents: read
+
 # Runner policy (gemini audit finding 3): PR-triggered runs execute UNTRUSTED
 # code, so they must NOT land on the self-hosted runner that also runs deploy/
 # release — a malicious PR could otherwise persist on the box and steal
@@ -24,6 +30,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Start PostgreSQL container
         run: |
@@ -73,6 +81,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -94,7 +104,7 @@ jobs:
       - name: Vulnerability scan (govulncheck)
         working-directory: proxy-go
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
           "$(go env GOPATH)/bin/govulncheck" ./...
 
   # Reference implementation. Kept building so the Rust proxy doesn't
@@ -105,6 +115,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
@@ -142,6 +154,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -183,6 +197,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -282,6 +298,8 @@ jobs:
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -303,7 +321,7 @@ jobs:
           docker network connect "${COMPOSE_PROJECT_NAME:-pg_reactive}_default" "$(hostname)" || true
 
       - name: Install ws (needed by anon-WS test)
-        run: cd tests && npm install ws
+        run: npm ci --prefix tests
 
       - name: Static lint for unsafe SQL / Markdown patterns
         run: node tests/lint/security_patterns.mjs
@@ -351,6 +369,8 @@ jobs:
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       # Round 32 F1: build the GO proxy (the one actually shipped via
       # release.yml + examples/docker-compose.prod.yml). The earlier
@@ -455,6 +475,8 @@ jobs:
     needs: [test-extension, test-proxy-go, test-sdk]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -566,6 +588,8 @@ jobs:
     needs: [test-extension]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Start PostgreSQL container
         run: |
@@ -595,6 +619,8 @@ jobs:
     needs: [test-extension]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Boot PostgreSQL with the async-recompute worker enabled
         run: |
@@ -619,6 +645,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -657,3 +685,131 @@ jobs:
         run: |
           cargo install cargo-audit --locked --quiet
           cargo audit
+
+  # ─── Publish release-candidate images (build ONCE, promote at release) ───────
+  # Supply-chain provenance (gemini finding 7): release.yml must NOT rebuild the
+  # Docker images from a mutable base (Dockerfile.dev's `FROM postgres:16-bookworm`)
+  # — a release-time rebuild ships bytes CI never saw, and a base republish between
+  # CI and release silently changes them. Instead CI builds each image ONCE here,
+  # on a GREEN master push, and pushes it under the immutable per-commit staging
+  # tag `sha-<sha>`. release.yml then PROMOTES that exact digest to the version
+  # tags with `docker buildx imagetools create` — a manifest copy, no rebuild, no
+  # second base pull. Only trusted master pushes publish (PRs have no
+  # packages:write and run on ephemeral runners); `needs` the full suite so a
+  # staged image always corresponds to a green CI run for its sha.
+  build-publish-images:
+    name: Publish release-candidate images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs:
+      - test-extension
+      - test-proxy-go
+      - test-sdk
+      - test-cli
+      - test-security
+      - test-prod-validator
+      - test-e2e
+      - test-integration
+      - test-async-bgworker
+      - security
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU (multi-platform)
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Push to a UNIQUE per-run staging tag (never sha-<sha>) and capture the
+      # digest. The sha-<sha> tag — the one release resolves — is created only
+      # AFTER the smoke passes (last step), so a re-run whose smoke fails can never
+      # leave sha-<sha> pointing at an un-smoked image (gemini finding 1).
+      - name: Build and push pgstack-proxy (staging)
+        id: proxy
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        with:
+          context: .
+          file: ./proxy-go/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/pgstack-proxy:_staging-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push pgstack-postgres (staging)
+        id: postgres
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        with:
+          context: .
+          file: ./Dockerfile.dev
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/pgstack-postgres:_staging-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Smoke the EXACT digest just built (by @digest, --pull=always — never a tag
+      # that a persistent runner might have stale locally) — gemini finding 1/2.
+      - name: Smoke-test pgstack-postgres candidate (boot + extension load)
+        run: |
+          set -euo pipefail
+          IMG="${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"
+          docker rm -f cand-db >/dev/null 2>&1 || true
+          docker run -d --pull=always --name cand-db -e POSTGRES_DB=pg_reactive_test -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
+            "$IMG" postgres -c shared_preload_libraries=pg_reactive -c log_min_messages=warning
+          timeout 180 bash -c 'until docker exec cand-db pg_isready -U postgres -d pg_reactive_test; do sleep 3; done'
+          docker exec cand-db psql -U postgres -d pg_reactive_test -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_reactive"
+          ver=$(docker exec cand-db psql -U postgres -d pg_reactive_test -tAc "SELECT extversion FROM pg_extension WHERE extname='pg_reactive'")
+          [ -n "$ver" ] || { echo "::error::pg_reactive did not load in the candidate image"; exit 1; }
+          echo "✓ pgstack-postgres ${{ steps.postgres.outputs.digest }} boots; pg_reactive ${ver} loaded"
+
+      - name: Tear down candidate db
+        if: always()
+        run: docker rm -f cand-db >/dev/null 2>&1 || true
+
+      - name: Smoke-test pgstack-proxy candidate (production validator)
+        run: |
+          set -euo pipefail
+          IMG="${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"
+          # The shipped proxy image must REACH its production validator and reject a
+          # placeholder JWT_SECRET — assert the SPECIFIC rejection string, not just a
+          # non-zero exit (a missing binary / loader error / panic / missing
+          # ADMIN_DATABASE_URL also exits non-zero and would pass vacuously). No DB.
+          set +e
+          out=$(docker run --rm --pull=always -e PGSTACK_ENV=production \
+            -e JWT_SECRET=dev-only-jwt-secret-do-not-use-in-production \
+            -e ANON_KEY=$(openssl rand -base64 32) \
+            -e SERVICE_ROLE_KEY=$(openssl rand -base64 32) \
+            -e SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+            -e SMTP_HOST=smtp.example.com -e SMTP_USER=u -e SMTP_PASS=p \
+            "$IMG" 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          [ "$status" -ne 0 ] || { echo "::error::candidate proxy ACCEPTED a placeholder JWT_SECRET in production"; exit 1; }
+          echo "$out" | grep -qF "JWT_SECRET still contains 'dev-only'" \
+            || { echo "::error::proxy did not reach its production validator (no JWT_SECRET rejection — missing binary / loader error / panic?)"; exit 1; }
+          echo "✓ pgstack-proxy ${{ steps.proxy.outputs.digest }} ran its production validator and rejected the placeholder secret"
+
+      # Only now — both smokes green — create the sha-<sha> tag release resolves,
+      # pointing at the exact smoke-passed digests (gemini finding 1).
+      - name: Tag the smoke-passed digests as sha-<sha>
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"    "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"
+          docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-postgres:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"
+          echo "✓ tagged proxy@${{ steps.proxy.outputs.digest }} and postgres@${{ steps.postgres.outputs.digest }} as sha-${{ github.sha }}"
