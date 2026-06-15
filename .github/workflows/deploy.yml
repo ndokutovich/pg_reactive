@@ -33,19 +33,15 @@ jobs:
       # successful CI completion). A manual dispatch has no such proof, so it must
       # verify a green CI run exists for this exact SHA on master — otherwise a red
       # master commit could be hand-deployed (gemini finding 1, R23).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          persist-credentials: false
       - name: Require green CI for the dispatched commit
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          n=$(gh api \
-            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${{ github.sha }}&status=completed&event=push&branch=master" \
-            --jq '[.workflow_runs[] | select(.conclusion=="success" and .event=="push" and .head_branch=="master")] | length')
-          if [ "${n:-0}" -lt 1 ]; then
-            echo "::error::manual deploy refused — no successful CI run for ${{ github.sha }} on master" >&2
-            exit 1
-          fi
-          echo "CI is green for ${{ github.sha }} — manual deploy permitted"
+        run: bash .github/scripts/require-green-ci.sh "${{ github.repository }}" "${{ github.sha }}"
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5

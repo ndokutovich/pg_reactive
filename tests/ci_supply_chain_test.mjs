@@ -11,7 +11,7 @@
 //
 // Run: node tests/ci_supply_chain_test.mjs (cwd = repo root). Needs js-yaml in
 // tests/node_modules — the test-cli CI job runs `npm ci --prefix tests`.
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import yaml from "js-yaml";
 
 let fail = 0;
@@ -58,6 +58,10 @@ const stripDead = (s) => {
 // (`pgstack-proxy:sha-…`) survives. `${VAR#pat}` is safe (the `#` is not at a
 // command/whitespace boundary). Used for the image-ref / promote checks (R23).
 const stripComments = (s) => s.split("\n").map((l) => l.replace(/(^|\s)#.*$/, "$1")).join("\n");
+// Remove short-circuit-dead tails: `true || X` / `false && X` never run X — so a
+// `true || grep "JWT_SECRET…"` can't fake a smoke assertion by mere presence of the
+// string. Only literal true/false on the left (a real `grep … || {err}` is kept).
+const stripDeadBranches = (s) => s.replace(/\btrue\s*\|\|[^\n;&|]*/g, " ").replace(/\bfalse\s*&&[^\n;&|]*/g, " ");
 // Every git reset/checkout target in a deploy script. The target must be EXACTLY
 // $DEPLOY_SHA — not a branch (master), not a rev-expression ($DEPLOY_SHA^,
 // "$DEPLOY_SHA"~1), not github.sha (gemini R20-2/R20-3/R20-4).
@@ -121,7 +125,61 @@ const FAIL_CTX = wr("failure", "push", "master");
 const isGate = (s) => !!s && DEPLOY_CASES.every((c) => { try { return truthy(ev(s, c.ctx)) === c.ok; } catch { return false; } });
 const parseable = (s) => { if (!s) return true; try { ev(s, FAIL_CTX); return true; } catch { return false; } };
 const hasStatusFn = (s) => /\b(?:always|success|failure|cancelled)\s*\(/i.test(s);
+// "Should-run" contexts for critical steps, + a detector for a step that is
+// SILENTLY DISABLED (so its content passes the structural check but it never
+// runs / always succeeds): if: false, an early `exit 0` short-circuit, or
+// continue-on-error (gemini R25-1).
+const PUSH_TAG = { github: { event_name: "push", ref: "refs/tags/v9.9.9", sha: "TAGSHA" }, __funcs: { always: true, success: true, failure: false, cancelled: false } };
+const PUSH_MASTER = { github: { event_name: "push", ref: "refs/heads/master", sha: "MASTERSHA" }, __funcs: { always: true, success: true, failure: false, cancelled: false } };
+const gateDisabled = (s, ctx) => {
+  const r = [];
+  try { if (!truthy(ev(String(s.if || "true"), ctx))) r.push("if never fires"); } catch { r.push("if unparseable"); }
+  // Any early SUCCESS exit short-circuits the real check: `exit 0`, a bare `exit`
+  // (inherits the last status — `true; exit` is 0), or `exit $?`. A real gate only
+  // ever `exit`s NON-zero, conditionally (gemini R26-1). `exit 1` is fine.
+  if (/(?:^|[\n;&|]|\bthen\b|\bdo\b)\s*exit(?:\s+(?:0+|\$\?))?\s*(?:$|[\n;&|])/m.test(stripComments(String(s.run || "")))) r.push("early success `exit` (exit / exit 0 / exit $?) short-circuits the check");
+  if (coeStep(s)) r.push("continue-on-error");
+  return r;
+};
 const defeatsGating = (s) => { if (!s || !hasStatusFn(s)) return false; try { return truthy(ev(s, FAIL_CTX)); } catch { return true; } };
+// R27 architecture: the critical gate/validation/smoke LOGIC lives in
+// .github/scripts/*.sh, tested by EXECUTION in tests/release_scripts_test.mjs —
+// regex-analysis of inline workflow shell had hit its limit. The guard's job
+// shrinks to: the right step CALLS the right script, with a REAL shell, and isn't
+// silently disabled. `{0}`-style fake shells (`shell: true {0}`), `if: false`,
+// and continue-on-error are the workflow-level disables that still need catching.
+const REAL_SHELL = /^(bash|sh|pwsh|powershell|python|python3|cmd)\b/;
+// Match the script call in LIVE code only — a name in a `#` comment doesn't count
+// (gemini R28-3).
+const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(stripComments(String(s.run || ""))));
+const stepDisabled = (s, ctx) => {
+  const r = [];
+  const sh = String(s.shell || "").trim();
+  // a custom shell must be a real interpreter AND not carry `-c` — `shell: bash -c
+  // 'true' {0}` runs `true <scriptfile>`, never executing the script (gemini R28-3).
+  if (sh && (!REAL_SHELL.test(sh) || /(?:^|\s)-c(?:\s|$)/.test(sh))) r.push("custom/fake shell '" + sh + "' may not execute the script ({0})");
+  try { if (!truthy(ev(String(s.if || "true"), ctx))) r.push("if never fires"); } catch { r.push("if unparseable"); }
+  if (/always\s*\(/.test(String(s.if || ""))) r.push("if: always() (runs even after a prior step failed)");
+  if (coeStep(s)) r.push("continue-on-error");
+  // `bash script.sh || true` / `|| :` / `|| exit 0` swallows the script's failure (R28-3).
+  if (/\|\|\s*(?:true|:|exit\s+0)\b/.test(stripComments(String(s.run || "")))) r.push("script failure swallowed by `|| true` / `|| :` / `|| exit 0`");
+  return r;
+};
+// The scripts must EXIST and the offline-executable ones must be covered by the
+// execution test (so the behavioral correctness is actually exercised).
+const SCRIPTS_DIR = ".github/scripts/";
+const SCRIPT_TEST = "tests/release_scripts_test.mjs";
+const scriptTestSrc = existsSync(SCRIPT_TEST) ? readFileSync(SCRIPT_TEST, "utf-8") : "";
+function scriptsContract() {
+  const v = [];
+  const all = ["validate-release-version.sh", "require-green-ci.sh", "npm-dist-tag.sh", "compute-docker-tags.sh", "promote-image.sh", "smoke-postgres.sh", "smoke-proxy.sh"];
+  for (const s of all) if (!existsSync(SCRIPTS_DIR + s)) v.push("missing gate script .github/scripts/" + s);
+  // EVERY script must be exercised by the execution test — the deterministic ones
+  // directly, the Docker-bound ones (promote/smoke) via a stubbed docker, so a
+  // `exit 0` reimplementation is caught, not merely existence (gemini R28-4).
+  for (const s of all) if (!scriptTestSrc.includes(s)) v.push(s + " is not exercised by " + SCRIPT_TEST);
+  return v;
+}
 // A job can run UNTRUSTED pull_request code unless its `if` evaluates false under
 // a pull_request event. Push-only-gated jobs (build-publish) thus legitimately
 // hold packages:write and a self-hosted runner; a PR-reachable job must not. No
@@ -185,24 +243,28 @@ function deployPolicy(wf) {
   // exist. Dead code is stripped first (R20-2/R20-3/R20-4).
   const allTargets = [];
   for (const [name, j] of Object.entries(jobs)) {
-    // The CI-verify gate step legitimately queries CI for github.sha — exclude it
-    // from the deploy-script checks (those guard the git-reset/SSH script).
-    const script = stripNoise(stripDead((j.steps || []).filter((s) => !(/gh\s+api/.test(String(s.run || "")) && /ci\.yml\/runs/.test(String(s.run || "")))).map((s) => String(s.with?.script ?? s.run ?? "")).join("\n")));
+    // The CI-verify gate step legitimately passes github.sha to require-green-ci.sh —
+    // exclude it from the deploy-script checks (those guard the git-reset/SSH script).
+    const script = stripNoise(stripDead((j.steps || []).filter((s) => !/require-green-ci\.sh/.test(String(s.run || ""))).map((s) => String(s.with?.script ?? s.run ?? "")).join("\n")));
     if (/github\.sha\b/.test(script)) v.push(`${name}: deploy script references github.sha directly`);
     for (const t of resetTargets(script)) { allTargets.push(t); if (!exactSha(t)) v.push(`${name}: git reset/checkout target '${t}' is not exactly $DEPLOY_SHA`); }
   }
   if (!allTargets.length) v.push("no job git-resets/checks out the verified $DEPLOY_SHA");
   // The workflow_run path is CI-gated by the job `if`; a manual workflow_dispatch
-  // is NOT, so the deploy must verify a green CI run for github.sha on master
-  // before deploying — else a red master commit is hand-deployable (finding 1, R23).
-  const dispatchGate = Object.values(jobs).flatMap((j) => j.steps || []).find((s) => /workflow_dispatch/.test(String(s.if || "")) && /gh\s+api/.test(String(s.run || "")));
-  if (!dispatchGate) v.push("no workflow_dispatch CI-green gate (a red master commit could be hand-deployed)");
-  else {
-    const r = stripNoise(String(dispatchGate.run || ""));
-    if (!/ci\.yml\/runs\?[^\n]*head_sha=\$\{\{\s*github\.sha\s*\}\}/.test(r) || !/[?&]event=push\b/.test(r) || !/[?&]branch=master\b/.test(r))
-      v.push("workflow_dispatch gate does not query CI success for github.sha on a master push");
-    if (!/(^|[\s;&|])exit\s+[1-9]/m.test(r)) v.push("workflow_dispatch gate never exits nonzero");
+  // is NOT, so it must CALL the execution-tested require-green-ci.sh — enabled
+  // (real shell, if fires on a master dispatch, not coe) and BEFORE the deploy
+  // step (finding 1, R23; logic extracted to a tested script, R27).
+  let gateFound = false;
+  for (const [jn, j] of Object.entries(jobs)) {
+    const st = j.steps || [];
+    const gi = st.findIndex((s) => /workflow_dispatch/.test(String(s.if || "")) && /require-green-ci\.sh/.test(String(s.run || "")));
+    if (gi < 0) continue;
+    gateFound = true;
+    for (const reason of stepDisabled(st[gi], wd("refs/heads/master"))) v.push(jn + ": workflow_dispatch gate " + reason);
+    const di = st.findIndex((s) => /ssh-action/.test(String(s.uses || "")) || /git(?:\s+-C\s+\S+)?\s+(?:reset|checkout|switch)\b/.test(String(s.with?.script ?? s.run ?? "")));
+    if (di >= 0 && gi > di) v.push(jn + ": workflow_dispatch CI-gate runs AFTER the deploy step (too late)");
   }
+  if (!gateFound) v.push("no workflow_dispatch CI-green gate (require-green-ci.sh) — a red master commit could be hand-deployed");
   return v;
 }
 function releasePolicy(wf) {
@@ -220,16 +282,16 @@ function releasePolicy(wf) {
   if (!cg) return ["no ci-gate job"];
   if (coeJob(cg)) v.push("ci-gate: job continue-on-error");
   (cg.steps || []).forEach((s, i) => coeStep(s) && v.push(`ci-gate step ${i}: continue-on-error`));
-  // Strip comments + echo/printf (no gate effect) so a decoy `echo 'select(...)'`
-  // / `echo 'exit 1'` can't satisfy the checks; then inspect the actual --jq arg
-  // and a real exit command (R17-2).
-  const run = stripNoise(stripDead((cg.steps || []).map((s) => s.run || "").join("\n")));
-  const jqArgs = [...run.matchAll(/--jq\s+'([^']*)'/g)].map((m) => m[1]);
-  if (!jqArgs.some((a) => a.includes('conclusion=="success"') && a.includes('event=="push"') && a.includes('head_branch=="master"')))
-    v.push("ci-gate: --jq filter does not select conclusion==success && event==push && head_branch==master");
-  if (!/[?&]event=push\b/.test(run) || !/[?&]branch=master\b/.test(run)) v.push("ci-gate: gh api query does not filter event=push&branch=master");
-  if (!/[?&]head_sha=\$\{\{\s*github\.sha\s*\}\}/.test(run)) v.push("ci-gate: gh api query does not bind to the tagged commit (head_sha=github.sha)");
-  if (!/(^|[\s;&|])exit\s+[1-9]/m.test(run)) v.push("ci-gate: run never exits nonzero (gate cannot fail)");
+  // ci-gate's logic now lives in execution-tested scripts (R27): it must CALL
+  // require-green-ci.sh (CI-green for the tagged SHA on master) AND
+  // validate-release-version.sh (strict SemVer + sdk/cli match) — each via a real
+  // shell, with an if that fires on a tag push, and not continue-on-error.
+  const gci = callsScript(cg, "require-green-ci.sh");
+  if (!gci) v.push("ci-gate does not call require-green-ci.sh");
+  else for (const r of stepDisabled(gci, PUSH_TAG)) v.push("ci-gate require-green-ci step " + r);
+  const vrv = callsScript(cg, "validate-release-version.sh");
+  if (!vrv) v.push("ci-gate does not call validate-release-version.sh");
+  else for (const r of stepDisabled(vrv, PUSH_TAG)) v.push("ci-gate validate-version step " + r);
   const reaches = (name, seen = new Set()) => name === "ci-gate" ? true : (!jobs[name] || seen.has(name)) ? false : (seen.add(name), needsOf(jobs[name]).some((n) => reaches(n, seen)));
   for (const [name, j] of Object.entries(jobs)) {
     if (name === "ci-gate") continue;
@@ -253,38 +315,26 @@ function releasePolicy(wf) {
       if (/docker\/build-push-action/.test(u)) v.push(name + ": builds an image (build-push-action) — release must promote the CI digest, not rebuild");
     if (/docker\s+(?:buildx\s+)?build\b/.test(stripDead((j.steps || []).map((s) => s.run || "").join("\n")))) v.push(name + ": runs 'docker build' — release must promote the CI digest, not rebuild");
   }
-  // Each shipped image must be promoted, bound to ITS OWN repo (`REPO=…/pgstack-X`),
-  // from the DIGEST of the verified commit's staging tag (`${REPO}@${DIGEST}`) —
-  // never a mutable `:sha` tag, a decoy, an unrelated repo, or dead code (finding
-  // 3/5). Tying create to the `${REPO}`/`${DIGEST}` the inspect computed binds the
-  // source through the shell vars the promote idiom uses.
-  // Comments AND dead code stripped, so a decoy `# imagetools inspect …:sha-…` or
-  // a signature in `while false` can't satisfy the checks (gemini finding 4, R23).
-  const liveR = (j) => stripComments(stripDead((j.steps || []).map((s) => s.run || "").join("\n")));
+  // Each shipped image is promoted by a job that CALLS promote-image.sh with ITS
+  // OWN repo — the digest-resolution + tag-set logic is in promote-image.sh /
+  // compute-docker-tags.sh (the latter execution-tested). The promote step must be
+  // enabled (real shell, if fires, not coe) — R27.
   for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
-    const promoter = Object.entries(jobs).find(([, j]) => {
-      const r = liveR(j);
-      return new RegExp("REPO=[\"'][^\"'\\n]*" + img + "\\b").test(r) && /imagetools\s+create/.test(r);
-    });
-    if (!promoter) { v.push("no job promotes " + img + " from its CI-built digest"); continue; }
-    const r = liveR(promoter[1]);
-    if (!/imagetools\s+inspect/.test(r) || !/:sha-\$\{\{\s*github\.sha\s*\}\}/.test(r))
-      v.push(promoter[0] + ": " + img + " promote does not resolve the verified sha-${{ github.sha }} staging tag");
-    if (!/imagetools\s+create[\s\S]*\$\{?REPO\}?@\$\{?DIGEST\}?/.test(r))
-      v.push(promoter[0] + ": " + img + " imagetools create must use the computed ${REPO}@${DIGEST}, not a tag/unrelated ref");
-    // REPO/DIGEST assigned EXACTLY once — catch reassignment via `=`, export,
-    // declare, local, readonly, or `printf -v` before the create (finding 5/4).
-    const assigns = (name) => (r.match(new RegExp("(?:^|\\n|;)\\s*(?:export\\s+|declare\\s+|local\\s+|readonly\\s+)?" + name + "=", "g")) || []).length + (r.match(new RegExp("printf\\s+-v\\s+" + name + "\\b", "g")) || []).length;
-    if (assigns("REPO") !== 1) v.push(promoter[0] + ": " + img + " reassigns REPO before create (ref could be repointed)");
-    if (assigns("DIGEST") !== 1) v.push(promoter[0] + ": " + img + " reassigns DIGEST before create (ref could be repointed)");
+    const promoter = Object.entries(jobs).find(([, j]) => (j.steps || []).some((s) => new RegExp("promote-image\\.sh[^\\n]*" + img + "\\b").test(stripComments(String(s.run || "")))));
+    if (!promoter) { v.push("no job promotes " + img + " via promote-image.sh"); continue; }
+    const st = (promoter[1].steps || []).find((s) => /promote-image\.sh/.test(stripComments(String(s.run || ""))));
+    for (const r of stepDisabled(st, PUSH_TAG)) v.push(promoter[0] + " (" + img + " promote) " + r);
   }
-  // The release version is the git tag: ci-gate must strict-SemVer-validate it AND
-  // require sdk+cli package.json to match, and no promote job may carry its own
-  // loose `[0-9]*` SemVer case that drifts from ci-gate (gemini findings 2/3).
-  const cgRun = (jobs["ci-gate"]?.steps || []).map((s) => s.run || "").join("\n");
-  if (!/grep\s+-E\w*\s+'\^\(0\|\[1-9\]/.test(cgRun)) v.push("ci-gate does not strict-SemVer-validate the tag (anchored ^…$ with digit classes)");
-  if (!/jq\s+-r\s+\.version\s+sdk\/package\.json/.test(cgRun) || !/jq\s+-r\s+\.version\s+cli\/package\.json/.test(cgRun)) v.push("ci-gate does not require sdk+cli package.json to match the tag version");
-  for (const [name, j] of Object.entries(jobs)) if (/case\s+"\$V"\s+in\s+\[0-9\]\*/.test((j.steps || []).map((s) => s.run || "").join("\n"))) v.push(name + ": carries a loose [0-9]* SemVer case (ci-gate owns strict validation)");
+  // npm publish must derive its dist-tag from the execution-tested npm-dist-tag.sh
+  // (pre-release -> next, never latest) and pass it via --tag, enabled (R27).
+  for (const [name, j] of Object.entries(jobs)) {
+    const pub = (j.steps || []).find((s) => /npm\s+publish/.test(stripComments(String(s.run || ""))));
+    if (!pub) continue;
+    const rn = stripComments(String(pub.run || ""));
+    if (!/npm-dist-tag\.sh/.test(rn)) v.push(name + ": npm publish does not derive --tag from npm-dist-tag.sh");
+    if (!/--tag\b/.test(rn)) v.push(name + ": npm publish without --tag");
+    for (const r of stepDisabled(pub, PUSH_TAG)) v.push(name + " (npm publish) " + r);
+  }
   return v;
 }
 function pinPolicy(wf) {
@@ -384,24 +434,25 @@ function candidatePolicy(wf) {
     if (String(b.with?.push) !== "true") v.push(cn + ": " + img + " build does not push");
   }
   for (const s of builds) if (/:sha-\$\{\{\s*github\.sha\s*\}\}/.test(String(s.with?.tags ?? ""))) v.push(cn + ": a build tags :sha-${{ github.sha }} directly (must be tagged only AFTER smoke)");
-  // Strip comments + dead code so a smoke/promote SIGNATURE in a comment or an
-  // unreachable block can't satisfy the structural checks (gemini finding 4, R23).
-  const live = (s) => stripComments(stripDead(String(s || "")));
-  const run = live(steps.map((s) => s.run || "").join("\n"));
-  for (const { img } of IMAGES)
-    if (!new RegExp("imagetools\\s+create[^\\n]*" + img + ":sha-\\$\\{\\{\\s*github\\.sha\\s*\\}\\}[^\\n]*" + img + "@\\$\\{\\{\\s*steps\\.").test(run))
-      v.push(cn + ": " + img + ":sha-${{ github.sha }} is not created from a built @digest after smoke");
-  if (!/pgstack-postgres@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(run) || !/CREATE EXTENSION[\s\S]*pg_reactive/.test(run))
-    v.push(cn + ": missing pgstack-postgres digest smoke (boot + CREATE EXTENSION pg_reactive)");
-  if (!/pgstack-proxy@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(run) || !/JWT_SECRET still contains 'dev-only'/.test(run))
-    v.push(cn + ": missing pgstack-proxy digest smoke (production validator: JWT_SECRET rejection)");
-  // sha-<sha> (what release resolves) must be created AFTER both smokes pass — a
-  // create-before-smoke would re-expose finding 1 (gemini finding 4, R23).
-  const idxOf = (re) => steps.findIndex((s) => re.test(live(s.run || "")));
-  const tagIdx = idxOf(/imagetools\s+create[^\n]*:sha-\$\{\{\s*github\.sha/);
-  const pgSmoke = idxOf(/CREATE EXTENSION[\s\S]*pg_reactive/);
-  const pxSmoke = idxOf(/JWT_SECRET still contains 'dev-only'/);
-  if (tagIdx >= 0 && (pgSmoke < 0 || pxSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke)) v.push(cn + ": sha-${{ github.sha }} is created before the smokes pass (tag-after-smoke order)");
+  // The smoke logic (boot + extension, validator + JWT_SECRET rejection, BOTH
+  // arches via --platform "$PLAT") lives in the smoke-*.sh scripts, exercised on
+  // CI (R27). The candidate must CALL smoke-postgres.sh AND smoke-proxy.sh, each
+  // enabled (real shell, if fires on a master push, not coe), and create the
+  // sha-<sha> tag (what release resolves) ONLY AFTER both smokes — a
+  // create-before-smoke re-exposes finding 1.
+  const idx = (re) => steps.findIndex((s) => re.test(stripComments(String(s.run || ""))));
+  const pgSmoke = idx(/smoke-postgres\.sh/);
+  const pxSmoke = idx(/smoke-proxy\.sh/);
+  const tagIdx = idx(/imagetools\s+create[^\n]*:sha-\$\{\{\s*github\.sha/);
+  if (pgSmoke < 0) v.push(cn + ": does not call smoke-postgres.sh (the postgres digest would ship unsmoked)");
+  else for (const r of stepDisabled(steps[pgSmoke], PUSH_MASTER)) v.push(cn + " (postgres smoke) " + r);
+  if (pxSmoke < 0) v.push(cn + ": does not call smoke-proxy.sh (the proxy digest would ship unsmoked)");
+  else for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r);
+  if (tagIdx < 0) v.push(cn + ": does not create the sha-${{ github.sha }} tag release resolves");
+  else {
+    for (const r of stepDisabled(steps[tagIdx], PUSH_MASTER)) v.push(cn + " (sha-tag) " + r);
+    if (pgSmoke < 0 || pxSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke) v.push(cn + ": sha-${{ github.sha }} is created before both smokes pass (tag-after-smoke order)");
+  }
   return v;
 }
 
@@ -411,11 +462,12 @@ const ci = load("ci.yml");
 
 console.log("=== CI/CD supply-chain gating (FR-B.11.3) ===");
 console.log("-- real workflows must be clean --");
-const dV = deployPolicy(deploy), rV = releasePolicy(release), cV = ciPolicy(ci), candV = candidatePolicy(ci);
+const dV = deployPolicy(deploy), rV = releasePolicy(release), cV = ciPolicy(ci), candV = candidatePolicy(ci), scV = scriptsContract();
 check(dV.length === 0, `deploy policy clean${dV.length ? " — " + dV.join("; ") : ""}`);
 check(rV.length === 0, `release policy clean${rV.length ? " — " + rV.join("; ") : ""}`);
 check(cV.length === 0, `ci hardening clean${cV.length ? " — " + cV.join("; ") : ""}`);
 check(candV.length === 0, `ci candidate publisher clean${candV.length ? " — " + candV.join("; ") : ""}`);
+check(scV.length === 0, `gate scripts exist + execution-tested${scV.length ? " — " + scV.join("; ") : ""}`);
 for (const [n, wf] of [["deploy.yml", deploy], ["release.yml", release], ["ci.yml", ci]]) {
   const pv = pinPolicy(wf);
   check(pv.length === 0, `${n} pinning clean${pv.length ? " — " + pv.join("; ") : ""}`);
@@ -432,106 +484,94 @@ const mut = (label, base, mutate, policy) => {
 // found by its action, so mutations target the right step regardless of order.
 const sshStep = (w) => w.jobs.deploy.steps.find((s) => typeof s.uses === "string" && /ssh-action/.test(s.uses));
 const DGATE = "github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'master')";
+const findStep = (w, job, re) => w.jobs[job].steps.find((s) => re.test(String(s.run || "")));
+// ── deploy: gate if / DEPLOY_SHA / SSH reset (still inline) / triggers / script gate ──
 mut("deploy if drops event==push", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master'"; }, deployPolicy);
 mut("deploy if true || conds", deploy, (w) => { w.jobs.deploy.if = "true || (" + DGATE + ")"; }, deployPolicy);
 mut("deploy if allows master||main", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && (github.event.workflow_run.head_branch == 'master' || github.event.workflow_run.head_branch == 'main')"; }, deployPolicy);
 mut("deploy downstream if: always()", deploy, (w) => { w.jobs["deploy-polyglot"].if = "always()"; }, deployPolicy);
-mut("deploy if unparseable syntax", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion =~ /success/"; }, deployPolicy);
+mut("deploy if unparseable", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion =~ /success/"; }, deployPolicy);
+mut("deploy if uses unknown fn fromJSON('true')", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && (github.event.workflow_run.head_branch == 'master' || fromJSON('true'))"; }, deployPolicy);
+mut("deploy if allows master||release", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && (github.event.workflow_run.head_branch == 'master' || github.event.workflow_run.head_branch == 'release')"; }, deployPolicy);
+mut("deploy if head_branch != decoy", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch != 'nonexistent'"; }, deployPolicy);
+mut("deploy if head_branch self-compare", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == github.event.workflow_run.head_branch"; }, deployPolicy);
+mut("deploy if || workflow_run.id (unmodeled truthy)", deploy, (w) => { w.jobs.deploy.if = DGATE + " || github.event.workflow_run.id"; }, deployPolicy);
+mut("deploy allows workflow_dispatch on any ref", deploy, (w) => { w.jobs.deploy.if = DGATE; }, deployPolicy);
 mut("deploy DEPLOY_SHA wrong order", deploy, (w) => { sshStep(w).env.DEPLOY_SHA = "${{ github.sha || github.event.workflow_run.head_sha }}"; }, deployPolicy);
 mut("deploy decoy job-env + step-env github.sha", deploy, (w) => { w.jobs.deploy.env = { DEPLOY_SHA: "${{ github.event.workflow_run.head_sha }}" }; sshStep(w).env.DEPLOY_SHA = "${{ github.sha }}"; }, deployPolicy);
 mut("deploy job continue-on-error", deploy, (w) => { w.jobs.deploy["continue-on-error"] = true; }, deployPolicy);
-mut("deploy step continue-on-error", deploy, (w) => { sshStep(w)["continue-on-error"] = true; }, deployPolicy);
+mut("deploy SSH step continue-on-error", deploy, (w) => { sshStep(w)["continue-on-error"] = true; }, deployPolicy);
+mut("deploy SSH reset to a branch (master)", deploy, (w) => { sshStep(w).with.script = "git reset --hard master"; }, deployPolicy);
+mut("deploy SSH reset to \"${DEPLOY_SHA}^\"", deploy, (w) => { sshStep(w).with.script = "git fetch origin\ngit reset --hard \"${DEPLOY_SHA}^\""; }, deployPolicy);
+mut("deploy SSH reset to \"$DEPLOY_SHA\"~1", deploy, (w) => { sshStep(w).with.script = "git reset --hard \"$DEPLOY_SHA\"~1"; }, deployPolicy);
+mut("deploy SSH good reset + extra reset to master", deploy, (w) => { sshStep(w).with.script = "git reset --hard \"$DEPLOY_SHA\"\ngit reset --hard master"; }, deployPolicy);
+mut("deploy SSH git -C . switch master after reset", deploy, (w) => { sshStep(w).with.script = "git reset --hard \"$DEPLOY_SHA\"\ngit -C . switch master"; }, deployPolicy);
+mut("deploy SSH script uses github.sha", deploy, (w) => { sshStep(w).with.script = "git reset --hard ${{ github.sha }}"; }, deployPolicy);
+mut("deploy downstream job resets master", deploy, (w) => { w.jobs.evil = { needs: "deploy", "runs-on": ["self-hosted"], steps: [{ uses: "appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2", with: { script: "git reset --hard master" } }] }; }, deployPolicy);
+mut("deploy listens to Smoke not CI", deploy, (w) => { w.on.workflow_run.workflows = ["Smoke"]; }, deployPolicy);
+mut("deploy types: [requested]", deploy, (w) => { w.on.workflow_run.types = ["requested"]; }, deployPolicy);
+mut("deploy adds schedule trigger", deploy, (w) => { w.on.schedule = [{ cron: "0 0 * * *" }]; }, deployPolicy);
+mut("deploy gate drops require-green-ci.sh", deploy, (w) => { findStep(w, "deploy", /require-green-ci\.sh/).run = "echo skip"; }, deployPolicy);
+mut("deploy gate via fake shell (true {0})", deploy, (w) => { findStep(w, "deploy", /require-green-ci\.sh/).shell = "true {0}"; }, deployPolicy);
+mut("deploy gate if never fires (&& false)", deploy, (w) => { findStep(w, "deploy", /require-green-ci\.sh/).if = "github.event_name == 'workflow_dispatch' && false"; }, deployPolicy);
+mut("deploy gate continue-on-error", deploy, (w) => { findStep(w, "deploy", /require-green-ci\.sh/)["continue-on-error"] = true; }, deployPolicy);
+mut("deploy gate runs AFTER the SSH deploy", deploy, (w) => { const st = w.jobs.deploy.steps; const gi = st.findIndex((s) => /require-green-ci\.sh/.test(s.run || "")); st.push(st.splice(gi, 1)[0]); }, deployPolicy);
+// ── release: triggers / ci-gate scripts / promote scripts / npm / no-rebuild ──
+mut("release adds workflow_dispatch trigger", release, (w) => { w.on.workflow_dispatch = {}; }, releasePolicy);
+mut("release push.branches alongside tags", release, (w) => { w.on.push.branches = ["**"]; }, releasePolicy);
+mut("release tag pattern bare *", release, (w) => { w.on.push.tags = ["*"]; }, releasePolicy);
 mut("release ci-gate job continue-on-error", release, (w) => { w.jobs["ci-gate"]["continue-on-error"] = true; }, releasePolicy);
-mut("release ci-gate STEP continue-on-error", release, (w) => { w.jobs["ci-gate"].steps[0]["continue-on-error"] = true; }, releasePolicy);
-mut("release weaken jq + decoy echo", release, (w) => { w.jobs["ci-gate"].steps[0].run = "n=$(gh api 'repos/x/actions/workflows/ci.yml/runs?head_sha=y' --jq '[.workflow_runs[] | select(.conclusion==\"success\")] | length')\necho conclusion==\"success\" event==\"push\" head_branch==\"master\"\nif [ \"$n\" -lt 1 ]; then exit 1; fi"; }, releasePolicy);
+mut("release ci-gate drops require-green-ci.sh", release, (w) => { findStep(w, "ci-gate", /require-green-ci\.sh/).run = "echo skip"; }, releasePolicy);
+mut("release ci-gate drops validate-release-version.sh", release, (w) => { findStep(w, "ci-gate", /validate-release-version\.sh/).run = "echo skip"; }, releasePolicy);
+mut("release ci-gate require-green via fake shell", release, (w) => { findStep(w, "ci-gate", /require-green-ci\.sh/).shell = "true {0}"; }, releasePolicy);
+mut("release ci-gate validate-version if: false", release, (w) => { findStep(w, "ci-gate", /validate-release-version\.sh/).if = "false"; }, releasePolicy);
+mut("release ci-gate validate-version continue-on-error", release, (w) => { findStep(w, "ci-gate", /validate-release-version\.sh/)["continue-on-error"] = true; }, releasePolicy);
 mut("release publisher if: always()", release, (w) => { w.jobs["docker-proxy"].if = "always()"; }, releasePolicy);
 mut("release publisher drops needs", release, (w) => { delete w.jobs["docker-proxy"].needs; }, releasePolicy);
-mut("pin step uses @mutable tag", deploy, (w) => { sshStep(w).uses = "appleboy/ssh-action@v1"; }, pinPolicy);
-mut("pin job-level uses @main", release, (w) => { w.jobs.evil = { uses: "attacker/wf@main" }; }, pinPolicy);
-mut("pin docker://image:latest", release, (w) => { w.jobs["ci-gate"].steps.push({ uses: "docker://alpine:latest" }); }, pinPolicy);
-// R17
-mut("deploy if uses unknown fn fromJSON('true')", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && (github.event.workflow_run.head_branch == 'master' || fromJSON('true'))"; }, deployPolicy);
-mut("release coe via ${{ true }} expression", release, (w) => { w.jobs["ci-gate"].steps[0]["continue-on-error"] = "${{ true }}"; }, releasePolicy);
-mut("release removes real exit, echoes 'exit 1'", release, (w) => { w.jobs["ci-gate"].steps[0].run = "n=$(gh api 'repos/x/runs?event=push&branch=master' --jq '[.workflow_runs[] | select(.conclusion==\"success\" and .event==\"push\" and .head_branch==\"master\")] | length')\necho 'exit 1'"; }, releasePolicy);
-mut("deploy ssh script deploys github.sha directly", deploy, (w) => { sshStep(w).with.script = "git reset --hard ${{ github.sha }}"; }, deployPolicy);
-mut("pin job container :latest", release, (w) => { w.jobs["ci-gate"].container = "alpine:latest"; }, pinPolicy);
-mut("pin service image :latest", release, (w) => { w.jobs["ci-gate"].services = { db: { image: "postgres:latest" } }; }, pinPolicy);
-// R18
-mut("release gh api drops head_sha (any green master CI)", release, (w) => { w.jobs["ci-gate"].steps[0].run = "n=$(gh api 'repos/x/runs?status=completed&event=push&branch=master' --jq '[.workflow_runs[] | select(.conclusion==\"success\" and .event==\"push\" and .head_branch==\"master\")] | length')\nif [ \"$n\" -lt 1 ]; then exit 1; fi"; }, releasePolicy);
-mut("deploy git-resets to a branch, $DEPLOY_SHA only in echo", deploy, (w) => { sshStep(w).with.script = "git fetch origin master\ngit reset --hard master\necho deploying $DEPLOY_SHA"; }, deployPolicy);
-mut("deploy if allows master||release", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && (github.event.workflow_run.head_branch == 'master' || github.event.workflow_run.head_branch == 'release')"; }, deployPolicy);
-mut("release coe via event-context expr", release, (w) => { w.jobs["ci-gate"].steps[0]["continue-on-error"] = "${{ github.event_name == 'push' }}"; }, releasePolicy);
-mut("release decoy true/false no-op commands", release, (w) => { w.jobs["ci-gate"].steps[0].run = "n=$(gh api 'repos/x/runs?head_sha=z' --jq '[.workflow_runs[] | select(.conclusion==\"success\")] | length')\ntrue --jq 'select(.conclusion==\"success\" and .event==\"push\" and .head_branch==\"master\")' '?event=push&branch=master&head_sha=${{ github.sha }}'\nfalse && exit 1"; }, releasePolicy);
-mut("deploy listens to Smoke not CI", deploy, (w) => { w.on.workflow_run.workflows = ["Smoke"]; }, deployPolicy);
-mut("deploy types: [requested] not completed", deploy, (w) => { w.on.workflow_run.types = ["requested"]; }, deployPolicy);
-mut("release adds workflow_dispatch trigger", release, (w) => { w.on.workflow_dispatch = {}; }, releasePolicy);
+mut("release docker-postgres promotes the proxy repo", release, (w) => { const s = findStep(w, "docker-postgres", /promote-image\.sh/); s.run = s.run.replace(/pgstack-postgres/g, "pgstack-proxy"); }, releasePolicy);
+mut("release drops the postgres promote", release, (w) => { findStep(w, "docker-postgres", /promote-image\.sh/).run = "echo skip"; }, releasePolicy);
+mut("release promote via fake shell", release, (w) => { findStep(w, "docker-proxy", /promote-image\.sh/).shell = "true {0}"; }, releasePolicy);
+mut("release promote step continue-on-error", release, (w) => { findStep(w, "docker-proxy", /promote-image\.sh/)["continue-on-error"] = true; }, releasePolicy);
+mut("release rebuilds via build-push-action", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "Build", uses: "docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25", with: { file: "./proxy-go/Dockerfile", push: true } }); }, releasePolicy);
+mut("release runs docker build", release, (w) => { w.jobs["docker-postgres"].steps.push({ name: "Build", run: "docker buildx build -t x ." }); }, releasePolicy);
+mut("release npm publish without --tag", release, (w) => { const s = findStep(w, "npm-sdk", /npm publish/); s.run = s.run.replace(/\s--tag "?\$NPM_TAG"?/, ""); }, releasePolicy);
+mut("release npm publish drops npm-dist-tag.sh", release, (w) => { findStep(w, "npm-sdk", /npm publish/).run = "npm publish --provenance --access public --tag latest"; }, releasePolicy);
+mut("release checkout persists credentials", release, (w) => { for (const j of Object.values(w.jobs)) { const cs = (j.steps || []).find((s) => typeof s.uses === "string" && /actions\/checkout@/.test(s.uses)); if (cs) { cs.with = { ...(cs.with || {}), "persist-credentials": true }; return; } } }, releasePolicy);
+// ── candidate (ci build-publish-images) ──
+mut("ci candidate proxy build push: false", ci, (w) => { const s = w.jobs["build-publish-images"].steps.find((st) => String(st.with?.file) === "./proxy-go/Dockerfile"); s.with.push = false; }, candidatePolicy);
+mut("ci candidate drops the postgres build", ci, (w) => { const j = w.jobs["build-publish-images"]; j.steps = j.steps.filter((st) => String(st.with?.file) !== "./Dockerfile.dev"); }, candidatePolicy);
+mut("ci candidate builds postgres from proxy Dockerfile", ci, (w) => { const s = w.jobs["build-publish-images"].steps.find((st) => String(st.with?.file) === "./Dockerfile.dev"); s.with.file = "./proxy-go/Dockerfile"; }, candidatePolicy);
+mut("ci candidate drops all needs", ci, (w) => { delete w.jobs["build-publish-images"].needs; }, candidatePolicy);
+mut("ci candidate drops six suite gates", ci, (w) => { w.jobs["build-publish-images"].needs = ["test-proxy-go", "test-e2e", "test-security", "test-prod-validator"]; }, candidatePolicy);
+mut("ci candidate runs on any push branch", ci, (w) => { w.jobs["build-publish-images"].if = "github.event_name == 'push'"; }, candidatePolicy);
+mut("ci candidate drops smoke-postgres.sh", ci, (w) => { findStep(w, "build-publish-images", /smoke-postgres\.sh/).run = "echo skip"; }, candidatePolicy);
+mut("ci candidate drops smoke-proxy.sh", ci, (w) => { findStep(w, "build-publish-images", /smoke-proxy\.sh/).run = "echo skip"; }, candidatePolicy);
+mut("ci candidate smoke via fake shell", ci, (w) => { findStep(w, "build-publish-images", /smoke-proxy\.sh/).shell = "true {0}"; }, candidatePolicy);
+mut("ci candidate smoke if: false", ci, (w) => { findStep(w, "build-publish-images", /smoke-postgres\.sh/).if = "false"; }, candidatePolicy);
+mut("ci candidate smoke continue-on-error", ci, (w) => { findStep(w, "build-publish-images", /smoke-proxy\.sh/)["continue-on-error"] = true; }, candidatePolicy);
+mut("ci candidate sha-tag if: always()", ci, (w) => { findStep(w, "build-publish-images", /imagetools create[^\n]*:sha-/).if = "always()"; }, candidatePolicy);
+mut("ci candidate tags sha BEFORE smoke", ci, (w) => { const st = w.jobs["build-publish-images"].steps; const ti = st.findIndex((s) => /imagetools create[^\n]*:sha-/.test(s.run || "")); const tag = st.splice(ti, 1)[0]; const bi = st.findIndex((s) => /build-push/.test(s.uses || "")); st.splice(bi + 1, 0, tag); }, candidatePolicy);
+// ── ci hardening ──
 mut("ci checkout persist-credentials: true", ci, (w) => { const j = Object.values(w.jobs)[0]; const cs = (j.steps || []).find((s) => typeof s.uses === "string" && /actions\/checkout@/.test(s.uses)); cs.with = { ...(cs.with || {}), "persist-credentials": true }; }, ciPolicy);
 mut("ci permissions: write-all", ci, (w) => { w.permissions = "write-all"; }, ciPolicy);
 mut("ci govulncheck@latest", ci, (w) => { const j = Object.values(w.jobs).find((x) => (x.steps || []).some((s) => /govulncheck/.test(s.run || ""))); const s = j.steps.find((st) => /govulncheck/.test(st.run || "")); s.run = s.run.replace(/govulncheck@v[\d.]+/, "govulncheck@latest"); }, ciPolicy);
-// R19
-mut("deploy adds schedule trigger (fires without CI)", deploy, (w) => { w.on.schedule = [{ cron: "0 0 * * *" }]; }, deployPolicy);
-mut("deploy if head_branch != decoy (allows any branch)", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch != 'nonexistent'"; }, deployPolicy);
-mut("deploy if head_branch compared to itself", deploy, (w) => { w.jobs.deploy.if = "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == github.event.workflow_run.head_branch"; }, deployPolicy);
-mut("deploy git-resets to $DEPLOY_SHA^ (parent commit)", deploy, (w) => { sshStep(w).with.script = "git fetch origin\ngit reset --hard \"$DEPLOY_SHA^\""; }, deployPolicy);
-mut("release hides head_sha/jq/exit in a heredoc to /dev/null", release, (w) => { w.jobs["ci-gate"].steps[0].run = "n=$(gh api 'repos/x/runs?head_sha=z' --jq '[.workflow_runs[] | select(.conclusion==\"success\")] | length')\ncat <<EOF >/dev/null\nevent=push&branch=master&head_sha=${{ github.sha }}\n--jq 'select(.conclusion==\"success\" and .event==\"push\" and .head_branch==\"master\")'\nexit 1\nEOF"; }, releasePolicy);
-mut("release push.branches alongside tags", release, (w) => { w.on.push.branches = ["**"]; }, releasePolicy);
-mut("release tag pattern bare * (any tag)", release, (w) => { w.on.push.tags = ["*"]; }, releasePolicy);
-mut("release checkout persists credentials", release, (w) => { for (const j of Object.values(w.jobs)) { const cs = (j.steps || []).find((s) => typeof s.uses === "string" && /actions\/checkout@/.test(s.uses)); if (cs) { cs.with = { ...(cs.with || {}), "persist-credentials": true }; return; } } }, releasePolicy);
-mut("ci adds pull_request_target trigger", ci, (w) => { w.on.pull_request_target = {}; }, ciPolicy);
-mut("ci job runs on unconditional self-hosted", ci, (w) => { Object.values(w.jobs)[0]["runs-on"] = ["self-hosted", "Linux", "X64"]; }, ciPolicy);
-mut("ci job grants itself contents: write", ci, (w) => { Object.values(w.jobs)[0].permissions = { contents: "write" }; }, ciPolicy);
-// R20
-mut("deploy if || workflow_run.id (unmodeled truthy field)", deploy, (w) => { w.jobs.deploy.if = DGATE + " || github.event.workflow_run.id"; }, deployPolicy);
-mut("deploy reset to \"${DEPLOY_SHA}^\" (parent via braces)", deploy, (w) => { sshStep(w).with.script = "git fetch origin\ngit reset --hard \"${DEPLOY_SHA}^\""; }, deployPolicy);
-mut("deploy reset to \"$DEPLOY_SHA\"~1 (parent past quote)", deploy, (w) => { sshStep(w).with.script = "git fetch origin\ngit reset --hard \"$DEPLOY_SHA\"~1"; }, deployPolicy);
-mut("deploy good reset + extra reset to master", deploy, (w) => { sshStep(w).with.script = "git reset --hard \"$DEPLOY_SHA\"\ngit reset --hard master"; }, deployPolicy);
-mut("deploy good reset in uncalled fn, master reset live", deploy, (w) => { sshStep(w).with.script = "deployfn() {\n  git reset --hard \"$DEPLOY_SHA\"\n}\ngit reset --hard master"; }, deployPolicy);
-mut("deploy downstream job resets master", deploy, (w) => { w.jobs.evil = { needs: "deploy", "runs-on": ["self-hosted"], steps: [{ uses: "appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2", with: { script: "git reset --hard master" } }] }; }, deployPolicy);
-mut("release strong gate hidden in uncalled fn, real gh api weak", release, (w) => { w.jobs["ci-gate"].steps[0].run = "check() {\ngh api 'repos/x/runs?event=push&branch=master&head_sha=${{ github.sha }}' --jq '[.workflow_runs[] | select(.conclusion==\"success\" and .event==\"push\" and .head_branch==\"master\")] | length'\nexit 1\n}\nn=$(gh api 'repos/x/runs?head_sha=z' --jq '[.workflow_runs[] | select(.conclusion==\"success\")] | length')"; }, releasePolicy);
-mut("release strong gate hidden in if [ 1 -eq 0 ]", release, (w) => { w.jobs["ci-gate"].steps[0].run = "if [ 1 -eq 0 ]; then\ngh api 'repos/x/runs?event=push&branch=master&head_sha=${{ github.sha }}' --jq '[.workflow_runs[] | select(.conclusion==\"success\" and .event==\"push\" and .head_branch==\"master\")] | length'\nexit 1\nfi\nn=$(gh api 'repos/x/runs?head_sha=z' --jq '[.workflow_runs[] | select(.conclusion==\"success\")] | length')"; }, releasePolicy);
-mut("ci runs-on routes pull_request to self-hosted (inverted)", ci, (w) => { Object.values(w.jobs)[0]["runs-on"] = "${{ (github.event_name == 'pull_request') && fromJSON('[\"self-hosted\", \"Linux\", \"X64\"]') || fromJSON('[\"ubuntu-latest\"]') }}"; }, ciPolicy);
-// finding 7 — release must PROMOTE the CI-built digest, never REBUILD
-mut("release rebuilds via build-push-action", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "Build", uses: "docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25", with: { file: "./proxy-go/Dockerfile", push: true } }); }, releasePolicy);
-mut("release runs docker build", release, (w) => { w.jobs["docker-postgres"].steps.push({ name: "Build", run: "docker buildx build -t x ." }); }, releasePolicy);
-mut("release promote source is mutable :latest not sha", release, (w) => { const s = w.jobs["docker-proxy"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = s.run.replace(/sha-\$\{\{\s*github\.sha\s*\}\}/, "latest"); }, releasePolicy);
-mut("release drops the digest promote", release, (w) => { for (const jn of ["docker-proxy", "docker-postgres"]) w.jobs[jn].steps = w.jobs[jn].steps.filter((st) => !/imagetools/.test(st.run || "")); }, releasePolicy);
-// finding 3 — each image promoted from its OWN repo's computed digest
-mut("release drops postgres promotion (proxy still promotes)", release, (w) => { const j = w.jobs["docker-postgres"]; j.steps = j.steps.filter((st) => !/imagetools/.test(st.run || "")); }, releasePolicy);
-mut("release promotes the proxy repo inside the postgres job", release, (w) => { const s = w.jobs["docker-postgres"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = s.run.replace(/pgstack-postgres/g, "pgstack-proxy"); }, releasePolicy);
-mut("release creates from the mutable :sha tag, not the digest", release, (w) => { const s = w.jobs["docker-proxy"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = s.run.replace(/\$\{REPO\}@\$\{DIGEST\}/, "${REPO}:sha-${{ github.sha }}"); }, releasePolicy);
-// finding 5 — a promote buried in dead code doesn't count
-mut("release promote buried in while false", release, (w) => { const s = w.jobs["docker-proxy"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = "while false; do\n" + s.run + "\ndone"; }, releasePolicy);
-// finding 4 — the CI release-candidate publisher is policed
-mut("ci candidate proxy build push: false", ci, (w) => { const s = w.jobs["build-publish-images"].steps.find((st) => String(st.with?.file) === "./proxy-go/Dockerfile"); s.with.push = false; }, candidatePolicy);
-mut("ci candidate drops the postgres build", ci, (w) => { const j = w.jobs["build-publish-images"]; j.steps = j.steps.filter((st) => String(st.with?.file) !== "./Dockerfile.dev"); }, candidatePolicy);
-mut("ci candidate builds postgres tag from the proxy Dockerfile", ci, (w) => { const s = w.jobs["build-publish-images"].steps.find((st) => String(st.with?.file) === "./Dockerfile.dev"); s.with.file = "./proxy-go/Dockerfile"; }, candidatePolicy);
-mut("ci candidate removes both smoke tests", ci, (w) => { const j = w.jobs["build-publish-images"]; j.steps = j.steps.filter((st) => !/CREATE EXTENSION|JWT_SECRET still contains/.test(st.run || "")); }, candidatePolicy);
-mut("ci candidate proxy smoke replaced with exit 42", ci, (w) => { const s = w.jobs["build-publish-images"].steps.find((st) => /JWT_SECRET still contains/.test(st.run || "")); s.run = "exit 42"; }, candidatePolicy);
-mut("ci candidate drops six suite gates", ci, (w) => { w.jobs["build-publish-images"].needs = ["test-proxy-go", "test-e2e", "test-security", "test-prod-validator"]; }, candidatePolicy);
-mut("ci candidate drops all needs", ci, (w) => { delete w.jobs["build-publish-images"].needs; }, candidatePolicy);
-// finding 6 — matrix-provided self-hosted runner on a PR-reachable job
-mut("ci PR job routes to self-hosted via matrix", ci, (w) => { const j = Object.values(w.jobs)[0]; j.strategy = { matrix: { runner: ["self-hosted"] } }; j["runs-on"] = "${{ matrix.runner }}"; }, ciPolicy);
-// finding 7 — git switch to a moving branch after the verified reset
-mut("deploy git switch master after verified reset", deploy, (w) => { sshStep(w).with.script = "git reset --hard \"$DEPLOY_SHA\"\ngit switch master"; }, deployPolicy);
-// R22 finding 3 — manual deploy must be pinned to refs/heads/master
-mut("deploy allows workflow_dispatch on any ref", deploy, (w) => { w.jobs.deploy.if = "github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'master')"; }, deployPolicy);
-// R22 finding 5 — text-analyzer hardening
-mut("deploy git -C . switch master after reset", deploy, (w) => { sshStep(w).with.script = "git reset --hard \"$DEPLOY_SHA\"\ngit -C . switch master"; }, deployPolicy);
+mut("ci adds pull_request_target", ci, (w) => { w.on.pull_request_target = {}; }, ciPolicy);
+mut("ci PR job unconditional self-hosted", ci, (w) => { Object.values(w.jobs)[0]["runs-on"] = ["self-hosted", "Linux", "X64"]; }, ciPolicy);
 mut("ci PR job self-hosted via matrix.include", ci, (w) => { const j = Object.values(w.jobs)[0]; j.strategy = { matrix: { include: [{ runner: "self-hosted" }] } }; j["runs-on"] = "${{ matrix.runner }}"; }, ciPolicy);
-mut("release reassigns REPO before imagetools create", release, (w) => { const s = w.jobs["docker-proxy"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = s.run.replace(/(docker buildx imagetools create)/, "REPO=evil\n          $1"); }, releasePolicy);
-// R23 finding 1 — manual deploy must verify green CI for github.sha
-mut("deploy removes the workflow_dispatch CI-green gate", deploy, (w) => { w.jobs.deploy.steps = w.jobs.deploy.steps.filter((s) => !/gh\s+api/.test(s.run || "")); }, deployPolicy);
-// R23 finding 4 — candidate/release structural bypasses
-mut("ci candidate creates sha-* BEFORE smoke", ci, (w) => { const st = w.jobs["build-publish-images"].steps; const ti = st.findIndex((s) => /imagetools create[^\n]*:sha-/.test(s.run || "")); const tag = st.splice(ti, 1)[0]; const bi = st.findIndex((s) => /build-push/.test(s.uses || "")); st.splice(bi + 1, 0, tag); }, candidatePolicy);
-mut("ci candidate proxy smoke signature only in a comment", ci, (w) => { const s = w.jobs["build-publish-images"].steps.find((st) => /JWT_SECRET still contains/.test(st.run || "")); s.run = "# JWT_SECRET still contains 'dev-only' (decoy)\necho ok"; }, candidatePolicy);
-mut("ci candidate runs on any push branch", ci, (w) => { w.jobs["build-publish-images"].if = "github.event_name == 'push'"; }, candidatePolicy);
-mut("release inspect signature only in a comment", release, (w) => { const s = w.jobs["docker-proxy"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = s.run.replace(/^\s*DIGEST=.*/m, "          # docker buildx imagetools inspect \"$SRC\" :sha-${{ github.sha }} decoy\n          DIGEST=sha256:decoy"); }, releasePolicy);
-mut("release reassigns DIGEST via export", release, (w) => { const s = w.jobs["docker-proxy"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = s.run.replace(/(docker buildx imagetools create)/, "export DIGEST=sha256:evil\n          $1"); }, releasePolicy);
-mut("release reassigns DIGEST via printf -v", release, (w) => { const s = w.jobs["docker-proxy"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = s.run.replace(/(docker buildx imagetools create)/, "printf -v DIGEST sha256:evil\n          $1"); }, releasePolicy);
-// R23 findings 2/3 — the version is the git tag, validated once in ci-gate
-mut("release ci-gate drops strict SemVer validation", release, (w) => { const s = w.jobs["ci-gate"].steps.find((st) => /grep -E/.test(st.run || "")); s.run = s.run.replace(/grep -Eq '[^']*'/, "grep -q ."); }, releasePolicy);
-mut("release ci-gate drops the cli version match", release, (w) => { const s = w.jobs["ci-gate"].steps.find((st) => /cli\/package\.json/.test(st.run || "")); s.run = s.run.replace(/.*cli\/package\.json.*\n?/, ""); }, releasePolicy);
-mut("release promote re-adds a loose [0-9]* SemVer case", release, (w) => { const s = w.jobs["docker-proxy"].steps.find((st) => /imagetools create/.test(st.run || "")); s.run = 'case "$V" in [0-9]*.[0-9]*.[0-9]*) ;; esac\n' + s.run; }, releasePolicy);
+mut("ci PR job routes pull_request to self-hosted (inverted)", ci, (w) => { Object.values(w.jobs)[0]["runs-on"] = "${{ (github.event_name == 'pull_request') && fromJSON('[\"self-hosted\", \"Linux\", \"X64\"]') || fromJSON('[\"ubuntu-latest\"]') }}"; }, ciPolicy);
+mut("ci job contents: write", ci, (w) => { Object.values(w.jobs)[0].permissions = { contents: "write" }; }, ciPolicy);
+// ── pinning ──
+mut("pin step uses @mutable tag", deploy, (w) => { sshStep(w).uses = "appleboy/ssh-action@v1"; }, pinPolicy);
+mut("pin job-level uses @main", release, (w) => { w.jobs.evil = { uses: "attacker/wf@main" }; }, pinPolicy);
+mut("pin docker://image:latest", release, (w) => { w.jobs["ci-gate"].steps.push({ uses: "docker://alpine:latest" }); }, pinPolicy);
+mut("pin job container :latest", release, (w) => { w.jobs["ci-gate"].container = "alpine:latest"; }, pinPolicy);
+mut("pin service image :latest", release, (w) => { w.jobs["ci-gate"].services = { db: { image: "postgres:latest" } }; }, pinPolicy);
+// R28 finding 3 — script-disable bypasses (swallow / comment-only / fake shell)
+mut("deploy gate call swallowed by || true", deploy, (w) => { const s = findStep(w, "deploy", /require-green-ci\.sh/); s.run = s.run + " || true"; }, deployPolicy);
+mut("release ci-gate validate-version only in a comment", release, (w) => { findStep(w, "ci-gate", /validate-release-version\.sh/).run = "# bash .github/scripts/validate-release-version.sh decoy\necho ok"; }, releasePolicy);
+mut("release promote swallowed by || true", release, (w) => { const s = findStep(w, "docker-proxy", /promote-image\.sh/); s.run = s.run + " || true"; }, releasePolicy);
+mut("ci candidate smoke via shell bash -c 'true' {0}", ci, (w) => { findStep(w, "build-publish-images", /smoke-proxy\.sh/).shell = "bash -c 'true' {0}"; }, candidatePolicy);
+mut("ci candidate smoke name only in a comment", ci, (w) => { findStep(w, "build-publish-images", /smoke-postgres\.sh/).run = "# bash .github/scripts/smoke-postgres.sh decoy\necho ok"; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);

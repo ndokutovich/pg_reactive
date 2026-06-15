@@ -276,6 +276,12 @@ jobs:
       - name: CI/CD supply-chain gating guard (FR-B.11.3)
         run: node tests/ci_supply_chain_test.mjs
 
+      # R27: the critical gate/validation logic lives in .github/scripts/*.sh,
+      # tested by EXECUTION here (the guard above only checks the workflows CALL
+      # them and don't disable the step). Needs bash (present on the runner).
+      - name: Release/deploy gate scripts (executed)
+        run: node tests/release_scripts_test.mjs
+
       # project-trace: docs/traceability.yaml maps every spec FR (pg_reactive_spec
       # + postgres_native_backend_spec) to code symbols + tests. The gate fails if
       # any FR regresses below the pinned floor in docs/traceability.baseline.json.
@@ -761,49 +767,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Smoke the EXACT digest just built (by @digest, --pull=always — never a tag
-      # that a persistent runner might have stale locally) — gemini finding 1/2.
-      - name: Smoke-test pgstack-postgres candidate (boot + extension load)
-        run: |
-          set -euo pipefail
-          IMG="${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"
-          docker rm -f cand-db >/dev/null 2>&1 || true
-          docker run -d --pull=always --name cand-db -e POSTGRES_DB=pg_reactive_test -e POSTGRES_USER=postgres \
-            -e POSTGRES_PASSWORD=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
-            "$IMG" postgres -c shared_preload_libraries=pg_reactive -c log_min_messages=warning
-          timeout 180 bash -c 'until docker exec cand-db pg_isready -U postgres -d pg_reactive_test; do sleep 3; done'
-          docker exec cand-db psql -U postgres -d pg_reactive_test -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_reactive"
-          ver=$(docker exec cand-db psql -U postgres -d pg_reactive_test -tAc "SELECT extversion FROM pg_extension WHERE extname='pg_reactive'")
-          [ -n "$ver" ] || { echo "::error::pg_reactive did not load in the candidate image"; exit 1; }
-          echo "✓ pgstack-postgres ${{ steps.postgres.outputs.digest }} boots; pg_reactive ${ver} loaded"
+      # Smoke the EXACT digest just built on BOTH published arches (via the QEMU
+      # set up above) — logic in the scripts; the release promotes only a digest
+      # these passed (gemini findings 1/2/R24-1, extracted per R27).
+      - name: Smoke-test pgstack-postgres candidate (boot + extension load, amd64 + arm64)
+        run: bash .github/scripts/smoke-postgres.sh "${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"
 
       - name: Tear down candidate db
         if: always()
         run: docker rm -f cand-db >/dev/null 2>&1 || true
 
-      - name: Smoke-test pgstack-proxy candidate (production validator)
-        run: |
-          set -euo pipefail
-          IMG="${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"
-          # The shipped proxy image must REACH its production validator and reject a
-          # placeholder JWT_SECRET — assert the SPECIFIC rejection string, not just a
-          # non-zero exit (a missing binary / loader error / panic / missing
-          # ADMIN_DATABASE_URL also exits non-zero and would pass vacuously). No DB.
-          set +e
-          out=$(docker run --rm --pull=always -e PGSTACK_ENV=production \
-            -e JWT_SECRET=dev-only-jwt-secret-do-not-use-in-production \
-            -e ANON_KEY=$(openssl rand -base64 32) \
-            -e SERVICE_ROLE_KEY=$(openssl rand -base64 32) \
-            -e SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32) \
-            -e SMTP_HOST=smtp.example.com -e SMTP_USER=u -e SMTP_PASS=p \
-            "$IMG" 2>&1)
-          status=$?
-          set -e
-          echo "$out"
-          [ "$status" -ne 0 ] || { echo "::error::candidate proxy ACCEPTED a placeholder JWT_SECRET in production"; exit 1; }
-          echo "$out" | grep -qF "JWT_SECRET still contains 'dev-only'" \
-            || { echo "::error::proxy did not reach its production validator (no JWT_SECRET rejection — missing binary / loader error / panic?)"; exit 1; }
-          echo "✓ pgstack-proxy ${{ steps.proxy.outputs.digest }} ran its production validator and rejected the placeholder secret"
+      - name: Smoke-test pgstack-proxy candidate (production validator, amd64 + arm64)
+        run: bash .github/scripts/smoke-proxy.sh "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"
 
       # Only now — both smokes green — create the sha-<sha> tag release resolves,
       # pointing at the exact smoke-passed digests (gemini finding 1).
