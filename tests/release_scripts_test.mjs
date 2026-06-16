@@ -77,6 +77,10 @@ ok(green.code === 0, "exit 0 when a green CI run exists (count>=1)");
 const red = run("require-green-ci.sh", ["o/r", "deadbeef"], { env: { ...process.env, GH_CLI: mkGh(0) } });
 ok(red.code !== 0, "exit nonzero when NO green CI run exists (count 0)");
 ok(/event=push&branch=master/.test(red.out) && /head_sha=deadbeef/.test(red.out), "passes head_sha + event=push&branch=master to gh api");
+// FAIL CLOSED on malformed/empty gh output (a non-numeric count must not pass the
+// `-lt 1` test fall-through as "CI is green") — gemini R29.
+ok(run("require-green-ci.sh", ["o/r", "deadbeef"], { env: { ...process.env, GH_CLI: mkGh("not-a-number") } }).code !== 0, "fails closed on a NON-NUMERIC gh count");
+ok(run("require-green-ci.sh", ["o/r", "deadbeef"], { env: { ...process.env, GH_CLI: mkGh("") } }).code !== 0, "fails closed on an EMPTY gh count");
 rmSync(ghDir, { recursive: true, force: true });
 
 // ── promote-image.sh + smoke-*.sh (docker stubbed via $DOCKER_CLI) ────────────
@@ -120,12 +124,12 @@ ok(!/imagetools create/.test(log()), "promote does NOT imagetools-create without
 resetLog();
 const smP = run("smoke-postgres.sh", ["ghcr.io/o/pgstack-postgres@sha256:abc"], { env: { ...process.env, DOCKER_CLI: bashPath(dockerStub) } });
 ok(smP.code === 0, "smoke-postgres.sh passes against a healthy stubbed image");
-ok(/run -d[\s\S]*linux\/arm64/.test(log()) && /CREATE EXTENSION/.test(log()), "smoke-postgres boots arm64 AND runs CREATE EXTENSION (not just exit 0)");
+ok(/run -d[\s\S]*linux\/amd64/.test(log()) && /run -d[\s\S]*linux\/arm64/.test(log()) && /CREATE EXTENSION/.test(log()), "smoke-postgres boots BOTH amd64+arm64 AND runs CREATE EXTENSION (R29: not arm64 only)");
 // smoke-proxy: runs the validator on both arches; passes because it rejects.
 resetLog();
 const smX = run("smoke-proxy.sh", ["ghcr.io/o/pgstack-proxy@sha256:abc"], { env: { ...process.env, DOCKER_CLI: bashPath(dockerStub) } });
 ok(smX.code === 0, "smoke-proxy.sh passes when the validator rejects the placeholder secret");
-ok(/run --rm[\s\S]*linux\/arm64/.test(log()), "smoke-proxy runs the validator on arm64 (not just exit 0)");
+ok(/run --rm[\s\S]*linux\/amd64/.test(log()) && /run --rm[\s\S]*linux\/arm64/.test(log()), "smoke-proxy runs the validator on BOTH amd64+arm64 (R29: not arm64 only)");
 rmSync(dk, { recursive: true, force: true });
 
 if (fail) { console.error(`\nFAIL: ${fail} release-script execution test(s) failed.`); process.exit(1); }

@@ -1,0 +1,20 @@
+# Code owners for the security-critical CI/CD supply chain.
+#
+# This declares who must review changes to these paths. It is ENFORCED only when
+# the repository's branch-protection rule for `master` has "Require review from
+# Code Owners" enabled — the file is the prerequisite; the setting is the switch.
+# Rationale: the supply-chain regression guard (tests/ci_supply_chain_test.mjs)
+# defends against ACCIDENTAL regressions; a deliberate bypass requires editing
+# these files, so a human owner review on them is the real control there
+# (SECURITY.md invariant 25).
+
+# All workflows + the extracted gate scripts.
+/.github/                              @ndokutovich
+
+# The trust-boundary doc, the supply-chain guard, and the gate-script tests.
+/SECURITY.md                           @ndokutovich
+/tests/ci_supply_chain_test.mjs        @ndokutovich
+/tests/release_scripts_test.mjs        @ndokutovich
+
+# The security backbone source of truth (roles, RLS, grants).
+/docker/init.sql                       @ndokutovich

@@ -16,7 +16,16 @@ n="$("$gh_cli" api \
   "repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed&event=push&branch=master" \
   --jq '[.workflow_runs[] | select(.conclusion=="success" and .event=="push" and .head_branch=="master")] | length')"
 
-if [ "${n:-0}" -lt 1 ]; then
+# FAIL CLOSED on a non-numeric / empty count: a malformed gh/jq response makes
+# `[ "$n" -lt 1 ]` error (exit 2, "integer expected"), which the `if` treats as
+# FALSE — so the gate would fall through to "CI is green" and exit 0 (gemini R29).
+case "$n" in
+  ''|*[!0-9]*)
+    echo "::error::CI run count is not a non-negative integer ('${n}') — gh/jq returned malformed output; refusing" >&2
+    exit 1 ;;
+esac
+
+if [ "$n" -lt 1 ]; then
   echo "::error::no successful CI run for ${sha} (push to master) — only release/deploy a commit that is green on master" >&2
   exit 1
 fi

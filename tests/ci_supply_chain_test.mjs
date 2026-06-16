@@ -149,9 +149,11 @@ const defeatsGating = (s) => { if (!s || !hasStatusFn(s)) return false; try { re
 // silently disabled. `{0}`-style fake shells (`shell: true {0}`), `if: false`,
 // and continue-on-error are the workflow-level disables that still need catching.
 const REAL_SHELL = /^(bash|sh|pwsh|powershell|python|python3|cmd)\b/;
-// Match the script call in LIVE code only — a name in a `#` comment doesn't count
-// (gemini R28-3).
-const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(stripComments(String(s.run || ""))));
+// LIVE run text: `#` comments stripped AND short-circuit-dead tails removed, so a
+// name in a comment (R28-3) or `true || bash script.sh` — where the call never
+// runs — doesn't count as a call (gemini R29).
+const lr = (s) => stripDeadBranches(stripComments(String(s ?? "")));
+const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
   const sh = String(s.shell || "").trim();
@@ -257,10 +259,11 @@ function deployPolicy(wf) {
   let gateFound = false;
   for (const [jn, j] of Object.entries(jobs)) {
     const st = j.steps || [];
-    const gi = st.findIndex((s) => /workflow_dispatch/.test(String(s.if || "")) && /require-green-ci\.sh/.test(String(s.run || "")));
+    const gi = st.findIndex((s) => /workflow_dispatch/.test(String(s.if || "")) && /require-green-ci\.sh/.test(lr(s.run)));
     if (gi < 0) continue;
     gateFound = true;
     for (const reason of stepDisabled(st[gi], wd("refs/heads/master"))) v.push(jn + ": workflow_dispatch gate " + reason);
+    if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(st[gi].run))) v.push(jn + ": workflow_dispatch gate does not pass ${{ github.sha }} to require-green-ci.sh (hardcoded/foreign SHA)");
     const di = st.findIndex((s) => /ssh-action/.test(String(s.uses || "")) || /git(?:\s+-C\s+\S+)?\s+(?:reset|checkout|switch)\b/.test(String(s.with?.script ?? s.run ?? "")));
     if (di >= 0 && gi > di) v.push(jn + ": workflow_dispatch CI-gate runs AFTER the deploy step (too late)");
   }
@@ -288,10 +291,10 @@ function releasePolicy(wf) {
   // shell, with an if that fires on a tag push, and not continue-on-error.
   const gci = callsScript(cg, "require-green-ci.sh");
   if (!gci) v.push("ci-gate does not call require-green-ci.sh");
-  else for (const r of stepDisabled(gci, PUSH_TAG)) v.push("ci-gate require-green-ci step " + r);
+  else { for (const r of stepDisabled(gci, PUSH_TAG)) v.push("ci-gate require-green-ci step " + r); if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(gci.run))) v.push("ci-gate require-green-ci is not passed ${{ github.sha }} (hardcoded/foreign SHA)"); }
   const vrv = callsScript(cg, "validate-release-version.sh");
   if (!vrv) v.push("ci-gate does not call validate-release-version.sh");
-  else for (const r of stepDisabled(vrv, PUSH_TAG)) v.push("ci-gate validate-version step " + r);
+  else { for (const r of stepDisabled(vrv, PUSH_TAG)) v.push("ci-gate validate-version step " + r); if (!/\$\{\{\s*github\.ref_name\s*\}\}/.test(lr(vrv.run))) v.push("ci-gate validate-version is not passed ${{ github.ref_name }} (validates the wrong tag)"); }
   const reaches = (name, seen = new Set()) => name === "ci-gate" ? true : (!jobs[name] || seen.has(name)) ? false : (seen.add(name), needsOf(jobs[name]).some((n) => reaches(n, seen)));
   for (const [name, j] of Object.entries(jobs)) {
     if (name === "ci-gate") continue;
@@ -320,17 +323,18 @@ function releasePolicy(wf) {
   // compute-docker-tags.sh (the latter execution-tested). The promote step must be
   // enabled (real shell, if fires, not coe) — R27.
   for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
-    const promoter = Object.entries(jobs).find(([, j]) => (j.steps || []).some((s) => new RegExp("promote-image\\.sh[^\\n]*" + img + "\\b").test(stripComments(String(s.run || "")))));
+    const promoter = Object.entries(jobs).find(([, j]) => (j.steps || []).some((s) => new RegExp("promote-image\\.sh[^\\n]*" + img + "\\b").test(lr(s.run))));
     if (!promoter) { v.push("no job promotes " + img + " via promote-image.sh"); continue; }
-    const st = (promoter[1].steps || []).find((s) => /promote-image\.sh/.test(stripComments(String(s.run || ""))));
+    const st = (promoter[1].steps || []).find((s) => /promote-image\.sh/.test(lr(s.run)));
     for (const r of stepDisabled(st, PUSH_TAG)) v.push(promoter[0] + " (" + img + " promote) " + r);
+    if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(st && st.run))) v.push(promoter[0] + ": " + img + " promote is not passed ${{ github.sha }} (could promote a foreign commit)");
   }
   // npm publish must derive its dist-tag from the execution-tested npm-dist-tag.sh
   // (pre-release -> next, never latest) and pass it via --tag, enabled (R27).
   for (const [name, j] of Object.entries(jobs)) {
-    const pub = (j.steps || []).find((s) => /npm\s+publish/.test(stripComments(String(s.run || ""))));
+    const pub = (j.steps || []).find((s) => /npm\s+publish/.test(lr(s.run)));
     if (!pub) continue;
-    const rn = stripComments(String(pub.run || ""));
+    const rn = lr(pub.run);
     if (!/npm-dist-tag\.sh/.test(rn)) v.push(name + ": npm publish does not derive --tag from npm-dist-tag.sh");
     if (!/--tag\b/.test(rn)) v.push(name + ": npm publish without --tag");
     for (const r of stepDisabled(pub, PUSH_TAG)) v.push(name + " (npm publish) " + r);
@@ -440,14 +444,16 @@ function candidatePolicy(wf) {
   // enabled (real shell, if fires on a master push, not coe), and create the
   // sha-<sha> tag (what release resolves) ONLY AFTER both smokes — a
   // create-before-smoke re-exposes finding 1.
-  const idx = (re) => steps.findIndex((s) => re.test(stripComments(String(s.run || ""))));
+  const idx = (re) => steps.findIndex((s) => re.test(lr(s.run)));
   const pgSmoke = idx(/smoke-postgres\.sh/);
   const pxSmoke = idx(/smoke-proxy\.sh/);
   const tagIdx = idx(/imagetools\s+create[^\n]*:sha-\$\{\{\s*github\.sha/);
+  // each smoke must be passed the EXACT built @digest — not a mutable tag like
+  // :latest or :sha-… (smoking the wrong bytes) — gemini R29.
   if (pgSmoke < 0) v.push(cn + ": does not call smoke-postgres.sh (the postgres digest would ship unsmoked)");
-  else for (const r of stepDisabled(steps[pgSmoke], PUSH_MASTER)) v.push(cn + " (postgres smoke) " + r);
+  else { for (const r of stepDisabled(steps[pgSmoke], PUSH_MASTER)) v.push(cn + " (postgres smoke) " + r); if (!/pgstack-postgres@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(lr(steps[pgSmoke].run))) v.push(cn + ": smoke-postgres is not passed pgstack-postgres@${{ steps.*.outputs.digest }} (smoking a mutable tag, not the built digest)"); }
   if (pxSmoke < 0) v.push(cn + ": does not call smoke-proxy.sh (the proxy digest would ship unsmoked)");
-  else for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r);
+  else { for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r); if (!/pgstack-proxy@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(lr(steps[pxSmoke].run))) v.push(cn + ": smoke-proxy is not passed pgstack-proxy@${{ steps.*.outputs.digest }} (smoking a mutable tag, not the built digest)"); }
   if (tagIdx < 0) v.push(cn + ": does not create the sha-${{ github.sha }} tag release resolves");
   else {
     for (const r of stepDisabled(steps[tagIdx], PUSH_MASTER)) v.push(cn + " (sha-tag) " + r);
@@ -572,6 +578,13 @@ mut("release ci-gate validate-version only in a comment", release, (w) => { find
 mut("release promote swallowed by || true", release, (w) => { const s = findStep(w, "docker-proxy", /promote-image\.sh/); s.run = s.run + " || true"; }, releasePolicy);
 mut("ci candidate smoke via shell bash -c 'true' {0}", ci, (w) => { findStep(w, "build-publish-images", /smoke-proxy\.sh/).shell = "bash -c 'true' {0}"; }, candidatePolicy);
 mut("ci candidate smoke name only in a comment", ci, (w) => { findStep(w, "build-publish-images", /smoke-postgres\.sh/).run = "# bash .github/scripts/smoke-postgres.sh decoy\necho ok"; }, candidatePolicy);
+// R29 finding 3 — guard must check the script ARGS, not just the call site
+mut("deploy gate dead-branched by true ||", deploy, (w) => { const s = findStep(w, "deploy", /require-green-ci\.sh/); s.run = "true || " + s.run; }, deployPolicy);
+mut("deploy gate passes a hardcoded SHA", deploy, (w) => { const s = findStep(w, "deploy", /require-green-ci\.sh/); s.run = s.run.replace(/\$\{\{\s*github\.sha\s*\}\}/, "abc123"); }, deployPolicy);
+mut("release ci-gate require-green passes a hardcoded SHA", release, (w) => { const s = findStep(w, "ci-gate", /require-green-ci\.sh/); s.run = s.run.replace(/\$\{\{\s*github\.sha\s*\}\}/, "0000000"); }, releasePolicy);
+mut("release ci-gate validates a hardcoded tag (not ref_name)", release, (w) => { const s = findStep(w, "ci-gate", /validate-release-version\.sh/); s.run = s.run.replace(/\$\{\{\s*github\.ref_name\s*\}\}/, "v9.9.9"); }, releasePolicy);
+mut("release promote passes a foreign SHA", release, (w) => { const s = findStep(w, "docker-proxy", /promote-image\.sh/); s.run = s.run.replace(/\$\{\{\s*github\.sha\s*\}\}/, "deadbeef"); }, releasePolicy);
+mut("ci candidate smokes :latest instead of the built digest", ci, (w) => { const s = findStep(w, "build-publish-images", /smoke-postgres\.sh/); s.run = s.run.replace(/@\$\{\{\s*steps\.\w+\.outputs\.digest\s*\}\}/, ":latest"); }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
