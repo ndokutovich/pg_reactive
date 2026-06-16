@@ -165,8 +165,33 @@ const stepDisabled = (s, ctx) => {
   try { if (!truthy(ev(String(s.if || "true"), ctx))) r.push("if never fires"); } catch { r.push("if unparseable"); }
   if (/always\s*\(/.test(String(s.if || ""))) r.push("if: always() (runs even after a prior step failed)");
   if (coeStep(s)) r.push("continue-on-error");
-  // `bash script.sh || true` / `|| :` / `|| exit 0` swallows the script's failure (R28-3).
-  if (/\|\|\s*(?:true|:|exit\s+0)\b/.test(stripComments(String(s.run || "")))) r.push("script failure swallowed by `|| true` / `|| :` / `|| exit 0`");
+  // `bash script.sh || true` / `|| :` / `|| echo …` / `|| exit 0` swallows the
+  // script's failure (R28-3 / R31). A fail-CLOSED re-raise (`|| { echo …; exit 1; }`)
+  // is left alone. This is the blocklist for the SHARED sites (npm publish, sha-tag);
+  // critical .sh gating steps additionally get the bareCall allowlist below.
+  if (/\|\|\s*(?:true|:|echo|printf|exit\s+0)\b/.test(stripComments(String(s.run || "")))) r.push("script failure swallowed by `|| true` / `|| :` / `|| echo …` / `|| exit 0`");
+  return r;
+};
+// A CRITICAL gating script (require-green-ci / validate-release-version /
+// promote-image / smoke-*) must be invoked as a BARE single command so its
+// non-zero exit ALWAYS fails the step. stepDisabled is a blocklist (known swallow
+// tails); this is the ALLOWLIST the auditor asked for (R31): reject ANY live shell
+// logic around the call — a conditional/loop wrapper (`if ! script; then echo ok;
+// fi`), a control operator (`script || echo ok`, `a && script`, `script | cat`,
+// `script; echo ok`), a command substitution, or any extra command line. Only the
+// bare `… /<script> …` call (plus optional `set -…` shell-option lines) is allowed.
+// Dead code is stripped first (lr), so this only sees what actually runs.
+const bareCall = (step, script) => {
+  const r = [];
+  const re = new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\."));
+  const lines = lr(step && step.run).split("\n").map((l) => l.trim()).filter(Boolean);
+  const callLines = lines.filter((l) => re.test(l));
+  const extra = lines.filter((l) => !re.test(l) && !/^set\s+[-+]/.test(l));
+  if (extra.length) r.push(script + " is not a bare single-command call — extra shell line(s) " + JSON.stringify(extra));
+  for (const l of callLines) {
+    if (/^(?:if|elif|while|until|for|case)\b/.test(l) || /^!\s/.test(l)) r.push(script + " call is wrapped in a conditional/loop (its failure is swallowed): " + JSON.stringify(l));
+    if (/[|;&]/.test(l) || /\$\(|`/.test(l)) r.push(script + " call has a shell control operator/substitution (its failure may be swallowed): " + JSON.stringify(l));
+  }
   return r;
 };
 // The scripts must EXIST and the offline-executable ones must be covered by the
@@ -265,6 +290,7 @@ function deployPolicy(wf) {
     if (gi < 0) continue;
     gateFound = true;
     for (const reason of stepDisabled(st[gi], wd("refs/heads/master"))) v.push(jn + ": workflow_dispatch gate " + reason);
+    for (const reason of bareCall(st[gi], "require-green-ci.sh")) v.push(jn + ": workflow_dispatch gate " + reason);
     if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(st[gi].run))) v.push(jn + ": workflow_dispatch gate does not pass ${{ github.sha }} to require-green-ci.sh (hardcoded/foreign SHA)");
     const di = st.findIndex((s) => /ssh-action/.test(String(s.uses || "")) || /git(?:\s+-C\s+\S+)?\s+(?:reset|checkout|switch)\b/.test(String(s.with?.script ?? s.run ?? "")));
     if (di >= 0 && gi > di) v.push(jn + ": workflow_dispatch CI-gate runs AFTER the deploy step (too late)");
@@ -293,10 +319,10 @@ function releasePolicy(wf) {
   // shell, with an if that fires on a tag push, and not continue-on-error.
   const gci = callsScript(cg, "require-green-ci.sh");
   if (!gci) v.push("ci-gate does not call require-green-ci.sh");
-  else { for (const r of stepDisabled(gci, PUSH_TAG)) v.push("ci-gate require-green-ci step " + r); if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(gci.run))) v.push("ci-gate require-green-ci is not passed ${{ github.sha }} (hardcoded/foreign SHA)"); }
+  else { for (const r of stepDisabled(gci, PUSH_TAG)) v.push("ci-gate require-green-ci step " + r); for (const r of bareCall(gci, "require-green-ci.sh")) v.push("ci-gate require-green-ci step " + r); if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(gci.run))) v.push("ci-gate require-green-ci is not passed ${{ github.sha }} (hardcoded/foreign SHA)"); }
   const vrv = callsScript(cg, "validate-release-version.sh");
   if (!vrv) v.push("ci-gate does not call validate-release-version.sh");
-  else { for (const r of stepDisabled(vrv, PUSH_TAG)) v.push("ci-gate validate-version step " + r); if (!/\$\{\{\s*github\.ref_name\s*\}\}/.test(lr(vrv.run))) v.push("ci-gate validate-version is not passed ${{ github.ref_name }} (validates the wrong tag)"); }
+  else { for (const r of stepDisabled(vrv, PUSH_TAG)) v.push("ci-gate validate-version step " + r); for (const r of bareCall(vrv, "validate-release-version.sh")) v.push("ci-gate validate-version step " + r); if (!/\$\{\{\s*github\.ref_name\s*\}\}/.test(lr(vrv.run))) v.push("ci-gate validate-version is not passed ${{ github.ref_name }} (validates the wrong tag)"); }
   const reaches = (name, seen = new Set()) => name === "ci-gate" ? true : (!jobs[name] || seen.has(name)) ? false : (seen.add(name), needsOf(jobs[name]).some((n) => reaches(n, seen)));
   for (const [name, j] of Object.entries(jobs)) {
     if (name === "ci-gate") continue;
@@ -329,6 +355,7 @@ function releasePolicy(wf) {
     if (!promoter) { v.push("no job promotes " + img + " via promote-image.sh"); continue; }
     const st = (promoter[1].steps || []).find((s) => /promote-image\.sh/.test(lr(s.run)));
     for (const r of stepDisabled(st, PUSH_TAG)) v.push(promoter[0] + " (" + img + " promote) " + r);
+    for (const r of bareCall(st, "promote-image.sh")) v.push(promoter[0] + " (" + img + " promote) " + r);
     if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(st && st.run))) v.push(promoter[0] + ": " + img + " promote is not passed ${{ github.sha }} (could promote a foreign commit)");
   }
   // npm publish must derive its dist-tag from the execution-tested npm-dist-tag.sh
@@ -453,9 +480,9 @@ function candidatePolicy(wf) {
   // each smoke must be passed the EXACT built @digest — not a mutable tag like
   // :latest or :sha-… (smoking the wrong bytes) — gemini R29.
   if (pgSmoke < 0) v.push(cn + ": does not call smoke-postgres.sh (the postgres digest would ship unsmoked)");
-  else { for (const r of stepDisabled(steps[pgSmoke], PUSH_MASTER)) v.push(cn + " (postgres smoke) " + r); if (!/pgstack-postgres@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(lr(steps[pgSmoke].run))) v.push(cn + ": smoke-postgres is not passed pgstack-postgres@${{ steps.*.outputs.digest }} (smoking a mutable tag, not the built digest)"); }
+  else { for (const r of stepDisabled(steps[pgSmoke], PUSH_MASTER)) v.push(cn + " (postgres smoke) " + r); for (const r of bareCall(steps[pgSmoke], "smoke-postgres.sh")) v.push(cn + " (postgres smoke) " + r); if (!/pgstack-postgres@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(lr(steps[pgSmoke].run))) v.push(cn + ": smoke-postgres is not passed pgstack-postgres@${{ steps.*.outputs.digest }} (smoking a mutable tag, not the built digest)"); }
   if (pxSmoke < 0) v.push(cn + ": does not call smoke-proxy.sh (the proxy digest would ship unsmoked)");
-  else { for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r); if (!/pgstack-proxy@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(lr(steps[pxSmoke].run))) v.push(cn + ": smoke-proxy is not passed pgstack-proxy@${{ steps.*.outputs.digest }} (smoking a mutable tag, not the built digest)"); }
+  else { for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r); for (const r of bareCall(steps[pxSmoke], "smoke-proxy.sh")) v.push(cn + " (proxy smoke) " + r); if (!/pgstack-proxy@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(lr(steps[pxSmoke].run))) v.push(cn + ": smoke-proxy is not passed pgstack-proxy@${{ steps.*.outputs.digest }} (smoking a mutable tag, not the built digest)"); }
   if (tagIdx < 0) v.push(cn + ": does not create the sha-${{ github.sha }} tag release resolves");
   else {
     for (const r of stepDisabled(steps[tagIdx], PUSH_MASTER)) v.push(cn + " (sha-tag) " + r);
@@ -592,6 +619,15 @@ mut("deploy gate shell `bash {0} || true` (swallow)", deploy, (w) => { findStep(
 mut("deploy gate inside `if false; then …; fi`", deploy, (w) => { const s = findStep(w, "deploy", /require-green-ci\.sh/); s.run = "if false; then " + s.run + "; fi"; }, deployPolicy);
 mut("release ci-gate validate inside `if false` block", release, (w) => { const s = findStep(w, "ci-gate", /validate-release-version\.sh/); s.run = "if false; then " + s.run + "; fi"; }, releasePolicy);
 mut("ci candidate smoke shell `bash {0} || true`", ci, (w) => { findStep(w, "build-publish-images", /smoke-proxy\.sh/).shell = "bash {0} || true"; }, candidatePolicy);
+// R31 finding — a LIVE shell wrapper around the call swallows its non-zero exit:
+// `if ! script; then echo ok; fi`, `script || echo ok`, `script | cat`. stripDead
+// can't strip these (the `if` is reachable), and the run-swallow regex only knew
+// `|| true|:|exit 0`. A critical script must be a BARE single-command call.
+mut("deploy gate wrapped in `if ! …; then echo ok; fi`", deploy, (w) => { const s = findStep(w, "deploy", /require-green-ci\.sh/); s.run = "if ! " + s.run + "; then echo ok; fi"; }, deployPolicy);
+mut("release ci-gate validate wrapped in `if ! …; then echo ok; fi`", release, (w) => { const s = findStep(w, "ci-gate", /validate-release-version\.sh/); s.run = "if ! " + s.run + "; then echo ok; fi"; }, releasePolicy);
+mut("release promote swallowed by `|| echo ok`", release, (w) => { const s = findStep(w, "docker-proxy", /promote-image\.sh/); s.run = s.run + " || echo ok"; }, releasePolicy);
+mut("ci candidate smoke swallowed by `|| echo ok`", ci, (w) => { const s = findStep(w, "build-publish-images", /smoke-proxy\.sh/); s.run = s.run + " || echo ok"; }, candidatePolicy);
+mut("ci candidate smoke piped to `| cat` (swallows without pipefail)", ci, (w) => { const s = findStep(w, "build-publish-images", /smoke-postgres\.sh/); s.run = s.run + " | cat"; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
