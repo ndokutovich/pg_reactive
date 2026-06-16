@@ -351,12 +351,18 @@ function releasePolicy(wf) {
   // compute-docker-tags.sh (the latter execution-tested). The promote step must be
   // enabled (real shell, if fires, not coe) — R27.
   for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
-    const promoter = Object.entries(jobs).find(([, j]) => (j.steps || []).some((s) => new RegExp("promote-image\\.sh[^\\n]*" + img + "\\b").test(lr(s.run))));
-    if (!promoter) { v.push("no job promotes " + img + " via promote-image.sh"); continue; }
-    const st = (promoter[1].steps || []).find((s) => /promote-image\.sh/.test(lr(s.run)));
-    for (const r of stepDisabled(st, PUSH_TAG)) v.push(promoter[0] + " (" + img + " promote) " + r);
-    for (const r of bareCall(st, "promote-image.sh")) v.push(promoter[0] + " (" + img + " promote) " + r);
-    if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(st && st.run))) v.push(promoter[0] + ": " + img + " promote is not passed ${{ github.sha }} (could promote a foreign commit)");
+    const imgRe = new RegExp("promote-image\\.sh[^\\n]*" + img + "\\b");
+    const promoters = Object.entries(jobs).filter(([, j]) => (j.steps || []).some((s) => imgRe.test(lr(s.run))));
+    if (!promoters.length) { v.push("no job promotes " + img + " via promote-image.sh"); continue; }
+    // check EVERY step that promotes THIS image (find by img, not the first
+    // promote step) — a decoy promote with the right SHA must not excuse a real
+    // promote of the same image on a foreign SHA (R32).
+    for (const [jn, j] of promoters)
+      for (const st of (j.steps || []).filter((s) => imgRe.test(lr(s.run)))) {
+        for (const r of stepDisabled(st, PUSH_TAG)) v.push(jn + " (" + img + " promote) " + r);
+        for (const r of bareCall(st, "promote-image.sh")) v.push(jn + " (" + img + " promote) " + r);
+        if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(st.run))) v.push(jn + ": " + img + " promote is not passed ${{ github.sha }} (could promote a foreign commit)");
+      }
   }
   // npm publish must derive its dist-tag from the execution-tested npm-dist-tag.sh
   // (pre-release -> next, never latest) and pass it via --tag, enabled (R27).
@@ -366,6 +372,12 @@ function releasePolicy(wf) {
     const rn = lr(pub.run);
     if (!/npm-dist-tag\.sh/.test(rn)) v.push(name + ": npm publish does not derive --tag from npm-dist-tag.sh");
     if (!/--tag\b/.test(rn)) v.push(name + ": npm publish without --tag");
+    // --tag must actually USE the npm-dist-tag.sh result, not a literal: capture
+    // the var assigned from `$(… npm-dist-tag.sh …)` and require `--tag "$VAR"` —
+    // a `NPM_TAG=$(…); npm publish --tag latest` ignores the routing (R32).
+    const dm = rn.match(/(\w+)=["']?\$\((?:\s*bash\s+)?[^)]*npm-dist-tag\.sh[^)]*\)/);
+    if (dm) { if (!new RegExp("--tag\\s+[\"']?\\$\\{?" + dm[1] + "\\b").test(rn)) v.push(name + ": npm publish --tag does not use $" + dm[1] + " from npm-dist-tag.sh (a literal --tag ignores the pre-release routing)"); }
+    else if (/npm-dist-tag\.sh/.test(rn)) v.push(name + ": npm-dist-tag.sh output is not captured into a variable for --tag");
     for (const r of stepDisabled(pub, PUSH_TAG)) v.push(name + " (npm publish) " + r);
   }
   return v;
@@ -487,6 +499,18 @@ function candidatePolicy(wf) {
   else {
     for (const r of stepDisabled(steps[tagIdx], PUSH_MASTER)) v.push(cn + " (sha-tag) " + r);
     if (pgSmoke < 0 || pxSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke) v.push(cn + ": sha-${{ github.sha }} is created before both smokes pass (tag-after-smoke order)");
+    // each image's sha-<sha> tag must be created FROM the SAME @digest its smoke
+    // verified — same image repo AND the same `steps.*.outputs.digest` ref — not a
+    // foreign image's digest, a foreign step's digest, or a mutable :latest (R32).
+    const norm = (s) => String(s ?? "").replace(/\s+/g, "");
+    const tagLines = lr(steps[tagIdx].run).split("\n");
+    for (const [img, smokeI] of [["pgstack-proxy", pxSmoke], ["pgstack-postgres", pgSmoke]]) {
+      const line = tagLines.find((l) => new RegExp("imagetools\\s+create[^\\n]*" + img + ":sha-\\$\\{\\{\\s*github\\.sha\\b").test(l));
+      if (!line) { v.push(cn + ": no sha-${{ github.sha }} tag created for " + img); continue; }
+      const m = smokeI >= 0 ? lr(steps[smokeI].run).match(new RegExp(img + "@\\$\\{\\{\\s*steps\\.\\w+\\.outputs\\.digest\\s*\\}\\}")) : null;
+      if (!m) continue; // the smoke digest is reported missing/wrong above
+      if (!norm(line).includes(norm(m[0]))) v.push(cn + ": " + img + " sha-${{ github.sha }} tag is not sourced from the smoke-passed " + img + "@${{ steps.*.outputs.digest }} (foreign image/digest or mutable tag)");
+    }
   }
   return v;
 }
@@ -628,6 +652,17 @@ mut("release ci-gate validate wrapped in `if ! …; then echo ok; fi`", release,
 mut("release promote swallowed by `|| echo ok`", release, (w) => { const s = findStep(w, "docker-proxy", /promote-image\.sh/); s.run = s.run + " || echo ok"; }, releasePolicy);
 mut("ci candidate smoke swallowed by `|| echo ok`", ci, (w) => { const s = findStep(w, "build-publish-images", /smoke-proxy\.sh/); s.run = s.run + " || echo ok"; }, candidatePolicy);
 mut("ci candidate smoke piped to `| cat` (swallows without pipefail)", ci, (w) => { const s = findStep(w, "build-publish-images", /smoke-postgres\.sh/); s.run = s.run + " | cat"; }, candidatePolicy);
+// R32 finding — the guard FINDS the right element but doesn't BIND it tightly:
+// (1) the sha-<sha> tag step must source each image's tag from THAT image's
+// smoke-passed digest, not a foreign digest or a mutable :latest; (2) the promote
+// check inspected the FIRST promote-image.sh step in the job, so a decoy step with
+// the right SHA hid a real promote on a foreign SHA; (3) npm --tag presence ≠ the
+// --tag value actually being the npm-dist-tag.sh result.
+mut("ci candidate proxy sha-tag sourced from the postgres digest", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run.replace(/pgstack-proxy@\$\{\{\s*steps\.proxy\.outputs\.digest\s*\}\}/, "pgstack-postgres@${{ steps.postgres.outputs.digest }}"); }, candidatePolicy);
+mut("ci candidate proxy sha-tag sourced from a mutable :latest", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run.replace(/pgstack-proxy@\$\{\{\s*steps\.proxy\.outputs\.digest\s*\}\}/, "pgstack-proxy:latest"); }, candidatePolicy);
+mut("ci candidate postgres sha-tag sourced from the proxy digest", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-postgres:sha-/); s.run = s.run.replace(/pgstack-postgres@\$\{\{\s*steps\.postgres\.outputs\.digest\s*\}\}/, "pgstack-proxy@${{ steps.proxy.outputs.digest }}"); }, candidatePolicy);
+mut("release postgres promote: decoy step hides a foreign-SHA real promote", release, (w) => { const j = w.jobs["docker-postgres"]; const real = j.steps.find((s) => /promote-image\.sh/.test(String(s.run || ""))); const i = j.steps.indexOf(real); const decoy = { name: "decoy promote", run: real.run }; real.run = real.run.replace(/\$\{\{\s*github\.sha\s*\}\}/, "deadbeef"); j.steps.splice(i, 0, decoy); }, releasePolicy);
+mut("release npm publish --tag uses a literal, not $NPM_TAG from npm-dist-tag.sh", release, (w) => { const s = findStep(w, "npm-sdk", /npm publish/); s.run = s.run.replace(/--tag\s+"?\$\{?NPM_TAG\}?"?/, "--tag latest"); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
