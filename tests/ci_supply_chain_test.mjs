@@ -473,11 +473,23 @@ function candidatePolicy(wf) {
   const nd = needsOf(cj);
   for (const g of FULL_SUITE) if (!nd.includes(g)) v.push(cn + ": candidate is not gated on '" + g + "'");
   const IMAGES = [{ img: "pgstack-proxy", file: "./proxy-go/Dockerfile" }, { img: "pgstack-postgres", file: "./Dockerfile.dev" }];
+  // Map each image to the id of ITS build-push-action step — the ONLY legit source
+  // of steps.<id>.outputs.digest. A build with no id can't be referenced; a digest
+  // consumed from a different id (a decoy step that writes digest=sha256:… to
+  // $GITHUB_OUTPUT under the consumed id, the real build renamed away) is NOT the
+  // built image (R33).
+  const buildId = {};
   for (const { img, file } of IMAGES) {
     const b = builds.find((s) => String(s.with?.file) === file);
     if (!b) { v.push(cn + ": no build of " + img + " from " + file); continue; }
     if (String(b.with?.push) !== "true") v.push(cn + ": " + img + " build does not push");
+    if (typeof b.id !== "string" || !b.id.trim()) v.push(cn + ": " + img + " build (" + file + ") has no step id — its digest output can't be referenced");
+    else buildId[img] = b.id.trim();
   }
+  // The digest smoke + sha-tag consume MUST be THIS image's build output —
+  // steps.<buildId>.outputs.digest — not any steps.<id> (R33). Falls back to a
+  // loose match only when the build/id is already reported missing above.
+  const digestRe = (img) => new RegExp(img + "@\\$\\{\\{\\s*steps\\." + (buildId[img] ? buildId[img].replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "\\w+") + "\\.outputs\\.digest");
   for (const s of builds) if (/:sha-\$\{\{\s*github\.sha\s*\}\}/.test(String(s.with?.tags ?? ""))) v.push(cn + ": a build tags :sha-${{ github.sha }} directly (must be tagged only AFTER smoke)");
   // The smoke logic (boot + extension, validator + JWT_SECRET rejection, BOTH
   // arches via --platform "$PLAT") lives in the smoke-*.sh scripts, exercised on
@@ -492,24 +504,22 @@ function candidatePolicy(wf) {
   // each smoke must be passed the EXACT built @digest — not a mutable tag like
   // :latest or :sha-… (smoking the wrong bytes) — gemini R29.
   if (pgSmoke < 0) v.push(cn + ": does not call smoke-postgres.sh (the postgres digest would ship unsmoked)");
-  else { for (const r of stepDisabled(steps[pgSmoke], PUSH_MASTER)) v.push(cn + " (postgres smoke) " + r); for (const r of bareCall(steps[pgSmoke], "smoke-postgres.sh")) v.push(cn + " (postgres smoke) " + r); if (!/pgstack-postgres@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(lr(steps[pgSmoke].run))) v.push(cn + ": smoke-postgres is not passed pgstack-postgres@${{ steps.*.outputs.digest }} (smoking a mutable tag, not the built digest)"); }
+  else { for (const r of stepDisabled(steps[pgSmoke], PUSH_MASTER)) v.push(cn + " (postgres smoke) " + r); for (const r of bareCall(steps[pgSmoke], "smoke-postgres.sh")) v.push(cn + " (postgres smoke) " + r); if (!digestRe("pgstack-postgres").test(lr(steps[pgSmoke].run))) v.push(cn + ": smoke-postgres is not passed pgstack-postgres@${{ steps." + (buildId["pgstack-postgres"] || "*") + ".outputs.digest }} (not THIS image's build digest — a mutable tag or a decoy step's output)"); }
   if (pxSmoke < 0) v.push(cn + ": does not call smoke-proxy.sh (the proxy digest would ship unsmoked)");
-  else { for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r); for (const r of bareCall(steps[pxSmoke], "smoke-proxy.sh")) v.push(cn + " (proxy smoke) " + r); if (!/pgstack-proxy@\$\{\{\s*steps\.\w+\.outputs\.digest/.test(lr(steps[pxSmoke].run))) v.push(cn + ": smoke-proxy is not passed pgstack-proxy@${{ steps.*.outputs.digest }} (smoking a mutable tag, not the built digest)"); }
+  else { for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r); for (const r of bareCall(steps[pxSmoke], "smoke-proxy.sh")) v.push(cn + " (proxy smoke) " + r); if (!digestRe("pgstack-proxy").test(lr(steps[pxSmoke].run))) v.push(cn + ": smoke-proxy is not passed pgstack-proxy@${{ steps." + (buildId["pgstack-proxy"] || "*") + ".outputs.digest }} (not THIS image's build digest — a mutable tag or a decoy step's output)"); }
   if (tagIdx < 0) v.push(cn + ": does not create the sha-${{ github.sha }} tag release resolves");
   else {
     for (const r of stepDisabled(steps[tagIdx], PUSH_MASTER)) v.push(cn + " (sha-tag) " + r);
     if (pgSmoke < 0 || pxSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke) v.push(cn + ": sha-${{ github.sha }} is created before both smokes pass (tag-after-smoke order)");
-    // each image's sha-<sha> tag must be created FROM the SAME @digest its smoke
-    // verified — same image repo AND the same `steps.*.outputs.digest` ref — not a
-    // foreign image's digest, a foreign step's digest, or a mutable :latest (R32).
-    const norm = (s) => String(s ?? "").replace(/\s+/g, "");
+    // each image's sha-<sha> tag must be created FROM THIS image's build digest —
+    // <img>:sha-${{github.sha}} on the same `imagetools create` line as
+    // <img>@${{ steps.<buildId>.outputs.digest }} — so a foreign image's digest, a
+    // foreign/decoy step's digest, or a mutable :latest is rejected (R32 + R33).
     const tagLines = lr(steps[tagIdx].run).split("\n");
-    for (const [img, smokeI] of [["pgstack-proxy", pxSmoke], ["pgstack-postgres", pgSmoke]]) {
+    for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
       const line = tagLines.find((l) => new RegExp("imagetools\\s+create[^\\n]*" + img + ":sha-\\$\\{\\{\\s*github\\.sha\\b").test(l));
       if (!line) { v.push(cn + ": no sha-${{ github.sha }} tag created for " + img); continue; }
-      const m = smokeI >= 0 ? lr(steps[smokeI].run).match(new RegExp(img + "@\\$\\{\\{\\s*steps\\.\\w+\\.outputs\\.digest\\s*\\}\\}")) : null;
-      if (!m) continue; // the smoke digest is reported missing/wrong above
-      if (!norm(line).includes(norm(m[0]))) v.push(cn + ": " + img + " sha-${{ github.sha }} tag is not sourced from the smoke-passed " + img + "@${{ steps.*.outputs.digest }} (foreign image/digest or mutable tag)");
+      if (!digestRe(img).test(line)) v.push(cn + ": " + img + " sha-${{ github.sha }} tag is not sourced from " + img + "@${{ steps." + (buildId[img] || "*") + ".outputs.digest }} (foreign image/digest, decoy step, or mutable tag)");
     }
   }
   return v;
@@ -663,6 +673,12 @@ mut("ci candidate proxy sha-tag sourced from a mutable :latest", ci, (w) => { co
 mut("ci candidate postgres sha-tag sourced from the proxy digest", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-postgres:sha-/); s.run = s.run.replace(/pgstack-postgres@\$\{\{\s*steps\.postgres\.outputs\.digest\s*\}\}/, "pgstack-proxy@${{ steps.proxy.outputs.digest }}"); }, candidatePolicy);
 mut("release postgres promote: decoy step hides a foreign-SHA real promote", release, (w) => { const j = w.jobs["docker-postgres"]; const real = j.steps.find((s) => /promote-image\.sh/.test(String(s.run || ""))); const i = j.steps.indexOf(real); const decoy = { name: "decoy promote", run: real.run }; real.run = real.run.replace(/\$\{\{\s*github\.sha\s*\}\}/, "deadbeef"); j.steps.splice(i, 0, decoy); }, releasePolicy);
 mut("release npm publish --tag uses a literal, not $NPM_TAG from npm-dist-tag.sh", release, (w) => { const s = findStep(w, "npm-sdk", /npm publish/); s.run = s.run.replace(/--tag\s+"?\$\{?NPM_TAG\}?"?/, "--tag latest"); }, releasePolicy);
+// R33 finding — the digest smoke/tag consume must be THIS image's build output.
+// Renaming the real build's id and adding a decoy step that writes the consumed
+// id's digest to $GITHUB_OUTPUT lets smoke/tag use an attacker-supplied digest.
+mut("ci candidate proxy digest comes from a decoy step, not the proxy build", ci, (w) => { const j = w.jobs["build-publish-images"]; const b = j.steps.find((s) => String(s.with?.file) === "./proxy-go/Dockerfile"); b.id = "proxy_build"; const bi = j.steps.indexOf(b); j.steps.splice(bi + 1, 0, { id: "proxy", run: 'echo "digest=sha256:dead" >> "$GITHUB_OUTPUT"' }); }, candidatePolicy);
+mut("ci candidate postgres digest comes from a decoy step, not the postgres build", ci, (w) => { const j = w.jobs["build-publish-images"]; const b = j.steps.find((s) => String(s.with?.file) === "./Dockerfile.dev"); b.id = "postgres_build"; const bi = j.steps.indexOf(b); j.steps.splice(bi + 1, 0, { id: "postgres", run: 'echo "digest=sha256:dead" >> "$GITHUB_OUTPUT"' }); }, candidatePolicy);
+mut("ci candidate proxy build has no step id (digest output unreferenceable)", ci, (w) => { const b = w.jobs["build-publish-images"].steps.find((s) => String(s.with?.file) === "./proxy-go/Dockerfile"); delete b.id; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
