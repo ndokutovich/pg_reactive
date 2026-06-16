@@ -345,6 +345,11 @@ function releasePolicy(wf) {
     for (const u of (j.steps || []).map((s) => s.uses).filter((x) => typeof x === "string"))
       if (/docker\/build-push-action/.test(u)) v.push(name + ": builds an image (build-push-action) — release must promote the CI digest, not rebuild");
     if (/docker\s+(?:buildx\s+)?build\b/.test(stripDead((j.steps || []).map((s) => s.run || "").join("\n")))) v.push(name + ": runs 'docker build' — release must promote the CI digest, not rebuild");
+    // No release job may run `imagetools create` DIRECTLY: promotion is delegated to
+    // promote-image.sh (which sources the CI-built digest). A direct create after a
+    // correct promote can re-point a release tag to :latest / a foreign image — an
+    // OVERWRITE the promote-presence check alone misses (R34).
+    if (/(?:docker\s+(?:buildx\s+)?)?imagetools\s+create\b/.test(lr((j.steps || []).map((s) => s.run || "").join("\n")))) v.push(name + ": runs 'imagetools create' directly — release promotion must be delegated to promote-image.sh, not re-pointed in the workflow");
   }
   // Each shipped image is promoted by a job that CALLS promote-image.sh with ITS
   // OWN repo — the digest-resolution + tag-set logic is in promote-image.sh /
@@ -380,6 +385,11 @@ function releasePolicy(wf) {
     else if (/npm-dist-tag\.sh/.test(rn)) v.push(name + ": npm-dist-tag.sh output is not captured into a variable for --tag");
     for (const r of stepDisabled(pub, PUSH_TAG)) v.push(name + " (npm publish) " + r);
   }
+  // No release job may run `npm dist-tag add … latest`: a later dist-tag re-points
+  // `latest` to a (possibly pre-release) version, defeating npm-dist-tag.sh's
+  // routing — an OVERWRITE the publish-`--tag` check alone misses (R34).
+  for (const [name, j] of Object.entries(jobs))
+    if (/npm\s+dist-tag\s+add\b[^\n]*\blatest\b/.test(lr((j.steps || []).map((s) => s.run || "").join("\n")))) v.push(name + ": runs `npm dist-tag add … latest` — the dist-tag must come only from `--tag $NPM_TAG` at publish");
   return v;
 }
 function pinPolicy(wf) {
@@ -511,15 +521,16 @@ function candidatePolicy(wf) {
   else {
     for (const r of stepDisabled(steps[tagIdx], PUSH_MASTER)) v.push(cn + " (sha-tag) " + r);
     if (pgSmoke < 0 || pxSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke) v.push(cn + ": sha-${{ github.sha }} is created before both smokes pass (tag-after-smoke order)");
-    // each image's sha-<sha> tag must be created FROM THIS image's build digest —
-    // <img>:sha-${{github.sha}} on the same `imagetools create` line as
-    // <img>@${{ steps.<buildId>.outputs.digest }} — so a foreign image's digest, a
-    // foreign/decoy step's digest, or a mutable :latest is rejected (R32 + R33).
-    const tagLines = lr(steps[tagIdx].run).split("\n");
+    // EVERY `imagetools create … <img>:sha-${{github.sha}}` line — across ALL steps,
+    // not just the canonical tag step — must source THIS image's build digest
+    // (steps.<buildId>.outputs.digest, same image repo). A later step (or a 2nd
+    // line) re-creating the sha tag from :latest / a foreign digest would otherwise
+    // OVERWRITE the smoke-passed manifest, last-writer-wins (R32 + R33 + R34).
+    const tagLines = steps.flatMap((s) => lr(s.run).split("\n"));
     for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
-      const line = tagLines.find((l) => new RegExp("imagetools\\s+create[^\\n]*" + img + ":sha-\\$\\{\\{\\s*github\\.sha\\b").test(l));
-      if (!line) { v.push(cn + ": no sha-${{ github.sha }} tag created for " + img); continue; }
-      if (!digestRe(img).test(line)) v.push(cn + ": " + img + " sha-${{ github.sha }} tag is not sourced from " + img + "@${{ steps." + (buildId[img] || "*") + ".outputs.digest }} (foreign image/digest, decoy step, or mutable tag)");
+      const created = tagLines.filter((l) => new RegExp("imagetools\\s+create[^\\n]*" + img + ":sha-\\$\\{\\{\\s*github\\.sha\\b").test(l));
+      if (!created.length) { v.push(cn + ": no sha-${{ github.sha }} tag created for " + img); continue; }
+      for (const line of created) if (!digestRe(img).test(line)) v.push(cn + ": " + img + " sha-${{ github.sha }} tag created from a non-build digest (foreign image/digest, decoy step, or mutable tag): " + JSON.stringify(line.trim()));
     }
   }
   return v;
@@ -679,6 +690,12 @@ mut("release npm publish --tag uses a literal, not $NPM_TAG from npm-dist-tag.sh
 mut("ci candidate proxy digest comes from a decoy step, not the proxy build", ci, (w) => { const j = w.jobs["build-publish-images"]; const b = j.steps.find((s) => String(s.with?.file) === "./proxy-go/Dockerfile"); b.id = "proxy_build"; const bi = j.steps.indexOf(b); j.steps.splice(bi + 1, 0, { id: "proxy", run: 'echo "digest=sha256:dead" >> "$GITHUB_OUTPUT"' }); }, candidatePolicy);
 mut("ci candidate postgres digest comes from a decoy step, not the postgres build", ci, (w) => { const j = w.jobs["build-publish-images"]; const b = j.steps.find((s) => String(s.with?.file) === "./Dockerfile.dev"); b.id = "postgres_build"; const bi = j.steps.indexOf(b); j.steps.splice(bi + 1, 0, { id: "postgres", run: 'echo "digest=sha256:dead" >> "$GITHUB_OUTPUT"' }); }, candidatePolicy);
 mut("ci candidate proxy build has no step id (digest output unreferenceable)", ci, (w) => { const b = w.jobs["build-publish-images"].steps.find((s) => String(s.with?.file) === "./proxy-go/Dockerfile"); delete b.id; }, candidatePolicy);
+// R34 finding — OVERWRITE after a correct step (last-writer-wins): a later
+// create/dist-tag re-points an artifact the canonical step set correctly.
+mut("ci candidate sha-tag step has a 2nd line overwriting proxy:sha from :latest", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
+mut("ci candidate adds a later step overwriting proxy:sha from :latest", ci, (w) => { w.jobs["build-publish-images"].steps.push({ name: "overwrite", run: 'docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"' }); }, candidatePolicy);
+mut("release docker-proxy runs a direct imagetools create re-pointing the release tag from :latest", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "overwrite", run: 'docker buildx imagetools create -t "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest"' }); }, releasePolicy);
+mut("release npm-sdk runs `npm dist-tag add … latest` after publish", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "promote latest", run: "npm dist-tag add @pgstack/sdk@${{ github.ref_name }} latest" }); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
