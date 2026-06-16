@@ -149,11 +149,16 @@ const defeatsGating = (s) => { if (!s || !hasStatusFn(s)) return false; try { re
 // silently disabled. `{0}`-style fake shells (`shell: true {0}`), `if: false`,
 // and continue-on-error are the workflow-level disables that still need catching.
 const REAL_SHELL = /^(bash|sh|pwsh|powershell|python|python3|cmd)\b/;
-// LIVE run text: `#` comments, short-circuit-dead tails (`true || …`), AND
-// unreachable blocks (`if false; then …; fi` / `while false` / uncalled
-// functions / heredocs) all stripped — so a script call that never runs doesn't
-// count as a call (gemini R28-3 / R29 / R30).
-const lr = (s) => stripDeadBranches(stripComments(stripDead(String(s ?? ""))));
+// Join shell line-continuations FIRST (`\` + newline + leading indent → a space)
+// so a command split across lines (`docker buildx imagetools \⏎ create …`,
+// `npm dist-tag \⏎ add …`) is matched as the single logical command it runs as,
+// not bypassed by the line break (gemini R35).
+const joinCont = (s) => String(s ?? "").replace(/\\\r?\n[ \t]*/g, " ");
+// LIVE run text: line-continuations joined, then `#` comments, short-circuit-dead
+// tails (`true || …`), AND unreachable blocks (`if false; then …; fi` /
+// `while false` / uncalled functions / heredocs) all stripped — so a script call
+// that never runs doesn't count as a call (gemini R28-3 / R29 / R30 / R35).
+const lr = (s) => stripDeadBranches(stripComments(stripDead(joinCont(s))));
 const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
@@ -385,11 +390,12 @@ function releasePolicy(wf) {
     else if (/npm-dist-tag\.sh/.test(rn)) v.push(name + ": npm-dist-tag.sh output is not captured into a variable for --tag");
     for (const r of stepDisabled(pub, PUSH_TAG)) v.push(name + " (npm publish) " + r);
   }
-  // No release job may run `npm dist-tag add … latest`: a later dist-tag re-points
-  // `latest` to a (possibly pre-release) version, defeating npm-dist-tag.sh's
-  // routing — an OVERWRITE the publish-`--tag` check alone misses (R34).
+  // ANY `npm dist-tag add` in a release job re-points a dist-tag after publish —
+  // ban it outright, not just a literal `latest`: the target can be a `$TAG`
+  // variable or a `${…}` expansion the literal match misses, and the dist-tag must
+  // come ONLY from `--tag $NPM_TAG` at publish (R34 + R35).
   for (const [name, j] of Object.entries(jobs))
-    if (/npm\s+dist-tag\s+add\b[^\n]*\blatest\b/.test(lr((j.steps || []).map((s) => s.run || "").join("\n")))) v.push(name + ": runs `npm dist-tag add … latest` — the dist-tag must come only from `--tag $NPM_TAG` at publish");
+    if (/npm\s+dist-tag\s+add\b/.test(lr((j.steps || []).map((s) => s.run || "").join("\n")))) v.push(name + ": runs `npm dist-tag add` — the dist-tag must come only from `--tag $NPM_TAG` at publish, never re-pointed afterward");
   return v;
 }
 function pinPolicy(wf) {
@@ -696,6 +702,12 @@ mut("ci candidate sha-tag step has a 2nd line overwriting proxy:sha from :latest
 mut("ci candidate adds a later step overwriting proxy:sha from :latest", ci, (w) => { w.jobs["build-publish-images"].steps.push({ name: "overwrite", run: 'docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"' }); }, candidatePolicy);
 mut("release docker-proxy runs a direct imagetools create re-pointing the release tag from :latest", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "overwrite", run: 'docker buildx imagetools create -t "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest"' }); }, releasePolicy);
 mut("release npm-sdk runs `npm dist-tag add … latest` after publish", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "promote latest", run: "npm dist-tag add @pgstack/sdk@${{ github.ref_name }} latest" }); }, releasePolicy);
+// R35 finding — R34's line/literal matching is beaten by shell line-continuations
+// (`\` + newline splits the command token) and variable indirection (`$TAG`).
+mut("ci candidate sha-tag overwrite split across a `\\`-continuation", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker buildx imagetools \\\n  create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
+mut("release direct imagetools create split across a `\\`-continuation", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'docker buildx imagetools \\\n  create -t "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest"' }); }, releasePolicy);
+mut("release npm dist-tag add split across a `\\`-continuation", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: 'npm dist-tag \\\n  add "@pgstack/sdk@${GITHUB_REF_NAME#v}" latest' }); }, releasePolicy);
+mut("release npm dist-tag add latest via a `$TAG` variable", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: 'TAG=latest\nnpm dist-tag add "@pgstack/sdk@${GITHUB_REF_NAME#v}" "$TAG"' }); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
