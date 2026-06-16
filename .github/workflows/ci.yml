@@ -391,9 +391,9 @@ jobs:
           out=$(docker compose run --rm \
             -e PGSTACK_ENV=production \
             -e JWT_SECRET=dev-only-jwt-secret-do-not-use-in-production \
-            -e ANON_KEY=$(openssl rand -base64 32) \
-            -e SERVICE_ROLE_KEY=$(openssl rand -base64 32) \
-            -e SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+            -e ANON_KEY="$(openssl rand -base64 32)" \
+            -e SERVICE_ROLE_KEY="$(openssl rand -base64 32)" \
+            -e SECRETS_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
             -e SMTP_HOST=smtp.example.com -e SMTP_USER=u -e SMTP_PASS=p \
             proxy-go 2>&1)
           status=$?
@@ -409,10 +409,10 @@ jobs:
           set +e
           out=$(docker compose run --rm \
             -e PGSTACK_ENV=production \
-            -e JWT_SECRET=$(openssl rand -base64 32) \
-            -e ANON_KEY=$(openssl rand -base64 32) \
-            -e SERVICE_ROLE_KEY=$(openssl rand -base64 32) \
-            -e SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+            -e JWT_SECRET="$(openssl rand -base64 32)" \
+            -e ANON_KEY="$(openssl rand -base64 32)" \
+            -e SERVICE_ROLE_KEY="$(openssl rand -base64 32)" \
+            -e SECRETS_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
             proxy-go 2>&1)
           status=$?
           echo "$out"
@@ -446,10 +446,10 @@ jobs:
           # validator's own dev-vs-prod machinery, not a regression.
           out=$(timeout 15 docker compose run --rm \
             -e PGSTACK_ENV=production \
-            -e JWT_SECRET=$(openssl rand -base64 32) \
-            -e ANON_KEY=$(openssl rand -base64 32) \
-            -e SERVICE_ROLE_KEY=$(openssl rand -base64 32) \
-            -e SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+            -e JWT_SECRET="$(openssl rand -base64 32)" \
+            -e ANON_KEY="$(openssl rand -base64 32)" \
+            -e SERVICE_ROLE_KEY="$(openssl rand -base64 32)" \
+            -e SECRETS_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
             -e SMTP_HOST=smtp.example.com -e SMTP_USER=u -e SMTP_PASS=p \
             -e ALLOWED_ORIGINS=https://example.com \
             -e REQUIRE_AUTHENTICATED_WS=true \

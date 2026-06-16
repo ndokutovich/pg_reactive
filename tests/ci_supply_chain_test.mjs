@@ -149,17 +149,19 @@ const defeatsGating = (s) => { if (!s || !hasStatusFn(s)) return false; try { re
 // silently disabled. `{0}`-style fake shells (`shell: true {0}`), `if: false`,
 // and continue-on-error are the workflow-level disables that still need catching.
 const REAL_SHELL = /^(bash|sh|pwsh|powershell|python|python3|cmd)\b/;
-// LIVE run text: `#` comments stripped AND short-circuit-dead tails removed, so a
-// name in a comment (R28-3) or `true || bash script.sh` — where the call never
-// runs — doesn't count as a call (gemini R29).
-const lr = (s) => stripDeadBranches(stripComments(String(s ?? "")));
+// LIVE run text: `#` comments, short-circuit-dead tails (`true || …`), AND
+// unreachable blocks (`if false; then …; fi` / `while false` / uncalled
+// functions / heredocs) all stripped — so a script call that never runs doesn't
+// count as a call (gemini R28-3 / R29 / R30).
+const lr = (s) => stripDeadBranches(stripComments(stripDead(String(s ?? ""))));
 const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
   const sh = String(s.shell || "").trim();
-  // a custom shell must be a real interpreter AND not carry `-c` — `shell: bash -c
-  // 'true' {0}` runs `true <scriptfile>`, never executing the script (gemini R28-3).
-  if (sh && (!REAL_SHELL.test(sh) || /(?:^|\s)-c(?:\s|$)/.test(sh))) r.push("custom/fake shell '" + sh + "' may not execute the script ({0})");
+  // a custom shell must be a real interpreter, with no `-c` (`shell: bash -c 'true'
+  // {0}` runs `true <scriptfile>`) and no control operator `| ; &` (`shell: bash {0}
+  // || true` swallows the script's failure) — gemini R28-3 / R30.
+  if (sh && (!REAL_SHELL.test(sh) || /(?:^|\s)-c(?:\s|$)/.test(sh) || /[|;&]/.test(sh))) r.push("custom/fake shell '" + sh + "' may not execute the script ({0}) or swallows its failure");
   try { if (!truthy(ev(String(s.if || "true"), ctx))) r.push("if never fires"); } catch { r.push("if unparseable"); }
   if (/always\s*\(/.test(String(s.if || ""))) r.push("if: always() (runs even after a prior step failed)");
   if (coeStep(s)) r.push("continue-on-error");
@@ -585,6 +587,11 @@ mut("release ci-gate require-green passes a hardcoded SHA", release, (w) => { co
 mut("release ci-gate validates a hardcoded tag (not ref_name)", release, (w) => { const s = findStep(w, "ci-gate", /validate-release-version\.sh/); s.run = s.run.replace(/\$\{\{\s*github\.ref_name\s*\}\}/, "v9.9.9"); }, releasePolicy);
 mut("release promote passes a foreign SHA", release, (w) => { const s = findStep(w, "docker-proxy", /promote-image\.sh/); s.run = s.run.replace(/\$\{\{\s*github\.sha\s*\}\}/, "deadbeef"); }, releasePolicy);
 mut("ci candidate smokes :latest instead of the built digest", ci, (w) => { const s = findStep(w, "build-publish-images", /smoke-postgres\.sh/); s.run = s.run.replace(/@\$\{\{\s*steps\.\w+\.outputs\.digest\s*\}\}/, ":latest"); }, candidatePolicy);
+// R30 finding — script disabled by an unreachable block or a shell control operator
+mut("deploy gate shell `bash {0} || true` (swallow)", deploy, (w) => { findStep(w, "deploy", /require-green-ci\.sh/).shell = "bash {0} || true"; }, deployPolicy);
+mut("deploy gate inside `if false; then …; fi`", deploy, (w) => { const s = findStep(w, "deploy", /require-green-ci\.sh/); s.run = "if false; then " + s.run + "; fi"; }, deployPolicy);
+mut("release ci-gate validate inside `if false` block", release, (w) => { const s = findStep(w, "ci-gate", /validate-release-version\.sh/); s.run = "if false; then " + s.run + "; fi"; }, releasePolicy);
+mut("ci candidate smoke shell `bash {0} || true`", ci, (w) => { findStep(w, "build-publish-images", /smoke-proxy\.sh/).shell = "bash {0} || true"; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
