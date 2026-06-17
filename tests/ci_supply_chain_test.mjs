@@ -160,22 +160,34 @@ const joinCont = (s) => String(s ?? "").replace(/\\\r?\n[ \t]*/g, " ");
 // that never runs doesn't count as a call (gemini R28-3 / R29 / R30 / R35).
 const lr = (s) => stripDeadBranches(stripComments(stripDead(joinCont(s))));
 // Shell-aware tokenization: split LIVE text into simple commands on UNQUOTED
-// separators (; | & newline ( )), then each into an argv list with quote
-// CHARACTERS removed — so the shell's quote-removal is reproduced: image"tools" /
-// dist"-tag" / a"dd" collapse to ONE argv token (imagetools / dist-tag / add),
-// while "imagetools create" stays ONE token (an echo arg in command position 0,
-// NOT the command `imagetools` followed by `create`). Match argv SEQUENCES, not
-// file bytes (gemini R36 — quoted-fragment bypass; R35 continuations already
-// joined by lr, so feed lr(text) in). Nested $()/quotes aren't fully parsed, but
-// no real workflow run produces a spurious imagetools-create / npm-dist-tag-add
-// token sequence, and over-tokenization can only over-match (fail closed).
+// separators (; | & newline ( )), then each into an argv list with the QUOTING
+// REMOVED exactly as Bash word-splitting does, so a command name split across
+// quoting/escaping collapses to one argv token and is matched as the command it
+// runs as, not the file bytes (gemini R36/R37). Reproduced forms:
+//   image"tools" / image'tools'        ordinary quotes  -> imagetools
+//   image$'tools' / image$"tools"      ANSI-C / locale  -> imagetools  (R37)
+//   imageto\ols / a\dd                 backslash escape -> imagetools  (R37)
+// while "imagetools create" stays ONE token (an echo arg, NOT the command
+// `imagetools` then `create`) — so no false positive. Nested $()/quotes aren't
+// fully parsed, but no real workflow run yields a spurious imagetools-create /
+// npm-dist-tag-add token sequence, and over-tokenization can only over-match.
 const shellCommands = (text) => {
-  const cmds = []; let argv = [], cur = "", q = null, inTok = false;
+  const s = String(text ?? "");
+  const cmds = []; let argv = [], cur = "", inTok = false;
   const endTok = () => { if (inTok) { argv.push(cur); cur = ""; inTok = false; } };
   const endCmd = () => { endTok(); if (argv.length) cmds.push(argv); argv = []; };
-  for (const c of String(text ?? "")) {
-    if (q) { if (c === q) q = null; else cur += c; inTok = true; continue; }
-    if (c === '"' || c === "'") { q = c; inTok = true; continue; }
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i], n = s[i + 1];
+    // $'…' (ANSI-C) / $"…" (locale): drop the `$`+quote, concatenate the content
+    // into the SAME word; inside $'…' a backslash escapes the next char.
+    if (c === "$" && (n === "'" || n === '"')) {
+      const close = n; inTok = true; i += 2;
+      for (; i < s.length && s[i] !== close; i++) { if (close === "'" && s[i] === "\\" && i + 1 < s.length) i++; cur += s[i]; }
+      continue;
+    }
+    if (c === "'") { inTok = true; i++; for (; i < s.length && s[i] !== "'"; i++) cur += s[i]; continue; }
+    if (c === '"') { inTok = true; i++; for (; i < s.length && s[i] !== '"'; i++) { if (s[i] === "\\" && i + 1 < s.length && /["\\$`]/.test(s[i + 1])) i++; cur += s[i]; } continue; }
+    if (c === "\\" && i + 1 < s.length) { cur += n; i++; inTok = true; continue; } // unquoted backslash escapes the next char
     if (c === ";" || c === "|" || c === "&" || c === "\n" || c === "(" || c === ")") { endCmd(); continue; }
     if (/\s/.test(c)) { endTok(); continue; }
     cur += c; inTok = true;
@@ -746,6 +758,14 @@ mut('ci candidate sha-tag overwrite via quoted-fragment image"tools"', ci, (w) =
 mut('release direct imagetools create via quoted-fragment image"tools"', release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'docker buildx image"tools" create -t "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest"' }); }, releasePolicy);
 mut('release npm dist-tag add via quoted-fragment dist"-tag"', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: 'npm dist"-tag" add "@pgstack/sdk@${GITHUB_REF_NAME#v}" latest' }); }, releasePolicy);
 mut('release npm dist-tag add via quoted-fragment a"dd"', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: 'npm dist-tag a"dd" "@pgstack/sdk@${GITHUB_REF_NAME#v}" latest' }); }, releasePolicy);
+// R37 finding — Bash ANSI-C quoting ($'…') and backslash escaping also concatenate
+// into one argv word: image$'tools' / dist$'-tag' / a$'dd' / a\dd -> imagetools /
+// dist-tag / add. The tokenizer must model these like the shell does.
+mut("ci candidate sha-tag overwrite via ANSI-C image$'tools'", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + "\ndocker buildx image$'tools' create -t \"${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\" \"${IMAGE_PREFIX}/pgstack-proxy:latest\""; }, candidatePolicy);
+mut("release direct imagetools create via ANSI-C image$'tools'", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker buildx image$'tools' create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
+mut("release npm dist-tag add via ANSI-C dist$'-tag'", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist$'-tag' add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+mut("release npm dist-tag add via ANSI-C a$'dd'", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag a$'dd' \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+mut("release npm dist-tag add via backslash a\\dd", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag a\\dd \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
