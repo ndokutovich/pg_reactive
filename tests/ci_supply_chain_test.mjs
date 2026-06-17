@@ -237,7 +237,20 @@ const transparentLead = (argv, j) => {
 // or after only transparent leads (launchers / assignments / options+values)? A
 // dynamic token then wildcard-matches the expected element; a dynamic ARGUMENT
 // (past the head, behind a non-launcher command) never does.
-const seqIn = (argv, seq) => argv.some((_, j) => transparentLead(argv, j) && seq.every((t, k) => { const x = argv[j + k]; return x !== undefined && (x === t || isDyn(x)); }));
+const seqIn = (argv, seq) => argv.some((_, j) => {
+  if (!transparentLead(argv, j)) return false;
+  // match the verbs in order from the command head, skipping CLI options (+ their
+  // values) BETWEEN verbs too — `npm dist-tag --registry=URL add` still matches
+  // ["dist-tag","add"] (gemini R41-2).
+  let i = j, prevOpt = false;
+  for (const t of seq) {
+    while (i < argv.length) { const x = argv[i]; if (/^-/.test(x)) { prevOpt = !x.includes("="); i++; continue; } if (prevOpt) { prevOpt = false; i++; continue; } break; }
+    const x = argv[i];
+    if (x === undefined || !(x === t || isDyn(x))) return false;
+    i++; prevOpt = false;
+  }
+  return true;
+});
 // Does any simple command in `text` invoke `seq` (e.g. ["imagetools","create"] /
 // ["npm","dist-tag","add"])? Pass lr(text) so dead/commented/continued forms are
 // already normalized.
@@ -437,7 +450,14 @@ function releasePolicy(wf) {
     // promote-image.sh (which sources the CI-built digest). A direct create after a
     // correct promote can re-point a release tag to :latest / a foreign image — an
     // OVERWRITE the promote-presence check alone misses (R34).
-    if (runsCmd(lr((j.steps || []).map((s) => s.run || "").join("\n")), ["imagetools", "create"])) v.push(name + ": runs 'imagetools create' directly — release promotion must be delegated to promote-image.sh, not re-pointed in the workflow");
+    // No release job may run ANY direct docker tag-mutation primitive — imagetools
+    // create, manifest create/push, docker tag/push all re-point a tag without
+    // promote-image.sh, which the imagetools-only ban missed (gemini R34/R41-1).
+    {
+      const jr = lr((j.steps || []).map((s) => s.run || "").join("\n"));
+      for (const seq of [["imagetools", "create"], ["manifest", "create"], ["manifest", "push"], ["docker", "tag"], ["docker", "push"]])
+        if (runsCmd(jr, seq)) { v.push(name + ": runs a direct docker tag-mutation (`" + seq.join(" ") + "`) — release promotion must be delegated to promote-image.sh, not re-pointed in the workflow"); break; }
+    }
   }
   // Each shipped image is promoted by a job that CALLS promote-image.sh with ITS
   // OWN repo — the digest-resolution + tag-set logic is in promote-image.sh /
@@ -618,7 +638,10 @@ function candidatePolicy(wf) {
     const tagCmds = steps.flatMap((s) => shellCommands(lr(s.run)));
     for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
       const shaTagRe = new RegExp(img + ":sha-\\$\\{\\{\\s*github\\.sha\\b");
-      const created = tagCmds.filter((argv) => seqIn(argv, ["imagetools", "create"]) && argv.some((t) => shaTagRe.test(t)));
+      // a sha-tag-DEFINING command — `imagetools create`, `manifest create`, or
+      // `docker tag` — must source THIS image's build digest, whichever primitive
+      // it uses (gemini R41-1).
+      const created = tagCmds.filter((argv) => (seqIn(argv, ["imagetools", "create"]) || seqIn(argv, ["manifest", "create"]) || seqIn(argv, ["docker", "tag"])) && argv.some((t) => shaTagRe.test(t)));
       if (!created.length) { v.push(cn + ": no sha-${{ github.sha }} tag created for " + img); continue; }
       for (const argv of created) if (!argv.some((t) => digestRe(img).test(t))) v.push(cn + ": " + img + " sha-${{ github.sha }} tag created from a non-build digest (foreign image/digest, decoy step, mutable tag, or quoted-fragment command): " + JSON.stringify(argv.join(" ")));
     }
@@ -835,6 +858,17 @@ mut("ci candidate sha-tag overwrite via option-interleave docker --context defau
 mut("release imagetools create via option-interleave docker --context default buildx", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker --context default buildx imagetools create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
 mut("release imagetools create via option-interleave buildx --builder default", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker buildx --builder default imagetools create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
 mut("release npm dist-tag add via option-interleave npm --prefix sdk", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm --prefix sdk dist-tag add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+// R41 finding 1 — `docker manifest create`/`docker tag`/`docker push` re-point a
+// tag without `imagetools create`, which the guard only looked for.
+mut("ci candidate sha-tag overwrite via docker manifest create", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + "\ndocker manifest create \"${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\" \"${IMAGE_PREFIX}/pgstack-proxy:latest\"\ndocker manifest push \"${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\""; }, candidatePolicy);
+mut("ci candidate sha-tag overwrite via docker tag", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + "\ndocker tag \"${IMAGE_PREFIX}/pgstack-proxy:latest\" \"${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\"\ndocker push \"${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\""; }, candidatePolicy);
+mut("release tag overwrite via docker manifest create", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker manifest create \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
+mut("release tag overwrite via docker manifest push", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker manifest push \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\"" }); }, releasePolicy);
+mut("release tag overwrite via docker tag", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker tag \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\"" }); }, releasePolicy);
+mut("release tag overwrite via docker push", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker push \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\"" }); }, releasePolicy);
+// R41 finding 2 — an option BETWEEN the verbs (npm dist-tag --registry=URL add)
+// breaks the consecutive match; seqIn must skip options inside the sequence too.
+mut("release npm dist-tag add via option between dist-tag and add", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag --registry=https://registry.npmjs.org add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
