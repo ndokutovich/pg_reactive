@@ -185,6 +185,15 @@ const shellCommands = (text) => {
       for (; i < s.length && s[i] !== close; i++) { if (close === "'" && s[i] === "\\" && i + 1 < s.length) i++; cur += s[i]; }
       continue;
     }
+    // $(…) command substitution / `…` backticks: consume as a BALANCED unit kept
+    // raw in the token (inner quotes/parens don't split it) — the token is then
+    // "dynamic" (isDyn) and matched as a wildcard in command positions (R38).
+    if (c === "$" && n === "(") {
+      inTok = true; let depth = 0, qq = null, j = i;
+      for (; j < s.length; j++) { const d = s[j]; cur += d; if (qq) { if (d === qq) qq = null; continue; } if (d === "'" || d === '"') { qq = d; continue; } if (d === "(") depth++; else if (d === ")" && --depth === 0) { j++; break; } }
+      i = j - 1; continue;
+    }
+    if (c === "`") { inTok = true; cur += c; i++; for (; i < s.length && s[i] !== "`"; i++) cur += s[i]; if (i < s.length) cur += "`"; continue; }
     if (c === "'") { inTok = true; i++; for (; i < s.length && s[i] !== "'"; i++) cur += s[i]; continue; }
     if (c === '"') { inTok = true; i++; for (; i < s.length && s[i] !== '"'; i++) { if (s[i] === "\\" && i + 1 < s.length && /["\\$`]/.test(s[i + 1])) i++; cur += s[i]; } continue; }
     if (c === "\\" && i + 1 < s.length) { cur += n; i++; inTok = true; continue; } // unquoted backslash escapes the next char
@@ -195,8 +204,14 @@ const shellCommands = (text) => {
   endCmd();
   return cmds;
 };
-// Is `seq` a consecutive run of argv tokens (the command + its sub-verbs)?
-const seqIn = (argv, seq) => argv.some((_, i) => seq.every((t, k) => argv[i + k] === t));
+// A command-substitution / backtick token resolves at RUNTIME — its value can't
+// be known statically, so in a command/sub-verb position it matches the forbidden
+// sequence as a WILDCARD (fail closed): `"$(printf imagetools)" create` is treated
+// as `imagetools create` (gemini R38).
+const isDyn = (t) => typeof t === "string" && (t.includes("$(") || t.includes("`"));
+// Is `seq` a consecutive run of argv tokens (the command + its sub-verbs)? A
+// dynamic token wildcard-matches any expected element.
+const seqIn = (argv, seq) => argv.some((_, i) => seq.every((t, k) => { const x = argv[i + k]; return x !== undefined && (x === t || isDyn(x)); }));
 // Does any simple command in `text` invoke `seq` (e.g. ["imagetools","create"] /
 // ["npm","dist-tag","add"])? Pass lr(text) so dead/commented/continued forms are
 // already normalized.
@@ -766,6 +781,17 @@ mut("release direct imagetools create via ANSI-C image$'tools'", release, (w) =>
 mut("release npm dist-tag add via ANSI-C dist$'-tag'", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist$'-tag' add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 mut("release npm dist-tag add via ANSI-C a$'dd'", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag a$'dd' \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 mut("release npm dist-tag add via backslash a\\dd", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag a\\dd \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+// R38 finding — a command/sub-verb token can be a command substitution whose
+// output the shell runs as that token: "$(printf imagetools)" create, npm
+// "$(printf dist-tag)" add, npm dist-tag "$(printf add)". The value is only known
+// at runtime → fail closed: a dynamic token ($()/backtick) in a command position
+// matches the forbidden sequence as a wildcard.
+mut('ci candidate sha-tag overwrite via command-sub "$(printf imagetools)"', ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + "\ndocker buildx \"$(printf imagetools)\" create -t \"${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\" \"${IMAGE_PREFIX}/pgstack-proxy:latest\""; }, candidatePolicy);
+mut('release imagetools create via command-sub "$(printf imagetools)"', release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker buildx \"$(printf imagetools)\" create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
+mut('release npm dist-tag add via command-sub "$(printf dist-tag)"', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm \"$(printf dist-tag)\" add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+mut('release npm dist-tag add via command-sub "$(printf add)"', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag \"$(printf add)\" \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+mut("release npm dist-tag add via backtick command-sub", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag \"`printf add`\" \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+mut("release imagetools create via unquoted $(printf imagetools)", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker buildx $(printf imagetools) create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
