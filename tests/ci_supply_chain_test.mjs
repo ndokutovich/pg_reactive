@@ -211,20 +211,33 @@ const shellCommands = (text) => {
 // `SUB=imagetools; … "$SUB" create` are both treated as `imagetools create`.
 const isDyn = (t) => typeof t === "string" && (/\$[({\w]/.test(t) || t.includes("`"));
 // Transparent leading tokens that don't change WHICH command runs — so the
-// forbidden sequence may legitimately start right after them. Anything else in
-// front of the sequence (e.g. `bash promote-image.sh`) means the dynamic tokens
-// are ARGUMENTS, not the command, and must NOT wildcard-match (else the real
-// promote, whose args are full of ${{ … }}, would false-positive) — gemini R39.
-const LAUNCHER = new Set(["docker", "buildx", "sudo", "command", "env", "exec", "time", "nice", "nohup", "stdbuf"]);
-const isPrefix = (t) => LAUNCHER.has(t) || /^\w+=/.test(t); // launcher or VAR=… assignment
-// Does `seq` (the command + its sub-verbs) start at a COMMAND HEAD in argv — i.e.
-// at index 0 or after only launchers/assignments? A dynamic token then
-// wildcard-matches the expected element; a dynamic ARGUMENT (past the head, behind
-// a non-launcher command) never does.
-const seqIn = (argv, seq) => argv.some((_, j) => {
-  for (let p = 0; p < j; p++) if (!isPrefix(argv[p])) return false;
-  return seq.every((t, k) => { const x = argv[j + k]; return x !== undefined && (x === t || isDyn(x)); });
-});
+// forbidden VERB sequence may legitimately start right after them. `docker`/`buildx`
+// front the imagetools verbs; `npm` fronts the dist-tag verbs (so the npm seq is
+// ["dist-tag","add"], not ["npm",…]). Anything else in front (e.g. `bash
+// promote-image.sh`) means the dynamic tokens are ARGUMENTS, not the command, and
+// must NOT wildcard-match (else the real promote, full of ${{ … }} args, would
+// false-positive) — gemini R39/R40.
+const LAUNCHER = new Set(["docker", "buildx", "npm", "sudo", "command", "env", "exec", "time", "nice", "nohup", "stdbuf"]);
+// A token is a transparent command-head lead if it's a launcher, a VAR= assignment,
+// a CLI option (-x / --flag / --flag=val), or the value of the preceding non-`=`
+// option — so `docker --context default buildx imagetools create` and `npm --prefix
+// sdk dist-tag add` still anchor to the verb sequence (gemini R40).
+const transparentLead = (argv, j) => {
+  let prevOpt = false;
+  for (let p = 0; p < j; p++) {
+    const t = argv[p];
+    if (LAUNCHER.has(t) || /^\w+=/.test(t)) { prevOpt = false; continue; }
+    if (/^-/.test(t)) { prevOpt = !t.includes("="); continue; } // option; expects a value unless --x=y
+    if (prevOpt) { prevOpt = false; continue; }                 // value of the previous option
+    return false;                                               // a bare positional word → not the command head
+  }
+  return true;
+};
+// Does `seq` (the command's sub-verbs) start at a COMMAND HEAD in argv — index 0,
+// or after only transparent leads (launchers / assignments / options+values)? A
+// dynamic token then wildcard-matches the expected element; a dynamic ARGUMENT
+// (past the head, behind a non-launcher command) never does.
+const seqIn = (argv, seq) => argv.some((_, j) => transparentLead(argv, j) && seq.every((t, k) => { const x = argv[j + k]; return x !== undefined && (x === t || isDyn(x)); }));
 // Does any simple command in `text` invoke `seq` (e.g. ["imagetools","create"] /
 // ["npm","dist-tag","add"])? Pass lr(text) so dead/commented/continued forms are
 // already normalized.
@@ -465,7 +478,7 @@ function releasePolicy(wf) {
   // variable or a `${…}` expansion the literal match misses, and the dist-tag must
   // come ONLY from `--tag $NPM_TAG` at publish (R34 + R35).
   for (const [name, j] of Object.entries(jobs))
-    if (runsCmd(lr((j.steps || []).map((s) => s.run || "").join("\n")), ["npm", "dist-tag", "add"])) v.push(name + ": runs `npm dist-tag add` — the dist-tag must come only from `--tag $NPM_TAG` at publish, never re-pointed afterward");
+    if (runsCmd(lr((j.steps || []).map((s) => s.run || "").join("\n")), ["dist-tag", "add"])) v.push(name + ": runs `npm dist-tag add` — the dist-tag must come only from `--tag $NPM_TAG` at publish, never re-pointed afterward");
   return v;
 }
 function pinPolicy(wf) {
@@ -813,6 +826,15 @@ mut('release imagetools create via variable "$SUB"', release, (w) => { w.jobs["d
 mut('release npm dist-tag add via variable "$SUB" (subcommand)', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "SUB=dist-tag\nnpm \"$SUB\" add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 mut('release npm dist-tag add via variable "$SUB" (verb)', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "SUB=add\nnpm dist-tag \"$SUB\" \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 mut('release npm dist-tag add via variable "${SUB}" braces', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "SUB=add\nnpm dist-tag \"${SUB}\" \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+// R40 finding — CLI OPTIONS interleaved between launcher and subcommand break the
+// anchor (the option + its value aren't launchers): docker --context default
+// buildx imagetools create / docker buildx --builder default imagetools create /
+// npm --prefix sdk dist-tag add. seqIn must skip options (+ their values) in the
+// command head, and the npm verb is dist-tag/add (npm is the root, not the verb).
+mut("ci candidate sha-tag overwrite via option-interleave docker --context default buildx", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + "\ndocker --context default buildx imagetools create -t \"${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\" \"${IMAGE_PREFIX}/pgstack-proxy:latest\""; }, candidatePolicy);
+mut("release imagetools create via option-interleave docker --context default buildx", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker --context default buildx imagetools create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
+mut("release imagetools create via option-interleave buildx --builder default", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker buildx --builder default imagetools create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
+mut("release npm dist-tag add via option-interleave npm --prefix sdk", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm --prefix sdk dist-tag add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
