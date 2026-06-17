@@ -159,6 +159,36 @@ const joinCont = (s) => String(s ?? "").replace(/\\\r?\n[ \t]*/g, " ");
 // `while false` / uncalled functions / heredocs) all stripped — so a script call
 // that never runs doesn't count as a call (gemini R28-3 / R29 / R30 / R35).
 const lr = (s) => stripDeadBranches(stripComments(stripDead(joinCont(s))));
+// Shell-aware tokenization: split LIVE text into simple commands on UNQUOTED
+// separators (; | & newline ( )), then each into an argv list with quote
+// CHARACTERS removed — so the shell's quote-removal is reproduced: image"tools" /
+// dist"-tag" / a"dd" collapse to ONE argv token (imagetools / dist-tag / add),
+// while "imagetools create" stays ONE token (an echo arg in command position 0,
+// NOT the command `imagetools` followed by `create`). Match argv SEQUENCES, not
+// file bytes (gemini R36 — quoted-fragment bypass; R35 continuations already
+// joined by lr, so feed lr(text) in). Nested $()/quotes aren't fully parsed, but
+// no real workflow run produces a spurious imagetools-create / npm-dist-tag-add
+// token sequence, and over-tokenization can only over-match (fail closed).
+const shellCommands = (text) => {
+  const cmds = []; let argv = [], cur = "", q = null, inTok = false;
+  const endTok = () => { if (inTok) { argv.push(cur); cur = ""; inTok = false; } };
+  const endCmd = () => { endTok(); if (argv.length) cmds.push(argv); argv = []; };
+  for (const c of String(text ?? "")) {
+    if (q) { if (c === q) q = null; else cur += c; inTok = true; continue; }
+    if (c === '"' || c === "'") { q = c; inTok = true; continue; }
+    if (c === ";" || c === "|" || c === "&" || c === "\n" || c === "(" || c === ")") { endCmd(); continue; }
+    if (/\s/.test(c)) { endTok(); continue; }
+    cur += c; inTok = true;
+  }
+  endCmd();
+  return cmds;
+};
+// Is `seq` a consecutive run of argv tokens (the command + its sub-verbs)?
+const seqIn = (argv, seq) => argv.some((_, i) => seq.every((t, k) => argv[i + k] === t));
+// Does any simple command in `text` invoke `seq` (e.g. ["imagetools","create"] /
+// ["npm","dist-tag","add"])? Pass lr(text) so dead/commented/continued forms are
+// already normalized.
+const runsCmd = (text, seq) => shellCommands(text).some((argv) => seqIn(argv, seq));
 const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
@@ -354,7 +384,7 @@ function releasePolicy(wf) {
     // promote-image.sh (which sources the CI-built digest). A direct create after a
     // correct promote can re-point a release tag to :latest / a foreign image — an
     // OVERWRITE the promote-presence check alone misses (R34).
-    if (/(?:docker\s+(?:buildx\s+)?)?imagetools\s+create\b/.test(lr((j.steps || []).map((s) => s.run || "").join("\n")))) v.push(name + ": runs 'imagetools create' directly — release promotion must be delegated to promote-image.sh, not re-pointed in the workflow");
+    if (runsCmd(lr((j.steps || []).map((s) => s.run || "").join("\n")), ["imagetools", "create"])) v.push(name + ": runs 'imagetools create' directly — release promotion must be delegated to promote-image.sh, not re-pointed in the workflow");
   }
   // Each shipped image is promoted by a job that CALLS promote-image.sh with ITS
   // OWN repo — the digest-resolution + tag-set logic is in promote-image.sh /
@@ -395,7 +425,7 @@ function releasePolicy(wf) {
   // variable or a `${…}` expansion the literal match misses, and the dist-tag must
   // come ONLY from `--tag $NPM_TAG` at publish (R34 + R35).
   for (const [name, j] of Object.entries(jobs))
-    if (/npm\s+dist-tag\s+add\b/.test(lr((j.steps || []).map((s) => s.run || "").join("\n")))) v.push(name + ": runs `npm dist-tag add` — the dist-tag must come only from `--tag $NPM_TAG` at publish, never re-pointed afterward");
+    if (runsCmd(lr((j.steps || []).map((s) => s.run || "").join("\n")), ["npm", "dist-tag", "add"])) v.push(name + ": runs `npm dist-tag add` — the dist-tag must come only from `--tag $NPM_TAG` at publish, never re-pointed afterward");
   return v;
 }
 function pinPolicy(wf) {
@@ -532,11 +562,12 @@ function candidatePolicy(wf) {
     // (steps.<buildId>.outputs.digest, same image repo). A later step (or a 2nd
     // line) re-creating the sha tag from :latest / a foreign digest would otherwise
     // OVERWRITE the smoke-passed manifest, last-writer-wins (R32 + R33 + R34).
-    const tagLines = steps.flatMap((s) => lr(s.run).split("\n"));
+    const tagCmds = steps.flatMap((s) => shellCommands(lr(s.run)));
     for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
-      const created = tagLines.filter((l) => new RegExp("imagetools\\s+create[^\\n]*" + img + ":sha-\\$\\{\\{\\s*github\\.sha\\b").test(l));
+      const shaTagRe = new RegExp(img + ":sha-\\$\\{\\{\\s*github\\.sha\\b");
+      const created = tagCmds.filter((argv) => seqIn(argv, ["imagetools", "create"]) && argv.some((t) => shaTagRe.test(t)));
       if (!created.length) { v.push(cn + ": no sha-${{ github.sha }} tag created for " + img); continue; }
-      for (const line of created) if (!digestRe(img).test(line)) v.push(cn + ": " + img + " sha-${{ github.sha }} tag created from a non-build digest (foreign image/digest, decoy step, or mutable tag): " + JSON.stringify(line.trim()));
+      for (const argv of created) if (!argv.some((t) => digestRe(img).test(t))) v.push(cn + ": " + img + " sha-${{ github.sha }} tag created from a non-build digest (foreign image/digest, decoy step, mutable tag, or quoted-fragment command): " + JSON.stringify(argv.join(" ")));
     }
   }
   return v;
@@ -708,6 +739,13 @@ mut("ci candidate sha-tag overwrite split across a `\\`-continuation", ci, (w) =
 mut("release direct imagetools create split across a `\\`-continuation", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'docker buildx imagetools \\\n  create -t "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest"' }); }, releasePolicy);
 mut("release npm dist-tag add split across a `\\`-continuation", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: 'npm dist-tag \\\n  add "@pgstack/sdk@${GITHUB_REF_NAME#v}" latest' }); }, releasePolicy);
 mut("release npm dist-tag add latest via a `$TAG` variable", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: 'TAG=latest\nnpm dist-tag add "@pgstack/sdk@${GITHUB_REF_NAME#v}" "$TAG"' }); }, releasePolicy);
+// R36 finding — the shell joins QUOTED FRAGMENTS into one argv token, so literal
+// token-matching is beaten: image"tools" -> imagetools, dist"-tag" -> dist-tag,
+// a"dd" -> add. Must tokenize to argv (quote chars removed) before matching.
+mut('ci candidate sha-tag overwrite via quoted-fragment image"tools"', ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker buildx image"tools" create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
+mut('release direct imagetools create via quoted-fragment image"tools"', release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'docker buildx image"tools" create -t "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest"' }); }, releasePolicy);
+mut('release npm dist-tag add via quoted-fragment dist"-tag"', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: 'npm dist"-tag" add "@pgstack/sdk@${GITHUB_REF_NAME#v}" latest' }); }, releasePolicy);
+mut('release npm dist-tag add via quoted-fragment a"dd"', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: 'npm dist-tag a"dd" "@pgstack/sdk@${GITHUB_REF_NAME#v}" latest' }); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
