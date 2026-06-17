@@ -204,14 +204,27 @@ const shellCommands = (text) => {
   endCmd();
   return cmds;
 };
-// A command-substitution / backtick token resolves at RUNTIME — its value can't
-// be known statically, so in a command/sub-verb position it matches the forbidden
-// sequence as a WILDCARD (fail closed): `"$(printf imagetools)" create` is treated
-// as `imagetools create` (gemini R38).
-const isDyn = (t) => typeof t === "string" && (t.includes("$(") || t.includes("`"));
-// Is `seq` a consecutive run of argv tokens (the command + its sub-verbs)? A
-// dynamic token wildcard-matches any expected element.
-const seqIn = (argv, seq) => argv.some((_, i) => seq.every((t, k) => { const x = argv[i + k]; return x !== undefined && (x === t || isDyn(x)); }));
+// A token whose value is resolved at RUNTIME — command substitution `$(…)` /
+// backtick (R38), OR parameter expansion `$VAR` / `${VAR}` (R39) — can't be known
+// statically, so in a command/sub-verb position it matches the forbidden sequence
+// as a WILDCARD (fail closed): `"$(printf imagetools)" create` and
+// `SUB=imagetools; … "$SUB" create` are both treated as `imagetools create`.
+const isDyn = (t) => typeof t === "string" && (/\$[({\w]/.test(t) || t.includes("`"));
+// Transparent leading tokens that don't change WHICH command runs — so the
+// forbidden sequence may legitimately start right after them. Anything else in
+// front of the sequence (e.g. `bash promote-image.sh`) means the dynamic tokens
+// are ARGUMENTS, not the command, and must NOT wildcard-match (else the real
+// promote, whose args are full of ${{ … }}, would false-positive) — gemini R39.
+const LAUNCHER = new Set(["docker", "buildx", "sudo", "command", "env", "exec", "time", "nice", "nohup", "stdbuf"]);
+const isPrefix = (t) => LAUNCHER.has(t) || /^\w+=/.test(t); // launcher or VAR=… assignment
+// Does `seq` (the command + its sub-verbs) start at a COMMAND HEAD in argv — i.e.
+// at index 0 or after only launchers/assignments? A dynamic token then
+// wildcard-matches the expected element; a dynamic ARGUMENT (past the head, behind
+// a non-launcher command) never does.
+const seqIn = (argv, seq) => argv.some((_, j) => {
+  for (let p = 0; p < j; p++) if (!isPrefix(argv[p])) return false;
+  return seq.every((t, k) => { const x = argv[j + k]; return x !== undefined && (x === t || isDyn(x)); });
+});
 // Does any simple command in `text` invoke `seq` (e.g. ["imagetools","create"] /
 // ["npm","dist-tag","add"])? Pass lr(text) so dead/commented/continued forms are
 // already normalized.
@@ -792,6 +805,14 @@ mut('release npm dist-tag add via command-sub "$(printf dist-tag)"', release, (w
 mut('release npm dist-tag add via command-sub "$(printf add)"', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag \"$(printf add)\" \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 mut("release npm dist-tag add via backtick command-sub", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag \"`printf add`\" \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 mut("release imagetools create via unquoted $(printf imagetools)", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "docker buildx $(printf imagetools) create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
+// R39 finding — a command/sub-verb token can be a parameter expansion ($VAR /
+// ${VAR}) the shell resolves to the forbidden verb. Fail closed: a dynamic token
+// in a COMMAND position (after launchers docker/buildx/… only) is a wildcard.
+mut('ci candidate sha-tag overwrite via variable "$SUB"', ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + "\nSUB=imagetools\ndocker buildx \"$SUB\" create -t \"${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\" \"${IMAGE_PREFIX}/pgstack-proxy:latest\""; }, candidatePolicy);
+mut('release imagetools create via variable "$SUB"', release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "SUB=imagetools\ndocker buildx \"$SUB\" create -t \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\" \"ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest\"" }); }, releasePolicy);
+mut('release npm dist-tag add via variable "$SUB" (subcommand)', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "SUB=dist-tag\nnpm \"$SUB\" add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+mut('release npm dist-tag add via variable "$SUB" (verb)', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "SUB=add\nnpm dist-tag \"$SUB\" \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+mut('release npm dist-tag add via variable "${SUB}" braces', release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "SUB=add\nnpm dist-tag \"${SUB}\" \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
