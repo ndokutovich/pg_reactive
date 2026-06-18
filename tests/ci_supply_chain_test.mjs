@@ -727,7 +727,19 @@ function candidatePolicy(wf) {
     if (hasCmdSub(argv)) return false; // $()/backtick runs a side command before the host (R43)
     if (isNoopHead(effHead(argv))) return true;
     if (isScriptCommand(argv, /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/)) return true;
-    return seqIn(argv, ["imagetools", "create"]) || seqIn(argv, ["docker", "rm"]);
+    if (seqIn(argv, ["docker", "rm"])) return true;
+    if (seqIn(argv, ["imagetools", "create"])) {
+      // a -t/--tag target naming a pgstack-* repo must be the EXACT literal canonical
+      // sha tag; a dynamic tag ($TAG/${TAG}/fragment) evades the literal-target
+      // digest-source check below and re-points sha-<sha> to :latest, last-writer-wins (R47)
+      const targets = [];
+      for (let k = 0; k < argv.length; k++) {
+        if ((argv[k] === "-t" || argv[k] === "--tag") && argv[k + 1] !== undefined) targets.push(argv[k + 1]);
+        else { const m = /^--tag=(.+)/.exec(argv[k]); if (m) targets.push(m[1]); }
+      }
+      return targets.every((t) => !/pgstack-(?:proxy|postgres)[:@]/.test(t) || /pgstack-(?:proxy|postgres):sha-\$\{\{\s*github\.sha\s*\}\}$/.test(t));
+    }
+    return false;
   };
   for (const s of steps) {
     if (hasHeredoc(s.run)) v.push(cn + ": uses a heredoc/here-string (<<) — its body live-expands command substitutions the guard can't inspect (R44)");
@@ -1008,6 +1020,16 @@ mut("ci candidate re-points the sha tag via `bash -c crane copy` with smoke-prox
 mut("release docker-proxy re-points the tag via `env -S` wrapping bash -c, promote-image.sh as an arg", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'env -S "bash -c \'crane copy ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\'" .github/scripts/promote-image.sh pgstack-proxy ${{ github.sha }}' }); }, releasePolicy);
 mut("release docker-proxy re-points the tag via `env --split-string` wrapping bash -c", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'env --split-string="bash -c \'crane copy ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\'" .github/scripts/promote-image.sh pgstack-proxy ${{ github.sha }}' }); }, releasePolicy);
 mut("ci candidate re-points the sha tag via `env -S` wrapping bash -c, smoke-proxy.sh as an arg", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nenv -S "bash -c \'crane copy ${IMAGE_PREFIX}/pgstack-proxy:latest ${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\'" .github/scripts/smoke-proxy.sh'; }, candidatePolicy);
+// R47 finding — the candidate allowlist permitted ANY `imagetools create`, while
+// the digest-source check binds only commands whose -t target LITERALLY reads
+// `<img>:sha-${{ github.sha }}`. A dynamic target (`-t "…/pgstack-proxy:${TAG}"`
+// with `TAG="sha-${{ github.sha }}"`) leaves the canonical command in place but
+// re-points the SAME sha tag to :latest as the last writer — release then promotes
+// unsmoked bytes. Fix: a pgstack-* `imagetools create` -t target must be the exact
+// literal sha tag; any dynamic tag fails closed.
+mut("ci candidate re-points the sha tag via a ${TAG} dynamic target (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:${TAG}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
+mut("ci candidate re-points the sha tag via a $TAG dynamic target (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:$TAG" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
+mut("ci candidate re-points the sha tag via a ${TAG} dynamic target (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-postgres:${TAG}" "${IMAGE_PREFIX}/pgstack-postgres:latest"'; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
