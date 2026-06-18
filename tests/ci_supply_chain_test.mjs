@@ -760,20 +760,31 @@ function candidatePolicy(wf) {
   // repo from both `created` and the allowlist yet expands to re-point the real tag —
   // so ANY `$IMG`/`$REPO`/`${…}` in the repo or tag of target/source fails closed (R49).
   const CANON_TARGET = /^\$\{IMAGE_PREFIX\}\/pgstack-(proxy|postgres):sha-\$\{\{\s*github\.sha\s*\}\}$/;
+  // Exact argv shape — not just operand validation. The prefix must be ONLY
+  // `docker`/`buildx` launchers (no `--context`/`--builder` etc. that redirect the
+  // daemon), and after `create` the ONLY tokens may be `-t <target>` (once) and one
+  // positional source. Any other flag — `--append` (existing tag becomes an implicit
+  // input), `--dry-run` (writes nothing, exits 0 → a stale sha-<sha> survives),
+  // `--annotation`, `--file`, … — fails closed (R50).
   const canonicalCreate = (argv) => {
-    const targets = [];
-    for (let k = 0; k < argv.length; k++) {
-      if ((argv[k] === "-t" || argv[k] === "--tag") && argv[k + 1] !== undefined) targets.push(argv[k + 1]);
-      else { const m = /^--tag=(.+)/.exec(argv[k]); if (m) targets.push(m[1]); }
+    const ci = argv.indexOf("create");
+    if (ci < 1 || argv[ci - 1] !== "imagetools") return false;
+    for (let k = 0; k < ci - 1; k++) if (!LAUNCHER.has(argv[k])) return false; // prefix: launchers only, no options
+    const targets = [], sources = [];
+    for (let k = ci + 1; k < argv.length; k++) {
+      const t = argv[k];
+      if (t === "-t" || t === "--tag") { if (argv[k + 1] === undefined) return false; targets.push(argv[++k]); continue; }
+      const m = /^(?:--tag|-t)=(.+)/.exec(t); if (m) { targets.push(m[1]); continue; }
+      if (/^-/.test(t)) return false; // ANY other flag (--append/--dry-run/--annotation/…) fails closed
+      sources.push(t);
     }
-    if (targets.length !== 1) return false;
+    if (targets.length !== 1 || sources.length !== 1) return false;
     const tm = CANON_TARGET.exec(targets[0]);
     if (!tm) return false;
     const img = "pgstack-" + tm[1];
-    const src = imagetoolsSources(argv);
     const bid = buildId[img] ? buildId[img].replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "\\w+";
     const srcRe = new RegExp("^\\$\\{IMAGE_PREFIX\\}\\/" + img + "@\\$\\{\\{\\s*steps\\." + bid + "\\.outputs\\.digest\\s*\\}\\}$");
-    return src.length === 1 && srcRe.test(src[0]);
+    return srcRe.test(sources[0]);
   };
   const allowedCand = (argv) => {
     if (hasCmdSub(argv)) return false; // $()/backtick runs a side command before the host (R43)
@@ -1094,6 +1105,18 @@ mut("ci candidate adds an extra mutable :latest source beside the digest (postgr
 mut("ci candidate re-points the sha tag via a $IMG dynamic repo (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nIMG="pgstack-proxy"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/${IMG}:sha-${{ github.sha }}" "${IMAGE_PREFIX}/${IMG}:latest"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via a ${REPO} dynamic repo (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nREPO="${IMAGE_PREFIX}/pgstack-proxy"\ndocker buildx imagetools create -t "${REPO}:sha-${{ github.sha }}" "${REPO}:latest"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via a $IMG dynamic repo (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-postgres:sha-/); s.run = s.run + '\nIMG="pgstack-postgres"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/${IMG}:sha-${{ github.sha }}" "${IMAGE_PREFIX}/${IMG}:latest"'; }, candidatePolicy);
+// R50 finding — canonicalCreate validated the operands (one literal target, one
+// digest source) but not the verb's MODE: `--append` makes the EXISTING tag an
+// implicit extra input (the sha tag is no longer built solely from the smoke
+// digest), and `--dry-run` writes nothing yet exits 0 (a pre-existing sha-<sha>
+// in the registry survives, so release promotes stale/unsmoked bytes). A prefix
+// option (`docker --context X buildx …`) likewise changes the target daemon.
+// Fix: an exact argv shape — prefix only `docker`/`buildx` launchers, and after
+// `create` ONLY `-t <canonical>` + one canonical source; any other flag fails closed.
+mut("ci candidate sha tag built with --append (existing tag becomes an implicit input)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker buildx imagetools create --append -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"'; }, candidatePolicy);
+mut("ci candidate sha tag with --dry-run (writes nothing, step still succeeds)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker buildx imagetools create --dry-run -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"'; }, candidatePolicy);
+mut("ci candidate sha tag built with --append (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-postgres:sha-/); s.run = s.run + '\ndocker buildx imagetools create --append -t "${IMAGE_PREFIX}/pgstack-postgres:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"'; }, candidatePolicy);
+mut("ci candidate sha tag via prefix option-interleave docker --context default buildx", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker --context default buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"'; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
