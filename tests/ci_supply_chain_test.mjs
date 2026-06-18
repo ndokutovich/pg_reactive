@@ -278,6 +278,25 @@ const hasCmdSub = (argv) => argv.some((t) => /\$\(/.test(t) || t.includes("`"));
 // R43 substitution check never sees it. A write-scoped job has no business with a
 // heredoc, so its mere presence in a run step is refused fail-closed (R44).
 const hasHeredoc = (run) => /<</.test(joinCont(String(run ?? "")));
+// Is `scriptRe` the EFFECTIVE command of argv — the command head, reached after
+// only transparent launchers (bash/sh/sudo/env/…), `VAR=` assignments, and
+// options — rather than merely an argument sitting somewhere in the line? A
+// `bash -c "<cmd>" .github/scripts/x.sh` runs `<cmd>`; the script path then lands
+// in $0/$1 and is NEVER executed, so a `-c` in the lead (which makes the next
+// token a command STRING, not a script file) means the marker is an argument and
+// is refused — the allowlist must match the command SHAPE, not marker presence (R45).
+const SCRIPT_LEAD = new Set(["bash", "sh", "dash", "ksh", "zsh", ...LAUNCHER]);
+const isScriptCommand = (argv, scriptRe) => {
+  let i = 0, prevOpt = false;
+  for (; i < argv.length; i++) {
+    const t = argv[i];
+    if (prevOpt) { prevOpt = false; continue; }                  // value of a prior non-`=` option
+    if (/^-/.test(t)) { if (/^-[A-Za-z]*c/.test(t)) return false; prevOpt = !t.includes("="); continue; } // -c / -ec: next arg is a command string
+    if (SCRIPT_LEAD.has(t) || /^\w+=/.test(t)) continue;
+    break;                                                       // first positional word = the command head
+  }
+  return i < argv.length && scriptRe.test(argv[i]);
+};
 const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
@@ -521,7 +540,7 @@ function releasePolicy(wf) {
         if (!argv.length) continue;
         if (hasCmdSub(argv)) { v.push(name + ": registry-write job runs a command carrying a substitution $()/backtick (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — the shell runs it as a side command before the host command, re-pointing a tag past the no-op head (R43)"); continue; }
         if (isNoopHead(effHead(argv))) continue;
-        if (argv.some((t) => /\.github\/scripts\/promote-image\.sh/.test(t))) continue;
+        if (isScriptCommand(argv, /\.github\/scripts\/promote-image\.sh/)) continue;
         v.push(name + ": registry-write job runs a non-promote command (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — only bare promote-image.sh may run with registry creds; any other client (crane/regctl/oras/curl) can re-point a tag (R42)");
       }
     }
@@ -704,7 +723,7 @@ function candidatePolicy(wf) {
   const allowedCand = (argv) => {
     if (hasCmdSub(argv)) return false; // $()/backtick runs a side command before the host (R43)
     if (isNoopHead(effHead(argv))) return true;
-    if (argv.some((t) => /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/.test(t))) return true;
+    if (isScriptCommand(argv, /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/)) return true;
     return seqIn(argv, ["imagetools", "create"]) || seqIn(argv, ["docker", "rm"]);
   };
   for (const s of steps) {
@@ -968,6 +987,15 @@ mut("ci candidate re-points the sha tag via echo backtick crane copy", ci, (w) =
 mut("release docker-proxy re-points the tag via echo <<EOF heredoc $(crane copy)", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo <<EOF\n$(crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}")\nEOF' }); }, releasePolicy);
 mut("release docker-proxy re-points the tag via echo <<-EOF heredoc $(crane copy)", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo <<-EOF\n\t$(crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}")\n\tEOF' }); }, releasePolicy);
 mut("ci candidate re-points the sha tag via echo <<EOF heredoc $(crane copy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\necho <<EOF\n$(crane copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}")\nEOF'; }, candidatePolicy);
+// R45 finding — the allowlist accepted ANY argv merely CONTAINING the script
+// marker, but a `bash -c "<cmd>" .github/scripts/x.sh` runs `<cmd>` and leaves the
+// script as an unexecuted positional ($1). So `bash -c "crane copy …"
+// promote-image.sh …` re-points a tag while the marker satisfies the allowlist.
+// Fix: the script must be the EFFECTIVE command head (isScriptCommand), not an
+// argument behind a `-c` wrapper.
+mut("release docker-proxy re-points the tag via `bash -c crane copy` with promote-image.sh as an arg", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'bash -c "crane copy ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" .github/scripts/promote-image.sh pgstack-proxy ${{ github.sha }}' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via `sh -c crane copy` with promote-image.sh as an arg", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'sh -c "crane copy ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" .github/scripts/promote-image.sh pgstack-proxy ${{ github.sha }}' }); }, releasePolicy);
+mut("ci candidate re-points the sha tag via `bash -c crane copy` with smoke-proxy.sh as an arg", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nbash -c "crane copy ${IMAGE_PREFIX}/pgstack-proxy:latest ${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" .github/scripts/smoke-proxy.sh'; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
