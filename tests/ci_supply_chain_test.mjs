@@ -272,6 +272,12 @@ const isNoopHead = (h) => h === undefined || NOOP_HEAD.has(h) || /^[0-9]+$/.test
 // substitution. Parameter expansion (`$VAR`/`${VAR}`/`${{ … }}`) runs no command
 // and is NOT flagged, so the real promote/imagetools args stay clean (R43).
 const hasCmdSub = (argv) => argv.some((t) => /\$\(/.test(t) || t.includes("`"));
+// A heredoc / here-string (`<<`, `<<-`, `<<<`) whose body Bash LIVE-EXPANDS:
+// `echo <<EOF`⏎`$(crane copy …)`⏎`EOF` runs the substitution before the host
+// command, but `lr`→`stripDead` discards the heredoc body as "dead code", so the
+// R43 substitution check never sees it. A write-scoped job has no business with a
+// heredoc, so its mere presence in a run step is refused fail-closed (R44).
+const hasHeredoc = (run) => /<</.test(joinCont(String(run ?? "")));
 const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
@@ -509,7 +515,8 @@ function releasePolicy(wf) {
     (j.steps || []).some((s) => (typeof s.uses === "string" && /docker\/login-action/.test(s.uses)) || /\bdocker\s+login\b/.test(lr(s.run)));
   for (const [name, j] of Object.entries(jobs)) {
     if (!registryWrite(j)) continue;
-    for (const s of (j.steps || []))
+    for (const s of (j.steps || [])) {
+      if (hasHeredoc(s.run)) v.push(name + ": registry-write job uses a heredoc/here-string (<<) — its body live-expands command substitutions the guard can't inspect (only bare promote-image.sh may run; R44)");
       for (const argv of shellCommands(lr(s.run))) {
         if (!argv.length) continue;
         if (hasCmdSub(argv)) { v.push(name + ": registry-write job runs a command carrying a substitution $()/backtick (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — the shell runs it as a side command before the host command, re-pointing a tag past the no-op head (R43)"); continue; }
@@ -517,6 +524,7 @@ function releasePolicy(wf) {
         if (argv.some((t) => /\.github\/scripts\/promote-image\.sh/.test(t))) continue;
         v.push(name + ": registry-write job runs a non-promote command (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — only bare promote-image.sh may run with registry creds; any other client (crane/regctl/oras/curl) can re-point a tag (R42)");
       }
+    }
   }
   // npm publish must derive its dist-tag from the execution-tested npm-dist-tag.sh
   // (pre-release -> next, never latest) and pass it via --tag, enabled (R27).
@@ -699,10 +707,11 @@ function candidatePolicy(wf) {
     if (argv.some((t) => /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/.test(t))) return true;
     return seqIn(argv, ["imagetools", "create"]) || seqIn(argv, ["docker", "rm"]);
   };
-  for (const s of steps)
-    for (const argv of shellCommands(lr(s.run))) {
+  for (const s of steps) {
+    if (hasHeredoc(s.run)) v.push(cn + ": uses a heredoc/here-string (<<) — its body live-expands command substitutions the guard can't inspect (R44)");
+    for (const argv of shellCommands(lr(s.run)))
       if (argv.length && !allowedCand(argv)) v.push(cn + ": runs a non-allowlisted command (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — a registry-write job is allowlisted to smoke scripts, docker buildx imagetools create, docker rm, and shell no-ops; any other client can re-point the sha tag (R42)");
-    }
+  }
   return v;
 }
 
@@ -952,6 +961,13 @@ mut("release docker-proxy re-points the tag via printf \"$(crane copy …)\"", r
 mut("release docker-proxy re-points the tag via echo backtick crane copy", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo "`crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}"`"' }); }, releasePolicy);
 mut("ci candidate re-points the sha tag via echo \"$(crane copy …)\"", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\necho "$(crane copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}")"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via echo backtick crane copy", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\necho "`crane copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"`"'; }, candidatePolicy);
+// R44 finding — a heredoc body live-expands the substitution, but `lr`/`stripDead`
+// discards it before the R43 check runs, so a no-op head (`echo`) + an unquoted
+// heredoc whose body is `$(crane copy …)` re-points a tag undetected. Fail-closed:
+// no heredoc/here-string (`<<`) in a write-scoped job's run step.
+mut("release docker-proxy re-points the tag via echo <<EOF heredoc $(crane copy)", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo <<EOF\n$(crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}")\nEOF' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via echo <<-EOF heredoc $(crane copy)", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo <<-EOF\n\t$(crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}")\n\tEOF' }); }, releasePolicy);
+mut("ci candidate re-points the sha tag via echo <<EOF heredoc $(crane copy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\necho <<EOF\n$(crane copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}")\nEOF'; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
