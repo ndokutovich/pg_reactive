@@ -265,6 +265,13 @@ const NOOP_HEAD = new Set(["echo", "printf", ":", "true", "false", "set", "expor
 // leaves behind (`2>&1` splits on `&` → a bare `1`; a leading `>/dev/null`). A
 // real command head is a word, never a number or a redirection token.
 const isNoopHead = (h) => h === undefined || NOOP_HEAD.has(h) || /^[0-9]+$/.test(h) || /^[0-9]*[<>]/.test(h);
+// A command-SUBSTITUTION token — `$(…)` or a backtick — executes a side command
+// BEFORE its host command runs, so even an `echo "$(crane copy …)"` re-points a
+// tag despite the no-op head. In a write-scoped job (allowlisted to a tiny
+// command set) this is refused fail-closed: no allowlisted command may carry a
+// substitution. Parameter expansion (`$VAR`/`${VAR}`/`${{ … }}`) runs no command
+// and is NOT flagged, so the real promote/imagetools args stay clean (R43).
+const hasCmdSub = (argv) => argv.some((t) => /\$\(/.test(t) || t.includes("`"));
 const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
@@ -505,6 +512,7 @@ function releasePolicy(wf) {
     for (const s of (j.steps || []))
       for (const argv of shellCommands(lr(s.run))) {
         if (!argv.length) continue;
+        if (hasCmdSub(argv)) { v.push(name + ": registry-write job runs a command carrying a substitution $()/backtick (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — the shell runs it as a side command before the host command, re-pointing a tag past the no-op head (R43)"); continue; }
         if (isNoopHead(effHead(argv))) continue;
         if (argv.some((t) => /\.github\/scripts\/promote-image\.sh/.test(t))) continue;
         v.push(name + ": registry-write job runs a non-promote command (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — only bare promote-image.sh may run with registry creds; any other client (crane/regctl/oras/curl) can re-point a tag (R42)");
@@ -686,6 +694,7 @@ function candidatePolicy(wf) {
   // smoke script, the canonical `docker buildx imagetools create`, a container
   // teardown (`docker rm`), or a shell no-op. An unknown command head is rejected.
   const allowedCand = (argv) => {
+    if (hasCmdSub(argv)) return false; // $()/backtick runs a side command before the host (R43)
     if (isNoopHead(effHead(argv))) return true;
     if (argv.some((t) => /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/.test(t))) return true;
     return seqIn(argv, ["imagetools", "create"]) || seqIn(argv, ["docker", "rm"]);
@@ -933,6 +942,16 @@ mut("release docker-proxy re-points the tag via a curl manifest PUT", release, (
 mut("ci candidate re-points the sha tag via containerized crane copy", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker run --rm -v "$HOME/.docker:/root/.docker:ro" gcr.io/go-containerregistry/crane:debug@sha256:1b1fb24d2b1bb27a9daf81a588157e68463876904e8e537a812edba6284fb252 copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via bare crane copy", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ncrane copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via regctl image copy", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nregctl image copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"'; }, candidatePolicy);
+// R43 finding — the allowlist's no-op heads (echo/printf/set/…) are not safe when
+// the argument carries a command substitution: the shell runs `$(…)` / backtick
+// BEFORE the no-op, so `echo "$(crane copy …)"` re-points a tag while the head
+// reads as harmless. Fail-closed: no allowlisted command in a write-scoped job
+// may carry a substitution.
+mut("release docker-proxy re-points the tag via echo \"$(crane copy …)\"", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo "$(crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}")"' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via printf \"$(crane copy …)\"", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'printf "%s" "$(crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}")"' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via echo backtick crane copy", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo "`crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}"`"' }); }, releasePolicy);
+mut("ci candidate re-points the sha tag via echo \"$(crane copy …)\"", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\necho "$(crane copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}")"'; }, candidatePolicy);
+mut("ci candidate re-points the sha tag via echo backtick crane copy", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\necho "`crane copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"`"'; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
