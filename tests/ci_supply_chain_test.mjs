@@ -285,13 +285,16 @@ const hasHeredoc = (run) => /<</.test(joinCont(String(run ?? "")));
 // in $0/$1 and is NEVER executed, so a `-c` in the lead (which makes the next
 // token a command STRING, not a script file) means the marker is an argument and
 // is refused — the allowlist must match the command SHAPE, not marker presence (R45).
+// The same trap exists with GNU `env -S "<cmd>" x.sh` / `--split-string` (R46) and
+// `bash -ec`-style clusters: any lead option that turns a value into the command
+// to run (`-c`, `-S`, `--split-string`) is refused fail-closed.
 const SCRIPT_LEAD = new Set(["bash", "sh", "dash", "ksh", "zsh", ...LAUNCHER]);
 const isScriptCommand = (argv, scriptRe) => {
   let i = 0, prevOpt = false;
   for (; i < argv.length; i++) {
     const t = argv[i];
     if (prevOpt) { prevOpt = false; continue; }                  // value of a prior non-`=` option
-    if (/^-/.test(t)) { if (/^-[A-Za-z]*c/.test(t)) return false; prevOpt = !t.includes("="); continue; } // -c / -ec: next arg is a command string
+    if (/^-/.test(t)) { if (/^-[A-Za-z]*[cS]/.test(t) || /^--split-string/.test(t)) return false; prevOpt = !t.includes("="); continue; } // -c / -ec / env -S / --split-string: the next arg/value is the command to run
     if (SCRIPT_LEAD.has(t) || /^\w+=/.test(t)) continue;
     break;                                                       // first positional word = the command head
   }
@@ -996,6 +999,15 @@ mut("ci candidate re-points the sha tag via echo <<EOF heredoc $(crane copy)", c
 mut("release docker-proxy re-points the tag via `bash -c crane copy` with promote-image.sh as an arg", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'bash -c "crane copy ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" .github/scripts/promote-image.sh pgstack-proxy ${{ github.sha }}' }); }, releasePolicy);
 mut("release docker-proxy re-points the tag via `sh -c crane copy` with promote-image.sh as an arg", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'sh -c "crane copy ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}" .github/scripts/promote-image.sh pgstack-proxy ${{ github.sha }}' }); }, releasePolicy);
 mut("ci candidate re-points the sha tag via `bash -c crane copy` with smoke-proxy.sh as an arg", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nbash -c "crane copy ${IMAGE_PREFIX}/pgstack-proxy:latest ${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" .github/scripts/smoke-proxy.sh'; }, candidatePolicy);
+// R46 finding — GNU `env -S "<cmd>"` (and `--split-string`) split-strings its value
+// into argv and RUNS it, exactly like `bash -c` — so `env -S "bash -c 'crane copy
+// …'" .github/scripts/promote-image.sh …` runs the crane command while the script
+// marker is just a trailing positional. `-S` was passing R45's lead-option skip
+// (only `-c` was treated as a command-string wrapper). Now `-S`/`--split-string`
+// is refused in the lead too.
+mut("release docker-proxy re-points the tag via `env -S` wrapping bash -c, promote-image.sh as an arg", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'env -S "bash -c \'crane copy ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\'" .github/scripts/promote-image.sh pgstack-proxy ${{ github.sha }}' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via `env --split-string` wrapping bash -c", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'env --split-string="bash -c \'crane copy ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}\'" .github/scripts/promote-image.sh pgstack-proxy ${{ github.sha }}' }); }, releasePolicy);
+mut("ci candidate re-points the sha tag via `env -S` wrapping bash -c, smoke-proxy.sh as an arg", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nenv -S "bash -c \'crane copy ${IMAGE_PREFIX}/pgstack-proxy:latest ${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}\'" .github/scripts/smoke-proxy.sh'; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
