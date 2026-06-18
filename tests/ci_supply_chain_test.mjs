@@ -255,6 +255,16 @@ const seqIn = (argv, seq) => argv.some((_, j) => {
 // ["npm","dist-tag","add"])? Pass lr(text) so dead/commented/continued forms are
 // already normalized.
 const runsCmd = (text, seq) => shellCommands(text).some((argv) => seqIn(argv, seq));
+// The effective command head: the first token that isn't a `VAR=val` assignment.
+const effHead = (argv) => { let i = 0; while (i < argv.length && /^\w+=/.test(argv[i])) i++; return argv[i]; };
+// Shell no-ops with no registry/filesystem-mutating effect — allowed anywhere a
+// write-scoped job is held to an ALLOWLIST (R42).
+const NOOP_HEAD = new Set(["echo", "printf", ":", "true", "false", "set", "export", "cd"]);
+// True for a command head with no registry/filesystem-mutating effect: a no-op
+// word, an empty command, or a redirection artifact the simple-command splitter
+// leaves behind (`2>&1` splits on `&` → a bare `1`; a leading `>/dev/null`). A
+// real command head is a word, never a number or a redirection token.
+const isNoopHead = (h) => h === undefined || NOOP_HEAD.has(h) || /^[0-9]+$/.test(h) || /^[0-9]*[<>]/.test(h);
 const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
@@ -477,6 +487,29 @@ function releasePolicy(wf) {
         if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(st.run))) v.push(jn + ": " + img + " promote is not passed ${{ github.sha }} (could promote a foreign commit)");
       }
   }
+  // R42: blocklisting the docker CLI tag-mutation primitives (imagetools/manifest/
+  // docker tag+push, above) is a losing game — ANY registry client holding the
+  // job's GHCR creds (crane/regctl/oras, or a bare curl manifest PUT, even
+  // containerized via `docker run …crane copy`) can re-point a tag without the
+  // docker CLI. So a registry-write release job (packages:write, or it
+  // docker-logs-in to a registry) is held to an ALLOWLIST: every command it runs
+  // must be a bare promote-image.sh call (promotion is delegated to the
+  // execution-tested script) or a shell no-op. Setup (checkout/buildx/login) is
+  // `uses`, not run, so it doesn't appear here. An unknown command head — i.e. any
+  // other registry client — is rejected, closing the whole class at once.
+  const registryWrite = (j) =>
+    (j.permissions && typeof j.permissions === "object" && String(j.permissions.packages) === "write") ||
+    (j.steps || []).some((s) => (typeof s.uses === "string" && /docker\/login-action/.test(s.uses)) || /\bdocker\s+login\b/.test(lr(s.run)));
+  for (const [name, j] of Object.entries(jobs)) {
+    if (!registryWrite(j)) continue;
+    for (const s of (j.steps || []))
+      for (const argv of shellCommands(lr(s.run))) {
+        if (!argv.length) continue;
+        if (isNoopHead(effHead(argv))) continue;
+        if (argv.some((t) => /\.github\/scripts\/promote-image\.sh/.test(t))) continue;
+        v.push(name + ": registry-write job runs a non-promote command (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — only bare promote-image.sh may run with registry creds; any other client (crane/regctl/oras/curl) can re-point a tag (R42)");
+      }
+  }
   // npm publish must derive its dist-tag from the execution-tested npm-dist-tag.sh
   // (pre-release -> next, never latest) and pass it via --tag, enabled (R27).
   for (const [name, j] of Object.entries(jobs)) {
@@ -646,6 +679,21 @@ function candidatePolicy(wf) {
       for (const argv of created) if (!argv.some((t) => digestRe(img).test(t))) v.push(cn + ": " + img + " sha-${{ github.sha }} tag created from a non-build digest (foreign image/digest, decoy step, mutable tag, or quoted-fragment command): " + JSON.stringify(argv.join(" ")));
     }
   }
+  // R42: the candidate holds packages:write and docker-logs-in, so any registry
+  // client (crane/regctl/oras, a curl manifest PUT) could OVERWRITE the
+  // sha-${{github.sha}} tag past the digest-bound imagetools-create check above
+  // (last-writer-wins). Same allowlist discipline: every command it runs must be a
+  // smoke script, the canonical `docker buildx imagetools create`, a container
+  // teardown (`docker rm`), or a shell no-op. An unknown command head is rejected.
+  const allowedCand = (argv) => {
+    if (isNoopHead(effHead(argv))) return true;
+    if (argv.some((t) => /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/.test(t))) return true;
+    return seqIn(argv, ["imagetools", "create"]) || seqIn(argv, ["docker", "rm"]);
+  };
+  for (const s of steps)
+    for (const argv of shellCommands(lr(s.run))) {
+      if (argv.length && !allowedCand(argv)) v.push(cn + ": runs a non-allowlisted command (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — a registry-write job is allowlisted to smoke scripts, docker buildx imagetools create, docker rm, and shell no-ops; any other client can re-point the sha tag (R42)");
+    }
   return v;
 }
 
@@ -869,6 +917,22 @@ mut("release tag overwrite via docker push", release, (w) => { w.jobs["docker-pr
 // R41 finding 2 — an option BETWEEN the verbs (npm dist-tag --registry=URL add)
 // breaks the consecutive match; seqIn must skip options inside the sequence too.
 mut("release npm dist-tag add via option between dist-tag and add", release, (w) => { w.jobs["npm-sdk"].steps.push({ name: "x", run: "npm dist-tag --registry=https://registry.npmjs.org add \"@pgstack/sdk@${GITHUB_REF_NAME#v}\" latest" }); }, releasePolicy);
+// R42 finding — blocklisting the docker CLI tag-mutation primitives is a losing
+// game: ANY registry client with the job's GHCR creds (crane/regctl/oras, or a
+// bare curl manifest PUT — even digest-pinned, even containerized via `docker
+// run …crane copy`) can re-point a tag without touching the docker CLI. The fix
+// is an ALLOWLIST for write-scoped jobs: a registry-write RELEASE job may run ONLY
+// bare promote-image.sh; the CANDIDATE may run ONLY smoke scripts + the canonical
+// imagetools-create (+ docker rm teardown + shell no-ops). An unknown command
+// head in a write-scoped job is rejected, closing the whole class at once.
+mut("release docker-proxy re-points the tag via containerized crane copy", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'docker run --rm -v "$HOME/.docker:/root/.docker:ro" gcr.io/go-containerregistry/crane:debug@sha256:1b1fb24d2b1bb27a9daf81a588157e68463876904e8e537a812edba6284fb252 copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}"' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via bare crane copy", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'crane copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}"' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via regctl image copy", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'regctl image copy "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}"' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via oras cp", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'oras cp "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:latest" "ghcr.io/${{ github.repository_owner }}/pgstack-proxy:${{ github.ref_name }}"' }); }, releasePolicy);
+mut("release docker-proxy re-points the tag via a curl manifest PUT", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'curl -sSL -X PUT -H "Authorization: Bearer $GITHUB_TOKEN" -H "Content-Type: application/vnd.oci.image.index.v1+json" "https://ghcr.io/v2/${{ github.repository_owner }}/pgstack-proxy/manifests/${{ github.ref_name }}" --data-binary @index.json' }); }, releasePolicy);
+mut("ci candidate re-points the sha tag via containerized crane copy", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker run --rm -v "$HOME/.docker:/root/.docker:ro" gcr.io/go-containerregistry/crane:debug@sha256:1b1fb24d2b1bb27a9daf81a588157e68463876904e8e537a812edba6284fb252 copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"'; }, candidatePolicy);
+mut("ci candidate re-points the sha tag via bare crane copy", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ncrane copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"'; }, candidatePolicy);
+mut("ci candidate re-points the sha tag via regctl image copy", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nregctl image copy "${IMAGE_PREFIX}/pgstack-proxy:latest" "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"'; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
