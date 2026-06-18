@@ -752,22 +752,35 @@ function candidatePolicy(wf) {
   // (last-writer-wins). Same allowlist discipline: every command it runs must be a
   // smoke script, the canonical `docker buildx imagetools create`, a container
   // teardown (`docker rm`), or a shell no-op. An unknown command head is rejected.
+  // A candidate `imagetools create` is allowed ONLY as an EXACT canonical pair: a
+  // single literal `${IMAGE_PREFIX}/pgstack-{proxy,postgres}:sha-${{ github.sha }}`
+  // target built from a single source = the SAME image's `@${{ steps.<build-id>.
+  // outputs.digest }}`. The dynamic lever has moved from the tag (R47) to the REPO
+  // name — `IMG=pgstack-proxy; … -t "${IMAGE_PREFIX}/${IMG}:sha-…"` hides the literal
+  // repo from both `created` and the allowlist yet expands to re-point the real tag —
+  // so ANY `$IMG`/`$REPO`/`${…}` in the repo or tag of target/source fails closed (R49).
+  const CANON_TARGET = /^\$\{IMAGE_PREFIX\}\/pgstack-(proxy|postgres):sha-\$\{\{\s*github\.sha\s*\}\}$/;
+  const canonicalCreate = (argv) => {
+    const targets = [];
+    for (let k = 0; k < argv.length; k++) {
+      if ((argv[k] === "-t" || argv[k] === "--tag") && argv[k + 1] !== undefined) targets.push(argv[k + 1]);
+      else { const m = /^--tag=(.+)/.exec(argv[k]); if (m) targets.push(m[1]); }
+    }
+    if (targets.length !== 1) return false;
+    const tm = CANON_TARGET.exec(targets[0]);
+    if (!tm) return false;
+    const img = "pgstack-" + tm[1];
+    const src = imagetoolsSources(argv);
+    const bid = buildId[img] ? buildId[img].replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "\\w+";
+    const srcRe = new RegExp("^\\$\\{IMAGE_PREFIX\\}\\/" + img + "@\\$\\{\\{\\s*steps\\." + bid + "\\.outputs\\.digest\\s*\\}\\}$");
+    return src.length === 1 && srcRe.test(src[0]);
+  };
   const allowedCand = (argv) => {
     if (hasCmdSub(argv)) return false; // $()/backtick runs a side command before the host (R43)
     if (isNoopHead(effHead(argv))) return true;
     if (isScriptCommand(argv, /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/)) return true;
     if (seqIn(argv, ["docker", "rm"])) return true;
-    if (seqIn(argv, ["imagetools", "create"])) {
-      // a -t/--tag target naming a pgstack-* repo must be the EXACT literal canonical
-      // sha tag; a dynamic tag ($TAG/${TAG}/fragment) evades the literal-target
-      // digest-source check below and re-points sha-<sha> to :latest, last-writer-wins (R47)
-      const targets = [];
-      for (let k = 0; k < argv.length; k++) {
-        if ((argv[k] === "-t" || argv[k] === "--tag") && argv[k + 1] !== undefined) targets.push(argv[k + 1]);
-        else { const m = /^--tag=(.+)/.exec(argv[k]); if (m) targets.push(m[1]); }
-      }
-      return targets.every((t) => !/pgstack-(?:proxy|postgres)[:@]/.test(t) || /pgstack-(?:proxy|postgres):sha-\$\{\{\s*github\.sha\s*\}\}$/.test(t));
-    }
+    if (seqIn(argv, ["imagetools", "create"])) return canonicalCreate(argv);
     return false;
   };
   for (const s of steps) {
@@ -1069,6 +1082,18 @@ mut("ci candidate re-points the sha tag via a ${TAG} dynamic target (postgres)",
 mut("ci candidate adds an extra mutable :latest source beside the digest (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run.replace('"${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"', '"${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'); }, candidatePolicy);
 mut("ci candidate hides the digest in --annotation and builds sha from :latest (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker buildx imagetools create --annotation "index:guard=${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}" -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
 mut("ci candidate adds an extra mutable :latest source beside the digest (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-postgres:sha-/); s.run = s.run.replace('"${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"', '"${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}" "${IMAGE_PREFIX}/pgstack-postgres:latest"'); }, candidatePolicy);
+// R49 finding — the dynamic lever moved from the TAG (R47) to the REPO name: a
+// `IMG="pgstack-proxy"; imagetools create -t "${IMAGE_PREFIX}/${IMG}:sha-${{
+// github.sha }}" "${IMAGE_PREFIX}/${IMG}:latest"` expands to re-point the real
+// pgstack-proxy:sha tag from :latest, but the literal `pgstack-proxy` never
+// appears in -t, so the command joins neither `created` (literal target) nor the
+// allowlist's pgstack-target check. Fix: a candidate imagetools create is allowed
+// ONLY as an exact canonical pair — literal `pgstack-{proxy,postgres}:sha-${{
+// github.sha }}` target + exactly one source `pgstack-<same>@${{ steps.<id>.outputs.digest }}`.
+// Any $IMG/$REPO/${…} in the repo or tag fails closed.
+mut("ci candidate re-points the sha tag via a $IMG dynamic repo (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nIMG="pgstack-proxy"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/${IMG}:sha-${{ github.sha }}" "${IMAGE_PREFIX}/${IMG}:latest"'; }, candidatePolicy);
+mut("ci candidate re-points the sha tag via a ${REPO} dynamic repo (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nREPO="${IMAGE_PREFIX}/pgstack-proxy"\ndocker buildx imagetools create -t "${REPO}:sha-${{ github.sha }}" "${REPO}:latest"'; }, candidatePolicy);
+mut("ci candidate re-points the sha tag via a $IMG dynamic repo (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-postgres:sha-/); s.run = s.run + '\nIMG="pgstack-postgres"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/${IMG}:sha-${{ github.sha }}" "${IMAGE_PREFIX}/${IMG}:latest"'; }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
