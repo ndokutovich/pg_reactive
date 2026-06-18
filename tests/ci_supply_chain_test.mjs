@@ -300,6 +300,24 @@ const isScriptCommand = (argv, scriptRe) => {
   }
   return i < argv.length && scriptRe.test(argv[i]);
 };
+// Parse a `docker buildx imagetools create` argv into its positional SOURCE refs —
+// everything after the `create` verb that is NOT an option, an option VALUE, or a
+// `-t`/`--tag` target. `docker buildx imagetools create [OPTS] SOURCE [SOURCE…]`
+// builds the manifest FROM the sources, so a `--annotation X` value or an extra
+// `:latest` source must not be mistaken for the (single) build digest: the
+// canonical command has exactly ONE source = the smoke-passed digest (R48).
+const IMGTOOLS_VALUE_OPT = new Set(["-t", "--tag", "--annotation", "--builder", "--file", "-f", "--progress"]);
+const imagetoolsSources = (argv) => {
+  let i = argv.indexOf("create");
+  if (i < 0) return [];
+  const sources = [];
+  for (i++; i < argv.length; i++) {
+    const t = argv[i];
+    if (/^-/.test(t)) { if (!t.includes("=") && IMGTOOLS_VALUE_OPT.has(t)) i++; continue; } // option (+ its separate value, incl. the -t target)
+    sources.push(t);
+  }
+  return sources;
+};
 const callsScript = (job, script) => (job.steps || []).find((s) => new RegExp("\\.github/scripts/" + script.replace(/\./g, "\\.")).test(lr(s.run)));
 const stepDisabled = (s, ctx) => {
   const r = [];
@@ -714,7 +732,18 @@ function candidatePolicy(wf) {
       // it uses (gemini R41-1).
       const created = tagCmds.filter((argv) => (seqIn(argv, ["imagetools", "create"]) || seqIn(argv, ["manifest", "create"]) || seqIn(argv, ["docker", "tag"])) && argv.some((t) => shaTagRe.test(t)));
       if (!created.length) { v.push(cn + ": no sha-${{ github.sha }} tag created for " + img); continue; }
-      for (const argv of created) if (!argv.some((t) => digestRe(img).test(t))) v.push(cn + ": " + img + " sha-${{ github.sha }} tag created from a non-build digest (foreign image/digest, decoy step, mutable tag, or quoted-fragment command): " + JSON.stringify(argv.join(" ")));
+      for (const argv of created) {
+        // For `imagetools create`, the digest must be the SOLE positional SOURCE — not
+        // merely present somewhere in argv: an extra `:latest` source merges unsmoked
+        // bytes into the manifest, and a digest parked in a `--annotation`/option value
+        // while the real source is `:latest` builds the sha tag from :latest (R48).
+        if (seqIn(argv, ["imagetools", "create"])) {
+          const src = imagetoolsSources(argv);
+          if (src.length !== 1 || !digestRe(img).test(src[0])) v.push(cn + ": " + img + " sha-${{ github.sha }} tag is not built from exactly one source equal to this image's build digest (extra/mutable source, or a digest hidden in an option value): " + JSON.stringify(argv.join(" ").slice(0, 120)));
+        } else if (!argv.some((t) => digestRe(img).test(t))) {
+          v.push(cn + ": " + img + " sha-${{ github.sha }} tag created from a non-build digest (foreign image/digest, decoy step, mutable tag, or quoted-fragment command): " + JSON.stringify(argv.join(" ")));
+        }
+      }
     }
   }
   // R42: the candidate holds packages:write and docker-logs-in, so any registry
@@ -1030,6 +1059,16 @@ mut("ci candidate re-points the sha tag via `env -S` wrapping bash -c, smoke-pro
 mut("ci candidate re-points the sha tag via a ${TAG} dynamic target (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:${TAG}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via a $TAG dynamic target (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:$TAG" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via a ${TAG} dynamic target (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-postgres:${TAG}" "${IMAGE_PREFIX}/pgstack-postgres:latest"'; }, candidatePolicy);
+// R48 finding — "digest present in argv" ≠ "digest is the SOURCE". `imagetools
+// create` takes multiple SOURCEs and value-options, so (a) `-t SHA <digest>
+// :latest` keeps the digest yet ALSO merges unsmoked :latest, and (b)
+// `--annotation "…@<digest>" -t SHA :latest` parks the digest in an annotation
+// while building sha-* from :latest — both pass the loose `argv.some(digestRe)`.
+// Fix: parse argv as a CLI and require EXACTLY one positional source == the build
+// digest (a digest in a -t target / option value doesn't count).
+mut("ci candidate adds an extra mutable :latest source beside the digest (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run.replace('"${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"', '"${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'); }, candidatePolicy);
+mut("ci candidate hides the digest in --annotation and builds sha from :latest (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker buildx imagetools create --annotation "index:guard=${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}" -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
+mut("ci candidate adds an extra mutable :latest source beside the digest (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-postgres:sha-/); s.run = s.run.replace('"${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"', '"${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}" "${IMAGE_PREFIX}/pgstack-postgres:latest"'); }, candidatePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
