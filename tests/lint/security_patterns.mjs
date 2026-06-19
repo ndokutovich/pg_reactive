@@ -480,12 +480,12 @@ function checkAnonGrantNeedsRLS() {
     }
   }
   // Scope: the canonical FRESH-INSTALL schema (docker/init.sql + the cli
-  // bootstrap it generates). This is the authority on the deployed schema's
-  // final state. Historical migrations (deltas, superseded by later ones) and
-  // the example stacks (the demos still being pulled up to prod-ready) are out
-  // of this rule's scope.
+  // bootstrap it generates) AND every example-stack setup.sql (the demos must be
+  // production-ready too — a demo is a template people copy). Historical
+  // migrations (deltas, superseded by later ones) are out of scope.
   const scoped = sql.filter((f) =>
-    /docker[\\/]init\.sql$/.test(f) || /bootstrap-core\.sql$/.test(f));
+    /docker[\\/]init\.sql$/.test(f) || /bootstrap-core\.sql$/.test(f) ||
+    /examples[\\/].*setup\.sql$/.test(f));
   // The negative lookahead also drops the ALTER DEFAULT PRIVILEGES object-type
   // keywords (`ON TABLES`/`ON SEQUENCES`/…), which are not table names.
   const grantRe =

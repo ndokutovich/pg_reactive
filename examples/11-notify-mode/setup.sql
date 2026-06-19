@@ -13,8 +13,12 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON sensor_readings TO anon, authenticated;
-GRANT USAGE, SELECT ON SEQUENCE sensor_readings_id_seq TO anon, authenticated;
+-- Production-ready: a public-READ sensor feed; new readings are pushed
+-- server-side (psql / a device writer), writes locked to service_role.
+ALTER TABLE sensor_readings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS sensor_readings_public_read ON sensor_readings;
+CREATE POLICY sensor_readings_public_read ON sensor_readings FOR SELECT TO anon, authenticated USING (true);
+GRANT SELECT ON sensor_readings TO anon, authenticated;
 
 -- Clean slate (idempotent re-runs in the umbrella every-boot scenario)
 TRUNCATE sensor_readings RESTART IDENTITY CASCADE;

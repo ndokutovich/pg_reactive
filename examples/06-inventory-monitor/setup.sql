@@ -12,8 +12,12 @@ CREATE TABLE IF NOT EXISTS inventory (
   UNIQUE(product_id)
 );
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON inventory TO anon, authenticated;
-GRANT USAGE, SELECT ON SEQUENCE inventory_id_seq TO anon, authenticated;
+-- Production-ready: a public-READ inventory dashboard; writes (stock changes)
+-- come from server-side psql, locked to service_role for network clients.
+ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS inventory_public_read ON inventory;
+CREATE POLICY inventory_public_read ON inventory FOR SELECT TO anon, authenticated USING (true);
+GRANT SELECT ON inventory TO anon, authenticated;
 
 -- Seed inventory for all products (skip if already populated)
 INSERT INTO inventory (product_id, stock_qty, reorder_point, warehouse)

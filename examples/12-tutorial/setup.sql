@@ -29,8 +29,17 @@ CREATE TABLE IF NOT EXISTS tut_orders (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON tut_products, tut_customers, tut_orders TO anon, authenticated;
-GRANT USAGE, SELECT ON SEQUENCE tut_products_id_seq, tut_customers_id_seq, tut_orders_id_seq TO anon, authenticated;
+-- Production-ready: public-READ tutorial tables; writes flow via psql/service_role.
+ALTER TABLE tut_products  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tut_customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tut_orders    ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tut_products_public_read  ON tut_products;
+DROP POLICY IF EXISTS tut_customers_public_read ON tut_customers;
+DROP POLICY IF EXISTS tut_orders_public_read    ON tut_orders;
+CREATE POLICY tut_products_public_read  ON tut_products  FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY tut_customers_public_read ON tut_customers FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY tut_orders_public_read    ON tut_orders    FOR SELECT TO anon, authenticated USING (true);
+GRANT SELECT ON tut_products, tut_customers, tut_orders TO anon, authenticated;
 
 -- Clean slate (idempotent: TRUNCATE tut_products CASCADE wipes tut_orders too;
 -- a separate TRUNCATE customers is needed because no FK links it to products)

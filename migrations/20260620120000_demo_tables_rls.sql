@@ -72,6 +72,30 @@ BEGIN
   END IF;
 END $$;
 
+-- ── example-stack fixtures (only present when an examples/ stack has run) ────
+-- Public-READ live-query demos: anon/authenticated keep SELECT, lose all DML;
+-- writes come from server-side psql / service_role. Mirrors the per-example
+-- setup.sql hardening so installs that ran an example + the old 20260515200000
+-- re-grant are pulled up too.
+DO $$
+DECLARE
+  t text;
+  tbls text[] := ARRAY['products','customers','orders','inventory','sensor_readings','tut_products','tut_customers','tut_orders'];
+BEGIN
+  FOREACH t IN ARRAY tbls LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_public_read', t);
+      EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO anon, authenticated USING (true)', t || '_public_read', t);
+      EXECUTE format('REVOKE INSERT, UPDATE, DELETE ON public.%I FROM anon, authenticated', t);
+      EXECUTE format('GRANT SELECT ON public.%I TO anon, authenticated', t);
+      BEGIN
+        EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM anon, authenticated', t || '_id_seq');
+      EXCEPTION WHEN undefined_table THEN NULL; END;
+    END IF;
+  END LOOP;
+END $$;
+
 -- migrate:down
 
 -- Down restores the prior (insecure) wide-open grants — intentionally unsafe,
@@ -106,4 +130,22 @@ BEGIN
     EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.comments TO anon, authenticated';
     EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE public.comments_id_seq TO anon, authenticated';
   END IF;
+END $$;
+
+-- down: restore the prior wide-open grants on the example fixtures too.
+DO $$
+DECLARE
+  t text;
+  tbls text[] := ARRAY['products','customers','orders','inventory','sensor_readings','tut_products','tut_customers','tut_orders'];
+BEGIN
+  FOREACH t IN ARRAY tbls LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', t || '_public_read', t);
+      EXECUTE format('ALTER TABLE public.%I DISABLE ROW LEVEL SECURITY', t);
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON public.%I TO anon, authenticated', t);
+      BEGIN
+        EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE public.%I TO anon, authenticated', t || '_id_seq');
+      EXCEPTION WHEN undefined_table THEN NULL; END;
+    END IF;
+  END LOOP;
 END $$;

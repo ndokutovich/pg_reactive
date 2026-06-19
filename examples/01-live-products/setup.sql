@@ -10,10 +10,13 @@ CREATE TABLE IF NOT EXISTS products (
   category text NOT NULL
 );
 
--- Explicit, per-table grants (since 2026-05 audit: no blanket public-schema grants).
--- Real apps should enable RLS and grant per policy; this is a demo fixture.
-GRANT SELECT, INSERT, UPDATE, DELETE ON products TO anon, authenticated;
-GRANT USAGE, SELECT ON SEQUENCE products_id_seq TO anon, authenticated;
+-- Production-ready: a public-READ live catalog with writes locked to service_role.
+-- The demo's live updates come from server-side psql (run this file again, or
+-- INSERT/UPDATE via psql), never browser-anon writes — so anon never needs DML.
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS products_public_read ON products;
+CREATE POLICY products_public_read ON products FOR SELECT TO anon, authenticated USING (true);
+GRANT SELECT ON products TO anon, authenticated;
 
 -- Clean slate (idempotent: RESTART IDENTITY keeps product ids stable across re-runs;
 -- CASCADE wipes dependent FK rows in orders/inventory if those tables already exist)

@@ -19,9 +19,15 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at timestamp DEFAULT now()
 );
 
--- Explicit per-table grants. Real apps should layer RLS on top.
-GRANT SELECT, INSERT, UPDATE, DELETE ON customers, orders TO anon, authenticated;
-GRANT USAGE, SELECT ON SEQUENCE customers_id_seq, orders_id_seq TO anon, authenticated;
+-- Production-ready: a public-READ order feed with writes locked to service_role.
+-- Live updates come from server-side psql, not browser-anon writes.
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders    ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS customers_public_read ON customers;
+DROP POLICY IF EXISTS orders_public_read    ON orders;
+CREATE POLICY customers_public_read ON customers FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY orders_public_read    ON orders    FOR SELECT TO anon, authenticated USING (true);
+GRANT SELECT ON customers, orders TO anon, authenticated;
 
 -- Clean slate. TRUNCATE customers RESTART IDENTITY CASCADE wipes both
 -- customers AND orders (via FK cascade) and resets the SERIALs so the

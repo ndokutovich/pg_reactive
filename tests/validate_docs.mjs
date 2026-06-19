@@ -112,6 +112,10 @@ function validateEnvVars() {
     'TLS_CERT_FILE', 'TLS_KEY_FILE',
     // Docker/PG vars (not in config.go, they're GUC or compose vars)
     'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'PROXY_PORT', 'PROXY_RUST_PORT',
+    // DB-side credential applied by docker/20-authenticator-login.sh (compose) /
+    // the all-in-one entrypoint — sets the authenticator LOGIN password in PG;
+    // never parsed by the proxy's config.go (SECURITY.md invariant 22).
+    'AUTHENTICATOR_PASSWORD',
     // Logging vars read in main.go, not config.go
     'LOG_LEVEL', 'LOG_PRETTY',
     // PG tuning GUC params (documented in env-vars.md but not config.go env vars)
