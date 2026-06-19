@@ -492,18 +492,36 @@ CREATE EVENT TRIGGER pgstack_grant_pgr_to_service
 -- to connect, fail-closed) rather than one reachable with a baked-in dev secret.
 -- gemini audit P2.
 
--- Test table (used by e2e_rest_test.mjs)
+-- Demo: per-user todo list — the canonical RLS pattern (mirrors
+-- examples/apps/todo/setup.sql). This is a production-ready demo, not a
+-- wide-open fixture: a user sees and writes ONLY their own rows (owner-scoped
+-- RLS), anon sees nothing, and `user_id` defaults to the caller's auth.uid()
+-- so a client can never forge another user's ownership. service_role (trusted
+-- backend + e2e fixtures) bypasses RLS via the ADP GRANT but must still supply
+-- a user_id (NOT NULL). Used by e2e_rest_test.mjs.
 CREATE TABLE IF NOT EXISTS todos (
   id serial PRIMARY KEY,
-  user_id uuid,
+  user_id uuid NOT NULL DEFAULT auth.uid(),
   title text,
   done boolean DEFAULT false
 );
 
--- Demo: todos. Test fixture for e2e_rest_test — read/write for both roles.
--- Real apps must NOT do this; enable RLS and grant per policy instead.
-GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO anon, authenticated;
-GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO anon, authenticated;
+ALTER TABLE todos ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS todos_own_select ON todos;
+DROP POLICY IF EXISTS todos_own_insert ON todos;
+DROP POLICY IF EXISTS todos_own_update ON todos;
+DROP POLICY IF EXISTS todos_own_delete ON todos;
+
+CREATE POLICY todos_own_select ON todos FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY todos_own_insert ON todos FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+CREATE POLICY todos_own_update ON todos FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY todos_own_delete ON todos FOR DELETE TO authenticated USING (user_id = auth.uid());
+
+-- authenticated only — NO anon grant (private per-user data). service_role
+-- reaches todos via ALTER DEFAULT PRIVILEGES (above) and bypasses RLS.
+GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO authenticated;
+GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO authenticated;
 
 -- Embedding test tables
 CREATE TABLE IF NOT EXISTS authors (
@@ -527,9 +545,25 @@ CREATE TABLE IF NOT EXISTS comments (
   content text NOT NULL
 );
 
--- Demo: blog (authors/posts/comments). Test fixture for e2e_embed_test.
-GRANT SELECT, INSERT, UPDATE, DELETE ON authors, posts, comments TO anon, authenticated;
-GRANT USAGE, SELECT ON SEQUENCE authors_id_seq, posts_id_seq, comments_id_seq TO anon, authenticated;
+-- Demo: blog (authors/posts/comments) — a PUBLIC-READ catalog with locked-down
+-- writes (production-ready pattern: anyone reads published content; only the
+-- trusted backend mutates it). RLS on + a public-read policy; writes are
+-- service_role-only (reaches the tables + sequences via ALTER DEFAULT
+-- PRIVILEGES above and bypasses RLS). anon/authenticated get SELECT only —
+-- never INSERT/UPDATE/DELETE, so a visitor can't vandalise the demo.
+ALTER TABLE authors  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE posts    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS authors_public_read  ON authors;
+DROP POLICY IF EXISTS posts_public_read     ON posts;
+DROP POLICY IF EXISTS comments_public_read  ON comments;
+
+CREATE POLICY authors_public_read  ON authors  FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY posts_public_read    ON posts    FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY comments_public_read ON comments FOR SELECT TO anon, authenticated USING (true);
+
+GRANT SELECT ON authors, posts, comments TO anon, authenticated;
 
 -- Seed data for embedding/RPC tests
 INSERT INTO authors (name, bio) VALUES

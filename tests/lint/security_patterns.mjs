@@ -453,6 +453,66 @@ function checkProxyRoleGrantOptions(file, text) {
   }
 }
 
+// Rule SEC-R44 — a network-reachable public table must have RLS.
+//   SECURITY.md invariant #26. A table in the deployed schema that GRANTs a
+//   table privilege (SELECT/INSERT/UPDATE/DELETE/ALL) to `anon` or
+//   `authenticated` but never `ENABLE ROW LEVEL SECURITY` exposes EVERY row to
+//   that network role — read, and (for write grants) overwrite/delete. The demo
+//   `todos`/`authors`/`posts`/`comments` shipped exactly this anti-pattern
+//   (anon full CRUD, no RLS) until they were pulled up to per-user / public-read
+//   RLS. Scope: the deployed schema SoT — docker/init.sql, the cli bootstrap,
+//   migrations, and the demo apps' setup.sql. RLS enablement is collected across
+//   ALL .sql files so a grant whose table is RLS-enabled in another file is fine.
+//   Override a verified-safe occurrence with `-- lint:allow=SEC-R44`.
+function checkAnonGrantNeedsRLS() {
+  const norm = (t) => t.toLowerCase().replace(/^public\./, "");
+  const allSql = [];
+  for (const r of ["docker", "migrations", "cli/templates", "examples", "ext/sql"]) {
+    walk(join(ROOT, r), allSql);
+  }
+  const sql = allSql.filter((f) => /\.sql$/.test(f));
+  const rls = new Set();
+  for (const f of sql) {
+    let t;
+    try { t = readFileSync(f, "utf-8"); } catch { continue; }
+    for (const m of t.matchAll(/\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?([\w."]+)\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/gi)) {
+      rls.add(norm(m[1].replace(/"/g, "")));
+    }
+  }
+  // Scope: the canonical FRESH-INSTALL schema (docker/init.sql + the cli
+  // bootstrap it generates). This is the authority on the deployed schema's
+  // final state. Historical migrations (deltas, superseded by later ones) and
+  // the example stacks (the demos still being pulled up to prod-ready) are out
+  // of this rule's scope.
+  const scoped = sql.filter((f) =>
+    /docker[\\/]init\.sql$/.test(f) || /bootstrap-core\.sql$/.test(f));
+  // The negative lookahead also drops the ALTER DEFAULT PRIVILEGES object-type
+  // keywords (`ON TABLES`/`ON SEQUENCES`/…), which are not table names.
+  const grantRe =
+    /\bGRANT\s+([\w\s,]+?)\s+ON\s+(?!SEQUENCE\b|SEQUENCES\b|FUNCTION\b|FUNCTIONS\b|ROUTINES\b|PROCEDURE\b|SCHEMA\b|ALL\b|TABLES\b|DATABASE\b|TYPE\b|DOMAIN\b|FOREIGN\b|TABLESPACE\b)([\w.,\s"]+?)\s+TO\s+([\w\s,]+)/i;
+  for (const f of scoped) {
+    let lines;
+    try { lines = readFileSync(f, "utf-8").split(/\r?\n/); } catch { continue; }
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/lint:allow=SEC-R44/.test(line)) continue;
+      if (/^\s*--/.test(line)) continue;
+      const m = grantRe.exec(line);
+      if (!m) continue;
+      if (!/\b(?:select|insert|update|delete|all)\b/i.test(m[1])) continue;
+      if (!/\b(?:anon|authenticated)\b/i.test(m[3])) continue;
+      for (const raw of m[2].split(",")) {
+        const tbl = raw.trim().replace(/"/g, "");
+        if (!tbl) continue;
+        if (!rls.has(norm(tbl))) {
+          report(f, i + 1, "SEC-R44",
+            `public table '${tbl}' is GRANTed to anon/authenticated but has no ENABLE ROW LEVEL SECURITY — a network role can read (and, for write grants, overwrite/delete) every row; enable RLS + add per-policy grants (SECURITY.md invariant 26)`);
+        }
+      }
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -460,6 +520,7 @@ function runAll() {
   }
   checkExtSDRevoke();
   checkProxyNotSuperuser();
+  checkAnonGrantNeedsRLS();
 
   for (const f of files) {
     let text;

@@ -61,7 +61,7 @@ async function setup() {
 async function testBasicBatch() {
   console.log('\nTest 1: Basic batch — insert + read');
   const r = await batch([
-    { id: 'ins', method: 'POST', path: '/rest/v1/todos', body: { title: 'Batch test', done: false } },
+    { id: 'ins', method: 'POST', path: '/rest/v1/todos', body: { user_id: '00000000-0000-0000-0000-000000000001', title:'Batch test', done: false } },
     { id: 'read', method: 'GET', path: '/rest/v1/todos', query: 'title=eq.Batch test' },
   ], { atomic: true }, SRV);
 
@@ -79,7 +79,7 @@ async function testBasicBatch() {
 async function testTemplateResolution() {
   console.log('\nTest 2: Template resolution — {{op.field}}');
   const r = await batch([
-    { id: 'create', method: 'POST', path: '/rest/v1/todos', body: { title: 'Template parent', done: false } },
+    { id: 'create', method: 'POST', path: '/rest/v1/todos', body: { user_id: '00000000-0000-0000-0000-000000000001', title:'Template parent', done: false } },
     { id: 'verify', method: 'GET', path: '/rest/v1/todos', query: 'id=eq.{{create.id}}&select=id,title' },
   ], { atomic: true }, SRV);
 
@@ -95,7 +95,7 @@ async function testAtomicRollback() {
   await api('DELETE', '/rest/v1/todos?id=gt.0', null, SRV);
 
   const r = await batch([
-    { id: 'ok', method: 'POST', path: '/rest/v1/todos', body: { title: 'Should rollback', done: false } },
+    { id: 'ok', method: 'POST', path: '/rest/v1/todos', body: { user_id: '00000000-0000-0000-0000-000000000001', title:'Should rollback', done: false } },
     { id: 'fail', method: 'POST', path: '/rest/v1/nonexistent_table', body: { x: 1 } },
   ], { atomic: true }, SRV);
 
@@ -113,9 +113,9 @@ async function testPartialMode() {
   await api('DELETE', '/rest/v1/todos?id=gt.0', null, SRV);
 
   const r = await batch([
-    { id: 'ok1', method: 'POST', path: '/rest/v1/todos', body: { title: 'Partial A', done: false } },
+    { id: 'ok1', method: 'POST', path: '/rest/v1/todos', body: { user_id: '00000000-0000-0000-0000-000000000001', title:'Partial A', done: false } },
     { id: 'fail', method: 'POST', path: '/rest/v1/nonexistent_table', body: { x: 1 } },
-    { id: 'ok2', method: 'POST', path: '/rest/v1/todos', body: { title: 'Partial B', done: true } },
+    { id: 'ok2', method: 'POST', path: '/rest/v1/todos', body: { user_id: '00000000-0000-0000-0000-000000000001', title:'Partial B', done: true } },
   ], { atomic: false }, SRV);
 
   assert(r.status === 207, `partial failure returns 207 (got ${r.status})`);
@@ -136,7 +136,7 @@ async function testBatchUpdate() {
   await api('DELETE', '/rest/v1/todos?id=gt.0', null, SRV);
 
   const r = await batch([
-    { id: 'ins', method: 'POST', path: '/rest/v1/todos', body: { title: 'Update me', done: false } },
+    { id: 'ins', method: 'POST', path: '/rest/v1/todos', body: { user_id: '00000000-0000-0000-0000-000000000001', title:'Update me', done: false } },
     { id: 'upd', method: 'PATCH', path: '/rest/v1/todos', query: 'id=eq.{{ins.id}}', body: { done: true } },
     { id: 'check', method: 'GET', path: '/rest/v1/todos', query: 'id=eq.{{ins.id}}' },
   ], { atomic: true }, SRV);
@@ -151,7 +151,7 @@ async function testBatchDelete() {
   await api('DELETE', '/rest/v1/todos?id=gt.0', null, SRV);
 
   const r = await batch([
-    { id: 'ins', method: 'POST', path: '/rest/v1/todos', body: { title: 'Delete me', done: false } },
+    { id: 'ins', method: 'POST', path: '/rest/v1/todos', body: { user_id: '00000000-0000-0000-0000-000000000001', title:'Delete me', done: false } },
     { id: 'del', method: 'DELETE', path: '/rest/v1/todos', query: 'id=eq.{{ins.id}}' },
     { id: 'check', method: 'GET', path: '/rest/v1/todos', query: 'title=eq.Delete me' },
   ], { atomic: true }, SRV);
@@ -204,7 +204,7 @@ async function testInvalidMethod() {
 async function testAutoIds() {
   console.log('\nTest 11: Auto-generated operation IDs');
   const r = await batch([
-    { method: 'POST', path: '/rest/v1/todos', body: { title: 'Auto ID', done: false } },
+    { method: 'POST', path: '/rest/v1/todos', body: { user_id: '00000000-0000-0000-0000-000000000001', title:'Auto ID', done: false } },
   ], { atomic: true }, SRV);
 
   assert(r.status === 200, `status 200 (got ${r.status})`);

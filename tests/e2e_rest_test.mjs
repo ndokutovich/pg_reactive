@@ -4,12 +4,17 @@
  * Requires: docker compose running with:
  *   JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY (reads from env, defaults to docker-compose values)
  *
- * And a 'todos' table in public schema with: id serial, user_id uuid, title text, done boolean
+ * The 'todos' table is per-user RLS (user_id NOT NULL, owner-scoped policies,
+ * authenticated-only — see docker/init.sql). REST mechanics here are exercised
+ * via service_role (bypasses RLS, sees all rows) and must supply a user_id.
+ * Per-user isolation + the anon lockdown are regression-tested separately in
+ * tests/security/rest__demo_tables_rls.test.mjs.
  */
 
 const BASE = 'http://127.0.0.1:8080';
 const ANON = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const SRV = process.env.SERVICE_ROLE_KEY || 'dev-only-service-role-key-do-not-use-in-production';
+const DEMO_USER = '00000000-0000-0000-0000-000000000001';
 
 let passed = 0;
 let failed = 0;
@@ -43,11 +48,11 @@ async function setup() {
   // Delete all rows via service_role
   await api('DELETE', '/rest/v1/todos?id=gt.0', null, SRV);
 
-  // Insert test data
+  // Insert test data (service_role bypasses RLS but must supply user_id)
   await api('POST', '/rest/v1/todos', [
-    { title: 'Buy milk', done: false },
-    { title: 'Write code', done: true },
-    { title: 'Deploy app', done: false },
+    { user_id: DEMO_USER, title: 'Buy milk', done: false },
+    { user_id: DEMO_USER, title: 'Write code', done: true },
+    { user_id: DEMO_USER, title: 'Deploy app', done: false },
   ], SRV);
 }
 
@@ -55,7 +60,7 @@ async function setup() {
 
 async function testSelectAll() {
   console.log('\nTest 1: SELECT all');
-  const r = await api('GET', '/rest/v1/todos', null, ANON);
+  const r = await api('GET', '/rest/v1/todos', null, SRV);
   assert(r.status === 200, `status 200 (got ${r.status})`);
   assert(Array.isArray(r.json), 'returns array');
   assert(r.json.length === 3, `3 rows (got ${r.json.length})`);
@@ -63,7 +68,7 @@ async function testSelectAll() {
 
 async function testSelectFilter() {
   console.log('\nTest 2: SELECT with filter');
-  const r = await api('GET', '/rest/v1/todos?done=eq.false', null, ANON);
+  const r = await api('GET', '/rest/v1/todos?done=eq.false', null, SRV);
   assert(r.status === 200, `status 200`);
   assert(r.json.length === 2, `2 undone rows (got ${r.json.length})`);
   assert(r.json.every(row => row.done === false), 'all rows have done=false');
@@ -71,7 +76,7 @@ async function testSelectFilter() {
 
 async function testSelectColumns() {
   console.log('\nTest 3: SELECT specific columns');
-  const r = await api('GET', '/rest/v1/todos?select=id,title', null, ANON);
+  const r = await api('GET', '/rest/v1/todos?select=id,title', null, SRV);
   assert(r.status === 200, `status 200`);
   assert(r.json[0].id !== undefined, 'has id');
   assert(r.json[0].title !== undefined, 'has title');
@@ -80,7 +85,7 @@ async function testSelectColumns() {
 
 async function testSelectOrder() {
   console.log('\nTest 4: SELECT with order');
-  const r = await api('GET', '/rest/v1/todos?order=title.asc', null, ANON);
+  const r = await api('GET', '/rest/v1/todos?order=title.asc', null, SRV);
   assert(r.status === 200, `status 200`);
   const titles = r.json.map(r => r.title);
   const sorted = [...titles].sort();
@@ -89,24 +94,24 @@ async function testSelectOrder() {
 
 async function testSelectLimit() {
   console.log('\nTest 5: SELECT with limit and offset');
-  const r = await api('GET', '/rest/v1/todos?order=id.asc&limit=2', null, ANON);
+  const r = await api('GET', '/rest/v1/todos?order=id.asc&limit=2', null, SRV);
   assert(r.status === 200, `status 200`);
   assert(r.json.length === 2, `2 rows with limit (got ${r.json.length})`);
 
-  const r2 = await api('GET', '/rest/v1/todos?order=id.asc&limit=2&offset=2', null, ANON);
+  const r2 = await api('GET', '/rest/v1/todos?order=id.asc&limit=2&offset=2', null, SRV);
   assert(r2.json.length === 1, `1 row with offset (got ${r2.json.length})`);
 }
 
 async function testSelectNot() {
   console.log('\nTest 6: SELECT with NOT filter');
-  const r = await api('GET', '/rest/v1/todos?done=not.eq.true', null, ANON);
+  const r = await api('GET', '/rest/v1/todos?done=not.eq.true', null, SRV);
   assert(r.status === 200, `status 200`);
   assert(r.json.length === 2, `2 rows not done (got ${r.json.length})`);
 }
 
 async function testInsertSingle() {
   console.log('\nTest 7: INSERT single');
-  const r = await api('POST', '/rest/v1/todos', { title: 'New todo', done: false }, SRV);
+  const r = await api('POST', '/rest/v1/todos', { user_id: DEMO_USER, title: 'New todo', done: false }, SRV);
   assert(r.status === 201, `status 201 (got ${r.status})`);
   assert(r.json.title === 'New todo', 'returned title');
   assert(r.json.id > 0, 'has auto-generated id');
@@ -116,8 +121,8 @@ async function testInsertSingle() {
 async function testInsertBulk() {
   console.log('\nTest 8: INSERT bulk');
   const r = await api('POST', '/rest/v1/todos', [
-    { title: 'Bulk 1', done: false },
-    { title: 'Bulk 2', done: true },
+    { user_id: DEMO_USER, title: 'Bulk 1', done: false },
+    { user_id: DEMO_USER, title: 'Bulk 2', done: true },
   ], SRV);
   assert(r.status === 201, `status 201 (got ${r.status})`);
   assert(Array.isArray(r.json), 'returns array for bulk');
@@ -153,19 +158,19 @@ async function testDeleteNoFilter() {
 
 async function testNotFound() {
   console.log('\nTest 13: Table not found');
-  const r = await api('GET', '/rest/v1/nonexistent', null, ANON);
+  const r = await api('GET', '/rest/v1/nonexistent', null, SRV);
   assert(r.status === 404, `nonexistent table -> 404 (got ${r.status})`);
 }
 
 async function testBadFilter() {
   console.log('\nTest 14: Bad filter operator');
-  const r = await api('GET', '/rest/v1/todos?id=badop.5', null, ANON);
+  const r = await api('GET', '/rest/v1/todos?id=badop.5', null, SRV);
   assert(r.status === 400, `bad operator -> 400 (got ${r.status})`);
 }
 
 async function testBadColumn() {
   console.log('\nTest 15: Unknown column in filter');
-  const r = await api('GET', '/rest/v1/todos?nonexistent=eq.5', null, ANON);
+  const r = await api('GET', '/rest/v1/todos?nonexistent=eq.5', null, SRV);
   assert(r.status === 400, `unknown column -> 400 (got ${r.status})`);
 }
 
@@ -173,6 +178,12 @@ async function testNoAuth() {
   console.log('\nTest 16: No auth -> 401');
   const r = await api('GET', '/rest/v1/todos');
   assert(r.status === 401, `no auth -> 401 (got ${r.status})`);
+}
+
+async function testAnonDenied() {
+  console.log('\nTest 17: anon has no grant on per-user todos -> 403');
+  const r = await api('GET', '/rest/v1/todos', null, ANON);
+  assert(r.status === 403, `anon read of per-user table -> 403 (got ${r.status})`);
 }
 
 // ---- Main ----
@@ -200,6 +211,7 @@ async function main() {
   await testBadFilter();
   await testBadColumn();
   await testNoAuth();
+  await testAnonDenied();
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
   process.exit(failed > 0 ? 1 : 0);

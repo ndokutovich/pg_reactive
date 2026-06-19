@@ -245,10 +245,13 @@ async function testQueryBuilder() {
   const client = new TestClient(BASE, SRV);
 
   // Insert
+  // todos.user_id is NOT NULL (per-user RLS); service_role bypasses RLS but must
+  // still supply a user_id. Fixed demo uuid — service_role reads see all rows.
+  const U = '00000000-0000-0000-0000-000000000001';
   const ins = await client.from('todos').insert([
-    { title: 'SDK todo 1', done: false },
-    { title: 'SDK todo 2', done: true },
-    { title: 'SDK todo 3', done: false },
+    { user_id: U, title: 'SDK todo 1', done: false },
+    { user_id: U, title: 'SDK todo 2', done: true },
+    { user_id: U, title: 'SDK todo 3', done: false },
   ]);
   assert(ins.status === 201, `insert status 201 (got ${ins.status})`);
   assert(Array.isArray(ins.data) && ins.data.length === 3, '3 rows inserted');

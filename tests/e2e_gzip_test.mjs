@@ -84,7 +84,10 @@ async function setup() {
     'Authorization': `Bearer ${SRV}`,
   };
   await fetch(`${BASE}/rest/v1/todos?id=gt.0`, { method: 'DELETE', headers });
+  // todos.user_id is NOT NULL (per-user RLS); service_role bypasses RLS but must
+  // still supply a user_id. Reads below are service_role too, so they see all.
   const rows = Array.from({ length: 20 }, (_, i) => ({
+    user_id: '00000000-0000-0000-0000-000000000001',
     title: `Gzip test item ${i}`,
     done: false,
   }));
