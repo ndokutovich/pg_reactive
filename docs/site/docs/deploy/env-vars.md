@@ -107,13 +107,21 @@ Set these to enable social login. Each provider is independent — configure onl
 
 Redirect URI to register with OAuth providers: `https://your-app.example.com/auth/v1/callback`
 
-## SMTP variables (optional)
+## Email / SMTP variables
 
-Required for email verification and password reset emails. If not set, these features are disabled.
+Email-based auth flows — email verification, password reset, magic link — need
+SMTP to deliver. **In `PGSTACK_ENV=production`, SMTP is required by default**:
+without it those flows would silently drop a token-bearing message (the proxy
+refuses to boot rather than let that happen). For a deployment that uses no
+email at all (e.g. OAuth-only), set `EMAIL_ENABLED=false` — production then boots
+without SMTP, and the email routes (`POST /auth/v1/recover`, `/auth/v1/magiclink`)
+return `503`. Do **not** drop `PGSTACK_ENV=production` to escape the SMTP check;
+that also disables the dev-secret / SQL-endpoint / CORS / WS guards.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SMTP_HOST` | — | SMTP server hostname. Example: `smtp.sendgrid.net` |
+| `EMAIL_ENABLED` | `true` | Master switch for email-based flows. `false` → no SMTP required, email routes return 503. Incompatible with `REQUIRE_EMAIL_VERIFICATION=true`. |
+| `SMTP_HOST` | — | SMTP server hostname (required in production unless `EMAIL_ENABLED=false`). Example: `smtp.sendgrid.net` |
 | `SMTP_PORT` | `587` | SMTP port. Use `587` for STARTTLS, `465` for SSL, `25` for unencrypted. |
 | `SMTP_USER` | — | SMTP authentication username. |
 | `SMTP_PASS` | — | SMTP authentication password. |

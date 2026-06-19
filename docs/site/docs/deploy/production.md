@@ -8,6 +8,21 @@ description: Security and reliability checklist for deploying pgStack to product
 
 Before launching pgStack in production, review the following checklist.
 
+:::warning Use the split deployment for production
+This checklist assumes the **split** topology: separate `pgstack-proxy` and
+`pgstack-postgres` containers — the digest-pinned images CI builds, smoke-tests,
+and promotes by digest (see `docker-compose.prod.yml`). The **all-in-one** image
+(`pgstack/pgstack`) and the `deploy/templates/*` stacks are a **demo /
+single-tenant quickstart**, not the hardened production posture: they co-locate
+PostgreSQL and the proxy in one container, so a proxy compromise can reach the
+database directly — the "proxy runs as a powerless role, never the superuser"
+guarantee holds only across the container boundary of the split deployment. The
+all-in-one also builds on mutable base image tags and does not go through the
+build-once / promote-by-digest release pipeline. Use it for demos and
+single-tenant hobby deployments; use the split GHCR images for multi-tenant
+production.
+:::
+
 ## Security
 
 ### Secrets
@@ -45,6 +60,11 @@ Before launching pgStack in production, review the following checklist.
 - [ ] RLS is enabled on all user-facing tables
 - [ ] `anon` and `authenticated` roles have only the minimum necessary permissions
 - [ ] Internal auth tables (`pgstack.refresh_tokens`, `pgstack.oauth_sessions`, `pgstack.email_tokens`) have RLS enabled
+
+### Email
+
+- [ ] If you use email flows (verification / password reset / magic link): `SMTP_HOST`/`SMTP_USER`/`SMTP_PASS` are configured — the `PGSTACK_ENV=production` validator requires them by default (otherwise a token-bearing email would be silently dropped)
+- [ ] If you do **not** use email (e.g. OAuth-only): `EMAIL_ENABLED=false` is set (the email routes return 503). Never drop `PGSTACK_ENV=production` to escape the SMTP check — that also disables the dev-secret / SQL-endpoint / CORS / WS guards
 
 ## Reliability
 

@@ -1,5 +1,12 @@
 # Phone-deployable "What to Buy" shopping cart.
 #
+# DEMO / SINGLE-TENANT QUICKSTART — not the hardened production posture. The
+# `pgstack` service is the all-in-one image (PG + proxy co-located in ONE
+# container, mutable `:latest` tag, outside the digest-pinned release pipeline).
+# A proxy compromise here can reach the database directly. For multi-tenant
+# production, deploy the split GHCR images (pgstack-proxy + pgstack-postgres)
+# via docker-compose.prod.yml — see docs/deploy/production.md.
+#
 # Three containers:
 #   pgstack         — all-in-one (PG + pg_reactive + Go proxy)
 #   shop-migration  — one-shot psql that applies migration.sql then exits

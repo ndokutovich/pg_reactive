@@ -42,7 +42,11 @@ type Deps struct {
 
 	Mailer                   MailerIface // optional; nil → no email sent
 	RequireEmailVerification bool
-	SiteURL                  string
+	// EmailEnabled gates the email-delivery flows (password reset, magic link).
+	// When false, those routes return 503 instead of silently dropping a
+	// token-bearing email (see Config.EmailEnabled).
+	EmailEnabled bool
+	SiteURL      string
 
 	// OAuth
 	GoogleClientID     string

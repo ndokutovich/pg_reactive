@@ -1,10 +1,22 @@
 # Canonical all-in-one pgStack image: PostgreSQL + pg_reactive C extension +
 # pgstack Go proxy + the bootstrap schema, in a single container.
 #
+# ┌─ DEMO / SINGLE-TENANT QUICKSTART — NOT the hardened production posture ─────┐
+# │ This image CO-LOCATES PostgreSQL and the proxy in one container, so a proxy │
+# │ compromise can reach the database directly: the "proxy runs as a powerless  │
+# │ role, never the superuser" guarantee (SECURITY.md invariant 22) holds only  │
+# │ across the container boundary of the SPLIT deployment. It also builds on     │
+# │ mutable base tags and does NOT go through the build-once / promote-by-digest │
+# │ release pipeline (which publishes only pgstack-proxy + pgstack-postgres).    │
+# │ For multi-tenant production use the split GHCR images — docker-compose.prod. │
+# │ yml. Use this all-in-one for demos and single-tenant hobby deployments.      │
+# └────────────────────────────────────────────────────────────────────────────┘
+#
 # Build context = the pg_reactive repo root:
 #   docker build -f docker/Dockerfile.all-in-one -t pgstack-all-in-one .
 #
-# Directly usable for a deployment that needs no extra bundled content.
+# Directly usable for a demo / single-tenant deployment that needs no extra
+# bundled content.
 # Deployments that bundle a frontend / docs / studio (e.g. the umbrella's
 # apps/pg-reactive and apps/longtask-template, or roblox-clone-app) write
 # their own Dockerfile but should MIRROR this runtime stage and COPY the

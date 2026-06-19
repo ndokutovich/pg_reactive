@@ -337,6 +337,47 @@ func TestValidate_ProductionRequiresAdminDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestValidate_EmailEnabledGatesSMTP(t *testing.T) {
+	// EMAIL_ENABLED=true (default) in production requires SMTP; EMAIL_ENABLED=false
+	// lets a no-email (e.g. OAuth-only) deployment boot without SMTP — so an
+	// operator never has to disable PGSTACK_ENV=production just to skip the SMTP
+	// check (which would also drop the dev-secret / SQL / CORS / WS guards).
+	base := func() Config {
+		return Config{
+			PgstackEnv:             "production",
+			JWTSecret:              "this-is-a-long-enough-secret-for-jwt-auth",
+			AnonKey:                "a-real-anon-key-not-a-dev-value",
+			ServiceRoleKey:         "a-real-service-role-key-not-a-dev-value",
+			SecretsEncryptionKey:   []byte("0123456789abcdef0123456789abcdef"),
+			AdminDatabaseURL:       "postgres://authenticator_admin:pw@db:5432/app",
+			RequireAuthenticatedWS: true,
+			TLSMode:                "off",
+			GzipLevel:              5,
+			MaxConnections:         1,
+			PGPoolMaxConns:         1,
+		}
+	}
+	// email enabled + no SMTP -> error
+	c := base()
+	c.EmailEnabled = true
+	if errs := c.Validate(); !containsError(errs, "SMTP") {
+		t.Errorf("expected SMTP error when email enabled in production, got: %v", errs)
+	}
+	// email disabled + no SMTP -> OK (no SMTP error)
+	c = base()
+	c.EmailEnabled = false
+	if errs := c.Validate(); containsError(errs, "SMTP") {
+		t.Errorf("did not expect SMTP error when EMAIL_ENABLED=false, got: %v", errs)
+	}
+	// email disabled + require verification -> incompatible
+	c = base()
+	c.EmailEnabled = false
+	c.RequireEmailVerification = true
+	if errs := c.Validate(); !containsError(errs, "EMAIL_ENABLED=false") {
+		t.Errorf("expected incompatibility error for verification + email disabled, got: %v", errs)
+	}
+}
+
 func TestValidate_AllValid(t *testing.T) {
 	cfg := Config{
 		JWTSecret:             "this-is-a-long-enough-secret-for-jwt-auth",

@@ -685,6 +685,7 @@ func buildRouter(state *AppState) http.Handler {
 		AnonymousJWTTTLSecs:      state.Config.AnonymousJWTTTLSecs,
 		Mailer:                   state.Mailer,
 		RequireEmailVerification: state.Config.RequireEmailVerification,
+		EmailEnabled:             state.Config.EmailEnabled,
 		SiteURL:                  state.Config.SiteURL,
 		GoogleClientID:           state.Config.GoogleClientID,
 		GoogleClientSecret:       state.Config.GoogleClientSecret,

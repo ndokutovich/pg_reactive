@@ -141,6 +141,14 @@ type Config struct {
 	HSTSPreload       bool
 
 	// SMTP / email
+	// EmailEnabled gates the email-based auth flows (verification, password
+	// reset, magic link). Default true. When true in production, SMTP is
+	// required (so those flows actually deliver). Set EMAIL_ENABLED=false for a
+	// deployment that doesn't use email at all (e.g. OAuth-only) — production
+	// then boots without SMTP and the email routes return 503 instead of
+	// silently dropping a token-bearing message. This removes the footgun where
+	// an operator disables PGSTACK_ENV=production just to escape the SMTP check.
+	EmailEnabled             bool
 	SMTPFrom                 string
 	RequireEmailVerification bool
 	SMTPHost                 string
@@ -307,6 +315,7 @@ func FromEnv() Config {
 	cfg.HSTSPreload = envBoolOrDefault("HSTS_PRELOAD", false)
 
 	cfg.SMTPFrom = envOrDefault("SMTP_FROM", "noreply@pgstack.local")
+	cfg.EmailEnabled = envBoolOrDefault("EMAIL_ENABLED", true)
 	cfg.RequireEmailVerification = envBoolOrDefault("REQUIRE_EMAIL_VERIFICATION", false)
 	cfg.SMTPHost = os.Getenv("SMTP_HOST")
 	cfg.SMTPPort = envIntOrDefault("SMTP_PORT", 587)
@@ -445,16 +454,24 @@ func (c Config) Validate() []string {
 		if c.AdminDatabaseURL == "" {
 			errs = append(errs, "PGSTACK_ENV=production: ADMIN_DATABASE_URL is required — point it at the authenticator_admin login role so the admin plane is a separate credential from the data plane (gemini audit findings 6 & R4-2)")
 		}
-		// Audit round 26 F5: dev-mode mailer writes recovery / magiclink /
-		// verification URLs to the console (anyone with log access can
-		// read a victim's reset token). In production, SMTP is required —
-		// the routes that emit those URLs are not safe to expose without
-		// a real delivery channel.
-		if c.SMTPHost == "" || c.SMTPUser == "" || c.SMTPPass == "" {
-			errs = append(errs, "PGSTACK_ENV=production: SMTP_HOST, SMTP_USER and SMTP_PASS are required — without SMTP the mailer logs reset/magiclink URLs to the console")
+		// Email-based auth flows (verification, password reset, magic link) need
+		// a real delivery channel. When EMAIL_ENABLED (default true), SMTP is
+		// required in production — otherwise those flows would silently drop a
+		// token-bearing message and the operator would think reset "works". A
+		// deployment that genuinely uses no email sets EMAIL_ENABLED=false and
+		// boots without SMTP; its email routes then return 503 (no silent drop).
+		// This removes the footgun where an operator disables PGSTACK_ENV=
+		// production just to get past the SMTP check (and so also loses the
+		// dev-secret / SQL-endpoint / CORS / WS guards). (round 26 F5 closed the
+		// token-logging leak separately — the mailer no longer logs the body.)
+		if c.EmailEnabled && (c.SMTPHost == "" || c.SMTPUser == "" || c.SMTPPass == "") {
+			errs = append(errs, "PGSTACK_ENV=production: SMTP_HOST, SMTP_USER and SMTP_PASS are required when email is enabled — configure SMTP, or set EMAIL_ENABLED=false for an email-free (e.g. OAuth-only) deployment")
 		}
 	}
-	if c.RequireEmailVerification && c.SMTPHost == "" {
+	if c.RequireEmailVerification && !c.EmailEnabled {
+		errs = append(errs, "REQUIRE_EMAIL_VERIFICATION=true is incompatible with EMAIL_ENABLED=false — email verification needs a delivery channel")
+	}
+	if c.RequireEmailVerification && c.EmailEnabled && c.SMTPHost == "" {
 		errs = append(errs, "REQUIRE_EMAIL_VERIFICATION=true but SMTP_HOST is not set")
 	}
 	if c.MaxConnections < 1 {

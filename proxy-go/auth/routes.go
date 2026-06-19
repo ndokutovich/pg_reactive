@@ -649,6 +649,10 @@ func Logout(d *Deps) http.HandlerFunc {
 
 func Recover(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !d.EmailEnabled {
+			writeError(w, http.StatusServiceUnavailable, "email-based flows are disabled on this deployment (EMAIL_ENABLED=false)")
+			return
+		}
 		var body struct {
 			Email string `json:"email"`
 		}
@@ -792,6 +796,10 @@ func RecoverConfirm(d *Deps) http.HandlerFunc {
 
 func Magiclink(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !d.EmailEnabled {
+			writeError(w, http.StatusServiceUnavailable, "email-based flows are disabled on this deployment (EMAIL_ENABLED=false)")
+			return
+		}
 		var body struct {
 			Email string `json:"email"`
 		}

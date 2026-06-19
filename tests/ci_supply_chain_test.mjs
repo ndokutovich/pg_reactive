@@ -259,7 +259,10 @@ const runsCmd = (text, seq) => shellCommands(text).some((argv) => seqIn(argv, se
 const effHead = (argv) => { let i = 0; while (i < argv.length && /^\w+=/.test(argv[i])) i++; return argv[i]; };
 // Shell no-ops with no registry/filesystem-mutating effect — allowed anywhere a
 // write-scoped job is held to an ALLOWLIST (R42).
-const NOOP_HEAD = new Set(["echo", "printf", ":", "true", "false", "set", "export", "cd"]);
+// `export`/`cd` are deliberately NOT here (R51): `export DOCKER_CLI=evil` sets an
+// env var a later step (promote-image.sh reads $DOCKER_CLI) trusts, and neither is
+// a genuine no-op in a write-scoped job.
+const NOOP_HEAD = new Set(["echo", "printf", ":", "true", "false", "set"]);
 // True for a command head with no registry/filesystem-mutating effect: a no-op
 // word, an empty command, or a redirection artifact the simple-command splitter
 // leaves behind (`2>&1` splits on `&` → a bare `1`; a leading `>/dev/null`). A
@@ -278,6 +281,16 @@ const hasCmdSub = (argv) => argv.some((t) => /\$\(/.test(t) || t.includes("`"));
 // R43 substitution check never sees it. A write-scoped job has no business with a
 // heredoc, so its mere presence in a run step is refused fail-closed (R44).
 const hasHeredoc = (run) => /<</.test(joinCont(String(run ?? "")));
+// A command that MUTATES CI state a later step trusts — even with a no-op head.
+// `echo "x" >> "$GITHUB_PATH"` / `>> "$GITHUB_ENV"` inject PATH/env into every
+// subsequent step (GitHub Actions' magic files); a `VAR=` assignment or `export`
+// of a hijack-sensitive variable (PATH, BASH_ENV/ENV, SHELL, DOCKER_CLI/CONFIG/
+// HOST that promote-image.sh and the docker CLI read, LD_PRELOAD/LD_LIBRARY_PATH)
+// redirects a later registry-write command to an attacker binary/registry. A
+// write-scoped job has no business doing either — refused fail-closed (R51).
+// (GITHUB_OUTPUT — per-step, consumed by the digest checks — is NOT flagged.)
+const DANGER_VAR = /^(?:PATH|BASH_ENV|ENV|SHELL|DOCKER_CLI|DOCKER_CONFIG|DOCKER_HOST|LD_PRELOAD|LD_LIBRARY_PATH)=/;
+const mutatesCIState = (argv) => argv.some((t) => /GITHUB_PATH|GITHUB_ENV/.test(t) || DANGER_VAR.test(t));
 // Is `scriptRe` the EFFECTIVE command of argv — the command head, reached after
 // only transparent launchers (bash/sh/sudo/env/…), `VAR=` assignments, and
 // options — rather than merely an argument sitting somewhere in the line? A
@@ -559,6 +572,7 @@ function releasePolicy(wf) {
       if (hasHeredoc(s.run)) v.push(name + ": registry-write job uses a heredoc/here-string (<<) — its body live-expands command substitutions the guard can't inspect (only bare promote-image.sh may run; R44)");
       for (const argv of shellCommands(lr(s.run))) {
         if (!argv.length) continue;
+        if (mutatesCIState(argv)) { v.push(name + ": registry-write job mutates CI state (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — writing $GITHUB_PATH/$GITHUB_ENV or setting PATH/BASH_ENV/DOCKER_CLI/… redirects a later step (promote reads $DOCKER_CLI) to an attacker (R51)"); continue; }
         if (hasCmdSub(argv)) { v.push(name + ": registry-write job runs a command carrying a substitution $()/backtick (" + JSON.stringify(argv.join(" ").slice(0, 70)) + ") — the shell runs it as a side command before the host command, re-pointing a tag past the no-op head (R43)"); continue; }
         if (isNoopHead(effHead(argv))) continue;
         if (isScriptCommand(argv, /\.github\/scripts\/promote-image\.sh/)) continue;
@@ -787,6 +801,7 @@ function candidatePolicy(wf) {
     return srcRe.test(sources[0]);
   };
   const allowedCand = (argv) => {
+    if (mutatesCIState(argv)) return false; // $GITHUB_PATH/$GITHUB_ENV write or PATH/DOCKER_CLI/… mutation (R51)
     if (hasCmdSub(argv)) return false; // $()/backtick runs a side command before the host (R43)
     if (isNoopHead(effHead(argv))) return true;
     if (isScriptCommand(argv, /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/)) return true;
@@ -1083,6 +1098,15 @@ mut("ci candidate re-points the sha tag via `env -S` wrapping bash -c, smoke-pro
 mut("ci candidate re-points the sha tag via a ${TAG} dynamic target (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:${TAG}" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via a $TAG dynamic target (proxy)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:$TAG" "${IMAGE_PREFIX}/pgstack-proxy:latest"'; }, candidatePolicy);
 mut("ci candidate re-points the sha tag via a ${TAG} dynamic target (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\nTAG="sha-${{ github.sha }}"\ndocker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-postgres:${TAG}" "${IMAGE_PREFIX}/pgstack-postgres:latest"'; }, candidatePolicy);
+// R51 finding — a no-op head (echo/export) can still MUTATE CI state a later
+// step trusts: `echo … >> $GITHUB_PATH` / `>> $GITHUB_ENV` inject PATH/env into
+// every subsequent step, and `export DOCKER_CLI=evil` redirects promote-image.sh
+// (which reads $DOCKER_CLI) to an attacker binary. Refused in write-scoped jobs.
+mut("release docker-proxy injects PATH via $GITHUB_PATH", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo "/tmp/evil" >> "$GITHUB_PATH"' }); }, releasePolicy);
+mut("release docker-proxy injects BASH_ENV via $GITHUB_ENV", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: 'echo "BASH_ENV=/tmp/x.sh" >> "$GITHUB_ENV"' }); }, releasePolicy);
+mut("release docker-proxy exports DOCKER_CLI (promote reads it)", release, (w) => { w.jobs["docker-proxy"].steps.push({ name: "x", run: "export DOCKER_CLI=/tmp/evil-docker" }); }, releasePolicy);
+mut("ci candidate injects PATH via $GITHUB_PATH", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\necho "$PWD/evil" >> "$GITHUB_PATH"'; }, candidatePolicy);
+mut("ci candidate sets DOCKER_CLI via a bare assignment", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + "\nDOCKER_CLI=/tmp/evil-docker"; }, candidatePolicy);
 // R48 finding — "digest present in argv" ≠ "digest is the SOURCE". `imagetools
 // create` takes multiple SOURCEs and value-options, so (a) `-t SHA <digest>
 // :latest` keeps the digest yet ALSO merges unsmoked :latest, and (b)

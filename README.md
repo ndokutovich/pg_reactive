@@ -223,7 +223,7 @@ scripts/              bootstrap-env.sh and friends
 ## Requirements
 
 - PostgreSQL 16+
-- Go 1.25+ (for proxy)
+- Go 1.25.11 or a patched newer toolchain (for proxy) — the CI-verified build pins `go1.25.11`, on which `govulncheck` is clean; older 1.25.x patch releases may carry unpatched stdlib advisories
 - Node.js 18+ (for SDK and CLI)
 - Docker and Docker Compose (for development)
 
