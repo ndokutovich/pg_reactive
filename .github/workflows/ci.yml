@@ -717,6 +717,12 @@ jobs:
     # emulation; give them an explicit, generous budget so a slow-but-healthy
     # build is never killed mid-flight by an implicit/default cap.
     timeout-minutes: 120
+    # Image publishing is DISTRIBUTION, not a quality gate. A flaky push to GHCR
+    # (runner network) must not redden CI and thereby block deploys of an
+    # otherwise-green commit (deploy.yml gates on CI conclusion). Release safety is
+    # unaffected: release.yml promotes only the sha-<commit> tag, which is created
+    # solely after the smoke passes — no publish ⇒ no tag ⇒ release fails honestly.
+    continue-on-error: true
     needs:
       - test-extension
       - test-proxy-go
