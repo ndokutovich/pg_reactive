@@ -44,8 +44,9 @@ const FeatureList: FeatureItem[] = [
     title: 'Two containers. That is it.',
     description: (
       <>
-        PostgreSQL + Rust proxy. No GoTrue, no PostgREST, no Realtime, no Kong, no Redis.
-        Run <code>docker compose up -d</code> and your backend is ready.
+        PostgreSQL + one proxy. No GoTrue, no PostgREST, no Realtime, no Kong, no Redis.
+        Run <code>docker compose up -d</code> and your backend is ready — the proxy ships
+        as two co-equal builds, <strong>Go or Rust</strong>, hardened to parity.
       </>
     ),
   },
@@ -54,7 +55,28 @@ const FeatureList: FeatureItem[] = [
     description: (
       <>
         The <code>pg_reactive</code> C extension turns any SELECT into a live subscription.
-        Delta delivery via WebSocket. Column-level tracking. No polling.
+        Delta delivery via WebSocket, column-level tracking, generation-isolated tenancy.
+        No CDC, no polling — the database itself pushes the diff.
+      </>
+    ),
+  },
+  {
+    title: 'Transaction batching',
+    description: (
+      <>
+        Many writes, one transaction, one HTTP call: <code>POST /rest/v1/batch</code> with
+        <code>{'{{op.field}}'}</code> templates, atomic or partial-success modes.
+        The multi-statement transaction Supabase has never shipped.
+      </>
+    ),
+  },
+  {
+    title: 'Edge Functions — five runtimes',
+    description: (
+      <>
+        One <code>/functions/v1/</code> endpoint, five backends: embedded JS (goja),
+        PL/v8, PL/Python, a Deno sidecar, or a per-function HTTP container in
+        <em>any</em> language. Pick per function.
       </>
     ),
   },
@@ -63,17 +85,18 @@ const FeatureList: FeatureItem[] = [
     description: (
       <>
         Full CRUD with PostgREST filter syntax — <code>eq</code>, <code>gt</code>,
-        <code>ilike</code>, <code>in</code>, embedding via FK. Migrate from Supabase
+        <code>ilike</code>, <code>in</code>, FK embedding, RPC. Migrate from Supabase
         without changing client code.
       </>
     ),
   },
   {
-    title: 'Auth built-in',
+    title: 'Security-first auth + RLS',
     description: (
       <>
-        Email/password with argon2id, JWT (HS256), OAuth (Google, GitHub),
-        refresh token rotation, and auto-refresh. RLS enforced on every request.
+        Email/password (argon2id), JWT, OAuth, magic links, refresh-token rotation.
+        Row-Level Security on <em>every</em> request via a two-pool least-privilege
+        model — hardened against 26 documented trust-boundary invariants.
       </>
     ),
   },
@@ -87,11 +110,21 @@ const FeatureList: FeatureItem[] = [
     ),
   },
   {
+    title: 'Studio + file storage',
+    description: (
+      <>
+        A built-in admin Studio — table editor, SQL editor, auth users, live logs —
+        plus S3-compatible storage buckets, PostgreSQL-backed by default
+        (optional disk backend). All from the same two containers.
+      </>
+    ),
+  },
+  {
     title: 'TypeScript SDK + CLI',
     description: (
       <>
         Supabase-compatible <code>@pgstack/sdk</code> with React hooks.
-        CLI for migrations, type generation, and dev environment management.
+        CLI for scaffolding, migrations, type generation, and dev environments.
       </>
     ),
   },
@@ -116,6 +149,52 @@ function HomepageFeatures() {
           {FeatureList.map((props, idx) => (
             <Feature key={idx} {...props} />
           ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WhyNotSupabase() {
+  return (
+    <section className={styles.features}>
+      <div className="container">
+        <div className="row">
+          <div className="col col--12 text--center">
+            <Heading as="h2">Coming from Supabase?</Heading>
+            <p>
+              Same client code, a fraction of the moving parts — plus features Supabase
+              doesn&apos;t have.
+            </p>
+          </div>
+        </div>
+        <div className="row">
+          <div className="col col--4 padding-vert--md">
+            <Heading as="h3">2 containers, not 15+</Heading>
+            <p>
+              GoTrue, PostgREST, Realtime, Storage, Kong, Redis — collapsed into one
+              PostgreSQL and one proxy.
+            </p>
+          </div>
+          <div className="col col--4 padding-vert--md">
+            <Heading as="h3">Drop-in SDK</Heading>
+            <p>
+              The PostgREST filter syntax and <code>@pgstack/sdk</code> are
+              Supabase-compatible. Point your client at a new URL.
+            </p>
+          </div>
+          <div className="col col--4 padding-vert--md">
+            <Heading as="h3">Things it never shipped</Heading>
+            <p>
+              Multi-statement transaction batching, database-native live queries, and
+              five edge-function runtimes — out of the box.
+            </p>
+          </div>
+        </div>
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <Link className="button button--outline button--primary button--lg" to="vs-supabase">
+            See the full comparison
+          </Link>
         </div>
       </div>
     </section>
@@ -198,6 +277,7 @@ export default function Home(): ReactNode {
       <HomepageHeader />
       <main>
         <HomepageFeatures />
+        <WhyNotSupabase />
         <CodeExample />
       </main>
     </Layout>
