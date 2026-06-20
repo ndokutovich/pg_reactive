@@ -378,6 +378,50 @@ func TestValidate_EmailEnabledGatesSMTP(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsPlaceholderAndShortSecrets(t *testing.T) {
+	// The repo ships change-me-* placeholders in .env.example; compose only checks
+	// non-empty, so a user who fills just what blocks startup could ship a
+	// publicly-known SERVICE_ROLE_KEY. Production must reject placeholders and
+	// too-short opaque keys.
+	base := func() Config {
+		return Config{
+			PgstackEnv:             "production",
+			JWTSecret:              "this-is-a-long-enough-secret-for-jwt-auth",
+			AnonKey:                "real-anon-key-1234567890abcdefXYZ",
+			ServiceRoleKey:         "real-service-role-key-1234567890abXYZ",
+			SecretsEncryptionKey:   []byte("0123456789abcdef0123456789abcdef"),
+			AdminDatabaseURL:       "postgres://authenticator_admin:pw@db:5432/app",
+			RequireAuthenticatedWS: true,
+			EmailEnabled:           false,
+			AccessTokenExpirySecs:  3600,
+			TLSMode:                "off",
+			GzipLevel:              5,
+			MaxConnections:         1,
+			PGPoolMaxConns:         1,
+		}
+	}
+	if errs := base().Validate(); len(errs) != 0 {
+		t.Fatalf("realistic prod base should pass, got: %v", errs)
+	}
+	cases := []struct {
+		name, want string
+		mut        func(*Config)
+	}{
+		{"jwt change-me", "JWT_SECRET", func(c *Config) { c.JWTSecret = "change-me-at-least-32-characters-long" }},
+		{"anon change-me", "ANON_KEY", func(c *Config) { c.AnonKey = "change-me-anon-key" }},
+		{"service change-me", "SERVICE_ROLE_KEY", func(c *Config) { c.ServiceRoleKey = "change-me-service-role-key" }},
+		{"service short", "SERVICE_ROLE_KEY", func(c *Config) { c.ServiceRoleKey = "short" }},
+		{"anon short", "ANON_KEY", func(c *Config) { c.AnonKey = "short" }},
+	}
+	for _, tc := range cases {
+		c := base()
+		tc.mut(&c)
+		if errs := c.Validate(); !containsError(errs, tc.want) {
+			t.Errorf("%s: expected %s rejected, got: %v", tc.name, tc.want, errs)
+		}
+	}
+}
+
 func TestValidate_AllValid(t *testing.T) {
 	cfg := Config{
 		JWTSecret:             "this-is-a-long-enough-secret-for-jwt-auth",

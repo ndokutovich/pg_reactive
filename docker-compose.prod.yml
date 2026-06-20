@@ -5,8 +5,13 @@
 #   cp .env.example .env   # fill in real secrets
 #   docker compose -f docker-compose.prod.yml up -d
 #
-# Required env vars (see .env.example):
-#   POSTGRES_PASSWORD, JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY
+# Required env vars (compose fail-fasts via ${VAR:?}; see .env.example):
+#   POSTGRES_PASSWORD, AUTHENTICATOR_PASSWORD, AUTHENTICATOR_ADMIN_PASSWORD,
+#   JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY, SECRETS_ENCRYPTION_KEY, SITE_URL
+# Email: SMTP_HOST/USER/PASS required when EMAIL_ENABLED=true (default); set
+#   EMAIL_ENABLED=false for an email-free (OAuth-only) deployment.
+# The production validator additionally rejects placeholder/short secrets — do
+# NOT paste the .env.example "change-me" values.
 
 services:
   db:

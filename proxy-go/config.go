@@ -389,6 +389,20 @@ func envBoolOrDefault(key string, def bool) bool {
 	return def
 }
 
+// isPlaceholderSecret reports whether s is a publicly-known placeholder value —
+// the repo ships these in .env.example / dev configs, so any of them reaching a
+// production secret means an attacker already knows it. Compose's `${VAR:?}` only
+// checks non-empty; `change-me-service-role-key` is non-empty yet public.
+func isPlaceholderSecret(s string) bool {
+	l := strings.ToLower(s)
+	for _, bad := range []string{"dev-only", "change-me", "changeme", "placeholder", "replace-me", "your-secret", "example-secret"} {
+		if strings.Contains(l, bad) {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate checks the loaded configuration and returns human-readable errors.
 // Callers should log all errors and abort startup if any are returned.
 func (c Config) Validate() []string {
@@ -410,8 +424,8 @@ func (c Config) Validate() []string {
 		if c.JWTSecret == "" {
 			errs = append(errs, "PGSTACK_ENV=production: JWT_SECRET is required (random 32+ bytes)")
 		}
-		if strings.Contains(c.JWTSecret, "dev-only") {
-			errs = append(errs, "PGSTACK_ENV=production: JWT_SECRET still contains 'dev-only' — generate a real key with `openssl rand -base64 32`")
+		if isPlaceholderSecret(c.JWTSecret) {
+			errs = append(errs, "PGSTACK_ENV=production: JWT_SECRET is a publicly-known placeholder (dev-only / change-me / …) shipped in .env.example — generate a real key with `openssl rand -base64 32`")
 		}
 		// ANON_KEY: required non-empty in production. Even when the proxy
 		// rejects anon-key WS subscriptions (REQUIRE_AUTHENTICATED_WS), a
@@ -419,15 +433,17 @@ func (c Config) Validate() []string {
 		// path, so a non-empty value is still a meaningful gate.
 		if c.AnonKey == "" {
 			errs = append(errs, "PGSTACK_ENV=production: ANON_KEY is required (random 32+ bytes)")
-		}
-		if strings.Contains(c.AnonKey, "dev-only") || c.AnonKey == "anon-key-12345" {
-			errs = append(errs, "PGSTACK_ENV=production: ANON_KEY is a publicly-known dev value — generate a real key")
+		} else if isPlaceholderSecret(c.AnonKey) || c.AnonKey == "anon-key-12345" {
+			errs = append(errs, "PGSTACK_ENV=production: ANON_KEY is a publicly-known placeholder/dev value — generate a real key with `openssl rand -base64 32`")
+		} else if len(c.AnonKey) < 16 {
+			errs = append(errs, fmt.Sprintf("PGSTACK_ENV=production: ANON_KEY is too short (%d chars) — use 32+ from `openssl rand -base64 32`", len(c.AnonKey)))
 		}
 		if c.ServiceRoleKey == "" {
 			errs = append(errs, "PGSTACK_ENV=production: SERVICE_ROLE_KEY is required (random 32+ bytes)")
-		}
-		if strings.Contains(c.ServiceRoleKey, "dev-only") {
-			errs = append(errs, "PGSTACK_ENV=production: SERVICE_ROLE_KEY is a publicly-known dev value — generate a real key")
+		} else if isPlaceholderSecret(c.ServiceRoleKey) {
+			errs = append(errs, "PGSTACK_ENV=production: SERVICE_ROLE_KEY is a publicly-known placeholder/dev value — generate a real key with `openssl rand -base64 32`")
+		} else if len(c.ServiceRoleKey) < 16 {
+			errs = append(errs, fmt.Sprintf("PGSTACK_ENV=production: SERVICE_ROLE_KEY is too short (%d chars) — use 32+ from `openssl rand -base64 32`", len(c.ServiceRoleKey)))
 		}
 		if c.EnableSQLEndpoint {
 			errs = append(errs, "PGSTACK_ENV=production: ENABLE_SQL_ENDPOINT=true is unsafe — raw SQL execution must not be reachable from the network")

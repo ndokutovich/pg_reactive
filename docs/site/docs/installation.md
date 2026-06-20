@@ -78,11 +78,15 @@ Copy `.env.example` to `.env` and fill in the values before starting in producti
 | Variable | Type | Description |
 |----------|------|-------------|
 | `POSTGRES_PASSWORD` | string | PostgreSQL superuser password. Use a strong random value. |
+| `AUTHENTICATOR_PASSWORD` | string | Login password for the powerless `authenticator` data-plane role. Random, URL-safe. Generate with `openssl rand -base64 32`. |
+| `AUTHENTICATOR_ADMIN_PASSWORD` | string | Login password for the `authenticator_admin` admin-plane role (kept separate from the data plane). Random, URL-safe. |
 | `JWT_SECRET` | string | Secret key for signing JWT access tokens. Must be 32+ characters. Generate with `openssl rand -base64 32`. |
-| `ANON_KEY` | string | Opaque API key for anonymous (unauthenticated) requests. Generate with `openssl rand -base64 32`. |
-| `SERVICE_ROLE_KEY` | string | Opaque API key for service-role (admin, bypasses RLS) requests. Keep secret. |
+| `ANON_KEY` | string | Opaque API key for anonymous (unauthenticated) requests. 32+ chars. Generate with `openssl rand -base64 32`. |
+| `SERVICE_ROLE_KEY` | string | Opaque API key for service-role (admin, bypasses RLS) requests. 32+ chars. Keep secret. |
 | `SECRETS_ENCRYPTION_KEY` | string | AES-256 key for at-rest encryption of edge-function env vars and webhook signing secrets. 32 raw bytes, base64-encoded. Generate with `openssl rand -base64 32`. |
 | `SITE_URL` | string | Your application's public URL. Required for OAuth redirect callbacks. Example: `https://app.example.com`. |
+
+In `PGSTACK_ENV=production` the proxy refuses to start if any secret is a publicly-known placeholder (`dev-only` / `change-me` / …) or if `ANON_KEY`/`SERVICE_ROLE_KEY` is too short. Leave the `.env.example` secrets blank and generate real values. **Email:** with `EMAIL_ENABLED=true` (default) SMTP is also required; set `EMAIL_ENABLED=false` for an email-free (e.g. OAuth-only) deployment.
 
 ### Database
 
@@ -100,12 +104,17 @@ Copy `.env.example` to `.env` and fill in the values before starting in producti
 | `GITHUB_CLIENT_ID` | GitHub OAuth App client ID from [GitHub Settings](https://github.com/settings/developers). |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth App client secret. |
 
-### SMTP / email (optional)
+### Email / SMTP
 
-Required for email verification and magic links.
+Email flows (verification, password reset, magic link) need SMTP. **In
+`PGSTACK_ENV=production`, SMTP is required by default** (`EMAIL_ENABLED=true`).
+For an email-free deployment set `EMAIL_ENABLED=false` — production boots without
+SMTP and the email routes return `503`. Do not drop `PGSTACK_ENV=production` to
+skip SMTP; that disables the other production guards.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `EMAIL_ENABLED` | `true` | Master switch for email flows. `false` → no SMTP required, email routes return 503. |
 | `SMTP_HOST` | — | SMTP server hostname. |
 | `SMTP_PORT` | `587` | SMTP port. |
 | `SMTP_USER` | — | SMTP authentication username. |
