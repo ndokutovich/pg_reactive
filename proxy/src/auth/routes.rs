@@ -705,11 +705,18 @@ async fn generate_token_pair_tx(
     Ok((access_token, refresh_token))
 }
 
+/// 32 cryptographically-random bytes read straight from the OS CSPRNG
+/// (getrandom). Used for refresh tokens, OAuth CSRF state, PKCE verifiers and
+/// email tokens. Panics only if the OS entropy source is unavailable — there is
+/// no safe way to mint a security token without it.
+pub(crate) fn random_token_bytes() -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("OS CSPRNG (getrandom) unavailable");
+    bytes
+}
+
 pub(crate) fn generate_refresh_token() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64_url_encode(&bytes)
+    base64_url_encode(&random_token_bytes())
 }
 
 pub(crate) fn base64_url_encode(data: &[u8]) -> String {
@@ -722,7 +729,7 @@ pub(crate) fn base64_url_encode(data: &[u8]) -> String {
 /// Generate a cryptographically random hex token (32 bytes = 64 hex chars).
 fn generate_token() -> String {
     use std::fmt::Write;
-    let bytes: [u8; 32] = rand::random();
+    let bytes = random_token_bytes();
     let mut s = String::with_capacity(64);
     for b in bytes {
         write!(s, "{b:02x}").unwrap();

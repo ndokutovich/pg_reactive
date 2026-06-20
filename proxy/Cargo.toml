@@ -27,7 +27,10 @@ serde_json = "1"
 jsonwebtoken = "9"
 argon2 = "0.5"
 subtle = "2"
-rand = "0.9"
+# OS CSPRNG for security tokens. We use getrandom directly rather than rand to
+# avoid the RUSTSEC "rand is unsound with a custom logger using rand::rng()"
+# advisory and to read OS entropy explicitly for every token.
+getrandom = "0.3"
 base64ct = { version = "1", features = ["alloc"] }
 sha2 = "0.10"
 

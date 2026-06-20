@@ -4,7 +4,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
-use crate::auth::routes::{base64_url_encode, generate_token_pair};
+use crate::auth::routes::{base64_url_encode, generate_token_pair, random_token_bytes};
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -84,17 +84,11 @@ fn error_redirect(site: &str, error: &str, description: &str) -> Redirect {
 }
 
 fn generate_csrf_state() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64_url_encode(&bytes)
+    base64_url_encode(&random_token_bytes())
 }
 
 fn generate_code_verifier() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
-    base64_url_encode(&bytes)
+    base64_url_encode(&random_token_bytes())
 }
 
 fn compute_code_challenge(verifier: &str) -> String {
