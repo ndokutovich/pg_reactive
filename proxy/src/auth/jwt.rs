@@ -40,9 +40,19 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, String> {
     validation.required_spec_claims.remove("exp");
     validation.validate_exp = true;
 
-    decode::<Claims>(token, &key, &validation)
+    let claims = decode::<Claims>(token, &key, &validation)
         .map(|data| data.claims)
-        .map_err(|e| format!("JWT validation failed: {e}"))
+        .map_err(|e| format!("JWT validation failed: {e}"))?;
+
+    // SECURITY.md invariant 11: a token must carry a non-empty `sub` to
+    // authenticate as anything other than anon. Without this, an identityless
+    // signed token resolves as `authenticated` with sub="" and any RLS policy
+    // keyed on auth.uid() (NULL) that evaluates truthy becomes a row-level bypass.
+    if claims.sub.trim().is_empty() {
+        return Err("JWT validation failed: missing sub claim".into());
+    }
+
+    Ok(claims)
 }
 
 /// Extract JWT token from Authorization header or apikey header or query param.

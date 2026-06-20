@@ -42,9 +42,21 @@ impl From<sqlx::Error> for AppError {
                 error!(pg_code = %code, "database error: {}", db_err.message());
 
                 // Return sanitized messages to client — never leak internal DB details
+                // SECURITY.md invariant 12: SQLSTATE class 22 (data exception) and
+                // 23 (integrity constraint) are the CLIENT sending bad input, not a
+                // server crash — map to 4xx, never 500. An injection probe like
+                // `?id=eq.1' OR '1'='1` is a 22P02 invalid-text-representation for the
+                // integer cast; returning 500 would flag every malformed value as a
+                // possible crash.
                 if code == "23505" {
                     // unique_violation
                     AppError::Conflict("duplicate value violates unique constraint".into())
+                } else if code == "23503" {
+                    // foreign_key_violation
+                    AppError::Conflict("foreign key constraint violation".into())
+                } else if code.starts_with("22") || code.starts_with("23") {
+                    // data exception / integrity constraint — malformed client input
+                    AppError::BadRequest("invalid request".into())
                 } else if code == "42501" {
                     // insufficient_privilege (RLS)
                     AppError::Forbidden("insufficient privileges".into())

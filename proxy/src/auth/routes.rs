@@ -1,5 +1,5 @@
 use crate::auth::jwt::{self, Claims};
-use crate::auth::keys::{constant_time_eq, is_service_role};
+use crate::auth::keys::{constant_time_eq, hash_token, is_service_role};
 use crate::auth::password;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -132,11 +132,11 @@ pub async fn signup(
         // Generate verification token and store it
         let verify_token = generate_token();
         sqlx::query(
-            "INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+            "INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
              VALUES ($1::uuid, $2, 'email_verification', now() + interval '24 hours')",
         )
         .bind(&user_id)
-        .bind(&verify_token)
+        .bind(hash_token(&verify_token))
         .execute(&state.admin_pool)
         .await?;
 
@@ -235,8 +235,8 @@ async fn token_password(
         .ok_or_else(|| AppError::BadRequest("password is required".into()))?;
 
     // Fetch user
-    let user = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, serde_json::Value, serde_json::Value)>(
-        "SELECT id::text, email, role, encrypted_password, created_at::text, updated_at::text, raw_user_meta, raw_app_meta
+    let user = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, serde_json::Value, serde_json::Value, Option<String>)>(
+        "SELECT id::text, email, role, encrypted_password, created_at::text, updated_at::text, raw_user_meta, raw_app_meta, email_confirmed_at::text
          FROM pgstack.users WHERE email = $1",
     )
     .bind(email)
@@ -252,6 +252,7 @@ async fn token_password(
         updated_at,
         raw_user_meta,
         raw_app_meta,
+        email_confirmed_at,
     ) = user.ok_or_else(|| AppError::Unauthorized("invalid login credentials".into()))?;
 
     let hash = encrypted_password
@@ -268,6 +269,13 @@ async fn token_password(
 
     if !valid {
         return Err(AppError::Unauthorized("invalid login credentials".into()));
+    }
+
+    // SECURITY.md invariant 20: enforce email verification at the login boundary.
+    // The signup path withholds email_confirmed_at when verification is on; here is
+    // where it must actually block — otherwise the whole flow is a no-op.
+    if state.config.require_email_verification && email_confirmed_at.is_none() {
+        return Err(AppError::Forbidden("email not verified".into()));
     }
 
     // Generate tokens (new family)
@@ -307,9 +315,9 @@ async fn token_refresh(
     // Find refresh token (including revoked, for reuse detection)
     let token_row = sqlx::query_as::<_, (i64, String, bool, Option<String>)>(
         "SELECT id, user_id::text, revoked, family_id::text FROM pgstack.refresh_tokens
-         WHERE token = $1 AND expires_at > now()",
+         WHERE token_hash = $1 AND expires_at > now()",
     )
-    .bind(refresh)
+    .bind(hash_token(refresh))
     .fetch_optional(&state.admin_pool)
     .await?;
 
@@ -451,11 +459,45 @@ pub async fn update_user(
         if !is_valid_email(email) {
             return Err(AppError::BadRequest("invalid email".into()));
         }
-        sqlx::query("UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2::uuid")
-            .bind(email)
+        if state.config.require_email_verification {
+            // SECURITY.md invariant 20: a changed address is UNVERIFIED until
+            // confirmed — clear email_confirmed_at (so it can't inherit the old
+            // address's confirmed status), revoke outstanding verification tokens,
+            // and issue a fresh one.
+            sqlx::query("UPDATE pgstack.users SET email = $1, email_confirmed_at = NULL, updated_at = now() WHERE id = $2::uuid")
+                .bind(email)
+                .bind(&claims.sub)
+                .execute(&state.admin_pool)
+                .await?;
+            sqlx::query("UPDATE pgstack.email_tokens SET used_at = now() WHERE user_id = $1::uuid AND token_type = 'email_verification' AND used_at IS NULL")
+                .bind(&claims.sub)
+                .execute(&state.admin_pool)
+                .await?;
+            let verify_token = generate_token();
+            sqlx::query(
+                "INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
+                 VALUES ($1::uuid, $2, 'email_verification', now() + interval '24 hours')",
+            )
             .bind(&claims.sub)
+            .bind(hash_token(&verify_token))
             .execute(&state.admin_pool)
             .await?;
+            let site_url = state
+                .config
+                .site_url
+                .as_deref()
+                .unwrap_or("http://127.0.0.1:3000");
+            let html = verify_email_html(site_url, &verify_token);
+            if let Err(e) = state.mailer.send(email, "Verify your email", &html).await {
+                tracing::warn!("Failed to send verification email to {email}: {e}");
+            }
+        } else {
+            sqlx::query("UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2::uuid")
+                .bind(email)
+                .bind(&claims.sub)
+                .execute(&state.admin_pool)
+                .await?;
+        }
     }
 
     // Update password if provided
@@ -476,14 +518,23 @@ pub async fn update_user(
             .map_err(|e| AppError::Internal(format!("hash task failed: {e}")))?
             .map_err(AppError::Internal)?;
 
+        // SECURITY.md invariant 21: a password change revokes every existing
+        // refresh token in the SAME transaction as the password update, so a fault
+        // can't leave the new password active while old sessions still mint tokens.
+        let mut tx = state.admin_pool.begin().await?;
         sqlx::query(
             "UPDATE pgstack.users SET encrypted_password = $1, updated_at = now()
              WHERE id = $2::uuid",
         )
         .bind(&hash)
         .bind(&claims.sub)
-        .execute(&state.admin_pool)
+        .execute(&mut *tx)
         .await?;
+        sqlx::query("DELETE FROM pgstack.refresh_tokens WHERE user_id = $1::uuid")
+            .bind(&claims.sub)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
     }
 
     // Return updated user
@@ -598,10 +649,10 @@ pub(crate) async fn generate_token_pair(
 
     // Store refresh token in DB (inherit family_id for rotation, or create new)
     sqlx::query(
-        "INSERT INTO pgstack.refresh_tokens (token, user_id, family_id, expires_at)
+        "INSERT INTO pgstack.refresh_tokens (token_hash, user_id, family_id, expires_at)
          VALUES ($1, $2::uuid, COALESCE($3::uuid, gen_random_uuid()), now() + $4 * interval '1 day')",
     )
-    .bind(&refresh_token)
+    .bind(hash_token(&refresh_token))
     .bind(user_id)
     .bind(family_id)
     .bind(state.config.refresh_token_expiry_days)
@@ -639,10 +690,10 @@ async fn generate_token_pair_tx(
     let refresh_token = generate_refresh_token();
 
     sqlx::query(
-        "INSERT INTO pgstack.refresh_tokens (token, user_id, family_id, expires_at)
+        "INSERT INTO pgstack.refresh_tokens (token_hash, user_id, family_id, expires_at)
          VALUES ($1, $2::uuid, COALESCE($3::uuid, gen_random_uuid()), now() + $4 * interval '1 day')",
     )
-    .bind(&refresh_token)
+    .bind(hash_token(&refresh_token))
     .bind(user_id)
     .bind(family_id)
     .bind(state.config.refresh_token_expiry_days)
@@ -733,11 +784,11 @@ pub async fn recover(
         let token = generate_token();
 
         sqlx::query(
-            "INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+            "INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
              VALUES ($1::uuid, $2, 'recovery', now() + interval '1 hour')",
         )
         .bind(&user_id)
-        .bind(&token)
+        .bind(hash_token(&token))
         .execute(&state.admin_pool)
         .await?;
 
@@ -781,12 +832,12 @@ pub async fn recover_confirm(
     // Look up the reset token
     let row = sqlx::query_as::<_, (String, String)>(
         "SELECT id::text, user_id::text FROM pgstack.email_tokens
-         WHERE token = $1
+         WHERE token_hash = $1
            AND token_type = 'recovery'
            AND used_at IS NULL
            AND expires_at > now()",
     )
-    .bind(&body.token)
+    .bind(hash_token(&body.token))
     .fetch_optional(&state.admin_pool)
     .await?;
 
@@ -816,6 +867,14 @@ pub async fn recover_confirm(
     // Mark token used
     sqlx::query("UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid")
         .bind(&token_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // SECURITY.md invariant 21: a password reset is the response to a credential
+    // compromise — revoke EVERY existing refresh token in the same transaction so a
+    // stolen one can't keep minting access tokens after the reset.
+    sqlx::query("DELETE FROM pgstack.refresh_tokens WHERE user_id = $1::uuid")
+        .bind(&user_id)
         .execute(&mut *tx)
         .await?;
 
@@ -872,11 +931,11 @@ pub async fn magiclink(
     let token = generate_token();
 
     sqlx::query(
-        "INSERT INTO pgstack.email_tokens (user_id, token, token_type, expires_at)
+        "INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
          VALUES ($1::uuid, $2, 'magiclink', now() + interval '15 minutes')",
     )
     .bind(&user_id)
-    .bind(&token)
+    .bind(hash_token(&token))
     .execute(&state.admin_pool)
     .await?;
 
@@ -919,12 +978,12 @@ pub async fn magiclink_verify(
     // Look up token
     let row = sqlx::query_as::<_, (String, String)>(
         "SELECT id::text, user_id::text FROM pgstack.email_tokens
-         WHERE token = $1
+         WHERE token_hash = $1
            AND token_type = 'magiclink'
            AND used_at IS NULL
            AND expires_at > now()",
     )
-    .bind(&params.token)
+    .bind(hash_token(&params.token))
     .fetch_optional(&state.admin_pool)
     .await?;
 
@@ -989,12 +1048,12 @@ pub async fn verify_email(
 ) -> Result<impl IntoResponse, AppError> {
     let row = sqlx::query_as::<_, (String, String)>(
         "SELECT id::text, user_id::text FROM pgstack.email_tokens
-         WHERE token = $1
+         WHERE token_hash = $1
            AND token_type = 'email_verification'
            AND used_at IS NULL
            AND expires_at > now()",
     )
-    .bind(&params.token)
+    .bind(hash_token(&params.token))
     .fetch_optional(&state.admin_pool)
     .await?;
 

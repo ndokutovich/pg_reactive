@@ -1,4 +1,17 @@
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+
+/// SHA-256 hex of a token — matches the Go proxy's `HashToken`. Email and refresh
+/// tokens are stored hashed at rest (SECURITY.md invariant 8): a DB/backup leak of
+/// `pgstack.email_tokens`/`refresh_tokens` then yields no usable reset/session token.
+pub fn hash_token(plain: &str) -> String {
+    let sum = Sha256::digest(plain.as_bytes());
+    let mut out = String::with_capacity(64);
+    for b in sum {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
 
 /// Constant-time string comparison to prevent timing attacks.
 /// Note: length difference is detectable via timing (acceptable for keys >= 32 chars).
