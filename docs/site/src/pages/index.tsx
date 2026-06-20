@@ -61,12 +61,12 @@ const FeatureList: FeatureItem[] = [
     ),
   },
   {
-    title: 'Transaction batching',
+    title: 'Auto-HTTPS & static hosting',
     description: (
       <>
-        Many writes, one transaction, one HTTP call: <code>POST /rest/v1/batch</code> with
-        <code>{'{{op.field}}'}</code> templates, atomic or partial-success modes.
-        The multi-statement transaction Supabase has never shipped.
+        <code>TLS_MODE=auto</code> provisions and renews Let&apos;s Encrypt certificates
+        (ACME) for your domains. Serve your SPA and assets straight from the proxy,
+        gzip-compressed. No nginx, no certbot, no extra hop.
       </>
     ),
   },
@@ -184,10 +184,10 @@ function WhyNotSupabase() {
             </p>
           </div>
           <div className="col col--4 padding-vert--md">
-            <Heading as="h3">Things it never shipped</Heading>
+            <Heading as="h3">More out of the box</Heading>
             <p>
-              Multi-statement transaction batching, database-native live queries, and
-              five edge-function runtimes — out of the box.
+              Database-native live queries, five edge-function runtimes, and auto-HTTPS
+              with static hosting — no extra services to wire up.
             </p>
           </div>
         </div>
