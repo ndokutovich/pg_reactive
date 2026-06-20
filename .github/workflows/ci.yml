@@ -713,6 +713,10 @@ jobs:
   build-publish-images:
     name: Publish release-candidate images
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # Multi-arch (amd64 + arm64-via-QEMU) builds of three images are slow under
+    # emulation; give them an explicit, generous budget so a slow-but-healthy
+    # build is never killed mid-flight by an implicit/default cap.
+    timeout-minutes: 120
     needs:
       - test-extension
       - test-proxy-go

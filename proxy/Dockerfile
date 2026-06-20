@@ -7,7 +7,7 @@
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS studio-builder
 WORKDIR /studio-build
 COPY studio/package.json studio/package-lock.json ./
-RUN npm ci --prefer-offline
+RUN npm ci --prefer-offline --no-audit --fetch-retries=6 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=180000 --fetch-timeout=600000
 COPY studio/ .
 RUN npm run build
 
