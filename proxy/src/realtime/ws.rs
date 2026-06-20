@@ -102,10 +102,11 @@ async fn snapshot_for_generation(
         ))
         .execute(&mut *tx)
         .await?;
-        let cur: Option<i64> = sqlx::query_scalar("SELECT generation FROM pgr.subscription_meta($1)")
-            .bind(query_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+        let cur: Option<i64> =
+            sqlx::query_scalar("SELECT generation FROM pgr.subscription_meta($1)")
+                .bind(query_id)
+                .fetch_optional(&mut *tx)
+                .await?;
         if cur != Some(expected_gen) {
             let _ = tx.rollback().await;
             return Ok(None);
@@ -121,7 +122,10 @@ async fn snapshot_for_generation(
     Ok(Some(rows))
 }
 
-async fn close_with(ws_tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, message: &str) {
+async fn close_with(
+    ws_tx: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    message: &str,
+) {
     let err = serde_json::json!({ "type": "error", "message": message });
     let _ = ws_tx.send(Message::Text(err.to_string().into())).await;
     let _ = ws_tx.send(Message::Close(None)).await;
@@ -156,15 +160,16 @@ pub async fn handle_websocket(
 
     // 2. Audience gate (inv 16): a non-public subscription is only deliverable to
     //    a JWT whose claims satisfy the audience. service_role bypasses.
-    if !audience.is_empty() && claims.role != "service_role" {
-        if claims.sub.is_none() || !claims_satisfy_audience(&audience, &claims.claims_json) {
-            close_with(
-                &mut ws_tx,
-                "JWT claims do not satisfy subscription audience",
-            )
-            .await;
-            return;
-        }
+    if !audience.is_empty()
+        && claims.role != "service_role"
+        && (claims.sub.is_none() || !claims_satisfy_audience(&audience, &claims.claims_json))
+    {
+        close_with(
+            &mut ws_tx,
+            "JWT claims do not satisfy subscription audience",
+        )
+        .await;
+        return;
     }
 
     info!("WebSocket connected: query_id={query_id} gen={my_gen}");

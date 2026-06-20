@@ -51,6 +51,10 @@ pub struct Config {
     pub email_enabled: bool,
     /// SMTP host (empty = not configured).
     pub smtp_host: String,
+    /// SMTP username (empty = not configured).
+    pub smtp_user: String,
+    /// SMTP password (empty = not configured).
+    pub smtp_pass: String,
 }
 
 impl Config {
@@ -174,6 +178,8 @@ impl Config {
         let hsts_preload = bool_env("HSTS_PRELOAD", false);
         let email_enabled = bool_env("EMAIL_ENABLED", true);
         let smtp_host = std::env::var("SMTP_HOST").unwrap_or_default();
+        let smtp_user = std::env::var("SMTP_USER").unwrap_or_default();
+        let smtp_pass = std::env::var("SMTP_PASS").unwrap_or_default();
 
         Self {
             database_url,
@@ -206,15 +212,23 @@ impl Config {
             require_email_verification,
             email_enabled,
             smtp_host,
+            smtp_user,
+            smtp_pass,
         }
     }
 
     /// Returns placeholder check: a publicly-known dev/example secret value.
     fn is_placeholder_secret(s: &str) -> bool {
         let l = s.to_lowercase();
-        ["dev-only", "change-me", "changeme", "placeholder", "replace-me"]
-            .iter()
-            .any(|bad| l.contains(bad))
+        [
+            "dev-only",
+            "change-me",
+            "changeme",
+            "placeholder",
+            "replace-me",
+        ]
+        .iter()
+        .any(|bad| l.contains(bad))
     }
 
     /// Validate the configuration. Returns a list of problems. In
@@ -233,7 +247,10 @@ impl Config {
             ),
             _ => {}
         }
-        for (name, key) in [("ANON_KEY", &self.anon_key), ("SERVICE_ROLE_KEY", &self.service_role_key)] {
+        for (name, key) in [
+            ("ANON_KEY", &self.anon_key),
+            ("SERVICE_ROLE_KEY", &self.service_role_key),
+        ] {
             match key {
                 None => errs.push(format!("PGSTACK_ENV=production: {name} is required")),
                 Some(s) if Self::is_placeholder_secret(s) => errs
@@ -254,11 +271,18 @@ impl Config {
         if !self.require_authenticated_ws {
             errs.push("PGSTACK_ENV=production: REQUIRE_AUTHENTICATED_WS=false lets anon-key holders open any live-query WS — set it true".into());
         }
-        if self.email_enabled && self.smtp_host.is_empty() {
-            errs.push("PGSTACK_ENV=production: SMTP_HOST is required when email is enabled — configure SMTP, or set EMAIL_ENABLED=false".into());
+        // All three SMTP vars are required when email is enabled — a host alone
+        // makes Mailer::from_env fall back to LOGGING the email body (token-bearing
+        // reset / magic-link / verification URLs). Mirror Go Config.Validate.
+        if self.email_enabled
+            && (self.smtp_host.is_empty() || self.smtp_user.is_empty() || self.smtp_pass.is_empty())
+        {
+            errs.push("PGSTACK_ENV=production: SMTP_HOST, SMTP_USER and SMTP_PASS are required when email is enabled — configure SMTP, or set EMAIL_ENABLED=false for an email-free (e.g. OAuth-only) deployment".into());
         }
         if self.require_email_verification && !self.email_enabled {
-            errs.push("REQUIRE_EMAIL_VERIFICATION=true is incompatible with EMAIL_ENABLED=false".into());
+            errs.push(
+                "REQUIRE_EMAIL_VERIFICATION=true is incompatible with EMAIL_ENABLED=false".into(),
+            );
         }
         errs
     }
@@ -310,5 +334,92 @@ impl fmt::Debug for Config {
                 &self.require_email_verification,
             )
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A production Config that passes validate() with email disabled.
+    fn valid_prod() -> Config {
+        let key = "x".repeat(40); // ≥32, not a placeholder
+        Config {
+            database_url: "postgres://a@db/x".into(),
+            admin_database_url: "postgres://a@db/x".into(),
+            pgstack_env: "production".into(),
+            listen_addr: "0.0.0.0:8080".parse().unwrap(),
+            jwt_secret: Some(key.clone()),
+            anon_key: Some(key.clone()),
+            service_role_key: Some(key),
+            max_connections: 10000,
+            google_client_id: None,
+            google_client_secret: None,
+            github_client_id: None,
+            github_client_secret: None,
+            site_url: None,
+            auth_rate_limit: 30,
+            auth_rate_window_secs: 60,
+            access_token_expiry_secs: 3600,
+            refresh_token_expiry_days: 30,
+            broadcast_capacity: 1024,
+            max_body_size: 1024 * 1024,
+            pg_reconnect_max_backoff_secs: 30,
+            enable_sql_endpoint: false,
+            allowed_origins: Some("https://app.example.com".into()),
+            allow_permissive_cors: false,
+            trusted_proxies: None,
+            require_authenticated_ws: true,
+            hsts_preload: false,
+            smtp_from: "noreply@x".into(),
+            require_email_verification: false,
+            email_enabled: false,
+            smtp_host: String::new(),
+            smtp_user: String::new(),
+            smtp_pass: String::new(),
+        }
+    }
+
+    #[test]
+    fn prod_baseline_is_clean() {
+        assert!(valid_prod().validate().is_empty());
+    }
+
+    // Regression (codex P1): EMAIL_ENABLED=true with only SMTP_HOST passed
+    // validation, then Mailer::from_env fell back to LOGGING the token-bearing
+    // email body. All three SMTP vars must be required.
+    #[test]
+    fn email_enabled_with_host_only_is_rejected() {
+        let mut c = valid_prod();
+        c.email_enabled = true;
+        c.smtp_host = "smtp.example.com".into(); // user + pass still empty
+        let errs = c.validate();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("SMTP_HOST, SMTP_USER and SMTP_PASS")),
+            "host-only SMTP must fail production validation, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn email_enabled_with_full_smtp_is_ok() {
+        let mut c = valid_prod();
+        c.email_enabled = true;
+        c.smtp_host = "smtp.example.com".into();
+        c.smtp_user = "u".into();
+        c.smtp_pass = "p".into();
+        assert!(
+            !c.validate().iter().any(|e| e.contains("SMTP")),
+            "full SMTP config must pass: {:?}",
+            c.validate()
+        );
+    }
+
+    #[test]
+    fn email_disabled_needs_no_smtp() {
+        let mut c = valid_prod();
+        c.email_enabled = false;
+        c.smtp_host = String::new();
+        assert!(!c.validate().iter().any(|e| e.contains("SMTP")));
     }
 }

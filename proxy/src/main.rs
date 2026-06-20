@@ -378,9 +378,7 @@ fn resolve_ws_claims(
         .and_then(|h| h.strip_prefix("Bearer "));
     let apikey_q = query_str.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("apikey=")));
     let token_q = query_str.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")));
-    let matches = |val: Option<&str>, key: &Option<String>| {
-        matches!((val, key), (Some(v), Some(k)) if auth::keys::constant_time_eq(v, k))
-    };
+    let matches = |val: Option<&str>, key: &Option<String>| matches!((val, key), (Some(v), Some(k)) if auth::keys::constant_time_eq(v, k));
     if matches(bearer, &state.config.service_role_key)
         || matches(apikey_q, &state.config.service_role_key)
     {

@@ -492,11 +492,13 @@ pub async fn update_user(
                 tracing::warn!("Failed to send verification email to {email}: {e}");
             }
         } else {
-            sqlx::query("UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2::uuid")
-                .bind(email)
-                .bind(&claims.sub)
-                .execute(&state.admin_pool)
-                .await?;
+            sqlx::query(
+                "UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2::uuid",
+            )
+            .bind(email)
+            .bind(&claims.sub)
+            .execute(&state.admin_pool)
+            .await?;
         }
     }
 

@@ -49,7 +49,11 @@ impl RateLimiter {
 /// `X-Real-IP` is NEVER honoured. The XFF chain is walked right-to-left, skipping
 /// trusted-proxy hops, so the nginx `$proxy_add_x_forwarded_for` append can't be
 /// spoofed by prepending attacker IPs.
-fn resolve_client_ip(headers: &axum::http::HeaderMap, fallback: IpAddr, trusted: &[IpAddr]) -> IpAddr {
+fn resolve_client_ip(
+    headers: &axum::http::HeaderMap,
+    fallback: IpAddr,
+    trusted: &[IpAddr],
+) -> IpAddr {
     // No trusted proxies configured, or the immediate peer is not one → never
     // trust forwarded headers.
     if trusted.is_empty() || !trusted.contains(&fallback) {

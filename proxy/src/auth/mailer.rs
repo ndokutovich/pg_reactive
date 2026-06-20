@@ -54,12 +54,14 @@ impl Mailer {
             transport.send(email).await?;
             info!("Email sent to {}: {}", to, subject);
         } else {
-            // Dev mode: log instead of send
+            // Dev mode: log instead of send. NEVER log the HTML body — it carries
+            // password-reset / magic-link / verification token URLs, and logs are a
+            // lower trust boundary than email. (The production validator already
+            // rejects EMAIL_ENABLED=true without full SMTP, so this path is dev-only.)
+            let _ = html_body;
             info!(
-                "EMAIL (dev mode — configure SMTP to send for real)\n  To: {}\n  Subject: {}\n  Body: {}",
-                to,
-                subject,
-                &html_body[..html_body.len().min(200)]
+                "EMAIL (dev mode — configure SMTP to send for real)\n  To: {}\n  Subject: {}\n  Body: [redacted — token-bearing; configure SMTP to deliver]",
+                to, subject
             );
         }
         Ok(())
