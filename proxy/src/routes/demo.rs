@@ -47,7 +47,7 @@ pub async fn demo_action(
         }
     };
 
-    match sqlx::query(sql).execute(&state.pg_pool).await {
+    match sqlx::query(sql).execute(&state.admin_pool).await {
         Ok(result) => (
             StatusCode::OK,
             Json(serde_json::json!({

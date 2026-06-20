@@ -53,7 +53,7 @@ pub async fn sql_execute(
         // Wrap in a read-only transaction so PostgreSQL itself rejects any
         // DML/DDL hidden inside CTEs (e.g. WITH x AS (DELETE ...) SELECT ...).
         let tx_result: Result<serde_json::Value, sqlx::Error> = async {
-            let mut tx = state.pg_pool.begin().await?;
+            let mut tx = state.admin_pool.begin().await?;
             sqlx::query("SET TRANSACTION READ ONLY")
                 .execute(&mut *tx)
                 .await?;
@@ -84,7 +84,7 @@ pub async fn sql_execute(
             "SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) AS data FROM ({trimmed}) t"
         );
         match sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(&wrapped)
-            .fetch_one(&state.pg_pool)
+            .fetch_one(&state.admin_pool)
             .await
         {
             Ok(rows) => (
@@ -100,7 +100,7 @@ pub async fn sql_execute(
             }
         }
     } else {
-        let result = match sqlx::query(sql).execute(&state.pg_pool).await {
+        let result = match sqlx::query(sql).execute(&state.admin_pool).await {
             Ok(result) => {
                 // Auto-refresh catalog after DDL statements
                 let trimmed_upper = sql.trim().to_uppercase();
@@ -108,7 +108,7 @@ pub async fn sql_execute(
                     || trimmed_upper.starts_with("ALTER")
                     || trimmed_upper.starts_with("DROP")
                 {
-                    if let Err(e) = state.catalog.refresh(&state.pg_pool).await {
+                    if let Err(e) = state.catalog.refresh(&state.admin_pool).await {
                         tracing::warn!("catalog refresh after DDL failed: {}", e);
                     }
                 }

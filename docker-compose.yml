@@ -101,7 +101,14 @@ services:
       context: .
       dockerfile: proxy/Dockerfile
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/pg_reactive_test
+      # Two powerless login roles, mirroring proxy-go: data plane (authenticator,
+      # anon/authenticated) + admin plane (authenticator_admin, service_role). The
+      # proxy runs two pools so a data-plane compromise can't reach service_role.
+      DATABASE_URL: postgres://authenticator:authenticator-dev-pw@db:5432/pg_reactive_test
+      ADMIN_DATABASE_URL: postgres://authenticator_admin:authenticator-admin-dev-pw@db:5432/pg_reactive_test
+      # Defaults to production (fail-secure); dev opts into the relaxed posture so
+      # verifyPoolRoles warns instead of aborting boot.
+      PGSTACK_ENV: ${PGSTACK_ENV:-development}
       LISTEN_ADDR: "0.0.0.0:8080"
       RUST_LOG: pgstack_proxy=info,tower_http=info
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-do-not-use-in-production}

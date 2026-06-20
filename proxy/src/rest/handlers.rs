@@ -35,7 +35,7 @@ pub async fn select_rows(
 
     if resolved_embeds.is_empty() {
         let built = query_builder::build_select(&table, &query)?;
-        let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
+        let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
         let rows = execute_select_json(&mut tx, &built).await?;
         tx.commit().await?;
         Ok(Json(rows))
@@ -46,7 +46,7 @@ pub async fn select_rows(
         let mut base_query = query;
         base_query.select = None; // None = SELECT *
         let built = query_builder::build_select(&table, &base_query)?;
-        let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
+        let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
         let rows = execute_select_with_embeds(
             &mut tx,
             &built,
@@ -76,7 +76,7 @@ pub async fn insert_rows(
 
     let built = query_builder::build_insert(&table, &body)?;
 
-    let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
+    let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
 
     let rows = execute_dml_json(&mut tx, &built).await?;
 
@@ -121,7 +121,7 @@ pub async fn update_rows(
     let query = RestQuery::parse(uri.0.query())?;
     let built = query_builder::build_update(&table, &body, &query)?;
 
-    let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
+    let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
 
     let rows = execute_dml_json(&mut tx, &built).await?;
 
@@ -146,7 +146,7 @@ pub async fn delete_rows(
     let query = RestQuery::parse(uri.0.query())?;
     let built = query_builder::build_delete(&table, &query)?;
 
-    let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
+    let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
 
     let rows = execute_dml_json(&mut tx, &built).await?;
 

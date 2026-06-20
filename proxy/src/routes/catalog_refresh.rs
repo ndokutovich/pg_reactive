@@ -21,7 +21,7 @@ pub async fn catalog_refresh(
 
     state
         .catalog
-        .refresh(&state.pg_pool)
+        .refresh(&state.admin_pool)
         .await
         .map_err(|e| AppError::Internal(format!("catalog refresh failed: {e}")))?;
 

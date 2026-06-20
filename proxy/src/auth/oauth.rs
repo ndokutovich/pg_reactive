@@ -122,7 +122,7 @@ pub async fn authorize(
     .bind(&csrf_state)
     .bind(&code_verifier)
     .bind(&params.provider)
-    .execute(&state.pg_pool)
+    .execute(&state.admin_pool)
     .await?;
 
     match params.provider.as_str() {
@@ -216,7 +216,7 @@ async fn callback_inner(
          RETURNING code_verifier, provider",
     )
     .bind(&params.state)
-    .fetch_optional(&state.pg_pool)
+    .fetch_optional(&state.admin_pool)
     .await?;
 
     let (code_verifier, provider) =
@@ -257,7 +257,7 @@ async fn callback_inner(
     .bind(&email)
     .bind(&provider)
     .bind(&user_meta)
-    .fetch_one(&state.pg_pool)
+    .fetch_one(&state.admin_pool)
     .await?;
 
     let (user_id, user_email, role, _created_at, _updated_at) = row;

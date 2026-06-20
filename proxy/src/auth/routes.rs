@@ -97,7 +97,7 @@ pub async fn signup(
     let existing =
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pgstack.users WHERE email = $1")
             .bind(&email)
-            .fetch_one(&state.pg_pool)
+            .fetch_one(&state.admin_pool)
             .await?;
 
     if existing > 0 {
@@ -123,7 +123,7 @@ pub async fn signup(
         .bind(&email)
         .bind(&hash)
         .bind(&user_meta)
-        .fetch_one(&state.pg_pool)
+        .fetch_one(&state.admin_pool)
         .await?;
 
         let (user_id, _user_email, _role, _created_at, _updated_at, _raw_user_meta, _raw_app_meta) =
@@ -137,7 +137,7 @@ pub async fn signup(
         )
         .bind(&user_id)
         .bind(&verify_token)
-        .execute(&state.pg_pool)
+        .execute(&state.admin_pool)
         .await?;
 
         // Send verification email
@@ -168,7 +168,7 @@ pub async fn signup(
         .bind(&email)
         .bind(&hash)
         .bind(&user_meta)
-        .fetch_one(&state.pg_pool)
+        .fetch_one(&state.admin_pool)
         .await?;
 
         let (user_id, user_email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = row;
@@ -240,7 +240,7 @@ async fn token_password(
          FROM pgstack.users WHERE email = $1",
     )
     .bind(email)
-    .fetch_optional(&state.pg_pool)
+    .fetch_optional(&state.admin_pool)
     .await?;
 
     let (
@@ -310,7 +310,7 @@ async fn token_refresh(
          WHERE token = $1 AND expires_at > now()",
     )
     .bind(refresh)
-    .fetch_optional(&state.pg_pool)
+    .fetch_optional(&state.admin_pool)
     .await?;
 
     let (token_id, user_id, revoked, family_id) = token_row
@@ -323,7 +323,7 @@ async fn token_refresh(
                 "UPDATE pgstack.refresh_tokens SET revoked = true WHERE family_id = $1::uuid",
             )
             .bind(fid)
-            .execute(&state.pg_pool)
+            .execute(&state.admin_pool)
             .await?;
         }
         tracing::warn!(
@@ -334,7 +334,7 @@ async fn token_refresh(
     }
 
     // Wrap revoke + new token insert in a single transaction
-    let mut tx = state.pg_pool.begin().await?;
+    let mut tx = state.admin_pool.begin().await?;
 
     // Revoke the old refresh token (rotation)
     sqlx::query("UPDATE pgstack.refresh_tokens SET revoked = true WHERE id = $1")
@@ -409,7 +409,7 @@ pub async fn get_user(
          FROM pgstack.users WHERE id = $1::uuid",
     )
     .bind(&claims.sub)
-    .fetch_optional(&state.pg_pool)
+    .fetch_optional(&state.admin_pool)
     .await?;
 
     let (id, email, role, created_at, updated_at, raw_user_meta, raw_app_meta) =
@@ -442,7 +442,7 @@ pub async fn update_user(
         )
         .bind(data)
         .bind(&claims.sub)
-        .execute(&state.pg_pool)
+        .execute(&state.admin_pool)
         .await?;
     }
 
@@ -454,7 +454,7 @@ pub async fn update_user(
         sqlx::query("UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2::uuid")
             .bind(email)
             .bind(&claims.sub)
-            .execute(&state.pg_pool)
+            .execute(&state.admin_pool)
             .await?;
     }
 
@@ -482,7 +482,7 @@ pub async fn update_user(
         )
         .bind(&hash)
         .bind(&claims.sub)
-        .execute(&state.pg_pool)
+        .execute(&state.admin_pool)
         .await?;
     }
 
@@ -492,7 +492,7 @@ pub async fn update_user(
          FROM pgstack.users WHERE id = $1::uuid",
     )
     .bind(&claims.sub)
-    .fetch_one(&state.pg_pool)
+    .fetch_one(&state.admin_pool)
     .await?;
 
     let (id, email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = user;
@@ -520,7 +520,7 @@ pub async fn logout(
         "UPDATE pgstack.refresh_tokens SET revoked = true WHERE user_id = $1::uuid AND NOT revoked",
     )
     .bind(&claims.sub)
-    .execute(&state.pg_pool)
+    .execute(&state.admin_pool)
     .await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -605,7 +605,7 @@ pub(crate) async fn generate_token_pair(
     .bind(user_id)
     .bind(family_id)
     .bind(state.config.refresh_token_expiry_days)
-    .execute(&state.pg_pool)
+    .execute(&state.admin_pool)
     .await?;
 
     Ok((access_token, refresh_token))
@@ -726,7 +726,7 @@ pub async fn recover(
     // Look up user — do not reveal whether the email exists
     let row = sqlx::query_as::<_, (String,)>("SELECT id::text FROM pgstack.users WHERE email = $1")
         .bind(&body.email)
-        .fetch_optional(&state.pg_pool)
+        .fetch_optional(&state.admin_pool)
         .await?;
 
     if let Some((user_id,)) = row {
@@ -738,7 +738,7 @@ pub async fn recover(
         )
         .bind(&user_id)
         .bind(&token)
-        .execute(&state.pg_pool)
+        .execute(&state.admin_pool)
         .await?;
 
         let html = reset_email_html(site_url, &token);
@@ -787,7 +787,7 @@ pub async fn recover_confirm(
            AND expires_at > now()",
     )
     .bind(&body.token)
-    .fetch_optional(&state.pg_pool)
+    .fetch_optional(&state.admin_pool)
     .await?;
 
     let (token_id, user_id) =
@@ -801,7 +801,7 @@ pub async fn recover_confirm(
         .map_err(AppError::Internal)?;
 
     // Wrap password update + token mark-used in a single transaction
-    let mut tx = state.pg_pool.begin().await?;
+    let mut tx = state.admin_pool.begin().await?;
 
     // Update password
     sqlx::query(
@@ -851,7 +851,7 @@ pub async fn magiclink(
         let existing =
             sqlx::query_as::<_, (String,)>("SELECT id::text FROM pgstack.users WHERE email = $1")
                 .bind(&body.email)
-                .fetch_optional(&state.pg_pool)
+                .fetch_optional(&state.admin_pool)
                 .await?;
 
         if let Some((id,)) = existing {
@@ -863,7 +863,7 @@ pub async fn magiclink(
                  RETURNING id::text",
             )
             .bind(&body.email)
-            .fetch_one(&state.pg_pool)
+            .fetch_one(&state.admin_pool)
             .await?;
             row.0
         }
@@ -877,7 +877,7 @@ pub async fn magiclink(
     )
     .bind(&user_id)
     .bind(&token)
-    .execute(&state.pg_pool)
+    .execute(&state.admin_pool)
     .await?;
 
     let html = magic_link_email_html(site_url, &token);
@@ -925,7 +925,7 @@ pub async fn magiclink_verify(
            AND expires_at > now()",
     )
     .bind(&params.token)
-    .fetch_optional(&state.pg_pool)
+    .fetch_optional(&state.admin_pool)
     .await?;
 
     let (token_id, user_id) = match row {
@@ -942,7 +942,7 @@ pub async fn magiclink_verify(
          FROM pgstack.users WHERE id = $1::uuid",
     )
     .bind(&user_id)
-    .fetch_one(&state.pg_pool)
+    .fetch_one(&state.admin_pool)
     .await?;
 
     let (email, role, _created_at, _updated_at, uid) = user;
@@ -950,7 +950,7 @@ pub async fn magiclink_verify(
     // Mark token used and confirm email (clicking the link proves email ownership)
     sqlx::query("UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid")
         .bind(&token_id)
-        .execute(&state.pg_pool)
+        .execute(&state.admin_pool)
         .await?;
 
     sqlx::query(
@@ -958,7 +958,7 @@ pub async fn magiclink_verify(
          WHERE id = $1::uuid",
     )
     .bind(&user_id)
-    .execute(&state.pg_pool)
+    .execute(&state.admin_pool)
     .await?;
 
     // Create session + token pair
@@ -995,7 +995,7 @@ pub async fn verify_email(
            AND expires_at > now()",
     )
     .bind(&params.token)
-    .fetch_optional(&state.pg_pool)
+    .fetch_optional(&state.admin_pool)
     .await?;
 
     let (token_id, user_id) =
@@ -1006,12 +1006,12 @@ pub async fn verify_email(
          WHERE id = $1::uuid",
     )
     .bind(&user_id)
-    .execute(&state.pg_pool)
+    .execute(&state.admin_pool)
     .await?;
 
     sqlx::query("UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid")
         .bind(&token_id)
-        .execute(&state.pg_pool)
+        .execute(&state.admin_pool)
         .await?;
 
     Ok(Json(serde_json::json!({ "message": "Email verified" })))
@@ -1061,7 +1061,7 @@ pub async fn admin_list_users(
     )
     .bind(page_size)
     .bind(offset)
-    .fetch_all(&state.pg_pool)
+    .fetch_all(&state.admin_pool)
     .await?;
 
     let users: Vec<AdminUserRow> = rows
@@ -1102,7 +1102,7 @@ pub async fn admin_delete_user(
 
     let result = sqlx::query("DELETE FROM pgstack.users WHERE id = $1::uuid")
         .bind(&user_id)
-        .execute(&state.pg_pool)
+        .execute(&state.admin_pool)
         .await?;
 
     if result.rows_affected() == 0 {
@@ -1171,7 +1171,7 @@ pub async fn admin_create_user(
     .bind(&hash)
     .bind(role)
     .bind(email_confirm)
-    .fetch_one(&state.pg_pool)
+    .fetch_one(&state.admin_pool)
     .await?;
 
     let (id, email, user_role, created_at, updated_at) = row;

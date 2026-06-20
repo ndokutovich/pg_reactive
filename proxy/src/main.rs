@@ -1,5 +1,6 @@
 mod auth;
 mod config;
+mod db_roles;
 mod error;
 mod middleware;
 mod realtime;
@@ -47,13 +48,31 @@ async fn main() {
         .max_connections(50)
         .connect(&config.database_url)
         .await
-        .expect("failed to connect to PostgreSQL");
-    info!("PG connection pool ready (max_connections=50)");
+        .expect("failed to connect to PostgreSQL (data pool)");
 
-    let state = AppState::new(config.clone(), pg_pool);
+    // Admin pool: every connection assumes `service_role` for trusted backend ops
+    // (auth, catalog, /api/sql, demo). Uses a SEPARATE login role
+    // (authenticator_admin) so a data-plane compromise can't reach service_role.
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(20)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE service_role").execute(&mut *conn).await?;
+                Ok(())
+            })
+        })
+        .connect(&config.admin_database_url)
+        .await
+        .expect("failed to connect to PostgreSQL (admin pool) — set ADMIN_DATABASE_URL to the authenticator_admin login role");
+    info!("PG pools ready (data max=50, admin max=20)");
+
+    // Startup role verification — refuse to boot with an unsafe DB role in production.
+    db_roles::verify_pool_roles(&pg_pool, &admin_pool, &config).await;
+
+    let state = AppState::new(config.clone(), pg_pool, admin_pool);
 
     // Load catalog (table metadata for REST API)
-    if let Err(e) = state.catalog.refresh(&state.pg_pool).await {
+    if let Err(e) = state.catalog.refresh(&state.admin_pool).await {
         warn!("catalog refresh failed (REST API may not work): {}", e);
     }
 
@@ -270,7 +289,9 @@ async fn ws_handler(
         .map_err(|_| error::AppError::TooManyRequests("too many WebSocket connections".into()))?;
 
     let channels = state.channels.clone();
-    let pg_pool = state.pg_pool.clone();
+    // WS initial snapshot reads pgr._snap_<id> (only service_role can) — use the
+    // admin pool. Generation/audience gating of the WS path is Phase 3.
+    let pg_pool = state.admin_pool.clone();
     let broadcast_capacity = state.config.broadcast_capacity;
 
     Ok(ws.on_upgrade(move |socket| {

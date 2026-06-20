@@ -34,7 +34,7 @@ pub async fn call_rpc(
         .ok_or_else(|| AppError::BadRequest("RPC body must be a JSON object".into()))?;
 
     // Look up function parameter types from pg_proc for proper casting.
-    let fn_meta = lookup_function(&state.pg_pool, &fn_name).await?;
+    let fn_meta = lookup_function(&state.admin_pool, &fn_name).await?;
 
     let mut param_names: Vec<String> = Vec::new();
     let mut placeholders: Vec<String> = Vec::new();
@@ -78,7 +78,7 @@ pub async fn call_rpc(
         placeholders.join(", ")
     );
 
-    let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
+    let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
 
     let mut q = sqlx::query(&sql);
     for param in &params {

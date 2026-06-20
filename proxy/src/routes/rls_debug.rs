@@ -22,7 +22,7 @@ pub async fn rls_debug(
         ));
     }
 
-    let mut tx = rls_transaction(&state.pg_pool, &claims).await?;
+    let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
 
     let row = sqlx::query(
         "SELECT current_setting('role') as pg_role,

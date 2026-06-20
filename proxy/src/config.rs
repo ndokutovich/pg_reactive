@@ -4,6 +4,13 @@ use std::net::SocketAddr;
 #[derive(Clone)]
 pub struct Config {
     pub database_url: String,
+    /// Admin-plane DSN (authenticator_admin login role, member of service_role).
+    /// Falls back to database_url when unset (legacy single-role). The proxy runs
+    /// two pools so a data-plane compromise cannot reach service_role.
+    pub admin_database_url: String,
+    /// Deployment posture. Defaults to "production" (fail-secure) — verifyPoolRoles
+    /// is fatal in production, a warning otherwise.
+    pub pgstack_env: String,
     pub listen_addr: SocketAddr,
     pub jwt_secret: Option<String>,
     pub anon_key: Option<String>,
@@ -36,6 +43,17 @@ impl Config {
     pub fn from_env() -> Self {
         let database_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@db:5432/app".into());
+
+        // Admin pool DSN; falls back to the data DSN (legacy single-role).
+        let admin_database_url =
+            std::env::var("ADMIN_DATABASE_URL").unwrap_or_else(|_| database_url.clone());
+
+        // Fail-secure: unset/empty PGSTACK_ENV means production.
+        let pgstack_env = std::env::var("PGSTACK_ENV")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "production".into())
+            .to_lowercase();
 
         let listen_addr: SocketAddr = std::env::var("LISTEN_ADDR")
             .unwrap_or_else(|_| "0.0.0.0:8080".into())
@@ -130,6 +148,8 @@ impl Config {
 
         Self {
             database_url,
+            admin_database_url,
+            pgstack_env,
             listen_addr,
             jwt_secret,
             anon_key,
@@ -159,6 +179,8 @@ impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Config")
             .field("database_url", &"[REDACTED]")
+            .field("admin_database_url", &"[REDACTED]")
+            .field("pgstack_env", &self.pgstack_env)
             .field("listen_addr", &self.listen_addr)
             .field(
                 "jwt_secret",
