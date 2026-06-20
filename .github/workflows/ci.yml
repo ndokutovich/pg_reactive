@@ -445,7 +445,13 @@ jobs:
           # it (and any other dev-only flag the validator rejects)
           # to false. Otherwise this step keeps catching the
           # validator's own dev-vs-prod machinery, not a regression.
-          out=$(timeout 15 docker compose run --rm \
+          # 60s, not 15s: unlike the fail-fast refuse cases, the positive case
+          # must reach the listen loop, which means connect to a just-built tmpfs
+          # DB + run verifyPoolRoles + build two pools. On a cold/loaded runner
+          # that can exceed 15s, killing the proxy mid-startup so neither the
+          # "configuration errors" nor the "pgstack listening" line is emitted —
+          # a false failure (the proxy never finished booting).
+          out=$(timeout 60 docker compose run --rm \
             -e PGSTACK_ENV=production \
             -e JWT_SECRET="$(openssl rand -base64 32)" \
             -e ANON_KEY="$(openssl rand -base64 32)" \
