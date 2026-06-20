@@ -37,7 +37,7 @@ impl RequestClaims {
     }
 
     /// Create claims for the service role (bypasses RLS).
-    fn service_role() -> Self {
+    pub fn service_role() -> Self {
         Self {
             role: "service_role".into(),
             sub: None,
@@ -49,7 +49,7 @@ impl RequestClaims {
     /// Create claims from a validated JWT.
     /// SECURITY: JWTs are never allowed to claim service_role.
     /// Only direct API key comparison grants service_role.
-    fn from_jwt(claims: &jwt::Claims) -> Self {
+    pub fn from_jwt(claims: &jwt::Claims) -> Self {
         let role = if claims.role == "service_role" {
             "authenticated".to_string()
         } else {

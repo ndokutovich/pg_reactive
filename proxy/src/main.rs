@@ -317,6 +317,20 @@ async fn ws_handler(
         }
     }
 
+    // WS Origin validation: browsers don't enforce same-origin on ws://, so check
+    // it here when ALLOWED_ORIGINS is set. Non-browser clients (no Origin) pass.
+    if let Some(allowed) = state.config.allowed_origins.as_deref() {
+        if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+            if !allowed.split(',').any(|a| a.trim() == origin) {
+                return Err(error::AppError::Forbidden("origin not allowed".into()));
+            }
+        }
+    }
+
+    // Resolve the connection identity (role + sub + claims) for the audience gate.
+    // The block above already enforced auth / REQUIRE_AUTHENTICATED_WS.
+    let claims = resolve_ws_claims(&state, &headers, req.0.query());
+
     // Acquire a WebSocket connection permit (FIX W1: connection limiting)
     let permit = state
         .ws_semaphore
@@ -325,8 +339,8 @@ async fn ws_handler(
         .map_err(|_| error::AppError::TooManyRequests("too many WebSocket connections".into()))?;
 
     let channels = state.channels.clone();
-    // WS initial snapshot reads pgr._snap_<id> (only service_role can) — use the
-    // admin pool. Generation/audience gating of the WS path is Phase 3.
+    // subscription_meta gate + initial snapshot read pgr.* (only service_role can) —
+    // use the admin pool. The generation/audience gating happens in handle_websocket.
     let pg_pool = state.admin_pool.clone();
     let broadcast_capacity = state.config.broadcast_capacity;
 
@@ -334,11 +348,52 @@ async fn ws_handler(
         // The permit is moved into the async block and held for the connection lifetime.
         // It is released automatically when the future completes and permit is dropped.
         async move {
-            realtime::ws::handle_websocket(socket, query_id, channels, pg_pool, broadcast_capacity)
-                .await;
+            realtime::ws::handle_websocket(
+                socket,
+                query_id,
+                channels,
+                pg_pool,
+                broadcast_capacity,
+                claims,
+            )
+            .await;
             drop(permit);
         }
     }))
+}
+
+/// Re-resolve the WebSocket connection's identity (role + sub + claims JSON) for
+/// the audience gate. Auth (401 / REQUIRE_AUTHENTICATED_WS) is already enforced
+/// by ws_handler, so this never rejects — service_role key → service_role, a
+/// valid JWT (Bearer or ?token=) → its claims, otherwise anon.
+fn resolve_ws_claims(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    query_str: Option<&str>,
+) -> middleware::rls::RequestClaims {
+    use middleware::rls::RequestClaims;
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "));
+    let apikey_q = query_str.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("apikey=")));
+    let token_q = query_str.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")));
+    let matches = |val: Option<&str>, key: &Option<String>| {
+        matches!((val, key), (Some(v), Some(k)) if auth::keys::constant_time_eq(v, k))
+    };
+    if matches(bearer, &state.config.service_role_key)
+        || matches(apikey_q, &state.config.service_role_key)
+    {
+        return RequestClaims::service_role();
+    }
+    if let Some(secret) = &state.config.jwt_secret {
+        if let Some(t) = bearer.or(token_q) {
+            if let Ok(c) = auth::jwt::validate_token(t, secret) {
+                return RequestClaims::from_jwt(&c);
+            }
+        }
+    }
+    RequestClaims::anon()
 }
 
 async fn shutdown_signal() {

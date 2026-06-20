@@ -64,9 +64,21 @@ async fn pg_listener_run(
             }
         };
 
+        // The generation the delta/overflow/invalidated/resubscribed was computed
+        // under (round 39 batch-2). A connection accepts a message only on EXACT
+        // generation match; a `resubscribed` notice with a different generation
+        // revokes the stale connection (RevokeStale). resubscribed is
+        // proxy-consumed — never forwarded to clients.
+        let gen = msg.get("gen").and_then(|v| v.as_i64());
+        let resubscribed = msg.get("type").and_then(|v| v.as_str()) == Some("resubscribed");
+
         let channels_read = channels.read().await;
         if let Some(tx) = channels_read.get(&query_id) {
-            let _ = tx.send(payload.to_string());
+            let _ = tx.send(crate::state::WsMessage {
+                gen,
+                resubscribed,
+                payload: payload.to_string(),
+            });
         }
     }
 }

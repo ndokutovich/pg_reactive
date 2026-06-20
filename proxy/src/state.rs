@@ -9,8 +9,24 @@ use crate::config::Config;
 use crate::middleware::rate_limit::RateLimiter;
 use crate::rest::catalog::Catalog;
 
+/// A fan-out message for a query_id's subscribers, carrying the GENERATION the
+/// NOTIFY was computed under (SECURITY.md invariants 15-17). Each connection is
+/// bound to the committed catalog generation it authorized against and accepts a
+/// message only on EXACT generation match; a `resubscribed` notice with a
+/// different generation revokes a stale connection (RevokeStale).
+#[derive(Clone, Debug)]
+pub struct WsMessage {
+    /// Generation stamped in the NOTIFY (`"gen":N`); None when absent.
+    pub gen: Option<i64>,
+    /// True for a `{"type":"resubscribed"}` notice — proxy-consumed (drives
+    /// RevokeStale), never forwarded to the client.
+    pub resubscribed: bool,
+    /// Raw JSON payload to forward (delta / overflow / invalidated).
+    pub payload: String,
+}
+
 /// Per-query broadcast sender. One query_id -> N WebSocket clients.
-pub type Channels = Arc<RwLock<HashMap<String, broadcast::Sender<String>>>>;
+pub type Channels = Arc<RwLock<HashMap<String, broadcast::Sender<WsMessage>>>>;
 
 /// Shared application state, injected into all handlers via axum State.
 #[derive(Clone)]
