@@ -10,7 +10,11 @@ path = "src/main.rs"
 
 [dependencies]
 tokio          = { version = "1.40", features = ["macros", "rt-multi-thread", "sync"] }
-tokio-postgres = "0.7"
+# >=0.7.18 pins out RUSTSEC: tokio-postgres 0.7.17 DataRow-panic DoS + the
+# postgres-protocol 0.6.11 SCRAM CPU-exhaustion DoS (transitive; 0.7.18 pulls
+# 0.6.12+). The deploy resolves fresh (Cargo.lock is gitignored), so the version
+# floor must live here, not in a lockfile.
+tokio-postgres = "0.7.18"
 futures-util   = "0.3"
 rust_decimal   = { version = "1", features = ["db-tokio-postgres"] }
 
