@@ -30,6 +30,21 @@ async fn main() {
 
     let config = Config::from_env();
 
+    // Production posture validator (fail-secure). validate() only returns problems
+    // when PGSTACK_ENV=production, and there they are fatal.
+    {
+        let problems = config.validate();
+        if !problems.is_empty() {
+            for p in &problems {
+                tracing::error!("config: {p}");
+            }
+            panic!(
+                "configuration invalid for PGSTACK_ENV=production: {} problem(s) — refusing to start",
+                problems.len()
+            );
+        }
+    }
+
     if config.jwt_secret.is_some() {
         info!("JWT authentication enabled");
     } else {
@@ -185,7 +200,8 @@ fn build_router(state: AppState) -> Router {
             state.config.max_body_size,
         ))
         // Strict security headers for API
-        .layer(axum::middleware::from_fn(
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             middleware::security_headers::security_headers,
         ))
         .with_state(state.clone());
@@ -205,6 +221,7 @@ fn build_router(state: AppState) -> Router {
         .merge(api_router)
         .layer(middleware::cors::cors_layer(
             state.config.allowed_origins.as_deref(),
+            state.config.allow_permissive_cors,
         ))
 }
 
@@ -263,6 +280,25 @@ async fn ws_handler(
         } else {
             false
         };
+
+        // REQUIRE_AUTHENTICATED_WS: an anon-key subscription is rejected when set —
+        // only an authenticated JWT or service_role may open a live-query WS.
+        if state.config.require_authenticated_ws {
+            let anon_via_apikey = query_str
+                .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("apikey=")))
+                .is_some_and(|key| {
+                    state
+                        .config
+                        .anon_key
+                        .as_ref()
+                        .is_some_and(|ak| auth::keys::constant_time_eq(key, ak))
+                });
+            if is_anon_key || anon_via_apikey {
+                return Err(error::AppError::Unauthorized(
+                    "authenticated WebSocket required (anon key rejected)".into(),
+                ));
+            }
+        }
 
         if !is_anon_key && !is_apikey_auth {
             let token = auth::jwt::extract_token_from_header(auth_header, None, query_str);

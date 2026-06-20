@@ -768,6 +768,11 @@ pub async fn recover(
     State(state): State<AppState>,
     Json(body): Json<RecoverRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    if !state.config.email_enabled {
+        return Err(AppError::ServiceUnavailable(
+            "email-based flows are disabled on this deployment (EMAIL_ENABLED=false)".into(),
+        ));
+    }
     let site_url = state
         .config
         .site_url
@@ -895,6 +900,11 @@ pub async fn magiclink(
     State(state): State<AppState>,
     Json(body): Json<MagiclinkRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    if !state.config.email_enabled {
+        return Err(AppError::ServiceUnavailable(
+            "email-based flows are disabled on this deployment (EMAIL_ENABLED=false)".into(),
+        ));
+    }
     if !is_valid_email(&body.email) {
         return Err(AppError::BadRequest("invalid email".into()));
     }

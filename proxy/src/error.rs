@@ -12,6 +12,7 @@ pub enum AppError {
     NotFound(String),
     Conflict(String),
     TooManyRequests(String),
+    ServiceUnavailable(String),
     Internal(String),
 }
 
@@ -24,6 +25,7 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg),
+            AppError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 

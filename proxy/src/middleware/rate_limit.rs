@@ -42,27 +42,28 @@ impl RateLimiter {
     }
 }
 
-/// Resolve the real client IP from proxy headers, falling back to the TCP peer.
-///
-/// Priority: X-Forwarded-For (first IP) > X-Real-IP > ConnectInfo socket addr.
-fn resolve_client_ip(headers: &axum::http::HeaderMap, fallback: IpAddr) -> IpAddr {
-    // 1. X-Forwarded-For: take the first (leftmost) IP in the comma-separated list
+/// Resolve the real client IP (SECURITY.md invariant 4). Forwarded headers are
+/// honoured ONLY when the immediate TCP peer is a configured trusted proxy;
+/// otherwise the kernel-attested peer address is used and `X-Forwarded-For` is
+/// ignored (a client could otherwise spoof XFF to evade the rate limiter).
+/// `X-Real-IP` is NEVER honoured. The XFF chain is walked right-to-left, skipping
+/// trusted-proxy hops, so the nginx `$proxy_add_x_forwarded_for` append can't be
+/// spoofed by prepending attacker IPs.
+fn resolve_client_ip(headers: &axum::http::HeaderMap, fallback: IpAddr, trusted: &[IpAddr]) -> IpAddr {
+    // No trusted proxies configured, or the immediate peer is not one → never
+    // trust forwarded headers.
+    if trusted.is_empty() || !trusted.contains(&fallback) {
+        return fallback;
+    }
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                return ip;
+        for part in xff.split(',').rev() {
+            if let Ok(ip) = part.trim().parse::<IpAddr>() {
+                if !trusted.contains(&ip) {
+                    return ip;
+                }
             }
         }
     }
-
-    // 2. X-Real-IP
-    if let Some(xri) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        if let Ok(ip) = xri.trim().parse::<IpAddr>() {
-            return ip;
-        }
-    }
-
-    // 3. Fall back to direct TCP connection address
     fallback
 }
 
@@ -73,7 +74,15 @@ pub async fn rate_limit_auth(
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, AppError> {
-    let client_ip = resolve_client_ip(request.headers(), addr.ip());
+    let trusted: Vec<IpAddr> = state
+        .config
+        .trusted_proxies
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let client_ip = resolve_client_ip(request.headers(), addr.ip(), &trusted);
     if !state.auth_rate_limiter.check(client_ip).await {
         return Err(AppError::TooManyRequests(
             "too many requests, try again later".into(),

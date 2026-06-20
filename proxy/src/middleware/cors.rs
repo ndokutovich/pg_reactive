@@ -6,9 +6,12 @@ use tower_http::cors::CorsLayer;
 /// Build CORS middleware.
 ///
 /// When `allowed_origins` is `Some`, parses comma-separated origins and
-/// restricts CORS to those values. When `None`, returns a permissive layer
-/// suitable for local development.
-pub fn cors_layer(allowed_origins: Option<&str>) -> CorsLayer {
+/// restricts CORS to those values. When `None`, the layer is permissive ONLY if
+/// `allow_permissive` (ALLOW_PERMISSIVE_CORS) is set — otherwise it is strict (no
+/// Access-Control-Allow-Origin is emitted, so cross-origin browsers are blocked
+/// while same-origin and non-browser clients still work). The production
+/// validator additionally makes ALLOW_PERMISSIVE_CORS=true fatal.
+pub fn cors_layer(allowed_origins: Option<&str>, allow_permissive: bool) -> CorsLayer {
     match allowed_origins {
         Some(origins) => {
             let parsed: Vec<HeaderValue> = origins
@@ -33,9 +36,13 @@ pub fn cors_layer(allowed_origins: Option<&str>) -> CorsLayer {
                 .expose_headers([header::CONTENT_TYPE])
                 .max_age(Duration::from_secs(3600))
         }
-        None => {
-            // Development: permissive
+        None if allow_permissive => {
+            // Dev opt-in: reflect any Origin.
             CorsLayer::very_permissive()
+        }
+        None => {
+            // Strict default: emit no Access-Control-Allow-Origin.
+            CorsLayer::new()
         }
     }
 }

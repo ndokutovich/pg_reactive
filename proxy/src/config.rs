@@ -33,10 +33,24 @@ pub struct Config {
     pub enable_sql_endpoint: bool,
     /// Comma-separated allowed origins for CORS, or None for permissive (dev mode).
     pub allowed_origins: Option<String>,
+    /// Explicit opt-in to reflect any Origin (dev). Fatal in production.
+    pub allow_permissive_cors: bool,
+    /// Comma-separated trusted reverse-proxy IPs. Forwarded headers (XFF) are
+    /// honoured ONLY from these; without it the kernel RemoteAddr is used (INV 4).
+    pub trusted_proxies: Option<String>,
+    /// Reject anon-key WebSocket subscriptions when true (require a JWT).
+    pub require_authenticated_ws: bool,
+    /// Add HSTS `preload` directive (irreversible — opt-in only).
+    pub hsts_preload: bool,
     /// SMTP_FROM address for outbound email.
     pub smtp_from: String,
     /// When true, users must verify email before logging in.
     pub require_email_verification: bool,
+    /// Master switch for email-based flows. When false, no SMTP is required and
+    /// the email routes return 503 (see Go Config.EmailEnabled).
+    pub email_enabled: bool,
+    /// SMTP host (empty = not configured).
+    pub smtp_host: String,
 }
 
 impl Config {
@@ -146,6 +160,21 @@ impl Config {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
+        let bool_env = |key: &str, def: bool| {
+            std::env::var(key)
+                .ok()
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(def)
+        };
+        let allow_permissive_cors = bool_env("ALLOW_PERMISSIVE_CORS", false);
+        let trusted_proxies = std::env::var("TRUSTED_PROXIES")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let require_authenticated_ws = bool_env("REQUIRE_AUTHENTICATED_WS", false);
+        let hsts_preload = bool_env("HSTS_PRELOAD", false);
+        let email_enabled = bool_env("EMAIL_ENABLED", true);
+        let smtp_host = std::env::var("SMTP_HOST").unwrap_or_default();
+
         Self {
             database_url,
             admin_database_url,
@@ -169,9 +198,69 @@ impl Config {
             pg_reconnect_max_backoff_secs,
             enable_sql_endpoint,
             allowed_origins,
+            allow_permissive_cors,
+            trusted_proxies,
+            require_authenticated_ws,
+            hsts_preload,
             smtp_from,
             require_email_verification,
+            email_enabled,
+            smtp_host,
         }
+    }
+
+    /// Returns placeholder check: a publicly-known dev/example secret value.
+    fn is_placeholder_secret(s: &str) -> bool {
+        let l = s.to_lowercase();
+        ["dev-only", "change-me", "changeme", "placeholder", "replace-me"]
+            .iter()
+            .any(|bad| l.contains(bad))
+    }
+
+    /// Validate the configuration. Returns a list of problems. In
+    /// PGSTACK_ENV=production these are fatal (the caller aborts startup);
+    /// otherwise they are warnings. Mirrors the Go proxy's Config.Validate.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errs = Vec::new();
+        if self.pgstack_env != "production" {
+            return errs;
+        }
+        // secrets present, not placeholders, opaque keys long enough
+        match &self.jwt_secret {
+            None => errs.push("PGSTACK_ENV=production: JWT_SECRET is required".into()),
+            Some(s) if Self::is_placeholder_secret(s) => errs.push(
+                "PGSTACK_ENV=production: JWT_SECRET is a publicly-known placeholder — generate a real key".into(),
+            ),
+            _ => {}
+        }
+        for (name, key) in [("ANON_KEY", &self.anon_key), ("SERVICE_ROLE_KEY", &self.service_role_key)] {
+            match key {
+                None => errs.push(format!("PGSTACK_ENV=production: {name} is required")),
+                Some(s) if Self::is_placeholder_secret(s) => errs
+                    .push(format!("PGSTACK_ENV=production: {name} is a publicly-known placeholder — generate a real key")),
+                Some(s) if s.len() < 32 => errs.push(format!(
+                    "PGSTACK_ENV=production: {name} is too short ({} chars, need 32+)",
+                    s.len()
+                )),
+                _ => {}
+            }
+        }
+        if self.enable_sql_endpoint {
+            errs.push("PGSTACK_ENV=production: ENABLE_SQL_ENDPOINT=true is unsafe — raw SQL must not be network-reachable".into());
+        }
+        if self.allow_permissive_cors {
+            errs.push("PGSTACK_ENV=production: ALLOW_PERMISSIVE_CORS=true reflects any Origin — set ALLOWED_ORIGINS instead".into());
+        }
+        if !self.require_authenticated_ws {
+            errs.push("PGSTACK_ENV=production: REQUIRE_AUTHENTICATED_WS=false lets anon-key holders open any live-query WS — set it true".into());
+        }
+        if self.email_enabled && self.smtp_host.is_empty() {
+            errs.push("PGSTACK_ENV=production: SMTP_HOST is required when email is enabled — configure SMTP, or set EMAIL_ENABLED=false".into());
+        }
+        if self.require_email_verification && !self.email_enabled {
+            errs.push("REQUIRE_EMAIL_VERIFICATION=true is incompatible with EMAIL_ENABLED=false".into());
+        }
+        errs
     }
 }
 

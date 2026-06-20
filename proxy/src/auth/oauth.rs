@@ -191,7 +191,8 @@ pub async fn callback(
                 | AppError::NotFound(ref msg)
                 | AppError::Forbidden(ref msg)
                 | AppError::Conflict(ref msg)
-                | AppError::TooManyRequests(ref msg) => msg.clone(),
+                | AppError::TooManyRequests(ref msg)
+                | AppError::ServiceUnavailable(ref msg) => msg.clone(),
             };
             Ok(error_redirect(&site, "server_error", &description))
         }
