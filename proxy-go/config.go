@@ -435,15 +435,15 @@ func (c Config) Validate() []string {
 			errs = append(errs, "PGSTACK_ENV=production: ANON_KEY is required (random 32+ bytes)")
 		} else if isPlaceholderSecret(c.AnonKey) || c.AnonKey == "anon-key-12345" {
 			errs = append(errs, "PGSTACK_ENV=production: ANON_KEY is a publicly-known placeholder/dev value — generate a real key with `openssl rand -base64 32`")
-		} else if len(c.AnonKey) < 16 {
-			errs = append(errs, fmt.Sprintf("PGSTACK_ENV=production: ANON_KEY is too short (%d chars) — use 32+ from `openssl rand -base64 32`", len(c.AnonKey)))
+		} else if len(c.AnonKey) < 32 {
+			errs = append(errs, fmt.Sprintf("PGSTACK_ENV=production: ANON_KEY is too short (%d chars, need 32+) — generate with `openssl rand -base64 32`", len(c.AnonKey)))
 		}
 		if c.ServiceRoleKey == "" {
 			errs = append(errs, "PGSTACK_ENV=production: SERVICE_ROLE_KEY is required (random 32+ bytes)")
 		} else if isPlaceholderSecret(c.ServiceRoleKey) {
 			errs = append(errs, "PGSTACK_ENV=production: SERVICE_ROLE_KEY is a publicly-known placeholder/dev value — generate a real key with `openssl rand -base64 32`")
-		} else if len(c.ServiceRoleKey) < 16 {
-			errs = append(errs, fmt.Sprintf("PGSTACK_ENV=production: SERVICE_ROLE_KEY is too short (%d chars) — use 32+ from `openssl rand -base64 32`", len(c.ServiceRoleKey)))
+		} else if len(c.ServiceRoleKey) < 32 {
+			errs = append(errs, fmt.Sprintf("PGSTACK_ENV=production: SERVICE_ROLE_KEY is too short (%d chars, need 32+) — generate with `openssl rand -base64 32`", len(c.ServiceRoleKey)))
 		}
 		if c.EnableSQLEndpoint {
 			errs = append(errs, "PGSTACK_ENV=production: ENABLE_SQL_ENDPOINT=true is unsafe — raw SQL execution must not be reachable from the network")

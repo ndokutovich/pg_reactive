@@ -37,7 +37,9 @@ These must be set for production. In development, the compose file provides inse
 | `POSTGRES_DB` | `app` | Database name. |
 | `POSTGRES_USER` | `postgres` | PostgreSQL superuser username. Used only to bootstrap the database — the proxy does **not** connect as this role. |
 | `AUTHENTICATOR_PASSWORD` | *(required in prod)* | Login password for the powerless `authenticator` role the proxy connects as (**not** the superuser) — see [SECURITY.md invariant 22]. The db image's `20-authenticator-login.sh` applies it at init; the proxy's `DATABASE_URL` uses it. Must be URL-safe. `bootstrap-env.sh` generates it; the production compose fails fast if it is unset. |
+| `AUTHENTICATOR_ADMIN_PASSWORD` | *(required in prod)* | Login password for the separate `authenticator_admin` admin-plane role (member of `service_role`) — kept distinct from the data plane so a data-plane compromise cannot reach `service_role` (SECURITY.md invariant 24). The production compose fails fast if unset. Must be URL-safe. |
 | `DATABASE_URL` | *(constructed)* | Full connection string, constructed by the compose file as `postgres://authenticator:$AUTHENTICATOR_PASSWORD@db:5432/$POSTGRES_DB`. The proxy connects as `authenticator` (NOSUPERUSER, NOINHERIT) and `SET ROLE`s per request, so a compromise cannot bypass RLS by default, run `COPY … FROM PROGRAM`, drop the database, or read `pg_authid`. Override only to point at an external PostgreSQL — keep the non-superuser role. |
+| `ADMIN_DATABASE_URL` | *(constructed)* | Admin-plane connection string, `postgres://authenticator_admin:$AUTHENTICATOR_ADMIN_PASSWORD@db:5432/$POSTGRES_DB`. **Required in `PGSTACK_ENV=production`** — without it the admin pool falls back to the data DSN, which can't assume `service_role`. |
 
 ## Proxy variables
 

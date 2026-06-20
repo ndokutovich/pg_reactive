@@ -412,6 +412,8 @@ func TestValidate_RejectsPlaceholderAndShortSecrets(t *testing.T) {
 		{"service change-me", "SERVICE_ROLE_KEY", func(c *Config) { c.ServiceRoleKey = "change-me-service-role-key" }},
 		{"service short", "SERVICE_ROLE_KEY", func(c *Config) { c.ServiceRoleKey = "short" }},
 		{"anon short", "ANON_KEY", func(c *Config) { c.AnonKey = "short" }},
+		{"anon 24 chars (below 32)", "ANON_KEY", func(c *Config) { c.AnonKey = "abcdefghij0123456789ABCD" }},
+		{"service 31 chars (below 32)", "SERVICE_ROLE_KEY", func(c *Config) { c.ServiceRoleKey = "abcdefghij0123456789ABCDEFGHIJ1" }},
 	}
 	for _, tc := range cases {
 		c := base()
