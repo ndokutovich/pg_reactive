@@ -71,6 +71,33 @@ jobs:
       - name: Promote the CI-built digest to release tags
         run: bash .github/scripts/promote-image.sh "${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-proxy" "${{ github.sha }}" "${{ github.ref_name }}"
 
+  docker-proxy-rust:
+    name: Docker — pgstack-proxy-rust
+    needs: ci-gate
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Promote the EXACT digest CI built + smoked (gemini finding 7) — the Rust
+      # sibling proxy ships to the same bar as the Go proxy. No rebuild.
+      - name: Promote the CI-built digest to release tags
+        run: bash .github/scripts/promote-image.sh "${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-proxy-rust" "${{ github.sha }}" "${{ github.ref_name }}"
+
   docker-postgres:
     name: Docker — pgstack-postgres
     needs: ci-gate
@@ -166,7 +193,7 @@ jobs:
   github-release:
     name: GitHub Release
     runs-on: [self-hosted, Linux, X64]
-    needs: [docker-proxy, docker-postgres, npm-sdk, npm-cli]
+    needs: [docker-proxy, docker-proxy-rust, docker-postgres, npm-sdk, npm-cli]
     permissions:
       contents: write
     steps:

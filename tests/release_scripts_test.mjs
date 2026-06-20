@@ -96,7 +96,7 @@ echo "$*" >> "${bashPath(dockerLog)}"
 case "$*" in
   *"imagetools inspect"*) echo '{"mediaType":"x","digest":"sha256:deadbeefcafe0123456789abcdef0123456789abcdef0123456789abcdef0123","size":1}' ;;
   *"SELECT extversion"*) echo "0.1.7" ;;
-  *"run --rm"*) echo "PGSTACK_ENV=production: JWT_SECRET still contains 'dev-only' — generate a real key"; exit 1 ;;
+  *"run --rm"*) echo "PGSTACK_ENV=production: JWT_SECRET still contains 'dev-only' — generate a real key | JWT_SECRET is a publicly-known placeholder — generate a real key"; exit 1 ;;
   *) : ;;
 esac
 `);
@@ -130,6 +130,11 @@ resetLog();
 const smX = run("smoke-proxy.sh", ["ghcr.io/o/pgstack-proxy@sha256:abc"], { env: { ...process.env, DOCKER_CLI: bashPath(dockerStub) } });
 ok(smX.code === 0, "smoke-proxy.sh passes when the validator rejects the placeholder secret");
 ok(/run --rm[\s\S]*linux\/amd64/.test(log()) && /run --rm[\s\S]*linux\/arm64/.test(log()), "smoke-proxy runs the validator on BOTH amd64+arm64 (R29: not arm64 only)");
+// smoke-proxy-rust: the Rust sibling proxy smoke — asserts the Rust validator wording.
+resetLog();
+const smR = run("smoke-proxy-rust.sh", ["ghcr.io/o/pgstack-proxy-rust@sha256:abc"], { env: { ...process.env, DOCKER_CLI: bashPath(dockerStub) } });
+ok(smR.code === 0, "smoke-proxy-rust.sh passes when the Rust validator rejects the placeholder secret");
+ok(/run --rm[\s\S]*linux\/amd64/.test(log()) && /run --rm[\s\S]*linux\/arm64/.test(log()), "smoke-proxy-rust runs the validator on BOTH amd64+arm64");
 rmSync(dk, { recursive: true, force: true });
 
 if (fail) { console.error(`\nFAIL: ${fail} release-script execution test(s) failed.`); process.exit(1); }

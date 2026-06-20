@@ -757,6 +757,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push pgstack-proxy-rust (staging)
+        id: proxy_rust
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        with:
+          context: .
+          file: ./proxy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/pgstack-proxy-rust:_staging-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Build and push pgstack-postgres (staging)
         id: postgres
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
@@ -782,11 +794,15 @@ jobs:
       - name: Smoke-test pgstack-proxy candidate (production validator, amd64 + arm64)
         run: bash .github/scripts/smoke-proxy.sh "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"
 
-      # Only now — both smokes green — create the sha-<sha> tag release resolves,
+      - name: Smoke-test pgstack-proxy-rust candidate (production validator, amd64 + arm64)
+        run: bash .github/scripts/smoke-proxy-rust.sh "${IMAGE_PREFIX}/pgstack-proxy-rust@${{ steps.proxy_rust.outputs.digest }}"
+
+      # Only now — all smokes green — create the sha-<sha> tag release resolves,
       # pointing at the exact smoke-passed digests (gemini finding 1).
       - name: Tag the smoke-passed digests as sha-<sha>
         run: |
           set -euo pipefail
-          docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"    "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"
-          docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-postgres:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"
-          echo "✓ tagged proxy@${{ steps.proxy.outputs.digest }} and postgres@${{ steps.postgres.outputs.digest }} as sha-${{ github.sha }}"
+          docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}"      "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"
+          docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy-rust:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy-rust@${{ steps.proxy_rust.outputs.digest }}"
+          docker buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-postgres:sha-${{ github.sha }}"   "${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"
+          echo "✓ tagged proxy/proxy-rust/postgres digests as sha-${{ github.sha }}"

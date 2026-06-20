@@ -378,7 +378,7 @@ const SCRIPT_TEST = "tests/release_scripts_test.mjs";
 const scriptTestSrc = existsSync(SCRIPT_TEST) ? readFileSync(SCRIPT_TEST, "utf-8") : "";
 function scriptsContract() {
   const v = [];
-  const all = ["validate-release-version.sh", "require-green-ci.sh", "npm-dist-tag.sh", "compute-docker-tags.sh", "promote-image.sh", "smoke-postgres.sh", "smoke-proxy.sh"];
+  const all = ["validate-release-version.sh", "require-green-ci.sh", "npm-dist-tag.sh", "compute-docker-tags.sh", "promote-image.sh", "smoke-postgres.sh", "smoke-proxy.sh", "smoke-proxy-rust.sh"];
   for (const s of all) if (!existsSync(SCRIPTS_DIR + s)) v.push("missing gate script .github/scripts/" + s);
   // EVERY script must be exercised by the execution test — the deterministic ones
   // directly, the Docker-bound ones (promote/smoke) via a stubbed docker, so a
@@ -539,7 +539,7 @@ function releasePolicy(wf) {
   // OWN repo — the digest-resolution + tag-set logic is in promote-image.sh /
   // compute-docker-tags.sh (the latter execution-tested). The promote step must be
   // enabled (real shell, if fires, not coe) — R27.
-  for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
+  for (const img of ["pgstack-proxy", "pgstack-proxy-rust", "pgstack-postgres"]) {
     const imgRe = new RegExp("promote-image\\.sh[^\\n]*" + img + "\\b");
     const promoters = Object.entries(jobs).filter(([, j]) => (j.steps || []).some((s) => imgRe.test(lr(s.run))));
     if (!promoters.length) { v.push("no job promotes " + img + " via promote-image.sh"); continue; }
@@ -694,7 +694,7 @@ function candidatePolicy(wf) {
   const FULL_SUITE = ["test-extension", "test-proxy-go", "test-proxy", "test-sdk", "test-cli", "test-security", "test-prod-validator", "test-e2e", "test-integration", "test-async-bgworker", "security"];
   const nd = needsOf(cj);
   for (const g of FULL_SUITE) if (!nd.includes(g)) v.push(cn + ": candidate is not gated on '" + g + "'");
-  const IMAGES = [{ img: "pgstack-proxy", file: "./proxy-go/Dockerfile" }, { img: "pgstack-postgres", file: "./Dockerfile.dev" }];
+  const IMAGES = [{ img: "pgstack-proxy", file: "./proxy-go/Dockerfile" }, { img: "pgstack-proxy-rust", file: "./proxy/Dockerfile" }, { img: "pgstack-postgres", file: "./Dockerfile.dev" }];
   // Map each image to the id of ITS build-push-action step — the ONLY legit source
   // of steps.<id>.outputs.digest. A build with no id can't be referenced; a digest
   // consumed from a different id (a decoy step that writes digest=sha256:… to
@@ -721,7 +721,8 @@ function candidatePolicy(wf) {
   // create-before-smoke re-exposes finding 1.
   const idx = (re) => steps.findIndex((s) => re.test(lr(s.run)));
   const pgSmoke = idx(/smoke-postgres\.sh/);
-  const pxSmoke = idx(/smoke-proxy\.sh/);
+  const pxSmoke = idx(/smoke-proxy\.sh/); // smoke-proxy.sh — NOT smoke-proxy-rust.sh (the `\.` after proxy excludes it)
+  const rsSmoke = idx(/smoke-proxy-rust\.sh/);
   const tagIdx = idx(/imagetools\s+create[^\n]*:sha-\$\{\{\s*github\.sha/);
   // each smoke must be passed the EXACT built @digest — not a mutable tag like
   // :latest or :sha-… (smoking the wrong bytes) — gemini R29.
@@ -729,17 +730,19 @@ function candidatePolicy(wf) {
   else { for (const r of stepDisabled(steps[pgSmoke], PUSH_MASTER)) v.push(cn + " (postgres smoke) " + r); for (const r of bareCall(steps[pgSmoke], "smoke-postgres.sh")) v.push(cn + " (postgres smoke) " + r); if (!digestRe("pgstack-postgres").test(lr(steps[pgSmoke].run))) v.push(cn + ": smoke-postgres is not passed pgstack-postgres@${{ steps." + (buildId["pgstack-postgres"] || "*") + ".outputs.digest }} (not THIS image's build digest — a mutable tag or a decoy step's output)"); }
   if (pxSmoke < 0) v.push(cn + ": does not call smoke-proxy.sh (the proxy digest would ship unsmoked)");
   else { for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r); for (const r of bareCall(steps[pxSmoke], "smoke-proxy.sh")) v.push(cn + " (proxy smoke) " + r); if (!digestRe("pgstack-proxy").test(lr(steps[pxSmoke].run))) v.push(cn + ": smoke-proxy is not passed pgstack-proxy@${{ steps." + (buildId["pgstack-proxy"] || "*") + ".outputs.digest }} (not THIS image's build digest — a mutable tag or a decoy step's output)"); }
+  if (rsSmoke < 0) v.push(cn + ": does not call smoke-proxy-rust.sh (the Rust sibling proxy digest would ship unsmoked)");
+  else { for (const r of stepDisabled(steps[rsSmoke], PUSH_MASTER)) v.push(cn + " (proxy-rust smoke) " + r); for (const r of bareCall(steps[rsSmoke], "smoke-proxy-rust.sh")) v.push(cn + " (proxy-rust smoke) " + r); if (!digestRe("pgstack-proxy-rust").test(lr(steps[rsSmoke].run))) v.push(cn + ": smoke-proxy-rust is not passed pgstack-proxy-rust@${{ steps." + (buildId["pgstack-proxy-rust"] || "*") + ".outputs.digest }} (not THIS image's build digest — a mutable tag or a decoy step's output)"); }
   if (tagIdx < 0) v.push(cn + ": does not create the sha-${{ github.sha }} tag release resolves");
   else {
     for (const r of stepDisabled(steps[tagIdx], PUSH_MASTER)) v.push(cn + " (sha-tag) " + r);
-    if (pgSmoke < 0 || pxSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke) v.push(cn + ": sha-${{ github.sha }} is created before both smokes pass (tag-after-smoke order)");
+    if (pgSmoke < 0 || pxSmoke < 0 || rsSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke || tagIdx < rsSmoke) v.push(cn + ": sha-${{ github.sha }} is created before all smokes pass (tag-after-smoke order)");
     // EVERY `imagetools create … <img>:sha-${{github.sha}}` line — across ALL steps,
     // not just the canonical tag step — must source THIS image's build digest
     // (steps.<buildId>.outputs.digest, same image repo). A later step (or a 2nd
     // line) re-creating the sha tag from :latest / a foreign digest would otherwise
     // OVERWRITE the smoke-passed manifest, last-writer-wins (R32 + R33 + R34).
     const tagCmds = steps.flatMap((s) => shellCommands(lr(s.run)));
-    for (const img of ["pgstack-proxy", "pgstack-postgres"]) {
+    for (const img of ["pgstack-proxy", "pgstack-proxy-rust", "pgstack-postgres"]) {
       const shaTagRe = new RegExp(img + ":sha-\\$\\{\\{\\s*github\\.sha\\b");
       // a sha-tag-DEFINING command — `imagetools create`, `manifest create`, or
       // `docker tag` — must source THIS image's build digest, whichever primitive
@@ -773,7 +776,7 @@ function candidatePolicy(wf) {
   // name — `IMG=pgstack-proxy; … -t "${IMAGE_PREFIX}/${IMG}:sha-…"` hides the literal
   // repo from both `created` and the allowlist yet expands to re-point the real tag —
   // so ANY `$IMG`/`$REPO`/`${…}` in the repo or tag of target/source fails closed (R49).
-  const CANON_TARGET = /^\$\{IMAGE_PREFIX\}\/pgstack-(proxy|postgres):sha-\$\{\{\s*github\.sha\s*\}\}$/;
+  const CANON_TARGET = /^\$\{IMAGE_PREFIX\}\/pgstack-(proxy-rust|proxy|postgres):sha-\$\{\{\s*github\.sha\s*\}\}$/;
   // Exact argv shape — not just operand validation. The prefix must be ONLY
   // `docker`/`buildx` launchers (no `--context`/`--builder` etc. that redirect the
   // daemon), and after `create` the ONLY tokens may be `-t <target>` (once) and one
@@ -804,7 +807,7 @@ function candidatePolicy(wf) {
     if (mutatesCIState(argv)) return false; // $GITHUB_PATH/$GITHUB_ENV write or PATH/DOCKER_CLI/… mutation (R51)
     if (hasCmdSub(argv)) return false; // $()/backtick runs a side command before the host (R43)
     if (isNoopHead(effHead(argv))) return true;
-    if (isScriptCommand(argv, /\.github\/scripts\/smoke-(?:postgres|proxy)\.sh/)) return true;
+    if (isScriptCommand(argv, /\.github\/scripts\/smoke-(?:postgres|proxy-rust|proxy)\.sh/)) return true;
     if (seqIn(argv, ["docker", "rm"])) return true;
     if (seqIn(argv, ["imagetools", "create"])) return canonicalCreate(argv);
     return false;
@@ -1141,6 +1144,15 @@ mut("ci candidate sha tag built with --append (existing tag becomes an implicit 
 mut("ci candidate sha tag with --dry-run (writes nothing, step still succeeds)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker buildx imagetools create --dry-run -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"'; }, candidatePolicy);
 mut("ci candidate sha tag built with --append (postgres)", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-postgres:sha-/); s.run = s.run + '\ndocker buildx imagetools create --append -t "${IMAGE_PREFIX}/pgstack-postgres:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-postgres@${{ steps.postgres.outputs.digest }}"'; }, candidatePolicy);
 mut("ci candidate sha tag via prefix option-interleave docker --context default buildx", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy:sha-/); s.run = s.run + '\ndocker --context default buildx imagetools create -t "${IMAGE_PREFIX}/pgstack-proxy:sha-${{ github.sha }}" "${IMAGE_PREFIX}/pgstack-proxy@${{ steps.proxy.outputs.digest }}"'; }, candidatePolicy);
+// R52 — the Rust sibling proxy is a released image to the same bar as Go: the
+// candidate must build + smoke + sha-tag pgstack-proxy-rust, and release must
+// promote it from ITS OWN repo (Rust→sibling, not reference).
+mut("ci candidate drops the proxy-rust build", ci, (w) => { const j = w.jobs["build-publish-images"]; j.steps = j.steps.filter((st) => String(st.with?.file) !== "./proxy/Dockerfile"); }, candidatePolicy);
+mut("ci candidate proxy-rust build push: false", ci, (w) => { const s = w.jobs["build-publish-images"].steps.find((st) => String(st.with?.file) === "./proxy/Dockerfile"); s.with.push = false; }, candidatePolicy);
+mut("ci candidate drops smoke-proxy-rust.sh", ci, (w) => { findStep(w, "build-publish-images", /smoke-proxy-rust\.sh/).run = "echo skip"; }, candidatePolicy);
+mut("ci candidate proxy-rust sha-tag sourced from a mutable :latest", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy-rust:sha-/); s.run = s.run.replace(/pgstack-proxy-rust@\$\{\{\s*steps\.proxy_rust\.outputs\.digest\s*\}\}/, "pgstack-proxy-rust:latest"); }, candidatePolicy);
+mut("release drops the proxy-rust promote", release, (w) => { findStep(w, "docker-proxy-rust", /promote-image\.sh/).run = "echo skip"; }, releasePolicy);
+mut("release docker-proxy-rust promotes the proxy repo (not proxy-rust)", release, (w) => { const s = findStep(w, "docker-proxy-rust", /promote-image\.sh/); s.run = s.run.replace(/pgstack-proxy-rust/g, "pgstack-proxy"); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
