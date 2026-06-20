@@ -38,11 +38,20 @@ async function api(method, path, body, token) {
 
 async function signup() {
   const email = `rls-demo-${Date.now()}-${Math.floor(performance.now())}@test.com`;
-  const r = await api("POST", "/auth/v1/signup", { email, password: "test123456" });
-  if (!r.json || !r.json.access_token) {
+  // The adversarial suite runs rate_limit__spoofed_xff immediately before this
+  // test; it floods the per-IP auth bucket (AUTH_RATE_LIMIT/AUTH_RATE_WINDOW,
+  // default 30/60s) on the shared runner IP. Retry on 429 until the window frees
+  // a slot rather than failing the whole job on a cross-test bucket collision.
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    const r = await api("POST", "/auth/v1/signup", { email, password: "test123456" });
+    if (r.json && r.json.access_token) return r.json.access_token;
+    if (r.status === 429 && Date.now() < deadline) {
+      await new Promise((res) => setTimeout(res, 5000));
+      continue;
+    }
     throw new Error(`signup failed (status ${r.status}): ${JSON.stringify(r.json)}`);
   }
-  return r.json.access_token;
 }
 
 async function main() {
