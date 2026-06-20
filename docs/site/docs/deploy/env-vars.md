@@ -54,7 +54,7 @@ These must be set for production. In development, the compose file provides inse
 | `STUDIO_DIR` | `/studio` | Directory containing the Studio SPA build, served at `/studio/` with a relaxed CSP. Point at your own build when customizing the image. |
 | `DOCS_DIR` | `/docs` | Directory containing the built documentation site (Docusaurus static output), served at `/docs/`. |
 | `PGSTACK_ENV` | `production` | **Defaults to `production`** (unset/empty → production, fail-secure). In production, security misconfigurations — placeholder/dev secrets, short `ANON_KEY`/`SERVICE_ROLE_KEY`, `ENABLE_SQL_ENDPOINT=true`, permissive CORS, `REQUIRE_AUTHENTICATED_WS=false`, missing SMTP when `EMAIL_ENABLED=true` — are **fatal startup errors**, not warnings. Set `PGSTACK_ENV=development` to opt into the relaxed dev posture (the dev compose files do). |
-| `PROXY_RUST_PORT` | `8081` | Host port for the legacy Rust reference proxy that the dev compose file starts alongside the primary Go proxy. Dev only — not part of the production stack. |
+| `PROXY_RUST_PORT` | `8081` | Host port for the **Rust proxy** — a co-equal sibling to the Go proxy, security-hardened to parity (same SECURITY.md invariants) — which the dev compose starts alongside the Go proxy (on `PROXY_PORT`). Either proxy can serve a deployment. |
 
 ## Auth variables
 

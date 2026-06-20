@@ -71,11 +71,12 @@ jobs:
             ext/regression.diffs
             ext/regression.out
 
-  # ─── Rust proxy ─────────────────────────────────────────────────────────────
-  # Released artifact gate. The published proxy in
-  # examples/docker-compose.prod.yml and release.yml is `proxy-go`;
-  # security CI MUST block on this job, not on test-proxy (Rust).
-  # Audit round 32 F1.
+  # ─── Sibling proxies (Go + Rust, co-equal) ─────────────────────────────────
+  # Both proxies are first-class and security-hardened to parity; BOTH gate the
+  # release candidate (build-publish-images needs both). The currently published
+  # image is `pgstack-proxy` (Go); the Rust image is the remaining release-infra
+  # step. (Round 32 F1 originally gated only on Go while Rust was a reference;
+  # Rust is now a sibling and a release gate.)
   test-proxy-go:
     name: Proxy (Go)
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
@@ -107,11 +108,11 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
           "$(go env GOPATH)/bin/govulncheck" ./...
 
-  # Reference implementation. Kept building so the Rust proxy doesn't
-  # bit-rot, but it is NOT a release gate — security/prod-validator
-  # depend on test-proxy-go above.
+  # Co-equal sibling proxy (Rust). A release gate alongside the Go proxy:
+  # build-publish-images needs this job too, so a broken Rust proxy blocks the
+  # release. clippy -D warnings, fmt --check, build, and unit tests.
   test-proxy:
-    name: Proxy (Rust, reference)
+    name: Proxy (Rust)
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -709,6 +710,7 @@ jobs:
     needs:
       - test-extension
       - test-proxy-go
+      - test-proxy
       - test-sdk
       - test-cli
       - test-security

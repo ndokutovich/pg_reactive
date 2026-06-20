@@ -45,7 +45,7 @@ Wait a few seconds for the database to initialize, then verify everything is hea
 ```bash
 docker compose ps
 # db and proxy-go should show "healthy" or "running"
-# (the cloned repo's compose also starts a legacy Rust reference proxy on 127.0.0.1:8081)
+# (the cloned repo's compose also starts the co-equal Rust sibling proxy on 127.0.0.1:8081)
 ```
 
 ## Step 3: Open Studio

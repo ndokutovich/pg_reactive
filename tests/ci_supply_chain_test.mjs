@@ -691,7 +691,7 @@ function candidatePolicy(wf) {
   // trusted master push — not any push branch (gemini finding 4, R23).
   const cif = stripBraces(String(cj.if || ""));
   if (!/event_name\s*==\s*'push'/.test(cif) || !/ref\s*==\s*'refs\/heads\/master'/.test(cif)) v.push(cn + ": candidate job is not gated to push on refs/heads/master");
-  const FULL_SUITE = ["test-extension", "test-proxy-go", "test-sdk", "test-cli", "test-security", "test-prod-validator", "test-e2e", "test-integration", "test-async-bgworker", "security"];
+  const FULL_SUITE = ["test-extension", "test-proxy-go", "test-proxy", "test-sdk", "test-cli", "test-security", "test-prod-validator", "test-e2e", "test-integration", "test-async-bgworker", "security"];
   const nd = needsOf(cj);
   for (const g of FULL_SUITE) if (!nd.includes(g)) v.push(cn + ": candidate is not gated on '" + g + "'");
   const IMAGES = [{ img: "pgstack-proxy", file: "./proxy-go/Dockerfile" }, { img: "pgstack-postgres", file: "./Dockerfile.dev" }];

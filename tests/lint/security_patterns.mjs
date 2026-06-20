@@ -392,8 +392,9 @@ function checkDeltaReauth(file, text) {
 //   default, COPY ... FROM PROGRAM, DROP DATABASE, or read pg_authid. A
 //   production DATABASE_URL pointed at the `postgres` superuser — or
 //   ${POSTGRES_USER}/${PGUSER}, conventionally the superuser — re-opens all of
-//   that. Scope: the production deployment configs only. The dev compose's Rust
-//   *reference* proxy and the bench stack are not production and are out of
+//   that. Scope: the production deployment configs only. The dev compose's two
+//   sibling proxies (Go + Rust, both now connecting as the powerless
+//   authenticator role) and the bench stack are not production and are out of
 //   scope (they are not in this fixed target list). The all-in-one's documented
 //   standalone-pg_reactive fallback DSN is marked lint:allow=SEC-R42.
 //   Override a verified-safe occurrence with `# lint:allow=SEC-R42`.

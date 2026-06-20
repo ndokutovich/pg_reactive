@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries with real-time delta notifications. Three-layer core: C extension (ext/) → Go WebSocket proxy (proxy-go/, primary) + Rust proxy (proxy/, reference) → TypeScript SDK (sdk/). Around that core lives the pgStack umbrella: a Supabase-compatible REST/RPC/auth/storage/edge-functions layer (also in `proxy-go/`), a CLI (`cli/`) that scaffolds new pgStack projects, a Studio SPA (`studio/`), and a Docusaurus docs site (`docs/site/`).
+pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries with real-time delta notifications. Three-layer core: C extension (ext/) → two co-equal sibling WebSocket proxies, Go (proxy-go/) and Rust (proxy/), both first-class and security-hardened to parity (the SECURITY.md invariants apply to both) → TypeScript SDK (sdk/). Around that core lives the pgStack umbrella: a Supabase-compatible REST/RPC/auth/storage/edge-functions layer (also in `proxy-go/`), a CLI (`cli/`) that scaffolds new pgStack projects, a Studio SPA (`studio/`), and a Docusaurus docs site (`docs/site/`).
 
 ## Security discipline — read this BEFORE touching auth / RLS / grants / secrets
 
