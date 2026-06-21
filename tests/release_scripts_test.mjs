@@ -112,6 +112,12 @@ resetLog();
 const promote = run("promote-image.sh", ["ghcr.io/o/pgstack-proxy", "deadbeef", "v1.2.3"], { env: dkEnv });
 ok(promote.code === 0, "promote-image.sh succeeds when the digest resolves");
 ok(/imagetools create[\s\S]*pgstack-proxy:1\.2\.3[\s\S]*pgstack-proxy@sha256:/.test(log()), "promote imagetools-creates the version tag from @digest (not just exit 0)");
+// TARGET_REPO mirror (Docker Hub): the digest is resolved from the GHCR repo, but
+// the version tags are created on the target repo from that SAME digest.
+resetLog();
+const mirror = run("promote-image.sh", ["ghcr.io/o/pgstack-proxy", "deadbeef", "v1.2.3"], { env: { ...dkEnv, TARGET_REPO: "docker.io/u/pgstack-proxy" } });
+ok(mirror.code === 0, "promote-image.sh mirrors to TARGET_REPO when set");
+ok(/imagetools create[\s\S]*docker\.io\/u\/pgstack-proxy:1\.2\.3[\s\S]*ghcr\.io\/o\/pgstack-proxy@sha256:/.test(log()), "mirror creates docker.io tags from the GHCR @digest (same bytes, cross-registry)");
 // promote fail-closed: a docker that yields no digest must abort, not promote ":".
 resetLog();
 const badDocker = join(dk, "docker-nodigest.sh");

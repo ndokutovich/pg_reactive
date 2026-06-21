@@ -49,6 +49,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # Docker Hub mirroring is opt-in: only when both DOCKERHUB_* secrets are set,
+    # so a repo without them still publishes GHCR + npm.
+    env:
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -63,6 +67,13 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Promote the EXACT digest CI built + smoked for this commit (gemini finding
       # 7) — resolve the immutable sha-<sha> staging tag and imagetools-create the
@@ -71,6 +82,12 @@ jobs:
       - name: Promote the CI-built digest to release tags
         run: bash .github/scripts/promote-image.sh "${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-proxy" "${{ github.sha }}" "${{ github.ref_name }}"
 
+      # Mirror the SAME smoked GHCR digest to Docker Hub (manifest copy, no rebuild
+      # — identical bytes). Skipped when DOCKERHUB_* are unset.
+      - name: Mirror the smoked digest to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        run: TARGET_REPO="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/pgstack-proxy" bash .github/scripts/promote-image.sh "${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-proxy" "${{ github.sha }}" "${{ github.ref_name }}"
+
   docker-proxy-rust:
     name: Docker — pgstack-proxy-rust
     needs: ci-gate
@@ -78,6 +95,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -93,10 +112,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       # Promote the EXACT digest CI built + smoked (gemini finding 7) — the Rust
       # sibling proxy ships to the same bar as the Go proxy. No rebuild.
       - name: Promote the CI-built digest to release tags
         run: bash .github/scripts/promote-image.sh "${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-proxy-rust" "${{ github.sha }}" "${{ github.ref_name }}"
+
+      - name: Mirror the smoked digest to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        run: TARGET_REPO="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/pgstack-proxy-rust" bash .github/scripts/promote-image.sh "${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-proxy-rust" "${{ github.sha }}" "${{ github.ref_name }}"
 
   docker-postgres:
     name: Docker — pgstack-postgres
@@ -105,6 +135,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -120,11 +152,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       # Promote the EXACT digest CI built + smoked (gemini finding 7) — see
       # docker-proxy. The 4th arg `16` is the fixed PostgreSQL-major tag, applied
       # by promote-image.sh only for final releases.
       - name: Promote the CI-built digest to release tags
         run: bash .github/scripts/promote-image.sh "${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-postgres" "${{ github.sha }}" "${{ github.ref_name }}" 16
+
+      - name: Mirror the smoked digest to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        run: TARGET_REPO="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/pgstack-postgres" bash .github/scripts/promote-image.sh "${{ env.REGISTRY }}/${{ github.repository_owner }}/pgstack-postgres" "${{ github.sha }}" "${{ github.ref_name }}" 16
 
   # ─── Publish npm packages ────────────────────────────────────────────────────
   npm-sdk:

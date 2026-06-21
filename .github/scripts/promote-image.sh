@@ -6,13 +6,21 @@
 # calls are seam-injectable so the control flow is execution-tested in
 # tests/release_scripts_test.mjs (gemini R28-4).
 #
+# The digest is ALWAYS resolved from <repo>'s smoked sha-<sha> tag (GHCR). The
+# version tags are created on TARGET_REPO (default <repo>) — set TARGET_REPO to a
+# second registry (e.g. docker.io/<user>/pgstack-proxy) to mirror the EXACT same
+# smoked digest there. imagetools create copies the manifest across registries,
+# so Docker Hub ships the identical bytes GHCR smoked — no rebuild, no drift.
+#
 # Usage: promote-image.sh <repo> <sha> <ref-or-version> [extra-fixed-tag]
+#        TARGET_REPO=<repo2> promote-image.sh <repo> <sha> <ref>   # mirror to repo2
 set -euo pipefail
 
 repo="${1:?usage: promote-image.sh <repo> <sha> <ref> [extra]}"
 sha="${2:?usage: promote-image.sh <repo> <sha> <ref> [extra]}"
 ref="${3:?usage: promote-image.sh <repo> <sha> <ref> [extra]}"
 extra="${4:-}"
+target="${TARGET_REPO:-$repo}"       # version tags go here; digest stays from $repo
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 docker_cli="${DOCKER_CLI:-docker}"   # test seams
 jq_cli="${JQ_CLI:-jq}"
@@ -27,10 +35,10 @@ case "$digest" in sha256:*) ;; *) echo "::error::could not resolve digest for ${
 # bit — a core.filemode=false checkout stores it 100644 and a direct exec would
 # be Permission denied on Linux, which the old `read <<< "$(…)"` swallowed,
 # leaving the tag list empty and promoting nothing (gemini R28-2). Fail closed.
-tags_line="$(bash "$here/compute-docker-tags.sh" "$repo" "$ref" "$extra")" \
+tags_line="$(bash "$here/compute-docker-tags.sh" "$target" "$ref" "$extra")" \
   || { echo "::error::compute-docker-tags.sh failed for ${ref}" >&2; exit 1; }
 read -r -a tags <<< "$tags_line"
 [ "${#tags[@]}" -ge 2 ] || { echo "::error::no -t tag args computed for ${ref} (refusing to promote with zero tags)" >&2; exit 1; }
 
-echo "promoting ${src} (${digest}) as: ${tags[*]}"
+echo "promoting ${src} (${digest}) -> ${target} as: ${tags[*]}"
 "$docker_cli" buildx imagetools create "${tags[@]}" "${repo}@${digest}"

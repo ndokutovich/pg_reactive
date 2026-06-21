@@ -546,12 +546,25 @@ function releasePolicy(wf) {
     // check EVERY step that promotes THIS image (find by img, not the first
     // promote step) — a decoy promote with the right SHA must not excuse a real
     // promote of the same image on a foreign SHA (R32).
+    let hasMandatory = false; // an UNCONDITIONAL GHCR promote (non-mirror)
     for (const [jn, j] of promoters)
       for (const st of (j.steps || []).filter((s) => imgRe.test(lr(s.run)))) {
-        for (const r of stepDisabled(st, PUSH_TAG)) v.push(jn + " (" + img + " promote) " + r);
-        for (const r of bareCall(st, "promote-image.sh")) v.push(jn + " (" + img + " promote) " + r);
+        // The optional Docker Hub mirror (TARGET_REPO=docker.io/…) is gated on the
+        // HAS_DOCKERHUB secret-derived env, so its `if` is EXPECTED not to fire in
+        // static analysis — tolerate that ONE reason. Everything else (bare call,
+        // SHA pin, no continue-on-error, real shell) is still enforced, and the
+        // mandatory GHCR promote (no TARGET_REPO) is checked in full.
+        const isMirror = /TARGET_REPO=/.test(lr(st.run));
+        if (!isMirror) hasMandatory = true;
+        const label = jn + " (" + img + (isMirror ? " mirror) " : " promote) ");
+        for (const r of stepDisabled(st, PUSH_TAG)) if (!(isMirror && r === "if never fires")) v.push(label + r);
+        for (const r of bareCall(st, "promote-image.sh")) v.push(label + r);
         if (!/\$\{\{\s*github\.sha\s*\}\}/.test(lr(st.run))) v.push(jn + ": " + img + " promote is not passed ${{ github.sha }} (could promote a foreign commit)");
       }
+    // A Docker Hub mirror alone does NOT publish the GHCR release tags — require an
+    // unconditional GHCR promote so dropping / re-pointing it can't hide behind the
+    // mirror (R53).
+    if (!hasMandatory) v.push("no unconditional GHCR promote (non-mirror) for " + img + " — only a gated Docker Hub mirror, which does not publish the GHCR release tags");
   }
   // R42: blocklisting the docker CLI tag-mutation primitives (imagetools/manifest/
   // docker tag+push, above) is a losing game — ANY registry client holding the
@@ -1153,6 +1166,12 @@ mut("ci candidate drops smoke-proxy-rust.sh", ci, (w) => { findStep(w, "build-pu
 mut("ci candidate proxy-rust sha-tag sourced from a mutable :latest", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-proxy-rust:sha-/); s.run = s.run.replace(/pgstack-proxy-rust@\$\{\{\s*steps\.proxy_rust\.outputs\.digest\s*\}\}/, "pgstack-proxy-rust:latest"); }, candidatePolicy);
 mut("release drops the proxy-rust promote", release, (w) => { findStep(w, "docker-proxy-rust", /promote-image\.sh/).run = "echo skip"; }, releasePolicy);
 mut("release docker-proxy-rust promotes the proxy repo (not proxy-rust)", release, (w) => { const s = findStep(w, "docker-proxy-rust", /promote-image\.sh/); s.run = s.run.replace(/pgstack-proxy-rust/g, "pgstack-proxy"); }, releasePolicy);
+// R53 — Docker Hub mirror: a gated docker.io mirror must not let a dropped/
+// re-pointed GHCR promote hide behind it, and the mirror itself stays bare,
+// SHA-pinned, and not continue-on-error.
+mut("release converts the postgres GHCR promote into a Docker-Hub-only mirror (no GHCR publish)", release, (w) => { const s = findStep(w, "docker-postgres", /promote-image\.sh/); s.run = 'TARGET_REPO="docker.io/u/pgstack-postgres" ' + s.run; }, releasePolicy);
+mut("release postgres Docker Hub mirror set continue-on-error", release, (w) => { findStep(w, "docker-postgres", /TARGET_REPO=/)["continue-on-error"] = true; }, releasePolicy);
+mut("release postgres Docker Hub mirror not SHA-pinned (foreign commit)", release, (w) => { const s = findStep(w, "docker-postgres", /TARGET_REPO=/); s.run = s.run.replace(/\$\{\{\s*github\.sha\s*\}\}/, "deadbeef"); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
