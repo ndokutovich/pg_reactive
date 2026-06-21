@@ -16,10 +16,20 @@ for plat in linux/amd64 linux/arm64; do
   "$docker_cli" run -d --platform "$plat" --pull=always --name cand-db -e POSTGRES_DB=pg_reactive_test \
     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
     "$img" postgres -c shared_preload_libraries=pg_reactive -c log_min_messages=warning
+  # `pg_isready` reports "accepting connections" against the entrypoint's
+  # init-phase temporary server (socket-only), which then SHUTS DOWN to restart
+  # the real server — so a single CREATE EXTENSION races into "the database system
+  # is shutting down". Retry the actual work until the real server answers; a
+  # transient connection/shutdown error just means "not fully up yet".
   ready=
-  for _ in $(seq 1 100); do "$docker_cli" exec cand-db pg_isready -U postgres -d pg_reactive_test && { ready=1; break; }; sleep 3; done
-  [ -n "$ready" ] || { echo "::error::${plat} postgres never became ready" >&2; exit 1; }
-  "$docker_cli" exec cand-db psql -U postgres -d pg_reactive_test -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_reactive"
+  for _ in $(seq 1 100); do
+    if "$docker_cli" exec cand-db psql -U postgres -d pg_reactive_test -v ON_ERROR_STOP=1 \
+         -c "CREATE EXTENSION IF NOT EXISTS pg_reactive" >/dev/null 2>&1; then
+      ready=1; break
+    fi
+    sleep 3
+  done
+  [ -n "$ready" ] || { echo "::error::${plat} postgres never accepted CREATE EXTENSION (boot/init failed)" >&2; exit 1; }
   ver="$("$docker_cli" exec cand-db psql -U postgres -d pg_reactive_test -tAc "SELECT extversion FROM pg_extension WHERE extname='pg_reactive'")"
   [ -n "$ver" ] || { echo "::error::pg_reactive did not load in the ${plat} image" >&2; exit 1; }
   "$docker_cli" rm -f cand-db >/dev/null 2>&1 || true
