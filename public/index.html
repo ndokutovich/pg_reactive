@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pgStack — The Complete PostgreSQL Backend</title>
-  <meta name="description" content="Auth, REST API, Live Queries, Storage, and Dashboard. Two processes. One command. Open source PostgreSQL backend platform.">
+  <meta name="description" content="Auth, REST API, live SQL queries, edge functions, storage, job queue, auto-HTTPS and a Studio dashboard — two processes, one command. Open-source PostgreSQL backend platform.">
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -29,7 +29,8 @@
     <h1 class="hero-title">pg<span class="accent">Stack</span></h1>
     <p class="hero-subtitle">The Complete PostgreSQL Backend</p>
     <p class="hero-desc">
-      Auth, REST API, Live Queries, Storage, and Dashboard.<br>
+      Auth, REST, live SQL queries, edge functions, storage, a job queue,
+      auto-HTTPS and a Studio dashboard.<br>
       Two processes. One command.
     </p>
     <div class="hero-code">
@@ -46,16 +47,16 @@
 <section class="features" id="features">
   <div class="container">
     <span class="section-label">Everything included</span>
-    <h2 class="section-title">Six pillars. Zero glue code.</h2>
-    <p class="section-desc">Everything you need to build a production backend, powered entirely by PostgreSQL.</p>
+    <h2 class="section-title">Nine pillars. Zero glue code.</h2>
+    <p class="section-desc">Everything you need to build <em>and ship</em> a production backend, powered entirely by PostgreSQL.</p>
 
     <div class="feature-grid">
       <div class="feature-card">
         <div class="feature-icon">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         </div>
-        <h3 class="feature-name">Authentication</h3>
-        <p class="feature-desc">Email/password, OAuth (Google, GitHub), magic links. JWT tokens with PostgreSQL RLS for row-level security.</p>
+        <h3 class="feature-name">Security-first auth</h3>
+        <p class="feature-desc">Email/password (argon2id), OAuth, magic links, JWT. Row-Level Security on every request via a two-pool least-privilege model — hardened against 26 documented trust-boundary invariants.</p>
       </div>
 
       <div class="feature-card">
@@ -71,7 +72,7 @@
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         </div>
         <h3 class="feature-name">Live Queries</h3>
-        <p class="feature-desc">SQL-level reactivity via pg_reactive. Column-level change tracking, delta computation, WebSocket delivery.</p>
+        <p class="feature-desc">SQL-level reactivity via pg_reactive. Column-level change tracking, delta computation over WebSocket, generation-isolated tenancy. No CDC, no polling.</p>
       </div>
 
       <div class="feature-card">
@@ -97,6 +98,30 @@
         <h3 class="feature-name">CLI</h3>
         <p class="feature-desc">Project scaffolding, dev server, migrations, type generation, and deployment. One tool for the full lifecycle.</p>
       </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </div>
+        <h3 class="feature-name">Edge Functions</h3>
+        <p class="feature-desc">One endpoint, five runtimes: embedded JS (goja), PL/v8, PL/Python, a Deno sidecar, or a per-function HTTP container in any language. Pick per function.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+        </div>
+        <h3 class="feature-name">Auto-HTTPS &amp; static hosting</h3>
+        <p class="feature-desc">Automatic Let's Encrypt certificates (ACME), provisioned and renewed for your domains. Serve your SPA and assets straight from the proxy, gzip-compressed. No nginx, no certbot.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <h3 class="feature-name">Job queue &amp; cron</h3>
+        <p class="feature-desc">Durable background jobs and scheduled tasks with no Redis or RabbitMQ. Jobs are rows. Failures retry. Observability is a <code>SELECT</code>.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -106,7 +131,7 @@
   <div class="container text-center">
     <span class="section-label">Architecture</span>
     <h2 class="section-title">Radically simple infrastructure</h2>
-    <p class="section-desc" style="margin: 0 auto;">No orchestrator. No message broker. No cache layer. Just PostgreSQL doing what it does best.</p>
+    <p class="section-desc" style="margin: 0 auto;">No orchestrator. No message broker. No cache layer. Just PostgreSQL doing what it does best — and the proxy ships as two co-equal builds, Go or Rust, hardened to parity.</p>
 
     <div class="arch-block">
       <div class="arch-diagram"><span class="highlight">Your App</span>  <span class="subtle">---&gt;</span>  <span class="highlight">pgstack-proxy</span>  <span class="subtle">---&gt;</span>  <span class="highlight">PostgreSQL</span>
