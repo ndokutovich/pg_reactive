@@ -53,6 +53,11 @@ RUN useradd --create-home --no-log-init --shell /bin/false appuser
 COPY --from=builder /app/pgstack-proxy-go /usr/local/bin/pgstack-proxy
 COPY --from=studio-builder /studio-build/dist /studio
 COPY --from=docs-builder /docs-build/build /docs
+# The pgStack marketing landing (public/index.html — the canonical pgstack.org
+# apex source). Inert unless PUBLIC_DIR=/public is set: the general image leaves
+# it unset so downstream `pgstack init` users serve their own SPA; only the
+# pgstack.org apex deployment opts in (examples/docker-compose.prod.yml).
+COPY public/ /public
 
 ENV STUDIO_DIR=/studio
 ENV DOCS_DIR=/docs

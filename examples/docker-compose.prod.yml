@@ -97,11 +97,20 @@ services:
       SMTP_PORT: ${SMTP_PORT:-2500}
       SMTP_USER: ${SMTP_USER:-demo}
       SMTP_PASS: ${SMTP_PASS:-demo}
+      # This deployment is also pgstack.org's apex: serve the marketing landing
+      # (public/index.html, baked at /public) at /. API routes (/rest, /auth,
+      # /ws, /docs, /studio, /functions) take precedence; / and unmatched paths
+      # fall back to the landing. Reached via the `pgstack-landing` gateway alias.
+      PUBLIC_DIR: /public
     networks:
       default:
       gateway:
         aliases:
           - pgr-proxy
+          # Apex upstream: the umbrella (vps-12gb-pgstack) proxies pgstack.org/
+          # to pgstack-landing:8080, which serves PUBLIC_DIR (the landing above).
+          # The pgStack landing's single source of truth is pg_reactive/public/.
+          - pgstack-landing
 
   hello-go:
     restart: unless-stopped
