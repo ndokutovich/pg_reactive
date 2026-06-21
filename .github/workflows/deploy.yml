@@ -110,6 +110,11 @@ jobs:
               -f examples/docker-compose.yml \
               -f examples/docker-compose.prod.yml \
               down -v --remove-orphans || true
+            # Belt-and-suspenders: `down --remove-orphans` can leave a container
+            # wedged in "removing" (it kept holding examples_pgdata above), so the
+            # next `up` hits "container name already in use" against that orphan.
+            # Force-remove any lingering examples-* container by name first.
+            docker ps -aq --filter 'name=^examples-' | xargs -r docker rm -f || true
             docker compose --env-file .env \
               -f examples/docker-compose.yml \
               -f examples/docker-compose.prod.yml \
