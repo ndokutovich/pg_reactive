@@ -16,22 +16,21 @@ for plat in linux/amd64 linux/arm64; do
   "$docker_cli" run -d --platform "$plat" --pull=always --name cand-db -e POSTGRES_DB=pg_reactive_test \
     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
     "$img" postgres -c shared_preload_libraries=pg_reactive -c log_min_messages=warning
-  # `pg_isready` reports "accepting connections" against the entrypoint's
-  # init-phase temporary server (socket-only), which then SHUTS DOWN to restart
-  # the real server — so a single CREATE EXTENSION races into "the database system
-  # is shutting down". Retry the actual work until the real server answers; a
-  # transient connection/shutdown error just means "not fully up yet".
-  ready=
+  # The postgres entrypoint's FIRST-init temporary server (socket-only) accepts
+  # connections, runs init, then SHUTS DOWN to restart the real server. Any single
+  # statement can race into "the database system is shutting down" / "starting up"
+  # — including a SELECT issued right after a CREATE that landed on the temp
+  # server. So retry ONE combined `CREATE EXTENSION; SELECT extversion` until the
+  # (stable) server returns a version; a transient failure just means "not fully
+  # up yet". `|| ver=` keeps set -e from aborting on the expected transient errors.
+  ver=
   for _ in $(seq 1 100); do
-    if "$docker_cli" exec cand-db psql -U postgres -d pg_reactive_test -v ON_ERROR_STOP=1 \
-         -c "CREATE EXTENSION IF NOT EXISTS pg_reactive" >/dev/null 2>&1; then
-      ready=1; break
-    fi
+    ver="$("$docker_cli" exec cand-db psql -U postgres -d pg_reactive_test -tAc \
+      "CREATE EXTENSION IF NOT EXISTS pg_reactive; SELECT extversion FROM pg_extension WHERE extname='pg_reactive'" 2>/dev/null)" || ver=
+    [ -n "$ver" ] && break
     sleep 3
   done
-  [ -n "$ready" ] || { echo "::error::${plat} postgres never accepted CREATE EXTENSION (boot/init failed)" >&2; exit 1; }
-  ver="$("$docker_cli" exec cand-db psql -U postgres -d pg_reactive_test -tAc "SELECT extversion FROM pg_extension WHERE extname='pg_reactive'")"
-  [ -n "$ver" ] || { echo "::error::pg_reactive did not load in the ${plat} image" >&2; exit 1; }
+  [ -n "$ver" ] || { echo "::error::${plat} postgres never loaded pg_reactive (boot/init failed or extension missing)" >&2; exit 1; }
   "$docker_cli" rm -f cand-db >/dev/null 2>&1 || true
   echo "✓ pgstack-postgres ${plat} boots; pg_reactive ${ver} loaded"
 done
