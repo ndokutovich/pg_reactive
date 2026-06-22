@@ -58,6 +58,11 @@ COPY --from=docs-builder /docs-build/build /docs
 # it unset so downstream `pgstack init` users serve their own SPA; only the
 # pgstack.org apex deployment opts in (examples/docker-compose.prod.yml).
 COPY public/ /public
+# The live example pages (examples/NN/app.html + the shared config.js/demo-panel.js)
+# served under /examples/* on the pgstack.org apex. config.js derives the WS base
+# from location.host, so they talk to whatever host serves them. Inert unless
+# PUBLIC_DIR is set. ~0.5MB of static HTML/JS/SQL — no node_modules.
+COPY examples/ /public/examples
 
 ENV STUDIO_DIR=/studio
 ENV DOCS_DIR=/docs
