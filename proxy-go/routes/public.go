@@ -46,8 +46,21 @@ func PublicSPA(dir string) http.Handler {
 
 		// Check if file exists.
 		info, err := os.Stat(cleanPath)
+		if err == nil && info.IsDir() {
+			// A real directory under the public root → serve its OWN index.html
+			// (dir-index) when present, before any root SPA fallback. Without
+			// this, /examples/apps/todo/ served the apex landing instead of the
+			// example. r.URL.Path keeps the directory form, so http.ServeFile
+			// does not redirect (it only redirects paths ending in /index.html).
+			dirIndex := filepath.Join(cleanPath, "index.html")
+			if di, e := os.Stat(dirIndex); e == nil && !di.IsDir() {
+				setCacheHeaders(w, "index.html")
+				http.ServeFile(w, r, dirIndex)
+				return
+			}
+		}
 		if err != nil || info.IsDir() {
-			// File doesn't exist (or is a directory).
+			// File doesn't exist (or is a directory without its own index.html).
 			// If the path has a file extension, it's a missing asset → 404.
 			if filepath.Ext(urlPath) != "" {
 				http.NotFound(w, r)

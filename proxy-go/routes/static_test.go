@@ -103,3 +103,34 @@ func TestDocsSite_RejectsTraversal(t *testing.T) {
 		t.Fatalf("served unexpected content: %q", rec.Body.String())
 	}
 }
+
+// Regression: a request resolving to a real SUBDIRECTORY that contains its own
+// index.html must serve THAT index.html (dir-index), not fall back to the root
+// index.html. Before the fix, /examples/apps/todo/ served the apex landing
+// (root index.html) instead of the example app — the pgstack.org example links
+// opened the marketing page.
+func TestPublicSPA_ServesSubdirIndex(t *testing.T) {
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "index.html"), []byte("ROOT-LANDING"), 0o644)
+	sub := filepath.Join(tmp, "examples", "apps", "todo")
+	_ = os.MkdirAll(sub, 0o755)
+	_ = os.WriteFile(filepath.Join(sub, "index.html"), []byte("TODO-APP"), 0o644)
+
+	for _, path := range []string{"/examples/apps/todo/", "/examples/apps/todo"} {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		PublicSPA(tmp).ServeHTTP(rec, r)
+		if rec.Code != http.StatusOK || rec.Body.String() != "TODO-APP" {
+			t.Fatalf("%s: got code=%d body=%q, want 200 + the subdir index (TODO-APP)", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	// A genuine client-side route (no real dir, no extension) still falls back to
+	// the root index.html — SPA behaviour preserved.
+	r := httptest.NewRequest(http.MethodGet, "/some/spa/route", nil)
+	rec := httptest.NewRecorder()
+	PublicSPA(tmp).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK || rec.Body.String() != "ROOT-LANDING" {
+		t.Fatalf("SPA route: got code=%d body=%q, want 200 + ROOT-LANDING", rec.Code, rec.Body.String())
+	}
+}
