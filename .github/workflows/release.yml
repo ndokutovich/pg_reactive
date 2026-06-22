@@ -176,7 +176,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      # No id-token: --provenance is disabled (private repo — see Publish step).
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -197,11 +197,13 @@ jobs:
           # dist-tag from the execution-tested npm-dist-tag.sh (pre-release -> next,
           # never latest). $GITHUB_WORKSPACE is the repo root (working-directory is the package).
           NPM_TAG="$(bash "$GITHUB_WORKSPACE/.github/scripts/npm-dist-tag.sh" "$GITHUB_REF_NAME")"
-          # --provenance is kept (npm audit signatures attestation). It needs clean
-          # egress to fulcio/oauth2.sigstore.dev, which the self-hosted runner's
-          # TLS-intercepting proxy breaks — so this job runs on ubuntu-latest
-          # (GitHub-hosted, clean egress + ephemeral), see runs-on above.
-          npm publish --provenance --access public --tag "$NPM_TAG"
+          # No --provenance: npm/sigstore provenance requires a PUBLIC source repo,
+          # but this repo is private (422 "Unsupported GitHub Actions source
+          # repository visibility: private"). Publish without attestation —
+          # consumers can't rely on `npm audit signatures` for these packages
+          # (documented in SECURITY.md inv 23). Restore --provenance if the repo
+          # ever goes public.
+          npm publish --access public --tag "$NPM_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -211,7 +213,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      # No id-token: --provenance is disabled (private repo — see Publish step).
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -232,11 +234,13 @@ jobs:
           # dist-tag from the execution-tested npm-dist-tag.sh (pre-release -> next,
           # never latest). $GITHUB_WORKSPACE is the repo root (working-directory is the package).
           NPM_TAG="$(bash "$GITHUB_WORKSPACE/.github/scripts/npm-dist-tag.sh" "$GITHUB_REF_NAME")"
-          # --provenance is kept (npm audit signatures attestation). It needs clean
-          # egress to fulcio/oauth2.sigstore.dev, which the self-hosted runner's
-          # TLS-intercepting proxy breaks — so this job runs on ubuntu-latest
-          # (GitHub-hosted, clean egress + ephemeral), see runs-on above.
-          npm publish --provenance --access public --tag "$NPM_TAG"
+          # No --provenance: npm/sigstore provenance requires a PUBLIC source repo,
+          # but this repo is private (422 "Unsupported GitHub Actions source
+          # repository visibility: private"). Publish without attestation —
+          # consumers can't rely on `npm audit signatures` for these packages
+          # (documented in SECURITY.md inv 23). Restore --provenance if the repo
+          # ever goes public.
+          npm publish --access public --tag "$NPM_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
