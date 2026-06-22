@@ -16,7 +16,7 @@ jobs:
   # this one, so a missing/failed CI run for the tagged SHA aborts the release.
   ci-gate:
     name: Require green CI for the tagged commit
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
@@ -45,7 +45,7 @@ jobs:
   docker-proxy:
     name: Docker — pgstack-proxy
     needs: ci-gate
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -91,7 +91,7 @@ jobs:
   docker-proxy-rust:
     name: Docker — pgstack-proxy-rust
     needs: ci-gate
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -131,7 +131,7 @@ jobs:
   docker-postgres:
     name: Docker — pgstack-postgres
     needs: ci-gate
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -173,7 +173,7 @@ jobs:
   npm-sdk:
     name: npm — @pgstack/sdk
     needs: ci-gate
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -197,17 +197,18 @@ jobs:
           # dist-tag from the execution-tested npm-dist-tag.sh (pre-release -> next,
           # never latest). $GITHUB_WORKSPACE is the repo root (working-directory is the package).
           NPM_TAG="$(bash "$GITHUB_WORKSPACE/.github/scripts/npm-dist-tag.sh" "$GITHUB_REF_NAME")"
-          # No --provenance: it requires reaching fulcio.sigstore.dev over a clean
-          # TLS chain, which this self-hosted runner's network intercepts
-          # (self-signed cert in chain) — it fails CA_CREATE_SIGNING_CERTIFICATE_ERROR.
-          npm publish --access public --tag "$NPM_TAG"
+          # --provenance is kept (npm audit signatures attestation). It needs clean
+          # egress to fulcio/oauth2.sigstore.dev, which the self-hosted runner's
+          # TLS-intercepting proxy breaks — so this job runs on ubuntu-latest
+          # (GitHub-hosted, clean egress + ephemeral), see runs-on above.
+          npm publish --provenance --access public --tag "$NPM_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   npm-cli:
     name: npm — pgstack CLI
     needs: ci-gate
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -231,17 +232,18 @@ jobs:
           # dist-tag from the execution-tested npm-dist-tag.sh (pre-release -> next,
           # never latest). $GITHUB_WORKSPACE is the repo root (working-directory is the package).
           NPM_TAG="$(bash "$GITHUB_WORKSPACE/.github/scripts/npm-dist-tag.sh" "$GITHUB_REF_NAME")"
-          # No --provenance: it requires reaching fulcio.sigstore.dev over a clean
-          # TLS chain, which this self-hosted runner's network intercepts
-          # (self-signed cert in chain) — it fails CA_CREATE_SIGNING_CERTIFICATE_ERROR.
-          npm publish --access public --tag "$NPM_TAG"
+          # --provenance is kept (npm audit signatures attestation). It needs clean
+          # egress to fulcio/oauth2.sigstore.dev, which the self-hosted runner's
+          # TLS-intercepting proxy breaks — so this job runs on ubuntu-latest
+          # (GitHub-hosted, clean egress + ephemeral), see runs-on above.
+          npm publish --provenance --access public --tag "$NPM_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # ─── GitHub Release ──────────────────────────────────────────────────────────
   github-release:
     name: GitHub Release
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     needs: [docker-proxy, docker-proxy-rust, docker-postgres, npm-sdk, npm-cli]
     permissions:
       contents: write
