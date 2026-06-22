@@ -25,7 +25,7 @@ for plat in linux/amd64 linux/arm64; do
   set -e
   echo "$out"
   [ "$status" -ne 0 ] || { echo "::error::${plat} proxy ACCEPTED a placeholder JWT_SECRET in production" >&2; exit 1; }
-  echo "$out" | grep -qF "JWT_SECRET still contains 'dev-only'" \
+  echo "$out" | grep -qF "JWT_SECRET is a publicly-known placeholder" \
     || { echo "::error::${plat} proxy did not reach its production validator (no JWT_SECRET rejection — missing binary / loader error / panic?)" >&2; exit 1; }
   echo "✓ pgstack-proxy ${plat} ran its production validator and rejected the placeholder secret"
 done
