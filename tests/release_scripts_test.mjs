@@ -96,6 +96,7 @@ echo "$*" >> "${bashPath(dockerLog)}"
 case "$*" in
   *"imagetools inspect"*) echo '{"mediaType":"x","digest":"sha256:deadbeefcafe0123456789abcdef0123456789abcdef0123456789abcdef0123","size":1}' ;;
   *"SELECT extversion"*) echo "0.1.7" ;;
+  *"logs"*) echo "pgstack listening (HTTP)" ;;
   *"run --rm"*) echo "PGSTACK_ENV=production: JWT_SECRET still contains 'dev-only' — generate a real key | JWT_SECRET is a publicly-known placeholder — generate a real key"; exit 1 ;;
   *) : ;;
 esac
@@ -141,6 +142,12 @@ resetLog();
 const smR = run("smoke-proxy-rust.sh", ["ghcr.io/o/pgstack-proxy-rust@sha256:abc"], { env: { ...process.env, DOCKER_CLI: bashPath(dockerStub) } });
 ok(smR.code === 0, "smoke-proxy-rust.sh passes when the Rust validator rejects the placeholder secret");
 ok(/run --rm[\s\S]*linux\/amd64/.test(log()) && /run --rm[\s\S]*linux\/arm64/.test(log()), "smoke-proxy-rust runs the validator on BOTH amd64+arm64");
+// smoke-all-in-one: boots the single container, waits for the proxy "listening"
+// log line, and loads pg_reactive — on both arches.
+resetLog();
+const smA = run("smoke-all-in-one.sh", ["ghcr.io/o/pgstack-all-in-one@sha256:abc"], { env: { ...process.env, DOCKER_CLI: bashPath(dockerStub) } });
+ok(smA.code === 0, "smoke-all-in-one.sh passes when the container boots PG + extension + proxy");
+ok(/run -d[\s\S]*linux\/amd64/.test(log()) && /run -d[\s\S]*linux\/arm64/.test(log()) && /CREATE EXTENSION/.test(log()), "smoke-all-in-one boots BOTH arches AND loads pg_reactive");
 rmSync(dk, { recursive: true, force: true });
 
 if (fail) { console.error(`\nFAIL: ${fail} release-script execution test(s) failed.`); process.exit(1); }

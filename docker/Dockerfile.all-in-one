@@ -5,10 +5,11 @@
 # │ This image CO-LOCATES PostgreSQL and the proxy in one container, so a proxy │
 # │ compromise can reach the database directly: the "proxy runs as a powerless  │
 # │ role, never the superuser" guarantee (SECURITY.md invariant 22) holds only  │
-# │ across the container boundary of the SPLIT deployment. It also builds on     │
-# │ mutable base tags and does NOT go through the build-once / promote-by-digest │
-# │ release pipeline (which publishes only pgstack-proxy + pgstack-postgres).    │
-# │ For multi-tenant production use the split GHCR images — docker-compose.prod. │
+# │ across the container boundary of the SPLIT deployment. It IS published        │
+# │ through the build-once / promote-by-digest release pipeline as the            │
+# │ `pgstack-all-in-one` image (digest-pinned bases, same as the split images) —  │
+# │ but as a DEMO / SINGLE-TENANT quickstart, NOT the hardened split posture.     │
+# │ For multi-tenant production use the split GHCR images — docker-compose.prod.  │
 # │ yml. Use this all-in-one for demos and single-tenant hobby deployments.      │
 # └────────────────────────────────────────────────────────────────────────────┘
 #
@@ -26,7 +27,7 @@
 # Deployment setup: ship an executable /app/post-init.sh (see the entrypoint).
 
 # ── Stage 1: pgstack Go proxy ────────────────────────────────────────────────
-FROM golang:1.23-bookworm AS proxy-builder
+FROM golang:1.25.11-bookworm@sha256:60cdd53a9656379b55681e2832cbf29ca1bffca1e6e8263b41d3b50aca826191 AS proxy-builder
 WORKDIR /app
 ENV GOTOOLCHAIN=auto
 COPY proxy-go/go.mod proxy-go/go.sum ./
@@ -35,7 +36,7 @@ COPY proxy-go/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o pgstack-proxy .
 
 # ── Stage 2: all-in-one runtime ──────────────────────────────────────────────
-FROM postgres:16-bookworm
+FROM postgres:16-bookworm@sha256:a0fd72825431f4b7fd3f9d5def9f370b9c22012f1a9e37ece1a5749b95333fb7
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential postgresql-server-dev-16 ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*

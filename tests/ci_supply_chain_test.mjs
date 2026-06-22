@@ -378,7 +378,7 @@ const SCRIPT_TEST = "tests/release_scripts_test.mjs";
 const scriptTestSrc = existsSync(SCRIPT_TEST) ? readFileSync(SCRIPT_TEST, "utf-8") : "";
 function scriptsContract() {
   const v = [];
-  const all = ["validate-release-version.sh", "require-green-ci.sh", "npm-dist-tag.sh", "compute-docker-tags.sh", "promote-image.sh", "smoke-postgres.sh", "smoke-proxy.sh", "smoke-proxy-rust.sh"];
+  const all = ["validate-release-version.sh", "require-green-ci.sh", "npm-dist-tag.sh", "compute-docker-tags.sh", "promote-image.sh", "smoke-postgres.sh", "smoke-proxy.sh", "smoke-proxy-rust.sh", "smoke-all-in-one.sh"];
   for (const s of all) if (!existsSync(SCRIPTS_DIR + s)) v.push("missing gate script .github/scripts/" + s);
   // EVERY script must be exercised by the execution test — the deterministic ones
   // directly, the Docker-bound ones (promote/smoke) via a stubbed docker, so a
@@ -539,7 +539,7 @@ function releasePolicy(wf) {
   // OWN repo — the digest-resolution + tag-set logic is in promote-image.sh /
   // compute-docker-tags.sh (the latter execution-tested). The promote step must be
   // enabled (real shell, if fires, not coe) — R27.
-  for (const img of ["pgstack-proxy", "pgstack-proxy-rust", "pgstack-postgres"]) {
+  for (const img of ["pgstack-proxy", "pgstack-proxy-rust", "pgstack-postgres", "pgstack-all-in-one"]) {
     const imgRe = new RegExp("promote-image\\.sh[^\\n]*" + img + "\\b");
     const promoters = Object.entries(jobs).filter(([, j]) => (j.steps || []).some((s) => imgRe.test(lr(s.run))));
     if (!promoters.length) { v.push("no job promotes " + img + " via promote-image.sh"); continue; }
@@ -707,7 +707,7 @@ function candidatePolicy(wf) {
   const FULL_SUITE = ["test-extension", "test-proxy-go", "test-proxy", "test-sdk", "test-cli", "test-security", "test-prod-validator", "test-e2e", "test-integration", "test-async-bgworker", "security"];
   const nd = needsOf(cj);
   for (const g of FULL_SUITE) if (!nd.includes(g)) v.push(cn + ": candidate is not gated on '" + g + "'");
-  const IMAGES = [{ img: "pgstack-proxy", file: "./proxy-go/Dockerfile" }, { img: "pgstack-proxy-rust", file: "./proxy/Dockerfile" }, { img: "pgstack-postgres", file: "./Dockerfile.dev" }];
+  const IMAGES = [{ img: "pgstack-proxy", file: "./proxy-go/Dockerfile" }, { img: "pgstack-proxy-rust", file: "./proxy/Dockerfile" }, { img: "pgstack-postgres", file: "./Dockerfile.dev" }, { img: "pgstack-all-in-one", file: "./docker/Dockerfile.all-in-one" }];
   // Map each image to the id of ITS build-push-action step — the ONLY legit source
   // of steps.<id>.outputs.digest. A build with no id can't be referenced; a digest
   // consumed from a different id (a decoy step that writes digest=sha256:… to
@@ -736,6 +736,7 @@ function candidatePolicy(wf) {
   const pgSmoke = idx(/smoke-postgres\.sh/);
   const pxSmoke = idx(/smoke-proxy\.sh/); // smoke-proxy.sh — NOT smoke-proxy-rust.sh (the `\.` after proxy excludes it)
   const rsSmoke = idx(/smoke-proxy-rust\.sh/);
+  const aioSmoke = idx(/smoke-all-in-one\.sh/);
   const tagIdx = idx(/imagetools\s+create[^\n]*:sha-\$\{\{\s*github\.sha/);
   // each smoke must be passed the EXACT built @digest — not a mutable tag like
   // :latest or :sha-… (smoking the wrong bytes) — gemini R29.
@@ -745,17 +746,19 @@ function candidatePolicy(wf) {
   else { for (const r of stepDisabled(steps[pxSmoke], PUSH_MASTER)) v.push(cn + " (proxy smoke) " + r); for (const r of bareCall(steps[pxSmoke], "smoke-proxy.sh")) v.push(cn + " (proxy smoke) " + r); if (!digestRe("pgstack-proxy").test(lr(steps[pxSmoke].run))) v.push(cn + ": smoke-proxy is not passed pgstack-proxy@${{ steps." + (buildId["pgstack-proxy"] || "*") + ".outputs.digest }} (not THIS image's build digest — a mutable tag or a decoy step's output)"); }
   if (rsSmoke < 0) v.push(cn + ": does not call smoke-proxy-rust.sh (the Rust sibling proxy digest would ship unsmoked)");
   else { for (const r of stepDisabled(steps[rsSmoke], PUSH_MASTER)) v.push(cn + " (proxy-rust smoke) " + r); for (const r of bareCall(steps[rsSmoke], "smoke-proxy-rust.sh")) v.push(cn + " (proxy-rust smoke) " + r); if (!digestRe("pgstack-proxy-rust").test(lr(steps[rsSmoke].run))) v.push(cn + ": smoke-proxy-rust is not passed pgstack-proxy-rust@${{ steps." + (buildId["pgstack-proxy-rust"] || "*") + ".outputs.digest }} (not THIS image's build digest — a mutable tag or a decoy step's output)"); }
+  if (aioSmoke < 0) v.push(cn + ": does not call smoke-all-in-one.sh (the all-in-one digest would ship unsmoked)");
+  else { for (const r of stepDisabled(steps[aioSmoke], PUSH_MASTER)) v.push(cn + " (all-in-one smoke) " + r); for (const r of bareCall(steps[aioSmoke], "smoke-all-in-one.sh")) v.push(cn + " (all-in-one smoke) " + r); if (!digestRe("pgstack-all-in-one").test(lr(steps[aioSmoke].run))) v.push(cn + ": smoke-all-in-one is not passed pgstack-all-in-one@${{ steps." + (buildId["pgstack-all-in-one"] || "*") + ".outputs.digest }} (not THIS image's build digest — a mutable tag or a decoy step's output)"); }
   if (tagIdx < 0) v.push(cn + ": does not create the sha-${{ github.sha }} tag release resolves");
   else {
     for (const r of stepDisabled(steps[tagIdx], PUSH_MASTER)) v.push(cn + " (sha-tag) " + r);
-    if (pgSmoke < 0 || pxSmoke < 0 || rsSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke || tagIdx < rsSmoke) v.push(cn + ": sha-${{ github.sha }} is created before all smokes pass (tag-after-smoke order)");
+    if (pgSmoke < 0 || pxSmoke < 0 || rsSmoke < 0 || aioSmoke < 0 || tagIdx < pgSmoke || tagIdx < pxSmoke || tagIdx < rsSmoke || tagIdx < aioSmoke) v.push(cn + ": sha-${{ github.sha }} is created before all smokes pass (tag-after-smoke order)");
     // EVERY `imagetools create … <img>:sha-${{github.sha}}` line — across ALL steps,
     // not just the canonical tag step — must source THIS image's build digest
     // (steps.<buildId>.outputs.digest, same image repo). A later step (or a 2nd
     // line) re-creating the sha tag from :latest / a foreign digest would otherwise
     // OVERWRITE the smoke-passed manifest, last-writer-wins (R32 + R33 + R34).
     const tagCmds = steps.flatMap((s) => shellCommands(lr(s.run)));
-    for (const img of ["pgstack-proxy", "pgstack-proxy-rust", "pgstack-postgres"]) {
+    for (const img of ["pgstack-proxy", "pgstack-proxy-rust", "pgstack-postgres", "pgstack-all-in-one"]) {
       const shaTagRe = new RegExp(img + ":sha-\\$\\{\\{\\s*github\\.sha\\b");
       // a sha-tag-DEFINING command — `imagetools create`, `manifest create`, or
       // `docker tag` — must source THIS image's build digest, whichever primitive
@@ -789,7 +792,7 @@ function candidatePolicy(wf) {
   // name — `IMG=pgstack-proxy; … -t "${IMAGE_PREFIX}/${IMG}:sha-…"` hides the literal
   // repo from both `created` and the allowlist yet expands to re-point the real tag —
   // so ANY `$IMG`/`$REPO`/`${…}` in the repo or tag of target/source fails closed (R49).
-  const CANON_TARGET = /^\$\{IMAGE_PREFIX\}\/pgstack-(proxy-rust|proxy|postgres):sha-\$\{\{\s*github\.sha\s*\}\}$/;
+  const CANON_TARGET = /^\$\{IMAGE_PREFIX\}\/pgstack-(proxy-rust|proxy|postgres|all-in-one):sha-\$\{\{\s*github\.sha\s*\}\}$/;
   // Exact argv shape — not just operand validation. The prefix must be ONLY
   // `docker`/`buildx` launchers (no `--context`/`--builder` etc. that redirect the
   // daemon), and after `create` the ONLY tokens may be `-t <target>` (once) and one
@@ -820,7 +823,7 @@ function candidatePolicy(wf) {
     if (mutatesCIState(argv)) return false; // $GITHUB_PATH/$GITHUB_ENV write or PATH/DOCKER_CLI/… mutation (R51)
     if (hasCmdSub(argv)) return false; // $()/backtick runs a side command before the host (R43)
     if (isNoopHead(effHead(argv))) return true;
-    if (isScriptCommand(argv, /\.github\/scripts\/smoke-(?:postgres|proxy-rust|proxy)\.sh/)) return true;
+    if (isScriptCommand(argv, /\.github\/scripts\/smoke-(?:postgres|proxy-rust|proxy|all-in-one)\.sh/)) return true;
     if (seqIn(argv, ["docker", "rm"])) return true;
     if (seqIn(argv, ["imagetools", "create"])) return canonicalCreate(argv);
     return false;
@@ -1172,6 +1175,14 @@ mut("release docker-proxy-rust promotes the proxy repo (not proxy-rust)", releas
 mut("release converts the postgres GHCR promote into a Docker-Hub-only mirror (no GHCR publish)", release, (w) => { const s = findStep(w, "docker-postgres", /promote-image\.sh/); s.run = 'TARGET_REPO="docker.io/u/pgstack-postgres" ' + s.run; }, releasePolicy);
 mut("release postgres Docker Hub mirror set continue-on-error", release, (w) => { findStep(w, "docker-postgres", /TARGET_REPO=/)["continue-on-error"] = true; }, releasePolicy);
 mut("release postgres Docker Hub mirror not SHA-pinned (foreign commit)", release, (w) => { const s = findStep(w, "docker-postgres", /TARGET_REPO=/); s.run = s.run.replace(/\$\{\{\s*github\.sha\s*\}\}/, "deadbeef"); }, releasePolicy);
+// R54 — the all-in-one (pgstack-all-in-one) is a published quickstart image: built
+// + smoked + promoted like the rest (demo posture, but the supply-chain gates apply).
+mut("ci candidate drops the all-in-one build", ci, (w) => { const j = w.jobs["build-publish-images"]; j.steps = j.steps.filter((st) => String(st.with?.file) !== "./docker/Dockerfile.all-in-one"); }, candidatePolicy);
+mut("ci candidate all-in-one build push: false", ci, (w) => { w.jobs["build-publish-images"].steps.find((st) => String(st.with?.file) === "./docker/Dockerfile.all-in-one").with.push = false; }, candidatePolicy);
+mut("ci candidate drops the all-in-one smoke", ci, (w) => { findStep(w, "build-publish-images", /smoke-all-in-one\.sh/).run = "echo skip"; }, candidatePolicy);
+mut("ci candidate all-in-one sha-tag sourced from a mutable :latest", ci, (w) => { const s = findStep(w, "build-publish-images", /imagetools create[^\n]*pgstack-all-in-one:sha-/); s.run = s.run.replace(/pgstack-all-in-one@\$\{\{\s*steps\.all_in_one\.outputs\.digest\s*\}\}/, "pgstack-all-in-one:latest"); }, candidatePolicy);
+mut("release drops the all-in-one promote", release, (w) => { findStep(w, "docker-all-in-one", /promote-image\.sh/).run = "echo skip"; }, releasePolicy);
+mut("release docker-all-in-one promotes the wrong repo", release, (w) => { const s = findStep(w, "docker-all-in-one", /promote-image\.sh/); s.run = s.run.replace(/pgstack-all-in-one/g, "pgstack-proxy"); }, releasePolicy);
 
 if (fail) {
   console.error(`\nFAIL: ${fail} — CI/CD supply-chain gating regressed or the guard missed a known mutation.`);
