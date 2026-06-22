@@ -102,6 +102,12 @@ services:
       # /ws, /docs, /studio, /functions) take precedence; / and unmatched paths
       # fall back to the landing. Reached via the `pgstack-landing` gateway alias.
       PUBLIC_DIR: /public
+      # The /examples/* pages are hand-written teaching demos with inline <script>
+      # blocks, so the public CSP must allow 'unsafe-inline' for script-src. Safe
+      # here: PUBLIC_DIR serves only static, non-user-generated content (landing +
+      # examples). The flag scopes 'unsafe-inline' to the public static handler;
+      # the API/auth/WS routes keep the strict default CSP.
+      PUBLIC_ALLOW_INLINE_SCRIPTS: "true"
     networks:
       default:
       gateway:
