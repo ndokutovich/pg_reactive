@@ -49,8 +49,15 @@ RUN make -C /tmp/ext clean && make -C /tmp/ext && make -C /tmp/ext install \
 # The stock postgres entrypoint regenerates postgresql.conf from the sample on
 # first init — patch the sample so PostgreSQL listens on TCP for the
 # in-container proxy (and any sibling worker containers). It is never
-# host-exposed unless the deployment maps a port.
-RUN echo "listen_addresses = '*'" >> /usr/share/postgresql/postgresql.conf.sample
+# host-exposed unless the deployment maps a port. shared_preload_libraries is
+# baked in too: pg_reactive installs hooks + an optional bgworker in _PG_init, so
+# without it `CREATE EXTENSION` succeeds but the first pgr.subscribe CRASHES the
+# backend — a bare `docker run pgstack-all-in-one` quickstart must do live queries
+# out of the box, not only when a compose `command:` happens to pass the GUC.
+RUN { \
+      echo "listen_addresses = '*'"; \
+      echo "shared_preload_libraries = 'pg_reactive'"; \
+    } >> /usr/share/postgresql/postgresql.conf.sample
 
 COPY --from=proxy-builder /app/pgstack-proxy /usr/local/bin/pgstack-proxy
 COPY docker/init.sql /docker-entrypoint-initdb.d/01-init.sql
