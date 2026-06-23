@@ -56,10 +56,14 @@ docker network create "$NET" >/dev/null
 
 # ── Backend: the all-in-one, dev mode with anon WS enabled ───────────────────
 echo "=== starting backend ==="
+# pg_reactive REQUIRES shared_preload_libraries (it installs hooks + an optional
+# bgworker in _PG_init) — without it, CREATE EXTENSION succeeds but the FIRST
+# pgr.subscribe crashes the backend. The all-in-one forwards its CMD args to
+# postgres, so pass the GUC there (deployments do this via compose `command:`).
 docker run -d --name "$BACKEND" --network "$NET" \
   -e PGSTACK_ENV=development -e POSTGRES_PASSWORD=postgres \
   -e JWT_SECRET="$JWT" -e ANON_KEY="$ANON" -e REQUIRE_AUTHENTICATED_WS=false \
-  "$AIO_IMAGE" >/dev/null
+  "$AIO_IMAGE" -c shared_preload_libraries=pg_reactive >/dev/null
 
 # "pgstack listening" is the proxy's last-mile readiness: it only starts the
 # HTTP listener after PostgreSQL is up, the pgr schema is present, and both
