@@ -15,7 +15,9 @@ set -euo pipefail
 
 img="${1:?usage: smoke-all-in-one.sh <image-ref>}"
 docker_cli="${DOCKER_CLI:-docker}"
-for plat in linux/amd64 linux/arm64; do
+# amd64-only: the all-in-one image is built for linux/amd64 only (its arm64 QEMU
+# build hangs the candidate — see ci.yml). The split images smoke both arches.
+for plat in linux/amd64; do
   echo "=== pgstack-all-in-one smoke on ${plat} ==="
   "$docker_cli" rm -f cand-aio >/dev/null 2>&1 || true
   # Dev mode: the proxy fail-closes in production without real secrets; this smoke
