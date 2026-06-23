@@ -309,12 +309,5 @@
   </div>
 </footer>
 
-<script>
-// Examples are served by a separate web server (port 3000).
-// Rewrite example links to use the correct port on the same host.
-document.querySelectorAll('.example-card').forEach(function(a) {
-  a.href = location.protocol + '//' + location.hostname + ':3000' + new URL(a.href).pathname.replace('/examples/', '/');
-});
-</script>
 </body>
 </html>
