@@ -713,10 +713,13 @@ jobs:
   build-publish-images:
     name: Publish release-candidate images
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    # Multi-arch (amd64 + arm64-via-QEMU) builds of three images are slow under
-    # emulation; give them an explicit, generous budget so a slow-but-healthy
-    # build is never killed mid-flight by an implicit/default cap.
-    timeout-minutes: 120
+    # Multi-arch (amd64 + arm64-via-QEMU) builds are slow under emulation —
+    # proxy-rust's arm64 cargo build alone can take ~60 min. A timeout does NOT
+    # honour continue-on-error: a timed-out job is CANCELLED, and a cancelled job
+    # cancels the whole CI run, which makes deploy.yml's "CI is green" gate skip
+    # (the exact coupling the continue-on-error below is meant to prevent). So the
+    # budget must comfortably exceed the slowest healthy run, not just barely fit.
+    timeout-minutes: 240
     # Image publishing is DISTRIBUTION, not a quality gate. A flaky push to GHCR
     # (runner network) must not redden CI and thereby block deploys of an
     # otherwise-green commit (deploy.yml gates on CI conclusion). Release safety is
