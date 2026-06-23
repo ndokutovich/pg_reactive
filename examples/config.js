@@ -43,6 +43,18 @@
     base = m ? m[1] : '';
   }
 
+  // The example HTML can be served as a static SUBPATH (e.g. /examples on the
+  // pgstack.org apex) of a deployment whose API/WS/auth live at the deployment
+  // ROOT — but the auto-detected base above points at the static-examples
+  // subpath, so backend calls would hit /examples/auth, /examples/ws, … (404).
+  // Strip a trailing /examples segment from an AUTO-DETECTED base so the backend
+  // base is the deployment root. An explicit PGR_BASE is honoured verbatim.
+  // (Co-located layouts — local web/nginx at root, or /pg-reactive/examples —
+  // are handled too: '' stays '', /pg-reactive/examples -> /pg-reactive.)
+  if (typeof window.PGR_BASE !== 'string') {
+    base = base.replace(/\/examples$/, '');
+  }
+
   var wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   var anonKey = typeof window.PGR_ANON_KEY === 'string' ? window.PGR_ANON_KEY : 'anon-key-12345';
   var apiBase = location.origin + base + '/api';
