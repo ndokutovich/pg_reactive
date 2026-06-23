@@ -1,0 +1,48 @@
+name: CLI+SDK e2e
+
+# Dogfood: prove the packaged CLI + SDK work end-to-end (scaffold → compile →
+# live query against the all-in-one). A SEPARATE workflow on purpose — it does NOT
+# feed deploy.yml's "CI is green" gate, so a flaky dockerised e2e can never block a
+# deploy. Runs on ubuntu-latest (clean + isolated): the self-hosted runners are
+# usually saturated, which starves the co-located PostgreSQL.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "local | published"
+        default: local
+      version:
+        description: "npm/docker tag (published mode)"
+        default: latest
+
+permissions:
+  contents: read
+
+jobs:
+  dogfood:
+    name: CLI scaffold + SDK live-query
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      # Local mode npm-packs cli/ + sdk/, so their dist must be built first.
+      - name: Install + build CLI and SDK
+        run: |
+          (cd cli && npm ci && npm run build)
+          (cd sdk && npm ci && npm run build)
+
+      - name: Dogfood (scaffold + compile + live delta)
+        run: bash tests/e2e_cli_sdk/runner.sh
+        env:
+          SOURCE: ${{ github.event.inputs.source || 'local' }}
+          VERSION: ${{ github.event.inputs.version || 'latest' }}
