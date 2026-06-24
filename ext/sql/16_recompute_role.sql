@@ -1,0 +1,60 @@
+-- 16_recompute_role: the BATCH pre-commit recompute (pgr_xact_callback) must run
+-- as the pgr-schema owner (the extension owner) — the same identity
+-- pgr.trigger_func() runs under via SECURITY DEFINER — NOT GetSessionUserId().
+--
+-- Under the two-login-role proxy model the session/login role is `authenticator`
+-- (or `authenticator_admin`): NOSUPERUSER, NOINHERIT, with NO direct grants
+-- (privileges arrive only via SET ROLE). If the batch callback recomputes as the
+-- SESSION user, the recompute's reads of the source tables and DELETE/INSERT on
+-- pgr._snap_* fail with `permission denied` (SQLSTATE 42501), so ANY write
+-- through the proxy into a table that has a live pgr subscription fails.
+--
+-- SET ROLE does NOT change the session user, so this test reconnects (\c) as a
+-- deliberately powerless LOGIN role to make GetSessionUserId() return it.
+\set VERBOSITY terse
+
+CREATE EXTENSION pg_reactive;
+
+-- Source tables + a cross-table subscription so recompute must READ rr_child
+-- (a table the powerless session role is NOT granted on) and write pgr._snap_*.
+CREATE TABLE rr_parent (id serial PRIMARY KEY, label text);
+CREATE TABLE rr_child  (id serial PRIMARY KEY, parent_id int, val int);
+INSERT INTO rr_parent (label) VALUES ('seed');
+INSERT INTO rr_child (parent_id, val) VALUES (1, 100);
+
+SELECT (pgr.subscribe('rr_join_q',
+  'SELECT p.id, p.label, c.val FROM rr_parent p JOIN rr_child c ON c.parent_id = p.id'))
+  AS subscribe_result;
+
+-- A powerless login role: it can INSERT into rr_parent only. It has NO grant on
+-- rr_child and NO grant on pgr._snap_rr_join_q — exactly the proxy's
+-- `authenticator` posture (no inherited privileges).
+CREATE ROLE rr_session LOGIN NOINHERIT;
+GRANT USAGE ON SCHEMA public TO rr_session;
+GRANT INSERT, SELECT ON rr_parent TO rr_session;
+GRANT USAGE, SELECT ON SEQUENCE rr_parent_id_seq TO rr_session;
+
+-- Reconnect so the SESSION user becomes the powerless role (trust auth on the
+-- local socket in the dev container). The INSERT fires the AFTER STATEMENT
+-- trigger (batch mode: just enqueues), and the pre-commit batch callback then
+-- recomputes. Pre-fix it recomputes as rr_session -> permission denied.
+\c - rr_session
+INSERT INTO rr_parent (label) VALUES ('x');
+
+-- Back to the superuser to assert the write landed and the snapshot recomputed.
+\c - postgres
+SELECT count(*) AS x_rows FROM rr_parent WHERE label = 'x';
+
+-- Snapshot still matches the live query (recompute succeeded as the pgr owner).
+SELECT count(*) AS snap_drift FROM (
+  (SELECT p.id, p.label, c.val FROM rr_parent p JOIN rr_child c ON c.parent_id = p.id)
+  EXCEPT
+  (SELECT * FROM pgr."_snap_rr_join_q")
+) t;
+
+-- Cleanup.
+SELECT pgr.unsubscribe('rr_join_q');
+DROP TABLE rr_parent, rr_child;
+DROP OWNED BY rr_session;
+DROP ROLE rr_session;
+DROP EXTENSION pg_reactive;

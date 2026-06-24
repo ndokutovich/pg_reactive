@@ -6,6 +6,7 @@
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_trigger.h"
 #include "commands/async.h"
 #include "commands/trigger.h"
@@ -16,6 +17,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 #include "pg_reactive.h"
 #include "invalidation.h"
@@ -925,6 +927,33 @@ run_ddl:
  *
  * SPI is available during PRE_COMMIT because the transaction is still open.
  */
+
+/*
+ * The role the batch recompute must run as: the owner of the pgr schema (the
+ * extension owner), the same identity pgr.trigger_func() runs under via
+ * SECURITY DEFINER. NOT GetSessionUserId() — under the two-login-role proxy
+ * (authenticator / authenticator_admin, both NOSUPERUSER NOINHERIT login roles
+ * with no direct grants) the session user is powerless, so the recompute's
+ * reads of the source + pgr._snap_* tables fail with permission denied.
+ * Falls back to the session user if pgr is somehow absent.
+ */
+static Oid
+pgr_recompute_user(void)
+{
+	Oid			nsp = get_namespace_oid("pgr", true);
+	HeapTuple	tup;
+	Oid			owner;
+
+	if (!OidIsValid(nsp))
+		return GetSessionUserId();
+	tup = SearchSysCache1(NAMESPACEOID, ObjectIdGetDatum(nsp));
+	if (!HeapTupleIsValid(tup))
+		return GetSessionUserId();
+	owner = ((Form_pg_namespace) GETSTRUCT(tup))->nspowner;
+	ReleaseSysCache(tup);
+	return owner;
+}
+
 static void
 pgr_xact_callback(XactEvent event, void *arg)
 {
@@ -944,19 +973,22 @@ pgr_xact_callback(XactEvent event, void *arg)
 				int		saved_sec_context;
 
 				/*
-				 * The proxy may have done SET LOCAL ROLE authenticated, which
-				 * would cause SPI queries to run as 'authenticated' — a role
-				 * that lacks privileges on internal pgr snapshot tables.
+				 * The outer transaction may be running as any role: the proxy
+				 * does SET LOCAL ROLE per request, and its login role is itself
+				 * a powerless NOINHERIT role (authenticator / authenticator_admin)
+				 * under the two-login-role model — neither has privileges on the
+				 * source tables or the internal pgr._snap_* snapshot tables.
 				 *
-				 * Switch to the session user (postgres) so that recompute
-				 * operations (DELETE/INSERT on pgr._snap_* tables) succeed
-				 * regardless of what role the outer transaction uses.
-				 *
-				 * This mirrors what SECURITY DEFINER does for pgr_trigger_func
-				 * in sync mode; we replicate it here for the batch pre-commit path.
+				 * Switch to the pgr-schema owner (the extension owner) so the
+				 * recompute (the temp-table SELECT over the source tables plus
+				 * DELETE/INSERT on pgr._snap_*) succeeds regardless of the outer
+				 * role. This mirrors exactly what SECURITY DEFINER does for
+				 * pgr.trigger_func() in sync mode; we replicate it here for the
+				 * batch pre-commit path. NOT GetSessionUserId(): under the proxy
+				 * the session user is the powerless login role.
 				 */
 				GetUserIdAndSecContext(&saved_user_id, &saved_sec_context);
-				SetUserIdAndSecContext(GetSessionUserId(), saved_sec_context);
+				SetUserIdAndSecContext(pgr_recompute_user(), saved_sec_context);
 
 				SPI_connect();
 				PushActiveSnapshot(GetTransactionSnapshot());
