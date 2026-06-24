@@ -140,7 +140,10 @@ describe('LiveQuery property-based tests', () => {
       }),
       { numRuns: 100 },
     );
-  });
+    // 30s (not the 5s default): 100 LiveQuery constructions are fast in
+    // isolation but the CI runner is CPU-starved when the multi-arch image
+    // candidate + the other parallel test jobs run, starving the event loop.
+  }, 30000);
 
   // Property 2: Token is URL-encoded in query parameter
   it('includes token as URL-encoded query parameter', async () => {
@@ -160,7 +163,7 @@ describe('LiveQuery property-based tests', () => {
       }),
       { numRuns: 100 },
     );
-  });
+  }, 30000);
 
   // Property 3: No token param when token is undefined
   it('omits token param when no token provided', async () => {
