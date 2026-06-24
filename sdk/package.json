@@ -1,6 +1,6 @@
 {
   "name": "@pgstack/sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "TypeScript SDK for pg_reactive live queries",
   "license": "Apache-2.0",
   "type": "module",

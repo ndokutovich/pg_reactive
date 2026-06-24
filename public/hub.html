@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pgStack — Hub</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --muted:#8b949e; --accent:#3fb950; --link:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.5; }
+  .wrap { max-width:900px; margin:0 auto; padding:48px 24px 80px; }
+  h1 { font-size:30px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 36px; }
+  h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:36px 0 12px; border-bottom:1px solid var(--border); padding-bottom:8px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:10px; }
+  a.card { display:block; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 14px; text-decoration:none; color:var(--fg); transition:border-color .12s,transform .12s; }
+  a.card:hover { border-color:var(--link); transform:translateY(-1px); }
+  a.card .name { font-weight:600; color:var(--link); }
+  a.card .desc { color:var(--muted); font-size:13px; margin-top:2px; }
+  code { background:#010409; border:1px solid var(--border); border-radius:5px; padding:2px 6px; font-size:12px; color:#e6edf3; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; }
+  .row a { color:var(--link); text-decoration:none; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:6px 12px; font-size:14px; }
+  .row a:hover { border-color:var(--link); }
+  footer { margin-top:48px; color:var(--muted); font-size:13px; border-top:1px solid var(--border); padding-top:16px; }
+  footer a { color:var(--link); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>pgStack — Hub</h1>
+  <p class="sub">Every entry point in one place. PostgreSQL-native backend: live queries, REST, auth, realtime, edge functions.</p>
+
+  <h2>Sites</h2>
+  <div class="grid">
+    <a class="card" href="https://pgstack.org/"><div class="name">Landing</div><div class="desc">What pgStack is</div></a>
+    <a class="card" href="https://reactive.pgstack.org/docs/"><div class="name">Docs</div><div class="desc">Guides &amp; reference (Docusaurus)</div></a>
+    <a class="card" href="https://pgstack.org/studio/"><div class="name">Studio</div><div class="desc">Admin SPA — tables, SQL, auth, realtime</div></a>
+    <a class="card" href="https://reactive.pgstack.org/"><div class="name">Examples gallery</div><div class="desc">All live pg_reactive demos</div></a>
+  </div>
+
+  <h2>Live examples · pg_reactive</h2>
+  <div class="grid">
+    <a class="card" href="https://reactive.pgstack.org/01-live-products/app.html"><div class="name">01 · Live Product Catalog</div><div class="desc">The simplest end-to-end demo</div></a>
+    <a class="card" href="https://reactive.pgstack.org/02-order-feed/app.html"><div class="name">02 · Order Feed</div><div class="desc">Streaming feed with live status</div></a>
+    <a class="card" href="https://reactive.pgstack.org/03-revenue-dashboard/app.html"><div class="name">03 · Revenue Dashboard</div><div class="desc">Live GROUP BY + rolling charts</div></a>
+    <a class="card" href="https://reactive.pgstack.org/04-category-leaderboard/app.html"><div class="name">04 · Category Leaderboard</div><div class="desc">Window functions, live ranks</div></a>
+    <a class="card" href="https://reactive.pgstack.org/05-realtime-crm/app.html"><div class="name">05 · Real-Time CRM</div><div class="desc">Activity stream, row-level badges</div></a>
+    <a class="card" href="https://reactive.pgstack.org/06-inventory-monitor/app.html"><div class="name">06 · Inventory Monitor</div><div class="desc">Low-stock tripwires</div></a>
+    <a class="card" href="https://reactive.pgstack.org/07-multi-filter/app.html"><div class="name">07 · Multi-Filter Dashboard</div><div class="desc">Many queries, one socket</div></a>
+    <a class="card" href="https://reactive.pgstack.org/08-order-analytics/app.html"><div class="name">08 · Order Analytics</div><div class="desc">Joins &amp; CTEs, live charts</div></a>
+    <a class="card" href="https://reactive.pgstack.org/09-price-comparison/app.html"><div class="name">09 · Price Comparison</div><div class="desc">Live pivot, no polling</div></a>
+    <a class="card" href="https://reactive.pgstack.org/10-executive-scorecard/app.html"><div class="name">10 · Executive Scorecard</div><div class="desc">KPIs from multiple feeds</div></a>
+    <a class="card" href="https://reactive.pgstack.org/11-notify-mode/app.html"><div class="name">11 · Notify Mode</div><div class="desc">notify vs delta, side by side</div></a>
+    <a class="card" href="https://reactive.pgstack.org/12-tutorial/app.html"><div class="name">12 · Interactive Tutorial</div><div class="desc">Subscribe, mutate, watch deltas</div></a>
+  </div>
+
+  <h2>Full-stack apps</h2>
+  <div class="grid">
+    <a class="card" href="https://shop.pgstack.org/"><div class="name">What to Buy</div><div class="desc">Shopping demo</div></a>
+    <a class="card" href="https://reactive.pgstack.org/apps/todo/"><div class="name">Todo</div><div class="desc">Auth + REST + real-time sync</div></a>
+    <a class="card" href="https://reactive.pgstack.org/apps/expenses/"><div class="name">Expenses</div><div class="desc">Multi-user shared ledger</div></a>
+    <a class="card" href="https://polyglot.pgstack.org/"><div class="name">Polyglot Engines</div><div class="desc">6 languages, one schema</div></a>
+  </div>
+
+  <h2>Install</h2>
+  <div class="row">
+    <a href="https://www.npmjs.com/package/pgstack"><code>npx pgstack init</code></a>
+    <a href="https://www.npmjs.com/package/@pgstack/sdk"><code>npm i @pgstack/sdk</code></a>
+    <a href="https://hub.docker.com/r/pgstack/pgstack-all-in-one"><code>docker run pgstack/pgstack-all-in-one</code></a>
+  </div>
+
+  <footer>
+    Source: <a href="https://github.com/ndokutovich/pg_reactive">github.com/ndokutovich/pg_reactive</a> ·
+    Images: <a href="https://hub.docker.com/u/pgstack">Docker Hub</a> · Apache-2.0
+  </footer>
+</div>
+</body>
+</html>
