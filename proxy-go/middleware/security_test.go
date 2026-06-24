@@ -83,6 +83,11 @@ func TestPublicSecurityHeaders_AllowInlineScripts(t *testing.T) {
 	if !strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
 		t.Errorf("allowInlineScripts=true should permit unsafe-inline; got CSP: %s", csp)
 	}
+	// The bundled pg_reactive example pages load Chart.js from jsdelivr — the
+	// demo (inline-scripts) mode must allow that CDN in script-src.
+	if !strings.Contains(csp, "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net") {
+		t.Errorf("allowInlineScripts=true should allow cdn.jsdelivr.net in script-src; got CSP: %s", csp)
+	}
 }
 
 func TestPublicSecurityHeaders_CSPPolicyEnvOverride(t *testing.T) {

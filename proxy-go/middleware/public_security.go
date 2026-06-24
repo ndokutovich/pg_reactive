@@ -24,7 +24,10 @@ func PublicSecurityHeaders(allowInlineScripts bool) func(http.Handler) http.Hand
 		// Required only for legacy static apps with inline <script>. Modern
 		// bundled SPAs (Vite/webpack/esbuild) emit external <script src> tags
 		// and should keep this off — inline scripts are the primary XSS payload.
-		scriptSrc = "script-src 'self' 'unsafe-inline'"
+		// cdn.jsdelivr.net is allowed in this mode because the bundled pg_reactive
+		// example pages load Chart.js from it; scoped to the inline-scripts (demo)
+		// mode so the strict default stays strict. Override entirely via CSP_POLICY.
+		scriptSrc = "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
 	}
 	csp := "default-src 'self'; " +
 		scriptSrc + "; " +
