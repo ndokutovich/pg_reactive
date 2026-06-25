@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -9,11 +10,26 @@ import (
 	"strings"
 )
 
+// leafFunc renders a resolved JSON scalar into the text substituted at a
+// template position. The JSON-body path (ResolveTemplates) and the
+// query-string path (ResolveTemplatesInString) need different leaf rendering:
+// the body path must JSON-escape string content so a value cannot break out of
+// its string literal and inject structure (round-45 F1); the query path emits
+// the raw string value and URL-encodes it at the top.
+type leafFunc func(json.RawMessage) string
+
 // templateRe matches {{opId.field}} or {{opId.N.field}} patterns in JSON strings.
 var templateRe = regexp.MustCompile(`\{\{([^}]+)\}\}`)
 
 // ResolveTemplates replaces all {{opId.field}} references in raw JSON with
 // values extracted from previous operation results.  Returns the resolved JSON.
+//
+// Substituted STRING values are JSON-string-escaped (round-45 F1): a value such
+// as `a","admin":"true` from a prior op is emitted as `a\",\"admin\":\"true`,
+// so it stays a string literal inside the `"{{x}}"` template position and can
+// NOT inject new keys into the request body. Non-string scalars (number / bool
+// / null) are emitted as their literal JSON text, so a bare `{"id": {{x}}}`
+// numeric position keeps working.
 func ResolveTemplates(raw json.RawMessage, results map[string]json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return raw, nil
@@ -27,7 +43,7 @@ func ResolveTemplates(raw json.RawMessage, results map[string]json.RawMessage) (
 	var errs []string
 	resolved := templateRe.ReplaceAllStringFunc(s, func(match string) string {
 		expr := match[2 : len(match)-2]
-		val, err := resolveExpression(expr, results)
+		val, err := resolveExpression(expr, results, jsonStringEscape)
 		if err != nil {
 			errs = append(errs, err.Error())
 			return match
@@ -57,7 +73,7 @@ func ResolveTemplatesInString(s string, results map[string]json.RawMessage) (str
 	var errs []string
 	resolved := templateRe.ReplaceAllStringFunc(s, func(match string) string {
 		expr := match[2 : len(match)-2]
-		val, err := resolveExpression(expr, results)
+		val, err := resolveExpression(expr, results, unquoteJSON)
 		if err != nil {
 			errs = append(errs, err.Error())
 			return match
@@ -84,8 +100,10 @@ func urlEncodePreservingCommas(s string) string {
 }
 
 // resolveExpression navigates a dot-path like "op1.id" or "op1.0.name" into
-// the results map.  Returns the string representation of the value.
-func resolveExpression(expr string, results map[string]json.RawMessage) (string, error) {
+// the results map.  Returns the string representation of the value, rendered
+// through leaf (unquoteJSON for the query path, jsonStringEscape for the
+// JSON-body path).
+func resolveExpression(expr string, results map[string]json.RawMessage, leaf leafFunc) (string, error) {
 	parts := strings.SplitN(expr, ".", 2)
 	if len(parts) == 0 {
 		return "", fmt.Errorf("template: empty expression")
@@ -98,16 +116,16 @@ func resolveExpression(expr string, results map[string]json.RawMessage) (string,
 	}
 
 	if len(parts) == 1 {
-		// No field path — return raw JSON value (unquoted if string).
-		return unquoteJSON(data), nil
+		// No field path — return raw JSON value rendered by leaf.
+		return leaf(data), nil
 	}
 
-	return navigatePath(data, parts[1])
+	return navigatePath(data, parts[1], leaf)
 }
 
 // navigatePath traverses a dot-separated path into a JSON value.
 // Supports: "field", "N" (array index), "N.field" (index then field).
-func navigatePath(data json.RawMessage, path string) (string, error) {
+func navigatePath(data json.RawMessage, path string, leaf leafFunc) (string, error) {
 	segments := strings.Split(path, ".")
 	current := data
 
@@ -131,9 +149,9 @@ func navigatePath(data json.RawMessage, path string) (string, error) {
 				var v string
 				var err error
 				if remaining == "" {
-					v = unquoteJSON(item)
+					v = leaf(item)
 				} else {
-					v, err = navigatePath(item, remaining)
+					v, err = navigatePath(item, remaining, leaf)
 					if err != nil {
 						return "", err
 					}
@@ -168,17 +186,46 @@ func navigatePath(data json.RawMessage, path string) (string, error) {
 		current = val
 	}
 
-	return unquoteJSON(current), nil
+	return leaf(current), nil
 }
 
 // unquoteJSON returns the string value of a JSON scalar.
 // JSON strings are unquoted; numbers, bools, null returned as-is.
+//
+// This is the leaf renderer for the query-string path, whose top-level
+// transform URL-encodes the result — so the unescaped content is safe there.
 func unquoteJSON(raw json.RawMessage) string {
 	s := strings.TrimSpace(string(raw))
 	if len(s) >= 2 && s[0] == '"' {
 		var unquoted string
 		if err := json.Unmarshal(raw, &unquoted); err == nil {
 			return unquoted
+		}
+	}
+	return s
+}
+
+// jsonStringEscape is the leaf renderer for the JSON-body path (round-45 F1).
+// A JSON string value is emitted as its escaped CONTENT WITHOUT the surrounding
+// quotes — the template's own quotes (`"{{x}}"`) delimit it — so a value
+// containing `"` / `\` / control chars stays inside its string literal and can
+// not inject new keys into the body. Non-string scalars (number / bool / null)
+// and composites are returned as their literal JSON text, preserving the
+// numeric `{"id": {{x}}}` case. HTML escaping is disabled so the output matches
+// the Rust sibling (serde_json) byte-for-byte.
+func jsonStringEscape(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if len(s) >= 1 && s[0] == '"' {
+		var decoded string
+		if err := json.Unmarshal(raw, &decoded); err == nil {
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(false)
+			if err := enc.Encode(decoded); err == nil {
+				// Encoder writes a quoted JSON string plus a trailing '\n'.
+				out := strings.TrimRight(buf.String(), "\n")
+				return out[1 : len(out)-1]
+			}
 		}
 	}
 	return s

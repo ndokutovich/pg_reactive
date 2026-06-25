@@ -211,6 +211,32 @@ async function testAutoIds() {
   assert(r.json.results?.[0]?.id === 'op0', `auto ID = op0 (got ${r.json.results?.[0]?.id})`);
 }
 
+// round-45 F1 HIGH (SECURITY.md invariant 27): structural JSON injection via
+// unescaped template substitution. op1 returns a title whose value contains
+// `","done":true,"title":"`; op2 templates it into a JSON body that deliberately
+// does NOT set `done`. Pre-fix the raw substitution forged a top-level `done`
+// key (done=true) on op2's row; after the fix the value is JSON-escaped and the
+// row keeps its `done` default (false).
+async function testTemplateJSONInjection() {
+  console.log('\nTest 12: Template JSON injection — escaped, no key smuggling');
+  await api('DELETE', '/rest/v1/todos?id=gt.0', null, SRV);
+
+  const payload = 'INJ","done":true,"title":"INJ';
+  const r = await batch([
+    { id: 'src', method: 'POST', path: '/rest/v1/todos',
+      body: { user_id: '00000000-0000-0000-0000-000000000001', title: payload, done: false } },
+    // op2 sets NO `done` — only an injected key could turn it true.
+    { id: 'sink', method: 'POST', path: '/rest/v1/todos',
+      body: { user_id: '00000000-0000-0000-0000-000000000002', title: '{{src.title}}' } },
+  ], { atomic: true }, SRV);
+
+  assert(r.status === 200, `status 200 (got ${r.status})`);
+  const sink = r.json.results?.[1]?.data;
+  const row = Array.isArray(sink) ? sink[0] : sink;
+  assert(row?.done !== true, `op2 'done' was NOT injected (got ${row?.done})`);
+  assert(row?.title === payload, `op2 title round-tripped as literal string`);
+}
+
 // ---- Runner ----
 
 async function main() {
@@ -229,6 +255,7 @@ async function main() {
     await testMaxOperations();
     await testInvalidMethod();
     await testAutoIds();
+    await testTemplateJSONInjection();
   } catch (e) {
     console.error('\nFATAL:', e);
     failed++;

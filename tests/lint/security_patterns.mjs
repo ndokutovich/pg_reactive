@@ -514,6 +514,50 @@ function checkAnonGrantNeedsRLS() {
   }
 }
 
+// Rule SEC-R45 — the transaction-batch template resolver's JSON-BODY path must
+//   JSON-escape substituted string values. SECURITY.md invariant #27 /
+//   round-45 F1 HIGH.
+//   The batch endpoint resolves {{opId.field}} references inside a JSON request
+//   body. Substituting a resolved STRING value as raw text lets a prior op's
+//   value break out of its string literal and inject new top-level keys
+//   (structural JSON injection — set columns the dependent op never named). The
+//   JSON-body resolver MUST route every leaf through a JSON-escaping renderer
+//   (Go: jsonStringEscape; Rust: json_string_escape) so the value stays inside
+//   its `"{{x}}"` literal; the separate query-string resolver correctly
+//   URL-encodes and is out of scope. This codifies the class as a file-scoped
+//   invariant: if either resolver file still defines its JSON-body entry point
+//   but no longer wires the escaping leaf into it, fail. Both sibling proxies
+//   are checked so they cannot drift.
+//   Override a verified-safe occurrence with `// lint:allow=SEC-R45`.
+function checkBatchTemplateEscape() {
+  const targets = [
+    {
+      file: join(ROOT, "proxy-go", "rest", "template.go"),
+      // JSON-body entry point + the wiring that must route through the escape.
+      entry: /func\s+ResolveTemplates\s*\(/,
+      wired: /resolveExpression\([^)]*\bjsonStringEscape\b/,
+      leaf: "jsonStringEscape",
+    },
+    {
+      file: join(ROOT, "proxy", "src", "rest", "template.rs"),
+      entry: /pub\s+fn\s+resolve_templates\s*\(/,
+      // The JSON-body call passes json_string_escape as the leaf renderer.
+      wired: /replace_templates\([^;]*\bjson_string_escape\b/s,
+      leaf: "json_string_escape",
+    },
+  ];
+  for (const t of targets) {
+    let text;
+    try { text = readFileSync(t.file, "utf-8"); } catch { continue; }
+    if (/lint:allow=SEC-R45/.test(text)) continue;
+    if (!t.entry.test(text)) continue; // entry point renamed/removed — skip
+    if (!t.wired.test(text)) {
+      report(t.file, 1, "SEC-R45",
+        `the batch JSON-body template resolver no longer routes through the ${t.leaf} escaping leaf — a substituted string value can structurally inject keys into a dependent operation's body (SECURITY.md invariant 27, round-45 F1)`);
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -522,6 +566,7 @@ function runAll() {
   checkExtSDRevoke();
   checkProxyNotSuperuser();
   checkAnonGrantNeedsRLS();
+  checkBatchTemplateEscape();
 
   for (const f of files) {
     let text;

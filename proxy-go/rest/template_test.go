@@ -165,6 +165,69 @@ func TestResolveTemplates_WildcardScalar(t *testing.T) {
 	}
 }
 
+// TestResolveTemplates_JSONInjection — round-45 F1 HIGH (SECURITY.md invariant
+// 27). A resolved STRING value must be JSON-escaped before substitution into a
+// JSON body position, so a prior op's attacker-controlled value cannot break
+// out of its string literal and inject new top-level keys (structural JSON
+// injection). Pre-fix this body resolved to `{"name":"a","admin":"true",...}`
+// with a forged top-level `admin` key; after the fix the value round-trips as a
+// literal string and no `admin` key exists.
+func TestResolveTemplates_JSONInjection(t *testing.T) {
+	const payload = `a","admin":"true`
+	results := map[string]json.RawMessage{
+		"op": json.RawMessage(`{"val":` + mustJSON(payload) + `}`),
+	}
+	raw := json.RawMessage(`{"name":"{{op.val}}"}`)
+
+	result, err := ResolveTemplates(raw, results)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("invalid JSON result: %v — raw: %s", err, result)
+	}
+	if _, injected := parsed["admin"]; injected {
+		t.Fatalf("structural JSON injection: forged top-level 'admin' key present — raw: %s", result)
+	}
+	if parsed["name"] != payload {
+		t.Fatalf("expected name to round-trip as the literal payload %q, got %v — raw: %s", payload, parsed["name"], result)
+	}
+	if len(parsed) != 1 {
+		t.Fatalf("expected exactly one top-level key, got %d: %v", len(parsed), parsed)
+	}
+}
+
+// TestResolveTemplates_NumericPositionPreserved — the escaping fix must not
+// break the legitimate non-string position `{"id": {{x}}}`: a numeric scalar
+// is still emitted as bare JSON text, not a quoted string.
+func TestResolveTemplates_NumericPositionPreserved(t *testing.T) {
+	results := map[string]json.RawMessage{
+		"op": json.RawMessage(`{"id":123}`),
+	}
+	raw := json.RawMessage(`{"id": {{op.id}}}`)
+	result, err := ResolveTemplates(raw, results)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("invalid JSON result: %v — raw: %s", err, result)
+	}
+	if parsed["id"] != float64(123) {
+		t.Fatalf("expected numeric id=123, got %v (%T)", parsed["id"], parsed["id"])
+	}
+}
+
+func mustJSON(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if !strings.Contains(s, sub) {

@@ -25,7 +25,10 @@ pub fn resolve_templates(
     if !raw.contains("{{") {
         return Ok(raw.to_string());
     }
-    replace_templates(raw, results, |v| v.to_string())
+    // JSON-body path: render leaves with `json_string_escape` so a string value
+    // cannot break out of its `"{{x}}"` literal and inject structure (round-45
+    // F1). The top-level transform is identity — escaping happens at the leaf.
+    replace_templates(raw, results, json_string_escape, |v| v)
 }
 
 /// Replace `{{opId.field}}` references in a plain string (e.g. a query string).
@@ -41,7 +44,10 @@ pub fn resolve_templates_in_string(
     if !s.contains("{{") {
         return Ok(s.to_string());
     }
-    replace_templates(s, results, url_encode_preserving_commas)
+    // Query-string path: leaf is the raw `unquote_json` content; the top-level
+    // transform URL-encodes it (preserving structural commas), so the unescaped
+    // content is safe here.
+    replace_templates(s, results, unquote_json, url_encode_preserving_commas)
 }
 
 /// Core scanner. Walks `s`, finds each `{{ <non-`}`+> }}` match left-to-right,
@@ -51,6 +57,7 @@ pub fn resolve_templates_in_string(
 fn replace_templates<F>(
     s: &str,
     results: &HashMap<String, Value>,
+    leaf: fn(&Value) -> String,
     transform: F,
 ) -> Result<String, AppError>
 where
@@ -67,7 +74,7 @@ where
                 let close = i + 2 + rel; // index of the first '}'
                 let inner = &s[i + 2..close];
                 if !inner.is_empty() && s[close..].starts_with("}}") {
-                    match resolve_expression(inner, results) {
+                    match resolve_expression(inner, results, leaf) {
                         Ok(v) => out.push_str(&transform(v)),
                         Err(e) => {
                             errors.push(e);
@@ -106,7 +113,11 @@ fn url_encode_preserving_commas(s: String) -> String {
 
 /// Navigate a dot-path like `op1.id` or `op1.0.name` into the results map and
 /// return the string representation of the value.
-fn resolve_expression(expr: &str, results: &HashMap<String, Value>) -> Result<String, String> {
+fn resolve_expression(
+    expr: &str,
+    results: &HashMap<String, Value>,
+    leaf: fn(&Value) -> String,
+) -> Result<String, String> {
     let (op_id, rest) = match expr.split_once('.') {
         Some((op, rest)) => (op, Some(rest)),
         None => (expr, None),
@@ -117,15 +128,15 @@ fn resolve_expression(expr: &str, results: &HashMap<String, Value>) -> Result<St
         .ok_or_else(|| format!("template: operation {op_id:?} not found"))?;
 
     match rest {
-        None => Ok(unquote_json(data)),
-        Some(path) => navigate_path(data, path),
+        None => Ok(leaf(data)),
+        Some(path) => navigate_path(data, path, leaf),
     }
 }
 
 /// Traverse a dot-separated path into a JSON value.
 /// Supports: `field`, `N` (array index), `N.field`, and `*` (wildcard over an
 /// array, collecting the remaining path from every element).
-fn navigate_path(data: &Value, path: &str) -> Result<String, String> {
+fn navigate_path(data: &Value, path: &str, leaf: fn(&Value) -> String) -> Result<String, String> {
     let segments: Vec<&str> = path.split('.').collect();
     let mut current = data;
 
@@ -143,9 +154,9 @@ fn navigate_path(data: &Value, path: &str) -> Result<String, String> {
             let mut vals = Vec::with_capacity(arr.len());
             for item in arr {
                 if remaining.is_empty() {
-                    vals.push(unquote_json(item));
+                    vals.push(leaf(item));
                 } else {
-                    vals.push(navigate_path(item, &remaining)?);
+                    vals.push(navigate_path(item, &remaining, leaf)?);
                 }
             }
             return Ok(vals.join(","));
@@ -174,14 +185,41 @@ fn navigate_path(data: &Value, path: &str) -> Result<String, String> {
             .ok_or_else(|| format!("template: field {seg:?} not found in object"))?;
     }
 
-    Ok(unquote_json(current))
+    Ok(leaf(current))
 }
 
 /// String value of a JSON scalar: strings are unquoted; numbers, bools, null,
 /// and composites are returned as their JSON text.
+///
+/// This is the leaf renderer for the query-string path, whose top-level
+/// transform URL-encodes the result — so the unescaped content is safe there.
 fn unquote_json(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Leaf renderer for the JSON-body path (round-45 F1, SECURITY.md invariant 27).
+///
+/// A JSON string value is emitted as its escaped CONTENT WITHOUT the surrounding
+/// quotes — the template's own quotes (`"{{x}}"`) delimit it — so a value
+/// containing `"` / `\` / control chars stays inside its string literal and can
+/// NOT inject new keys into the body. Non-string scalars (number / bool / null)
+/// and composites are returned as their literal JSON text, preserving the
+/// numeric `{"id": {{x}}}` case.
+fn json_string_escape(v: &Value) -> String {
+    match v {
+        Value::String(_) => {
+            // `to_string` of a string yields a quoted, escaped JSON string; drop
+            // the surrounding ASCII quotes so the template's own quotes delimit
+            // it. serde_json does not HTML-escape, matching the Go sibling.
+            let quoted = serde_json::to_string(v).unwrap_or_default();
+            quoted
+                .get(1..quoted.len().saturating_sub(1))
+                .unwrap_or("")
+                .to_string()
+        }
         other => other.to_string(),
     }
 }
@@ -280,5 +318,44 @@ mod tests {
         let r = results(&[("tags", json!(["alpha", "beta", "gamma"]))]);
         let out = resolve_templates_in_string("{{tags.*}}", &r).unwrap();
         assert_eq!(out, "alpha,beta,gamma");
+    }
+
+    // round-45 F1 HIGH (SECURITY.md invariant 27). A resolved STRING value must
+    // be JSON-escaped before substitution into a JSON body position, so a prior
+    // op's attacker-controlled value cannot break out of its string literal and
+    // inject new top-level keys (structural JSON injection). Pre-fix this body
+    // resolved to `{"name":"a","admin":"true"}` with a forged top-level `admin`
+    // key; after the fix the value round-trips as a literal string.
+    #[test]
+    fn test_resolve_templates_json_injection() {
+        let payload = r#"a","admin":"true"#;
+        let r = results(&[("op", json!({ "val": payload }))]);
+        let raw = r#"{"name":"{{op.val}}"}"#;
+
+        let out = resolve_templates(raw, &r).unwrap();
+        let parsed: Value = serde_json::from_str(&out)
+            .unwrap_or_else(|e| panic!("invalid JSON result: {e} — raw: {out}"));
+
+        let obj = parsed.as_object().expect("object");
+        assert!(
+            !obj.contains_key("admin"),
+            "structural JSON injection: forged top-level 'admin' key present — raw: {out}"
+        );
+        assert_eq!(
+            parsed["name"], payload,
+            "name must round-trip as the literal payload — raw: {out}"
+        );
+        assert_eq!(obj.len(), 1, "expected exactly one top-level key — raw: {out}");
+    }
+
+    // The escaping fix must not break the legitimate non-string position
+    // `{"id": {{x}}}`: a numeric scalar is still emitted as bare JSON text.
+    #[test]
+    fn test_resolve_templates_numeric_position_preserved() {
+        let r = results(&[("op", json!({ "id": 123 }))]);
+        let raw = r#"{"id": {{op.id}}}"#;
+        let out = resolve_templates(raw, &r).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["id"], json!(123));
     }
 }
