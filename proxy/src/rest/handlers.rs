@@ -156,7 +156,7 @@ pub async fn delete_rows(
 }
 
 /// Execute a SELECT query and return rows as JSON values.
-async fn execute_select_json(
+pub(crate) async fn execute_select_json(
     tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
     built: &query_builder::BuiltQuery,
 ) -> Result<Vec<serde_json::Value>, AppError> {
@@ -178,7 +178,7 @@ async fn execute_select_json(
 
 /// Execute a SELECT with resource embedding (lateral subqueries for FK joins).
 /// Supports nested/transitive embeds via recursive lateral subquery generation.
-async fn execute_select_with_embeds(
+pub(crate) async fn execute_select_with_embeds(
     tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
     built: &query_builder::BuiltQuery,
     _parent: &crate::rest::catalog::TableMeta,
@@ -263,7 +263,7 @@ async fn execute_select_with_embeds(
 }
 
 /// Execute a DML query (INSERT/UPDATE/DELETE with RETURNING *) and return rows as JSON.
-async fn execute_dml_json(
+pub(crate) async fn execute_dml_json(
     tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
     built: &query_builder::BuiltQuery,
 ) -> Result<Vec<serde_json::Value>, AppError> {

@@ -83,6 +83,9 @@ pub struct Config {
     /// the extension's pg_reactive.notify_channel GUC. Validated as a bare PG
     /// identifier (it is interpolated into a LISTEN statement).
     pub notify_channel: String,
+    /// Maximum number of operations permitted in a single POST /rest/v1/batch
+    /// request (env `MAX_BATCH_OPERATIONS`, default 20). Mirror Go config.go.
+    pub max_batch_operations: usize,
 }
 
 impl Config {
@@ -239,6 +242,11 @@ impl Config {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "pgr".into());
 
+        let max_batch_operations: usize = std::env::var("MAX_BATCH_OPERATIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(20);
+
         Self {
             database_url,
             admin_database_url,
@@ -281,6 +289,7 @@ impl Config {
             enable_demo_endpoint,
             public_demo_site,
             notify_channel,
+            max_batch_operations,
         }
     }
 
@@ -486,6 +495,7 @@ mod tests {
             enable_demo_endpoint: false,
             public_demo_site: false,
             notify_channel: "pgr".into(),
+            max_batch_operations: 20,
         }
     }
 

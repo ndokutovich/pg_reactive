@@ -33,10 +33,36 @@ pub async fn call_rpc(
         .as_object()
         .ok_or_else(|| AppError::BadRequest("RPC body must be a JSON object".into()))?;
 
-    // Look up function parameter types from pg_proc for proper casting.
-    let fn_meta = lookup_function(&state.admin_pool, &fn_name).await?;
+    let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
+    let result = execute_rpc(&mut tx, &state.admin_pool, &fn_name, obj).await?;
+    tx.commit().await?;
 
-    let mut param_names: Vec<String> = Vec::new();
+    Ok(Json(result))
+}
+
+/// Build and execute an RPC call within an existing transaction, returning the
+/// result already shaped per the scalar-vs-set-returning convention. Shared by
+/// the `call_rpc` handler and the batch executor (mirrors Go `buildRPCCall` +
+/// the dispatchRPC scan/unwrap in one place).
+///
+/// Function-metadata lookup runs on `admin_pool` (a plain catalog read), while
+/// the function itself executes on the caller-provided `tx` so it shares the
+/// single RLS context.
+pub(crate) async fn execute_rpc(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    admin_pool: &sqlx::PgPool,
+    fn_name: &str,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Value, AppError> {
+    if !is_valid_fn_name(fn_name) {
+        return Err(AppError::BadRequest(format!(
+            "invalid function name: '{fn_name}'"
+        )));
+    }
+
+    // Look up function parameter types from pg_proc for proper casting.
+    let fn_meta = lookup_function(admin_pool, fn_name).await?;
+
     let mut placeholders: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
@@ -46,7 +72,6 @@ pub async fn call_rpc(
                 "invalid parameter name: '{key}'"
             )));
         }
-        param_names.push(key.clone());
         params.push(json_to_param(val));
         // Find the parameter type from function metadata
         let pg_type = fn_meta
@@ -67,7 +92,7 @@ pub async fn call_rpc(
     // Use to_json() to always get JSON output regardless of return type.
     // For set-returning functions, json_agg wraps the rows.
     // For scalar functions, to_json wraps the value.
-    let fn_call = format!("public.{}", quote_ident(&fn_name));
+    let fn_call = format!("public.{}", quote_ident(fn_name));
 
     // Strategy: wrap in a CTE that calls the function, then aggregate to JSON.
     // This handles both scalar and set-returning functions uniformly.
@@ -78,22 +103,18 @@ pub async fn call_rpc(
         placeholders.join(", ")
     );
 
-    let mut tx = rls_transaction(state.pool_for(&claims.role), &claims).await?;
-
     let mut q = sqlx::query(&sql);
     for param in &params {
         q = q.bind(param);
     }
 
-    let row = q.fetch_one(&mut *tx).await?;
+    let row = q.fetch_one(&mut **tx).await?;
     let result: serde_json::Value = row.get::<serde_json::Value, _>("data");
-
-    tx.commit().await?;
 
     // Set-returning functions (RETURNS TABLE / RETURNS SETOF) -> always return array.
     // Scalar functions -> unwrap single-element array to bare value.
     if fn_meta.returns_set {
-        Ok(Json(result))
+        Ok(result)
     } else {
         match result {
             serde_json::Value::Array(ref arr) if arr.len() == 1 => {
@@ -102,12 +123,12 @@ pub async fn call_rpc(
                 if let serde_json::Value::Object(map) = item {
                     if map.len() == 1 {
                         let val = map.values().next().unwrap().clone();
-                        return Ok(Json(val));
+                        return Ok(val);
                     }
                 }
-                Ok(Json(item.clone()))
+                Ok(item.clone())
             }
-            _ => Ok(Json(result)),
+            _ => Ok(result),
         }
     }
 }

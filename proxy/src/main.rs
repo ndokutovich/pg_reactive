@@ -203,6 +203,9 @@ fn build_router(state: AppState) -> Router {
         // OAuth
         .route("/auth/v1/authorize", get(auth::oauth::authorize))
         .route("/auth/v1/callback", get(auth::oauth::callback))
+        // Transaction batching — mounted BEFORE the {table} wildcard so "batch"
+        // is not treated as a table name (mirrors Go's route order).
+        .route("/rest/v1/batch", post(rest::batch::batch))
         // REST API (PostgREST-compatible CRUD)
         .route(
             "/rest/v1/{table}",

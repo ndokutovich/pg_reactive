@@ -21,7 +21,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# raw_value: batch operation bodies are carried as raw JSON text so {{opId.field}}
+# templates are resolved against the exact bytes (mirrors Go's json.RawMessage).
+serde_json = { version = "1", features = ["raw_value"] }
 
 # Auth
 jsonwebtoken = "9"

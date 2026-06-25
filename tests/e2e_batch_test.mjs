@@ -5,7 +5,7 @@
  * Uses existing 'todos' table + 'authors'/'posts' tables from init.sql.
  */
 
-const BASE = 'http://127.0.0.1:8080';
+const BASE = process.env.PROXY_URL || process.env.BASE_URL || 'http://127.0.0.1:8080';
 const ANON = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const SRV = process.env.SERVICE_ROLE_KEY || 'dev-only-service-role-key-do-not-use-in-production';
 
