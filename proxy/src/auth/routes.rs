@@ -579,7 +579,77 @@ pub async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// POST /auth/v1/anonymous — mint a short-lived role=anon JWT.
+///
+/// Mirror of Go `auth.Anonymous` (round 34). Lets public-read demo pages satisfy
+/// REQUIRE_AUTHENTICATED_WS=true without embedding the raw anon-key as a fake
+/// credential — the WS gate receives a real signed token, expirable and
+/// attributable. No DB row is created; there is no refresh token (clients
+/// re-mint when the access token expires).
+///
+/// Default-deny (SECURITY.md trust-matrix row "Auth: anonymous signin"):
+/// returns 503 unless ALLOW_ANONYMOUS_SIGNIN is explicitly set.
+pub async fn anonymous(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    if !state.config.allow_anonymous_signin {
+        return Err(AppError::ServiceUnavailable(
+            "anonymous signin is disabled".into(),
+        ));
+    }
+
+    let secret = state
+        .config
+        .jwt_secret
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("JWT_SECRET not configured".into()))?;
+
+    let ttl = if state.config.anonymous_jwt_ttl_secs == 0 {
+        3600
+    } else {
+        state.config.anonymous_jwt_ttl_secs
+    };
+
+    let sub = uuid::Uuid::new_v4().to_string();
+    let claims = anon_claims(&sub, ttl);
+    let access_token = jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
+
+    // Shape mirrors Go AuthResponse + UserResponse (provider="anonymous",
+    // is_anonymous=true, empty refresh_token, "{}" metadata).
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": ttl,
+            "refresh_token": "",
+            "user": {
+                "id": sub,
+                "role": "anon",
+                "user_metadata": {},
+                "app_metadata": {},
+                "provider": "anonymous",
+                "is_anonymous": true,
+            }
+        })),
+    ))
+}
+
 // ---------- Helpers ----------
+
+/// Build the claims for an anonymous-signin token: role=anon, the given random
+/// `sub`, no email, exp = now + ttl. Mirror of Go `GenerateToken(sub,"anon",...)`.
+fn anon_claims(sub: &str, ttl_secs: u64) -> Claims {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    Claims {
+        sub: sub.to_string(),
+        role: "anon".into(),
+        email: None,
+        iat: Some(now),
+        exp: Some(now + ttl_secs),
+    }
+}
 
 /// Validate an email address: non-empty local part, non-empty domain with at
 /// least one dot, total length <= 254.
@@ -1266,4 +1336,38 @@ pub async fn admin_create_user(
             updated_at,
         }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ITEM F (parity with Go auth.Anonymous, SECURITY.md trust-matrix row
+    // "Auth: anonymous signin"): the minted token must carry role=anon, the
+    // server-derived sub, and an exp ~ now+ttl. A real anon JWT — not the raw
+    // anon-key — is what lets a public-read demo open a WS under
+    // REQUIRE_AUTHENTICATED_WS=true while remaining expirable/attributable.
+    #[test]
+    fn anon_claims_have_role_anon_and_ttl() {
+        let sub = "11111111-2222-3333-4444-555555555555";
+        let claims = anon_claims(sub, 3600);
+        assert_eq!(claims.role, "anon");
+        assert_eq!(claims.sub, sub);
+        assert!(claims.email.is_none());
+        let iat = claims.iat.unwrap();
+        assert_eq!(claims.exp.unwrap(), iat + 3600);
+    }
+
+    // The minted token must round-trip through validate_token (it is what the
+    // WS gate runs) and come back as role=anon with the same sub.
+    #[test]
+    fn anon_token_validates_as_anon() {
+        let secret = "anon-test-secret-key-at-least-32-bytes-long";
+        let sub = uuid::Uuid::new_v4().to_string();
+        let claims = anon_claims(&sub, 3600);
+        let token = jwt::generate_token(&claims, secret).unwrap();
+        let decoded = jwt::validate_token(&token, secret).unwrap();
+        assert_eq!(decoded.role, "anon");
+        assert_eq!(decoded.sub, sub);
+    }
 }

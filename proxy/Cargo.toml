@@ -40,8 +40,8 @@ reqwest = { version = "0.12", features = ["json"] }
 # URL parsing
 urlencoding = "2"
 
-# UUID parsing/validation
-uuid = "1"
+# UUID parsing/validation (+ v4 for the anonymous-signin random sub)
+uuid = { version = "1", features = ["v4"] }
 
 # Email
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls", "smtp-transport", "builder"], default-features = false }

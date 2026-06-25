@@ -28,6 +28,21 @@ pub struct Config {
     pub site_url: Option<String>,
     pub auth_rate_limit: usize,
     pub auth_rate_window_secs: u64,
+    /// Separate, typically more generous bucket for /auth/v1/anonymous. The
+    /// endpoint mints a stateless throw-away JWT (no DB write, no email), so it
+    /// gets its own limit. Default 10× auth_rate_limit (mirror Go).
+    pub anonymous_rate_limit: usize,
+    pub anonymous_rate_window_secs: u64,
+    /// Gate-controlled mint of short-lived role=anon JWTs so public-read demos
+    /// can satisfy REQUIRE_AUTHENTICATED_WS=true without embedding the raw
+    /// anon-key. Fail-closed: /auth/v1/anonymous returns 503 until true.
+    pub allow_anonymous_signin: bool,
+    /// TTL (seconds) of the minted anon JWT. Default 3600 (mirror Go).
+    pub anonymous_jwt_ttl_secs: u64,
+    /// Per-source-IP cap on concurrent WebSocket connections so one client can't
+    /// exhaust the global pool. 0 disables the cap. Default 10 (mirror Go
+    /// WS_MAX_PER_IP).
+    pub ws_max_per_ip: usize,
     pub access_token_expiry_secs: u64,
     pub refresh_token_expiry_days: i64,
     pub broadcast_capacity: usize,
@@ -139,6 +154,20 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(60); // 60 second window
 
+        // Anonymous bucket: default 10× auth_rate_limit (mirror Go config.go).
+        let anonymous_rate_limit: usize = std::env::var("ANONYMOUS_RATE_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(auth_rate_limit * 10);
+        let anonymous_rate_window_secs: u64 = std::env::var("ANONYMOUS_RATE_WINDOW")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60);
+        let anonymous_jwt_ttl_secs: u64 = std::env::var("ANONYMOUS_JWT_TTL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600);
+
         let access_token_expiry_secs: u64 = std::env::var("ACCESS_TOKEN_EXPIRY_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -192,6 +221,11 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
         let require_authenticated_ws = bool_env("REQUIRE_AUTHENTICATED_WS", false);
+        let allow_anonymous_signin = bool_env("ALLOW_ANONYMOUS_SIGNIN", false);
+        let ws_max_per_ip: usize = std::env::var("WS_MAX_PER_IP")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10);
         let hsts_preload = bool_env("HSTS_PRELOAD", false);
         let email_enabled = bool_env("EMAIL_ENABLED", true);
         let smtp_host = std::env::var("SMTP_HOST").unwrap_or_default();
@@ -222,6 +256,11 @@ impl Config {
             site_url,
             auth_rate_limit,
             auth_rate_window_secs,
+            anonymous_rate_limit,
+            anonymous_rate_window_secs,
+            allow_anonymous_signin,
+            anonymous_jwt_ttl_secs,
+            ws_max_per_ip,
             access_token_expiry_secs,
             refresh_token_expiry_days,
             broadcast_capacity,
@@ -422,6 +461,11 @@ mod tests {
             site_url: None,
             auth_rate_limit: 30,
             auth_rate_window_secs: 60,
+            anonymous_rate_limit: 300,
+            anonymous_rate_window_secs: 60,
+            allow_anonymous_signin: false,
+            anonymous_jwt_ttl_secs: 3600,
+            ws_max_per_ip: 10,
             access_token_expiry_secs: 3600,
             refresh_token_expiry_days: 30,
             broadcast_capacity: 1024,

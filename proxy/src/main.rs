@@ -132,13 +132,31 @@ async fn main() {
 }
 
 fn build_router(state: AppState) -> Router {
-    // Auth routes with rate limiting (signup + token are brute-force targets)
+    // Auth routes with rate limiting. signup + token are brute-force targets;
+    // recover / recover/confirm / magiclink are email-bombing targets. Mirrors
+    // the Go `state.RateLimiter` group (main.go). verify + magiclink/verify are
+    // GET confirmation links and stay un-rate-limited (as in Go).
     let auth_rate_limited = Router::new()
         .route("/auth/v1/signup", post(auth::routes::signup))
         .route("/auth/v1/token", post(auth::routes::token))
+        .route("/auth/v1/recover", post(auth::routes::recover))
+        .route(
+            "/auth/v1/recover/confirm",
+            post(auth::routes::recover_confirm),
+        )
+        .route("/auth/v1/magiclink", post(auth::routes::magiclink))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::rate_limit::rate_limit_auth,
+        ));
+
+    // Anonymous signin in its own, more generous bucket (stateless mint — no DB
+    // write, no email). Mirrors Go's `state.AnonymousLimiter` group.
+    let anonymous_rate_limited = Router::new()
+        .route("/auth/v1/anonymous", post(auth::routes::anonymous))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::rate_limit::rate_limit_anonymous,
         ));
 
     // /api/demo mutates demo tables — mount only when explicitly enabled or a
@@ -153,22 +171,18 @@ fn build_router(state: AppState) -> Router {
         .route("/health", get(routes::health::health))
         // WebSocket (pg_reactive)
         .route("/ws/{query_id}", get(ws_handler))
-        // Auth (rate-limited signup + token)
+        // Auth (rate-limited: signup, token, recover, recover/confirm, magiclink)
         .merge(auth_rate_limited)
+        // Auth (anonymous signin — separate rate-limit bucket)
+        .merge(anonymous_rate_limited)
         // Auth (non-rate-limited)
         .route(
             "/auth/v1/user",
             get(auth::routes::get_user).patch(auth::routes::update_user),
         )
         .route("/auth/v1/logout", post(auth::routes::logout))
-        // Email auth flows
-        .route("/auth/v1/recover", post(auth::routes::recover))
-        .route(
-            "/auth/v1/recover/confirm",
-            post(auth::routes::recover_confirm),
-        )
+        // Email confirmation links (GET — not rate-limited, mirror Go)
         .route("/auth/v1/verify", get(auth::routes::verify_email))
-        .route("/auth/v1/magiclink", post(auth::routes::magiclink))
         .route(
             "/auth/v1/magiclink/verify",
             get(auth::routes::magiclink_verify),
@@ -249,6 +263,7 @@ async fn ws_handler(
     path: axum::extract::Path<String>,
     ws: axum::extract::WebSocketUpgrade,
     req: axum::extract::OriginalUri,
+    conn: axum::extract::ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, error::AppError> {
     let query_id = path.0;
@@ -349,7 +364,31 @@ async fn ws_handler(
     // The block above already enforced auth / REQUIRE_AUTHENTICATED_WS.
     let claims = resolve_ws_claims(&state, &headers, req.0.query());
 
-    // Acquire a WebSocket connection permit (FIX W1: connection limiting)
+    // Per-IP WebSocket connection cap (parity with Go middleware.WSConnLimiter,
+    // round 22): one client must not be able to exhaust the global pool. XFF is
+    // honoured only from TRUSTED_PROXIES (SECURITY.md invariant 4) — reuse the
+    // rate-limiter's resolver so the IP source matches the auth limiter exactly.
+    let trusted: Vec<std::net::IpAddr> = state
+        .config
+        .trusted_proxies
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let client_ip =
+        middleware::rate_limit::resolve_client_ip(&headers, conn.0.ip(), &trusted);
+    let ip_guard = state
+        .ws_conn_limiter
+        .try_acquire(client_ip)
+        .ok_or_else(|| {
+            error::AppError::TooManyRequests(
+                "too many concurrent websocket connections from this address".into(),
+            )
+        })?;
+
+    // Acquire a global WebSocket connection permit (FIX W1: connection limiting).
+    // Both caps apply, like Go (global semaphore + per-IP limiter).
     let permit = state
         .ws_semaphore
         .clone()
@@ -363,8 +402,9 @@ async fn ws_handler(
     let broadcast_capacity = state.config.broadcast_capacity;
 
     Ok(ws.on_upgrade(move |socket| {
-        // The permit is moved into the async block and held for the connection lifetime.
-        // It is released automatically when the future completes and permit is dropped.
+        // Both the global permit and the per-IP guard are moved into the async
+        // block and held for the connection lifetime. They are released
+        // automatically when the future completes and they are dropped.
         async move {
             realtime::ws::handle_websocket(
                 socket,
@@ -376,6 +416,7 @@ async fn ws_handler(
             )
             .await;
             drop(permit);
+            drop(ip_guard);
         }
     }))
 }

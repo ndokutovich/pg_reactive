@@ -449,8 +449,7 @@ mod tests {
             name: name.to_string(),
             columns: cols
                 .iter()
-                .enumerate()
-                .map(|(_i, (col_name, pg_type))| ColumnMeta {
+                .map(|(col_name, pg_type)| ColumnMeta {
                     name: col_name.to_string(),
                     pg_type: pg_type.to_string(),
                 })
