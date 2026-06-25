@@ -4,10 +4,16 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use sqlx::PgPool;
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::middleware::rls::RequestClaims;
-use crate::state::Channels;
+use crate::realtime::presence::PresenceStore;
+use crate::state::{Channels, WsMessage};
+
+/// Hard cap on a single client-to-server frame. A hostile client must not be
+/// able to force the proxy to allocate an arbitrarily large buffer. Mirror of Go
+/// `realtime.maxWSMessageBytes` (64 KiB; audit F4, 2026-05).
+pub(crate) const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
 
 /// Bounds a single server-to-client write. Without a deadline a connection
 /// wedged on a slow/stuck TCP write blocks this task indefinitely — so a
@@ -41,8 +47,140 @@ where
 }
 
 /// Proxy-reserved ad-hoc collaboration channels (catalog-less, public delta).
-fn is_adhoc(query_id: &str) -> bool {
+pub(crate) fn is_adhoc(query_id: &str) -> bool {
     query_id.starts_with("_channel_") || query_id.starts_with("_presence_")
+}
+
+/// A unique per-connection client id (16 random bytes, hex). Used to key presence
+/// and stamp client broadcasts; the SERVER assigns it so a peer can't spoof
+/// another's presence by sending a forged id. Mirror of Go `generateClientID`.
+pub(crate) fn generate_client_id() -> String {
+    use std::fmt::Write;
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("OS CSPRNG (getrandom) unavailable");
+    let mut s = String::with_capacity(32);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Publish a proxy-originated event (presence / client broadcast) onto the
+/// per-query broadcast channel, stamped with the sender connection's generation.
+/// The receive loop delivers a message only on EXACT generation match, so a
+/// stale-epoch connection never receives a current peer's event — the SAME
+/// generation gate deltas use (SECURITY.md inv 17(a)(f), round 39 batch-2 F2).
+fn publish_gen(tx: &broadcast::Sender<WsMessage>, payload: String, gen: i64) {
+    let _ = tx.send(WsMessage {
+        gen: Some(gen),
+        resubscribed: false,
+        payload,
+    });
+}
+
+/// One client-originated text frame, parsed and routed.
+#[derive(serde::Deserialize)]
+struct ClientFrame {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    state: Option<serde_json::Value>,
+    payload: Option<serde_json::Value>,
+    // NOTE: any `client_id` in the frame is INTENTIONALLY ignored — the server
+    // uses its handshake-assigned id so a peer cannot overwrite another's
+    // presence (mirror of Go dispatchClientMessage).
+}
+
+/// Route a client text frame for `channel`, fanning presence/broadcast out
+/// generation-gated. Exactly two shapes are accepted, mirroring Go
+/// `dispatchClientMessage`:
+///   - `{"type":"presence","state":{...}}`    → presence update (peer-state sync)
+///   - `{"type":"broadcast","payload":<any>}` → wrapped as
+///     `{"type":"broadcast","from":<clientID>,"payload":<orig>}` so a receiver
+///     can't confuse it with a server delta.
+///
+/// Anything else (oversize, malformed, unknown/missing type) is dropped. Clients
+/// can NOT forge server deltas/overflow/invalidated — those flow only from the PG
+/// NOTIFY listener.
+async fn dispatch_client_message(
+    presence: &PresenceStore,
+    tx: &broadcast::Sender<WsMessage>,
+    channel: &str,
+    client_id: &str,
+    data: &[u8],
+    gen: i64,
+) {
+    if data.len() > MAX_WS_MESSAGE_BYTES {
+        warn!(
+            "dropped client message: oversize ({} bytes) on {channel}",
+            data.len()
+        );
+        return;
+    }
+    let frame: ClientFrame = match serde_json::from_slice(data) {
+        Ok(f) => f,
+        Err(_) => {
+            debug!("dropped client message: malformed JSON on {channel}");
+            return;
+        }
+    };
+    match frame.kind.as_deref() {
+        Some("presence") => {
+            // Always key presence by the server-assigned client_id; routed to the
+            // sender's generation so a stale peer never sees it (inv 17(f)).
+            let state = frame.state.unwrap_or(serde_json::Value::Null);
+            presence.set(channel, client_id, state.clone(), gen).await;
+            let event = serde_json::json!({
+                "type": "presence_state",
+                "channel": channel,
+                "client_id": client_id,
+                "state": state,
+            });
+            publish_gen(tx, event.to_string(), gen);
+        }
+        Some("broadcast") => {
+            let payload = frame.payload.unwrap_or(serde_json::Value::Null);
+            let envelope = serde_json::json!({
+                "type": "broadcast",
+                "from": client_id,
+                "payload": payload,
+            });
+            publish_gen(tx, envelope.to_string(), gen);
+        }
+        other => {
+            debug!("dropped client message: unknown type {other:?} on {channel}");
+        }
+    }
+}
+
+/// Pure access-decision for the presence HTTP endpoint, shared with `main.rs`.
+/// Returns `None` to allow, or `Some((status, msg))` to refuse. Identical policy
+/// to the WS audience gate (mirror of Go `gatePresenceAccess`):
+///   - empty audience           → public; allow.
+///   - service_role             → always allow (admin bypass).
+///   - audience set + anon       → 403 (anon never satisfies an audience).
+///   - audience set + JWT match  → allow; mismatch → 403.
+pub(crate) fn gate_presence_access(
+    audience: &str,
+    is_anon: bool,
+    claims: &RequestClaims,
+) -> Option<(axum::http::StatusCode, &'static str)> {
+    use axum::http::StatusCode;
+    if audience.is_empty() {
+        return None;
+    }
+    if claims.role == "service_role" {
+        return None;
+    }
+    if is_anon {
+        return Some((StatusCode::FORBIDDEN, "channel requires an authenticated JWT"));
+    }
+    if claims.sub.is_none() || !claims_satisfy_audience(audience, &claims.claims_json) {
+        return Some((
+            StatusCode::FORBIDDEN,
+            "JWT claims do not satisfy channel audience",
+        ));
+    }
+    None
 }
 
 /// Validate a query_id can form a safe `_snap_<id>` identifier.
@@ -61,7 +199,7 @@ fn safe_snap_id(query_id: &str) -> Option<String> {
 /// non-transactional shmem hash `pgr.get_subscriptions()` (SECURITY.md inv 15).
 /// Returns None when the subscription does not exist; ad-hoc channels are public
 /// delta with generation 0.
-async fn subscription_meta(
+pub(crate) async fn subscription_meta(
     pool: &PgPool,
     query_id: &str,
 ) -> Result<Option<(String, String, i64)>, sqlx::Error> {
@@ -81,7 +219,7 @@ async fn subscription_meta(
 /// claims, by EXACT JSON value (so `{"sub":42}` does NOT match `{"sub":"42"}`).
 /// An empty audience is public (allow). A non-NULL but predicate-less audience
 /// (`null` / `{}` / non-object) fails closed.
-fn claims_satisfy_audience(audience: &str, claims_json: &str) -> bool {
+pub(crate) fn claims_satisfy_audience(audience: &str, claims_json: &str) -> bool {
     if audience.is_empty() {
         return true;
     }
@@ -167,15 +305,21 @@ async fn close_with(
 /// Handle an established WebSocket connection for a given query_id, bound to the
 /// generation it authorized against. `claims` is the connection's resolved
 /// identity (role + sub + claims JSON) used for the audience gate.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_websocket(
     socket: WebSocket,
     query_id: String,
     channels: Channels,
+    presence: PresenceStore,
     pg_pool: PgPool,
     broadcast_capacity: usize,
     claims: RequestClaims,
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Server-assigned presence id (a peer can't spoof another's id — see
+    // dispatch_client_message).
+    let client_id = generate_client_id();
 
     // 1. Audience/mode/generation gate from the transactional catalog (inv 15).
     let (_mode, audience, my_gen) = match subscription_meta(&pg_pool, &query_id).await {
@@ -207,14 +351,16 @@ pub async fn handle_websocket(
 
     info!("WebSocket connected: query_id={query_id} gen={my_gen}");
 
-    // 3. Subscribe to the broadcast channel for this query_id.
-    let mut rx = {
+    // 3. Subscribe to the broadcast channel for this query_id. Keep a `tx` clone
+    //    so presence/broadcast events this connection emits ride the SAME channel
+    //    (and so the SAME generation gate) as deltas.
+    let (mut rx, tx) = {
         let mut channels_write = channels.write().await;
         let tx = channels_write.entry(query_id.clone()).or_insert_with(|| {
             let (tx, _) = broadcast::channel(broadcast_capacity);
             tx
         });
-        tx.subscribe()
+        (tx.subscribe(), tx.clone())
     };
 
     // 4. Welcome.
@@ -254,6 +400,20 @@ pub async fn handle_websocket(
             return;
         }
     }
+
+    // Presence join: register with empty state under this connection's
+    // generation and announce it to same-generation peers (gen-gated fan-out,
+    // inv 17(a)(f)). The join event also echoes back to this connection's own rx.
+    presence
+        .set(&query_id, &client_id, serde_json::json!({}), my_gen)
+        .await;
+    let join_event = serde_json::json!({
+        "type": "presence_join",
+        "channel": query_id,
+        "client_id": client_id,
+        "state": {},
+    });
+    publish_gen(&tx, join_event.to_string(), my_gen);
 
     // 6. Receive loop: deliver only on EXACT generation match; a resubscribed
     //    notice of a different generation revokes this (stale) connection.
@@ -304,6 +464,15 @@ pub async fn handle_websocket(
                             break;
                         }
                     }
+                    Some(Ok(Message::Text(text))) => {
+                        // Client-originated presence/broadcast — fanned out
+                        // generation-gated. Clients CANNOT forge server
+                        // deltas/overflow/invalidated (those come only from PG).
+                        dispatch_client_message(
+                            &presence, &tx, &query_id, &client_id, text.as_bytes(), my_gen,
+                        )
+                        .await;
+                    }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => { info!("WebSocket error: {e}"); break; }
                 }
@@ -311,11 +480,21 @@ pub async fn handle_websocket(
         }
     }
 
+    // Presence leave: drop this client and announce it to same-generation peers
+    // (gen-gated, inv 17(a)(f)).
+    presence.leave(&query_id, &client_id).await;
+    let leave_event = serde_json::json!({
+        "type": "presence_leave",
+        "channel": query_id,
+        "client_id": client_id,
+    });
+    publish_gen(&tx, leave_event.to_string(), my_gen);
+
     // Clean up the broadcast channel when the last subscriber leaves.
     {
         let mut channels_write = channels.write().await;
-        if let Some(tx) = channels_write.get(&query_id) {
-            if tx.receiver_count() == 0 {
+        if let Some(ch_tx) = channels_write.get(&query_id) {
+            if ch_tx.receiver_count() == 0 {
                 channels_write.remove(&query_id);
             }
         }

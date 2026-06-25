@@ -171,6 +171,10 @@ fn build_router(state: AppState) -> Router {
         .route("/health", get(routes::health::health))
         // WebSocket (pg_reactive)
         .route("/ws/{query_id}", get(ws_handler))
+        // Presence HTTP read — same auth + audience gate as the WS upgrade so it
+        // isn't a side channel into private rooms; filtered to the channel's
+        // current committed generation (inv 17(a)(f)).
+        .route("/ws/_presence/{channel}", get(presence_handler))
         // Auth (rate-limited: signup, token, recover, recover/confirm, magiclink)
         .merge(auth_rate_limited)
         // Auth (anonymous signin — separate rate-limit bucket)
@@ -396,10 +400,14 @@ async fn ws_handler(
         .map_err(|_| error::AppError::TooManyRequests("too many WebSocket connections".into()))?;
 
     let channels = state.channels.clone();
+    let presence = state.presence.clone();
     // subscription_meta gate + initial snapshot read pgr.* (only service_role can) —
     // use the admin pool. The generation/audience gating happens in handle_websocket.
     let pg_pool = state.admin_pool.clone();
     let broadcast_capacity = state.config.broadcast_capacity;
+
+    // Hard-cap inbound frames (parity with Go conn.SetReadLimit(maxWSMessageBytes)).
+    let ws = ws.max_message_size(realtime::ws::MAX_WS_MESSAGE_BYTES);
 
     Ok(ws.on_upgrade(move |socket| {
         // Both the global permit and the per-IP guard are moved into the async
@@ -410,6 +418,7 @@ async fn ws_handler(
                 socket,
                 query_id,
                 channels,
+                presence,
                 pg_pool,
                 broadcast_capacity,
                 claims,
@@ -451,6 +460,97 @@ fn resolve_ws_claims(
         }
     }
     RequestClaims::anon()
+}
+
+/// GET /ws/_presence/{channel} — current presence list for a channel.
+///
+/// Runs the SAME auth + audience gate as `ws_handler` so it is not an
+/// unauthenticated side channel into a private room, and returns ONLY the
+/// presence written under the channel's current committed generation
+/// (SECURITY.md inv 17(a)(f)). Mirror of Go `realtime.PresenceHandler`.
+async fn presence_handler(
+    state: axum::extract::State<AppState>,
+    path: axum::extract::Path<String>,
+    req: axum::extract::OriginalUri,
+    headers: axum::http::HeaderMap,
+) -> Result<impl axum::response::IntoResponse, error::AppError> {
+    let channel = path.0;
+    if channel.is_empty() {
+        return Err(error::AppError::BadRequest("channel is required".into()));
+    }
+    let query_str = req.0.query();
+
+    // Auth — same shape as ws_handler: resolve identity and whether the caller is
+    // an anon-key holder, enforcing REQUIRE_AUTHENTICATED_WS and JWT presence.
+    let mut is_anon = false;
+    let claims = if state.config.jwt_secret.is_some() {
+        let auth_header = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        let bearer = auth_header.and_then(|h| h.strip_prefix("Bearer "));
+        let apikey_q = query_str.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("apikey=")));
+        let token_q = query_str.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")));
+
+        let anon_via_bearer = state
+            .config
+            .anon_key
+            .as_ref()
+            .is_some_and(|ak| bearer.is_some_and(|t| auth::keys::constant_time_eq(t, ak)));
+        let anon_via_apikey = state
+            .config
+            .anon_key
+            .as_ref()
+            .is_some_and(|ak| apikey_q.is_some_and(|k| auth::keys::constant_time_eq(k, ak)));
+        is_anon = anon_via_bearer || anon_via_apikey;
+
+        if is_anon && state.config.require_authenticated_ws {
+            return Err(error::AppError::Unauthorized(
+                "authenticated presence read required".into(),
+            ));
+        }
+        if is_anon {
+            middleware::rls::RequestClaims::anon()
+        } else {
+            // A non-anon caller MUST present a credential: a service_role key
+            // (bearer/apikey) or a JWT (bearer/?token=). Absent or invalid → 401.
+            if bearer.is_none() && apikey_q.is_none() && token_q.is_none() {
+                return Err(error::AppError::Unauthorized("authentication required".into()));
+            }
+            let resolved = resolve_ws_claims(&state, &headers, query_str);
+            if resolved.role == "anon" {
+                return Err(error::AppError::Unauthorized("authentication required".into()));
+            }
+            resolved
+        }
+    } else {
+        // Auth disabled (no JWT secret) — mirror the dev WS path: accept.
+        middleware::rls::RequestClaims::anon()
+    };
+
+    // Audience gate — admin pool reads pgr.subscription_meta (only service_role
+    // can). Unknown channel → 404; DB error → 503 (fail closed).
+    let (audience, current_gen) = match realtime::ws::subscription_meta(&state.admin_pool, &channel)
+        .await
+    {
+        Ok(Some((_mode, audience, gen))) => (audience, gen),
+        Ok(None) => return Err(error::AppError::NotFound("channel not found".into())),
+        Err(e) => {
+            warn!("presence metadata lookup failed for {channel}: {e}; failing closed");
+            return Err(error::AppError::ServiceUnavailable(
+                "channel metadata unavailable".into(),
+            ));
+        }
+    };
+    if let Some((status, msg)) = realtime::ws::gate_presence_access(&audience, is_anon, &claims) {
+        return Err(match status {
+            axum::http::StatusCode::FORBIDDEN => error::AppError::Forbidden(msg.into()),
+            _ => error::AppError::Unauthorized(msg.into()),
+        });
+    }
+
+    // Restrict to the current committed generation (inv 17(f)).
+    let presence_map = state.presence.list(&channel, current_gen).await;
+    Ok(axum::Json(presence_map))
 }
 
 async fn shutdown_signal() {

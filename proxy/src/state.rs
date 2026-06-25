@@ -125,6 +125,12 @@ pub struct AppState {
     pub ws_conn_limiter: Arc<WsConnLimiter>,
     /// SMTP mailer (logs to console when SMTP not configured).
     pub mailer: Arc<crate::auth::mailer::Mailer>,
+    /// Per-channel presence store. Each entry is tagged with the generation the
+    /// writing connection authorized against; reads are generation-filtered so a
+    /// stale-epoch reader never sees another epoch's presence (SECURITY.md inv
+    /// 17(a)(f)). The presence/broadcast fan-out itself rides the per-query
+    /// `channels` broadcast (gen-gated in the WS receive loop).
+    pub presence: crate::realtime::presence::PresenceStore,
 }
 
 impl AppState {
@@ -147,6 +153,7 @@ impl AppState {
             ws_semaphore,
             ws_conn_limiter,
             mailer,
+            presence: crate::realtime::presence::PresenceStore::new(),
         }
     }
 
