@@ -18,7 +18,8 @@ if (!existsSync(join(_testDir, 'node_modules', 'ws'))) {
 }
 const { default: WebSocket } = await import('ws');
 
-const PROXY_URL = 'ws://127.0.0.1:8080/ws/e2e_q1';
+const WS_BASE = process.env.WS_BASE || 'ws://127.0.0.1:8080';
+const PROXY_URL = `${WS_BASE}/ws/e2e_q1`;
 const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 const TIMEOUT_MS = 10000;
 

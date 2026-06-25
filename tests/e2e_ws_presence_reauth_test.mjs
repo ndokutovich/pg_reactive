@@ -23,7 +23,7 @@ if (!existsSync(join(_testDir, 'node_modules', 'ws'))) {
 }
 const { default: WebSocket } = await import('ws');
 
-const URL = 'ws://127.0.0.1:8080';
+const URL = process.env.WS_BASE || 'ws://127.0.0.1:8080';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-jwt-secret-do-not-use-in-production';
 const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 
