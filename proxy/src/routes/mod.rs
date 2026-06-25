@@ -3,5 +3,6 @@ pub mod demo;
 pub mod health;
 pub mod rls_debug;
 pub mod sql;
+pub mod storage;
 pub mod studio;
 pub mod webhooks;

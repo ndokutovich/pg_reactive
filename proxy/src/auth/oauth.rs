@@ -185,6 +185,7 @@ pub async fn callback(
                 | AppError::NotFound(ref msg)
                 | AppError::Forbidden(ref msg)
                 | AppError::Conflict(ref msg)
+                | AppError::PayloadTooLarge(ref msg)
                 | AppError::TooManyRequests(ref msg)
                 | AppError::ServiceUnavailable(ref msg) => msg.clone(),
             };

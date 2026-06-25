@@ -87,6 +87,20 @@ async fn main() {
 
     let state = AppState::new(config.clone(), pg_pool, admin_pool);
 
+    // One-shot orphan sweep for the disk storage backend (audit F1 round 19/20):
+    // clears partial-upload staging/backup files left by uploads killed mid-flight.
+    // Runs only when STORAGE_BACKEND=disk. Mirror of Go main.go's startup sweep.
+    if config.storage_backend == "disk" && !config.storage_dir.is_empty() {
+        let dir = config.storage_dir.clone();
+        tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                routes::storage::sweep_disk_orphans(&dir, std::time::Duration::from_secs(600));
+            })
+            .await
+            .ok();
+        });
+    }
+
     // Load catalog (table metadata for REST API)
     if let Err(e) = state.catalog.refresh(&state.admin_pool).await {
         warn!("catalog refresh failed (REST API may not work): {}", e);
@@ -272,10 +286,43 @@ fn build_router(state: AppState) -> Router {
             middleware::security_headers::studio_security_headers,
         ));
 
-    // Merge: studio checked first, then API.
-    // CORS goes on the outer router so it applies to both.
+    // Storage routes — own group with NO 1 MB RequestBodyLimit (uploads are
+    // large); instead a per-route DefaultBodyLimit of MAX_FILE_SIZE + 1 KB caps
+    // the stream, mirroring Go's MaxBytesReader (over-limit → 413). Route order
+    // mirrors Go's chi mounts: the static `object/list/{bucket}` is registered
+    // before the `object/{bucket}/{*path}` catch-all.
+    let storage_body_limit = (state.config.max_file_size.max(0) as usize).saturating_add(1024);
+    let storage_router = Router::new()
+        .route(
+            "/storage/v1/bucket",
+            post(routes::storage::create_bucket).get(routes::storage::list_buckets),
+        )
+        .route(
+            "/storage/v1/bucket/{bucketId}",
+            delete(routes::storage::delete_bucket),
+        )
+        .route(
+            "/storage/v1/object/list/{bucket}",
+            get(routes::storage::list_objects),
+        )
+        .route(
+            "/storage/v1/object/{bucket}/{*path}",
+            post(routes::storage::upload_object)
+                .get(routes::storage::download_object)
+                .delete(routes::storage::delete_object),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(storage_body_limit))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::security_headers::security_headers,
+        ))
+        .with_state(state.clone());
+
+    // Merge: studio checked first, then storage, then API.
+    // CORS goes on the outer router so it applies to all.
     Router::new()
         .merge(studio_router)
+        .merge(storage_router)
         .merge(api_router)
         .layer(middleware::cors::cors_layer(
             state.config.allowed_origins.as_deref(),

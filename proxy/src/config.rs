@@ -91,6 +91,15 @@ pub struct Config {
     /// that need encryption refuse to store/return plaintext. Validated as
     /// decodable at load (fail-fast); required in production (mirror Go).
     pub secrets_encryption_key: Option<String>,
+    /// Storage object backend: "database" (bytea column, default) or "disk"
+    /// (files under `storage_dir`). Env `STORAGE_BACKEND`. Mirror Go config.go.
+    pub storage_backend: String,
+    /// Filesystem root for the disk storage backend. Env `STORAGE_DIR`
+    /// (default `/data/storage`). Mirror Go config.go.
+    pub storage_dir: String,
+    /// Hard ceiling (bytes) on a single storage upload. Env `MAX_FILE_SIZE`
+    /// (default 50 MB). A per-bucket `file_size_limit` may lower it. Mirror Go.
+    pub max_file_size: i64,
 }
 
 impl Config {
@@ -264,6 +273,14 @@ impl Config {
             }
         }
 
+        let storage_backend =
+            std::env::var("STORAGE_BACKEND").unwrap_or_else(|_| "database".into());
+        let storage_dir = std::env::var("STORAGE_DIR").unwrap_or_else(|_| "/data/storage".into());
+        let max_file_size: i64 = std::env::var("MAX_FILE_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(52428800); // 50 MB default for storage uploads
+
         Self {
             database_url,
             admin_database_url,
@@ -308,6 +325,9 @@ impl Config {
             notify_channel,
             max_batch_operations,
             secrets_encryption_key,
+            storage_backend,
+            storage_dir,
+            max_file_size,
         }
     }
 
@@ -351,6 +371,14 @@ impl Config {
                 "NOTIFY_CHANNEL={:?} is not a valid PG identifier (must match ^[A-Za-z_][A-Za-z0-9_]*$); it is used in a LISTEN statement and must equal the extension's pg_reactive.notify_channel",
                 self.notify_channel
             ));
+        }
+        // STORAGE_BACKEND is validated in EVERY environment (mirror Go
+        // Config.Validate, which checks it outside the production block).
+        match self.storage_backend.as_str() {
+            "" | "database" | "disk" => {}
+            other => errs.push(format!(
+                "STORAGE_BACKEND={other:?} is invalid (use database or disk)"
+            )),
         }
         if self.pgstack_env != "production" {
             return errs;
@@ -525,6 +553,9 @@ mod tests {
             notify_channel: "pgr".into(),
             max_batch_operations: 20,
             secrets_encryption_key: Some("base64-key-placeholder-present".into()),
+            storage_backend: "database".into(),
+            storage_dir: "/data/storage".into(),
+            max_file_size: 52428800,
         }
     }
 
@@ -640,6 +671,30 @@ mod tests {
             !c.validate().iter().any(|e| e.contains("SMTP")),
             "full SMTP config must pass: {:?}",
             c.validate()
+        );
+    }
+
+    // STORAGE_BACKEND is validated in any environment (mirror Go); an invalid
+    // value is fatal even in development, valid values pass.
+    #[test]
+    fn storage_backend_validation() {
+        for ok in ["", "database", "disk"] {
+            let mut c = valid_prod();
+            c.pgstack_env = "development".into();
+            c.storage_backend = ok.into();
+            assert!(
+                !c.validate().iter().any(|e| e.contains("STORAGE_BACKEND")),
+                "STORAGE_BACKEND={ok:?} must be accepted: {:?}",
+                c.validate()
+            );
+        }
+        let mut bad = valid_prod();
+        bad.pgstack_env = "development".into();
+        bad.storage_backend = "s3".into();
+        assert!(
+            bad.validate().iter().any(|e| e.contains("STORAGE_BACKEND")),
+            "STORAGE_BACKEND=s3 must fail validation in any environment: {:?}",
+            bad.validate()
         );
     }
 

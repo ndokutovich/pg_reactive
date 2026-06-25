@@ -441,6 +441,7 @@ fn app_error_status(e: AppError) -> (u16, String) {
         AppError::Forbidden(m) => (403, m),
         AppError::NotFound(m) => (404, m),
         AppError::Conflict(m) => (409, m),
+        AppError::PayloadTooLarge(m) => (413, m),
         AppError::TooManyRequests(m) => (429, m),
         AppError::ServiceUnavailable(m) => (503, m),
         AppError::Internal(m) => (500, m),
