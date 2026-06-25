@@ -40,7 +40,10 @@ pub fn validate_webhook_url(raw: &str) -> Result<Url, String> {
 
     let scheme = u.scheme().to_lowercase();
     if scheme != "http" && scheme != "https" {
-        return Err(format!("url scheme must be http or https, got {:?}", u.scheme()));
+        return Err(format!(
+            "url scheme must be http or https, got {:?}",
+            u.scheme()
+        ));
     }
 
     let host = match u.host_str() {
@@ -58,7 +61,10 @@ pub fn validate_webhook_url(raw: &str) -> Result<Url, String> {
     }
     // url::Host also classifies IPv6 literals; reject those too (defensive — the
     // string parse above already covers `[::1]` once brackets are stripped).
-    if matches!(u.host(), Some(url::Host::Ipv6(_)) | Some(url::Host::Ipv4(_))) {
+    if matches!(
+        u.host(),
+        Some(url::Host::Ipv6(_)) | Some(url::Host::Ipv4(_))
+    ) {
         return Err(format!(
             "url host must be a hostname, not an IP literal ({host})"
         ));
@@ -193,10 +199,7 @@ mod tests {
             "http://api.example.com/webhook",
             "https://my-app.example.com:8443/inbound",
         ] {
-            assert!(
-                validate_webhook_url(raw).is_ok(),
-                "expected valid: {raw}"
-            );
+            assert!(validate_webhook_url(raw).is_ok(), "expected valid: {raw}");
         }
     }
 
@@ -209,10 +212,7 @@ mod tests {
             "https://192.168.1.1/admin",
             "http://[::1]:8080/",
         ] {
-            assert!(
-                validate_webhook_url(raw).is_err(),
-                "expected reject: {raw}"
-            );
+            assert!(validate_webhook_url(raw).is_err(), "expected reject: {raw}");
         }
     }
 
@@ -226,10 +226,7 @@ mod tests {
             "http://db",       // bare docker-network name
             "http://hello-go", // bare docker-network name
         ] {
-            assert!(
-                validate_webhook_url(raw).is_err(),
-                "expected reject: {raw}"
-            );
+            assert!(validate_webhook_url(raw).is_err(), "expected reject: {raw}");
         }
     }
 
@@ -241,10 +238,7 @@ mod tests {
             "ftp://api.example.com/",
             "javascript:alert(1)",
         ] {
-            assert!(
-                validate_webhook_url(raw).is_err(),
-                "expected reject: {raw}"
-            );
+            assert!(validate_webhook_url(raw).is_err(), "expected reject: {raw}");
         }
     }
 

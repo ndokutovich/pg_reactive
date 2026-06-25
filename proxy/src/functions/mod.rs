@@ -60,7 +60,11 @@ fn is_valid_fn_name(name: &str) -> bool {
 
 /// GET/POST /functions/v1/{name} — resolve the function, gate on `verify_jwt`,
 /// then dispatch to the runtime (mirror Go `invoke`).
-pub async fn invoke(State(state): State<AppState>, Path(name): Path<String>, req: Request) -> Response {
+pub async fn invoke(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    req: Request,
+) -> Response {
     if !is_valid_fn_name(&name) {
         return json_error(StatusCode::BAD_REQUEST, "invalid function name");
     }
@@ -101,15 +105,22 @@ pub async fn invoke(State(state): State<AppState>, Path(name): Path<String>, req
                 return json_error(StatusCode::BAD_REQUEST, "embedded runtime disabled");
             }
             let pool = state.pool_for(&claims.role).clone();
-            let fut =
-                embedded::execute_embedded(fm.code.clone(), body_bytes.to_vec(), claims.clone(), pool);
+            let fut = embedded::execute_embedded(
+                fm.code.clone(),
+                body_bytes.to_vec(),
+                claims.clone(),
+                pool,
+            );
             let exec = if timeout.is_zero() {
                 fut.await
             } else {
                 match tokio::time::timeout(timeout, fut).await {
                     Ok(r) => r,
                     Err(_) => {
-                        return json_error(StatusCode::GATEWAY_TIMEOUT, "function execution timed out")
+                        return json_error(
+                            StatusCode::GATEWAY_TIMEOUT,
+                            "function execution timed out",
+                        )
                     }
                 }
             };
@@ -122,7 +133,10 @@ pub async fn invoke(State(state): State<AppState>, Path(name): Path<String>, req
                     .into_response(),
                 Err(e) => {
                     error!(fn = %name, error = %e, "functions: embedded execution failed");
-                    json_error(StatusCode::INTERNAL_SERVER_ERROR, "function execution failed")
+                    json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "function execution failed",
+                    )
                 }
             }
         }
@@ -134,7 +148,9 @@ pub async fn invoke(State(state): State<AppState>, Path(name): Path<String>, req
             } else {
                 match tokio::time::timeout(timeout, fut).await {
                     Ok(r) => r,
-                    Err(_) => json_error(StatusCode::GATEWAY_TIMEOUT, "function execution timed out"),
+                    Err(_) => {
+                        json_error(StatusCode::GATEWAY_TIMEOUT, "function execution timed out")
+                    }
                 }
             }
         }
@@ -178,7 +194,10 @@ pub async fn invoke(State(state): State<AppState>, Path(name): Path<String>, req
 /// `List`). Env vars are never serialised.
 pub async fn list(State(state): State<AppState>, claims: RequestClaims) -> Response {
     if claims.role != "service_role" {
-        return json_error(StatusCode::FORBIDDEN, "listing functions requires service_role");
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "listing functions requires service_role",
+        );
     }
     let funcs: Vec<serde_json::Value> = state
         .functions
@@ -208,7 +227,10 @@ pub async fn list(State(state): State<AppState>, claims: RequestClaims) -> Respo
 /// Go `Refresh`). Reads `pgstack.edge_functions` on the admin pool.
 pub async fn refresh(State(state): State<AppState>, claims: RequestClaims) -> Response {
     if claims.role != "service_role" {
-        return json_error(StatusCode::FORBIDDEN, "functions refresh requires service_role");
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "functions refresh requires service_role",
+        );
     }
     match state.functions.refresh(&state.admin_pool).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
@@ -228,7 +250,14 @@ mod tests {
         for ok in ["hello", "_x", "my-fn", "a1_b2-c3", "H"] {
             assert!(is_valid_fn_name(ok), "want valid: {ok}");
         }
-        for bad in ["", "1abc", "-leading", "has space", "white space", &"x".repeat(64)] {
+        for bad in [
+            "",
+            "1abc",
+            "-leading",
+            "has space",
+            "white space",
+            &"x".repeat(64),
+        ] {
             assert!(!is_valid_fn_name(bad), "want invalid: {bad}");
         }
     }

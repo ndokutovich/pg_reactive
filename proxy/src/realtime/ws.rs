@@ -172,7 +172,10 @@ pub(crate) fn gate_presence_access(
         return None;
     }
     if is_anon {
-        return Some((StatusCode::FORBIDDEN, "channel requires an authenticated JWT"));
+        return Some((
+            StatusCode::FORBIDDEN,
+            "channel requires an authenticated JWT",
+        ));
     }
     if claims.sub.is_none() || !claims_satisfy_audience(audience, &claims.claims_json) {
         return Some((

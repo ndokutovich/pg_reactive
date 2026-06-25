@@ -18,10 +18,7 @@ use crate::error::AppError;
 ///
 /// A string without `{{` (including the empty string) is returned unchanged,
 /// matching the Go fast-path.
-pub fn resolve_templates(
-    raw: &str,
-    results: &HashMap<String, Value>,
-) -> Result<String, AppError> {
+pub fn resolve_templates(raw: &str, results: &HashMap<String, Value>) -> Result<String, AppError> {
     if !raw.contains("{{") {
         return Ok(raw.to_string());
     }
@@ -164,9 +161,9 @@ fn navigate_path(data: &Value, path: &str, leaf: fn(&Value) -> String) -> Result
 
         // Try as array index first.
         if let Ok(idx) = seg.parse::<usize>() {
-            let arr = current.as_array().ok_or_else(|| {
-                format!("template: expected array at index {idx}, got non-array")
-            })?;
+            let arr = current
+                .as_array()
+                .ok_or_else(|| format!("template: expected array at index {idx}, got non-array"))?;
             current = arr.get(idx).ok_or_else(|| {
                 format!(
                     "template: array index {idx} out of bounds (len {})",
@@ -230,7 +227,10 @@ mod tests {
     use serde_json::json;
 
     fn results(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -281,10 +281,7 @@ mod tests {
 
     #[test]
     fn test_resolve_templates_uuid_string() {
-        let r = results(&[(
-            "op1",
-            json!({"id":"550e8400-e29b-41d4-a716-446655440000"}),
-        )]);
+        let r = results(&[("op1", json!({"id":"550e8400-e29b-41d4-a716-446655440000"}))]);
         let raw = r#"{"ref":"{{op1.id}}"}"#;
         let out = resolve_templates(raw, &r).unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
@@ -345,7 +342,11 @@ mod tests {
             parsed["name"], payload,
             "name must round-trip as the literal payload — raw: {out}"
         );
-        assert_eq!(obj.len(), 1, "expected exactly one top-level key — raw: {out}");
+        assert_eq!(
+            obj.len(),
+            1,
+            "expected exactly one top-level key — raw: {out}"
+        );
     }
 
     // The escaping fix must not break the legitimate non-string position

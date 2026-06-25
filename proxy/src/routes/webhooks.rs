@@ -79,7 +79,9 @@ pub async fn create_webhook(
             Ok(enc) => Some(enc),
             Err(e) => {
                 error!("webhooks: encrypt secret: {e}");
-                return Err(AppError::Internal("internal error encrypting secret".into()));
+                return Err(AppError::Internal(
+                    "internal error encrypting secret".into(),
+                ));
             }
         }
     };

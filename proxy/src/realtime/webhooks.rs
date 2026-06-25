@@ -270,7 +270,11 @@ fn matches_event(events: &[String], event: &str) -> bool {
 /// Deliver with 3 attempts and exponential backoff (Go `deliverWithRetry`).
 async fn deliver_with_retry(client: &reqwest::Client, wh: &Webhook, body: &[u8]) {
     // 3 attempts; backoff before attempts 2 and 3 (0s, 1s, 4s — Go delays[0..3]).
-    let delays = [Duration::ZERO, Duration::from_secs(1), Duration::from_secs(4)];
+    let delays = [
+        Duration::ZERO,
+        Duration::from_secs(1),
+        Duration::from_secs(4),
+    ];
     for (attempt, delay) in delays.iter().enumerate() {
         if !delay.is_zero() {
             tokio::time::sleep(*delay).await;
@@ -335,7 +339,10 @@ mod tests {
         let null: Box<RawValue> = RawValue::from_string("null".into()).unwrap();
         assert!(raw_or_none(Some(&null)).is_none());
         let obj: Box<RawValue> = RawValue::from_string(r#"{"id":1}"#.into()).unwrap();
-        assert_eq!(raw_or_none(Some(&obj)).map(|v| v.get()), Some(r#"{"id":1}"#));
+        assert_eq!(
+            raw_or_none(Some(&obj)).map(|v| v.get()),
+            Some(r#"{"id":1}"#)
+        );
         assert!(raw_or_none(None).is_none());
     }
 
@@ -356,6 +363,9 @@ mod tests {
         assert_eq!(v["event"], "INSERT");
         assert_eq!(v["table"], "orders");
         assert_eq!(v["record"]["id"], 42);
-        assert!(v.get("old_record").is_none(), "null old_record must be dropped");
+        assert!(
+            v.get("old_record").is_none(),
+            "null old_record must be dropped"
+        );
     }
 }

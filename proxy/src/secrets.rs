@@ -214,7 +214,10 @@ mod tests {
         let pt = b"same plaintext";
         let c1 = b.encrypt(pt).unwrap();
         let c2 = b.encrypt(pt).unwrap();
-        assert_ne!(c1, c2, "nonce reuse: identical ciphertext for same plaintext");
+        assert_ne!(
+            c1, c2,
+            "nonce reuse: identical ciphertext for same plaintext"
+        );
     }
 
     #[test]

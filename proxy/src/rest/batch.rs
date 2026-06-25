@@ -343,8 +343,8 @@ async fn batch_insert(
 ) -> Result<BatchResult, AppError> {
     let raw = resolve_body(op, results_by_id)?
         .ok_or_else(|| AppError::BadRequest("invalid JSON body".into()))?;
-    let body: Value = serde_json::from_str(&raw)
-        .map_err(|_| AppError::BadRequest("invalid JSON body".into()))?;
+    let body: Value =
+        serde_json::from_str(&raw).map_err(|_| AppError::BadRequest("invalid JSON body".into()))?;
     let is_array = body.is_array();
 
     let built = query_builder::build_insert(table, &body)?;
@@ -381,8 +381,8 @@ async fn batch_update(
 
     let raw = resolve_body(op, results_by_id)?
         .ok_or_else(|| AppError::BadRequest("invalid JSON body".into()))?;
-    let body: Value = serde_json::from_str(&raw)
-        .map_err(|_| AppError::BadRequest("invalid JSON body".into()))?;
+    let body: Value =
+        serde_json::from_str(&raw).map_err(|_| AppError::BadRequest("invalid JSON body".into()))?;
 
     let built = query_builder::build_update(table, &body, &query)?;
     let rows = handlers::execute_dml_json(tx, &built).await?;

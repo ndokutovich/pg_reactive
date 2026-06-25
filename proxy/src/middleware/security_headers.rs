@@ -30,7 +30,10 @@ xr-spatial-tracking=()";
 /// spoofed `X-Forwarded-Proto: https` against a directly-exposed proxy. Mirror of
 /// Go `middleware.isHTTPS` (round-21 F4+F5, SECURITY.md inv 10).
 fn is_https(headers: &HeaderMap, remote_ip: Option<IpAddr>, trusted_proxies: &str) -> bool {
-    let xfp = match headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()) {
+    let xfp = match headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+    {
         Some(v) => v,
         None => return false,
     };

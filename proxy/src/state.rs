@@ -147,8 +147,10 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config, pg_pool: PgPool, admin_pool: PgPool) -> Self {
         let rate_limiter = RateLimiter::new(config.auth_rate_limit, config.auth_rate_window_secs);
-        let anonymous_rate_limiter =
-            RateLimiter::new(config.anonymous_rate_limit, config.anonymous_rate_window_secs);
+        let anonymous_rate_limiter = RateLimiter::new(
+            config.anonymous_rate_limit,
+            config.anonymous_rate_window_secs,
+        );
         let ws_semaphore = Arc::new(Semaphore::new(config.max_connections));
         let ws_conn_limiter = WsConnLimiter::new(config.ws_max_per_ip);
         let mailer = Arc::new(crate::auth::mailer::Mailer::from_env());
@@ -252,7 +254,11 @@ mod tests {
         let limiter = WsConnLimiter::new(0);
         let ip: IpAddr = "10.0.0.3".parse().unwrap();
         let guards: Vec<_> = (0..100).filter_map(|_| limiter.try_acquire(ip)).collect();
-        assert_eq!(guards.len(), 100, "disabled cap must admit every connection");
+        assert_eq!(
+            guards.len(),
+            100,
+            "disabled cap must admit every connection"
+        );
         // Disabled cap never counts, so the map stays empty.
         assert_eq!(limiter.count(ip), 0);
     }

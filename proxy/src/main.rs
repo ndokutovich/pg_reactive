@@ -116,7 +116,9 @@ async fn main() {
     // only), then auto-refresh on `pgstack_fn_changed` NOTIFY. Mirror Go's
     // initial Refresh + StartAutoRefresh.
     if let Err(e) = state.functions.refresh(&state.admin_pool).await {
-        warn!("initial edge functions catalog load failed — functions may 404 until refreshed: {e}");
+        warn!(
+            "initial edge functions catalog load failed — functions may 404 until refreshed: {e}"
+        );
     } else {
         info!("edge functions catalog loaded");
     }
@@ -199,8 +201,7 @@ fn build_router(state: AppState) -> Router {
     // /api/demo mutates demo tables — mount only when explicitly enabled or a
     // service_role key is configured (the handler still gates every request).
     // Mirrors Go main.go's `EnableDemoEndpoint || ServiceRoleKey != ""` gate.
-    let mount_demo =
-        state.config.enable_demo_endpoint || state.config.service_role_key.is_some();
+    let mount_demo = state.config.enable_demo_endpoint || state.config.service_role_key.is_some();
 
     // All API routes with strict CSP
     let mut api_router = Router::new()
@@ -476,8 +477,7 @@ async fn ws_handler(
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
-    let client_ip =
-        middleware::rate_limit::resolve_client_ip(&headers, conn.0.ip(), &trusted);
+    let client_ip = middleware::rate_limit::resolve_client_ip(&headers, conn.0.ip(), &trusted);
     let ip_guard = state
         .ws_conn_limiter
         .try_acquire(client_ip)
@@ -610,11 +610,15 @@ async fn presence_handler(
             // A non-anon caller MUST present a credential: a service_role key
             // (bearer/apikey) or a JWT (bearer/?token=). Absent or invalid → 401.
             if bearer.is_none() && apikey_q.is_none() && token_q.is_none() {
-                return Err(error::AppError::Unauthorized("authentication required".into()));
+                return Err(error::AppError::Unauthorized(
+                    "authentication required".into(),
+                ));
             }
             let resolved = resolve_ws_claims(&state, &headers, query_str);
             if resolved.role == "anon" {
-                return Err(error::AppError::Unauthorized("authentication required".into()));
+                return Err(error::AppError::Unauthorized(
+                    "authentication required".into(),
+                ));
             }
             resolved
         }
@@ -625,18 +629,17 @@ async fn presence_handler(
 
     // Audience gate — admin pool reads pgr.subscription_meta (only service_role
     // can). Unknown channel → 404; DB error → 503 (fail closed).
-    let (audience, current_gen) = match realtime::ws::subscription_meta(&state.admin_pool, &channel)
-        .await
-    {
-        Ok(Some((_mode, audience, gen))) => (audience, gen),
-        Ok(None) => return Err(error::AppError::NotFound("channel not found".into())),
-        Err(e) => {
-            warn!("presence metadata lookup failed for {channel}: {e}; failing closed");
-            return Err(error::AppError::ServiceUnavailable(
-                "channel metadata unavailable".into(),
-            ));
-        }
-    };
+    let (audience, current_gen) =
+        match realtime::ws::subscription_meta(&state.admin_pool, &channel).await {
+            Ok(Some((_mode, audience, gen))) => (audience, gen),
+            Ok(None) => return Err(error::AppError::NotFound("channel not found".into())),
+            Err(e) => {
+                warn!("presence metadata lookup failed for {channel}: {e}; failing closed");
+                return Err(error::AppError::ServiceUnavailable(
+                    "channel metadata unavailable".into(),
+                ));
+            }
+        };
     if let Some((status, msg)) = realtime::ws::gate_presence_access(&audience, is_anon, &claims) {
         return Err(match status {
             axum::http::StatusCode::FORBIDDEN => error::AppError::Forbidden(msg.into()),

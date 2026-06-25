@@ -610,7 +610,9 @@ mod tests {
         let mut c = valid_prod();
         c.admin_database_url_set = false;
         assert!(
-            c.validate().iter().any(|e| e.contains("ADMIN_DATABASE_URL")),
+            c.validate()
+                .iter()
+                .any(|e| e.contains("ADMIN_DATABASE_URL")),
             "production without an explicit ADMIN_DATABASE_URL must fail: {:?}",
             c.validate()
         );
@@ -623,7 +625,9 @@ mod tests {
         c.enable_demo_endpoint = true;
         c.public_demo_site = false;
         assert!(
-            c.validate().iter().any(|e| e.contains("ENABLE_DEMO_ENDPOINT")),
+            c.validate()
+                .iter()
+                .any(|e| e.contains("ENABLE_DEMO_ENDPOINT")),
             "demo endpoint without PUBLIC_DEMO_SITE must fail in production: {:?}",
             c.validate()
         );
@@ -635,7 +639,9 @@ mod tests {
         c.enable_demo_endpoint = true;
         c.public_demo_site = true;
         assert!(
-            !c.validate().iter().any(|e| e.contains("ENABLE_DEMO_ENDPOINT")),
+            !c.validate()
+                .iter()
+                .any(|e| e.contains("ENABLE_DEMO_ENDPOINT")),
             "demo endpoint WITH PUBLIC_DEMO_SITE must pass: {:?}",
             c.validate()
         );
@@ -652,7 +658,7 @@ mod tests {
         assert!(!Config::is_valid_notify_channel("")); // empty
         assert!(!Config::is_valid_notify_channel("a b")); // space
         assert!(!Config::is_valid_notify_channel("a;DROP")); // injection attempt
-        // The default constructed by from_env is `pgr`.
+                                                             // The default constructed by from_env is `pgr`.
         assert_eq!(valid_prod().notify_channel, "pgr");
     }
 

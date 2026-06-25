@@ -177,7 +177,10 @@ mod tests {
         let claims = make_claims("user-recent-exp", Some(now_unix() - 30));
         let token = generate_token(&claims, TEST_SECRET).unwrap();
         let result = validate_token(&token, TEST_SECRET);
-        assert!(result.is_err(), "a token expired 30s ago must be rejected (leeway=0)");
+        assert!(
+            result.is_err(),
+            "a token expired 30s ago must be rejected (leeway=0)"
+        );
     }
 
     #[test]

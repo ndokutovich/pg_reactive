@@ -237,7 +237,11 @@ fn detect_content_type(data: &[u8]) -> &'static str {
         "text/xml; charset=utf-8"
     } else if data.starts_with(b"\x1f\x8b") {
         "application/x-gzip"
-    } else if !data.is_empty() && data.iter().all(|&b| b >= 0x20 || b == b'\n' || b == b'\r' || b == b'\t') {
+    } else if !data.is_empty()
+        && data
+            .iter()
+            .all(|&b| b >= 0x20 || b == b'\n' || b == b'\r' || b == b'\t')
+    {
         "text/plain; charset=utf-8"
     } else {
         "application/octet-stream"
@@ -283,7 +287,11 @@ pub async fn create_bucket(
         ));
     }
 
-    let bucket_id = if !body.id.is_empty() { body.id } else { body.name };
+    let bucket_id = if !body.id.is_empty() {
+        body.id
+    } else {
+        body.name
+    };
     if bucket_id.is_empty() {
         return Err(AppError::BadRequest("bucket id or name is required".into()));
     }
@@ -502,9 +510,16 @@ pub async fn upload_object(
     let is_service = claims.role == "service_role";
 
     let object_id = if state.config.storage_backend == "disk" {
-        upload_disk(&state, &bucket_id, &obj_name, file_size, &mime_type, &owner_id, is_service, &file_data).await?
+        upload_disk(
+            &state, &bucket_id, &obj_name, file_size, &mime_type, &owner_id, is_service, &file_data,
+        )
+        .await?
     } else {
-        let sql = if is_service { UPSERT_DB_SERVICE_ROLE } else { UPSERT_DB_OWNER_LOCKED };
+        let sql = if is_service {
+            UPSERT_DB_SERVICE_ROLE
+        } else {
+            UPSERT_DB_OWNER_LOCKED
+        };
         let row = sqlx::query(sql)
             .bind(&bucket_id)
             .bind(&obj_name)
@@ -520,7 +535,11 @@ pub async fn upload_object(
             })?;
         match row {
             Some(r) => r.get::<String, _>("id"),
-            None => return Err(AppError::Forbidden("cannot overwrite another user's object".into())),
+            None => {
+                return Err(AppError::Forbidden(
+                    "cannot overwrite another user's object".into(),
+                ))
+            }
         }
     };
 
@@ -550,12 +569,13 @@ async fn upload_disk(
     file_data: &[u8],
 ) -> Result<String, AppError> {
     let dir = &state.config.storage_dir;
-    let disk_path =
-        safe_storage_path(dir, bucket_id, obj_name).map_err(AppError::BadRequest)?;
+    let disk_path = safe_storage_path(dir, bucket_id, obj_name).map_err(AppError::BadRequest)?;
     if let Some(parent) = disk_path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             error!("storage: mkdir for disk upload: {e}");
-            return Err(AppError::Internal("failed to create storage directory".into()));
+            return Err(AppError::Internal(
+                "failed to create storage directory".into(),
+            ));
         }
     }
     // Stage the file in the reserved staging dir.
@@ -581,7 +601,11 @@ async fn upload_disk(
             return Err(AppError::Internal("internal database error".into()));
         }
     };
-    let sql = if is_service { UPSERT_DISK_SERVICE_ROLE } else { UPSERT_DISK_OWNER_LOCKED };
+    let sql = if is_service {
+        UPSERT_DISK_SERVICE_ROLE
+    } else {
+        UPSERT_DISK_OWNER_LOCKED
+    };
     let row = sqlx::query(sql)
         .bind(bucket_id)
         .bind(obj_name)
@@ -594,7 +618,9 @@ async fn upload_disk(
         Ok(Some(r)) => r.get::<String, _>("id"),
         Ok(None) => {
             cleanup_tmp(&tmp_path);
-            return Err(AppError::Forbidden("cannot overwrite another user's object".into()));
+            return Err(AppError::Forbidden(
+                "cannot overwrite another user's object".into(),
+            ));
         }
         Err(e) => {
             cleanup_tmp(&tmp_path);
@@ -657,7 +683,9 @@ pub async fn download_object(
     // service_role (SECURITY.md storage surface; init.sql storage RLS mirror).
     if !bucket.public {
         if claims.role == "anon" {
-            return Err(AppError::Forbidden("access denied to private bucket".into()));
+            return Err(AppError::Forbidden(
+                "access denied to private bucket".into(),
+            ));
         }
         if claims.role != "service_role" && claims.sub.as_deref() != Some(owner_str.as_str()) {
             return Err(AppError::Forbidden(
@@ -668,8 +696,8 @@ pub async fn download_object(
 
     // Disk backend: bytes live on the filesystem (data column is NULL).
     if state.config.storage_backend == "disk" && data.is_none() {
-        let disk_path =
-            safe_storage_path(&state.config.storage_dir, &bucket_id, &obj_name).map_err(AppError::BadRequest)?;
+        let disk_path = safe_storage_path(&state.config.storage_dir, &bucket_id, &obj_name)
+            .map_err(AppError::BadRequest)?;
         match std::fs::read(&disk_path) {
             Ok(b) => data = Some(b),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -776,13 +804,15 @@ pub async fn delete_object(
     .rows_affected();
 
     if rows_affected == 0 {
-        return Err(AppError::NotFound("object not found or access denied".into()));
+        return Err(AppError::NotFound(
+            "object not found or access denied".into(),
+        ));
     }
 
     if let Some(tx) = tx {
         let mut backup: Option<PathBuf> = None;
-        let disk_path =
-            safe_storage_path(&state.config.storage_dir, &bucket_id, &obj_name).map_err(AppError::BadRequest)?;
+        let disk_path = safe_storage_path(&state.config.storage_dir, &bucket_id, &obj_name)
+            .map_err(AppError::BadRequest)?;
         match std::fs::metadata(&disk_path) {
             Ok(_) => {
                 let staging = ensure_staging_dir(&state.config.storage_dir).map_err(|e| {
@@ -835,7 +865,9 @@ pub async fn list_objects(
 
     // Private bucket: anon cannot list.
     if !bucket.public && claims.role == "anon" {
-        return Err(AppError::Forbidden("access denied to private bucket".into()));
+        return Err(AppError::Forbidden(
+            "access denied to private bucket".into(),
+        ));
     }
 
     let cols = format!("id::text, name, size, mime_type, {TS_RFC3339} AS created_at");
@@ -849,10 +881,16 @@ pub async fn list_objects(
     ));
     builder.push_bind(&bucket_id);
     if have_prefix {
-        builder.push(" AND name LIKE ").push_bind(&q.prefix).push(" || '%'");
+        builder
+            .push(" AND name LIKE ")
+            .push_bind(&q.prefix)
+            .push(" || '%'");
     }
     if restrict_owner {
-        builder.push(" AND owner = ").push_bind(&claims.sub).push("::uuid");
+        builder
+            .push(" AND owner = ")
+            .push_bind(&claims.sub)
+            .push("::uuid");
     }
     builder.push(" ORDER BY name");
 
@@ -908,7 +946,9 @@ mod tests {
     #[test]
     fn safe_path_allows_clean_relative() {
         let p = safe_storage_path("/storage", "avatars", "user/42/pic.png").unwrap();
-        assert!(p.ends_with("avatars/user/42/pic.png") || p.ends_with("avatars\\user\\42\\pic.png"));
+        assert!(
+            p.ends_with("avatars/user/42/pic.png") || p.ends_with("avatars\\user\\42\\pic.png")
+        );
     }
 
     #[test]
@@ -946,7 +986,10 @@ mod tests {
     #[test]
     fn safe_path_rejects_invalid_bucket_and_empty_and_nul() {
         for b in ["..", "a/b", "a\\b", "../foo"] {
-            assert!(safe_storage_path("/storage", b, "ok.txt").is_err(), "bucket {b:?}");
+            assert!(
+                safe_storage_path("/storage", b, "ok.txt").is_err(),
+                "bucket {b:?}"
+            );
         }
         assert!(safe_storage_path("", "b", "o").is_err());
         assert!(safe_storage_path("/storage", "", "o").is_err());
@@ -969,7 +1012,13 @@ mod tests {
         assert_eq!(detect_content_type(b"\x89PNG\r\n\x1a\n..."), "image/png");
         assert_eq!(detect_content_type(&[0xFF, 0xD8, 0xFF, 0x00]), "image/jpeg");
         assert_eq!(detect_content_type(b"%PDF-1.7"), "application/pdf");
-        assert_eq!(detect_content_type(b"hello world"), "text/plain; charset=utf-8");
-        assert_eq!(detect_content_type(&[0x00, 0x01, 0x02]), "application/octet-stream");
+        assert_eq!(
+            detect_content_type(b"hello world"),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(
+            detect_content_type(&[0x00, 0x01, 0x02]),
+            "application/octet-stream"
+        );
     }
 }

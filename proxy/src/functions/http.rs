@@ -108,7 +108,10 @@ pub async fn proxy_to_upstream(
             );
         }
     };
-    proxy::forward(&target, fn_name, method, headers, query, body, claims, timeout).await
+    proxy::forward(
+        &target, fn_name, method, headers, query, body, claims, timeout,
+    )
+    .await
 }
 
 #[cfg(test)]

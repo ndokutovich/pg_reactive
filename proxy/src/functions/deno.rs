@@ -54,7 +54,10 @@ pub async fn proxy_to_deno(
             );
         }
     };
-    proxy::forward(&target, fn_name, method, headers, query, body, claims, timeout).await
+    proxy::forward(
+        &target, fn_name, method, headers, query, body, claims, timeout,
+    )
+    .await
 }
 
 /// GET /functions/v1/_health — proxy to the edge-runtime root as a readiness

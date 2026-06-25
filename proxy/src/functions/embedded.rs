@@ -89,7 +89,8 @@ fn run_sync(code: &str, body: &[u8], claims: &RequestClaims) -> Result<Vec<u8>, 
     let mut ctx = Context::default();
     ctx.runtime_limits_mut()
         .set_loop_iteration_limit(LOOP_ITERATION_LIMIT);
-    ctx.runtime_limits_mut().set_recursion_limit(RECURSION_LIMIT);
+    ctx.runtime_limits_mut()
+        .set_recursion_limit(RECURSION_LIMIT);
 
     // ── console.log / console.error ───────────────────────────────────────
     let console = ObjectInitializer::new(&mut ctx)
@@ -122,8 +123,9 @@ fn run_sync(code: &str, body: &[u8], claims: &RequestClaims) -> Result<Vec<u8>, 
     let body_json: serde_json::Value = if body.is_empty() {
         serde_json::Value::Null
     } else {
-        serde_json::from_slice(body)
-            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(body).into_owned()))
+        serde_json::from_slice(body).unwrap_or_else(|_| {
+            serde_json::Value::String(String::from_utf8_lossy(body).into_owned())
+        })
     };
     let claims_json: serde_json::Value = serde_json::from_str(&claims.claims_json)
         .unwrap_or_else(|_| serde_json::Value::String(claims.claims_json.clone()));
@@ -207,9 +209,9 @@ fn db_query(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Result<JsVa
     // completion on the tokio runtime (we are on a spawn_blocking thread, so
     // block_on is permitted and never starves a runtime worker).
     let captured = DB_CTX.with(|c| {
-        c.borrow().as_ref().map(|d| {
-            (d.handle.clone(), d.pool.clone(), d.claims.clone())
-        })
+        c.borrow()
+            .as_ref()
+            .map(|d| (d.handle.clone(), d.pool.clone(), d.claims.clone()))
     });
     let (handle, pool, claims) = match captured {
         Some(t) => t,
@@ -266,7 +268,9 @@ async fn run_query(
         .await
         .map_err(|e| format!("db.query: {e}"))?;
     let data: serde_json::Value = row.get("data");
-    tx.commit().await.map_err(|e| format!("db.query: commit: {e}"))?;
+    tx.commit()
+        .await
+        .map_err(|e| format!("db.query: commit: {e}"))?;
     Ok(data)
 }
 

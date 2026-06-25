@@ -172,11 +172,12 @@ async fn check_login_role(pool: &PgPool, allow: &[&str]) -> Result<Vec<String>, 
     let mut missing: Vec<String> = Vec::new();
     let mut absent: Vec<String> = Vec::new();
     for target in allow {
-        let exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1) AS e")
-            .bind(*target)
-            .fetch_one(pool)
-            .await?
-            .get("e");
+        let exists: bool =
+            sqlx::query("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1) AS e")
+                .bind(*target)
+                .fetch_one(pool)
+                .await?
+                .get("e");
         if !exists {
             absent.push((*target).to_string());
         } else if !actual.contains(*target) {
@@ -285,11 +286,12 @@ async fn check_login_role(pool: &PgPool, allow: &[&str]) -> Result<Vec<String>, 
     //     roles) object ownership. service_role may be BYPASSRLS by design.
     let mut target_bad: Vec<String> = Vec::new();
     for target in allow {
-        let exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1) AS e")
-            .bind(*target)
-            .fetch_one(pool)
-            .await?
-            .get("e");
+        let exists: bool =
+            sqlx::query("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1) AS e")
+                .bind(*target)
+                .fetch_one(pool)
+                .await?
+                .get("e");
         if !exists {
             continue;
         }
