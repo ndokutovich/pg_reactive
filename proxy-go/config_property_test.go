@@ -60,6 +60,7 @@ func TestProperty_Config_ValidateAcceptsValidConfigs(t *testing.T) {
 			PGPoolMaxConns:        int32(pgPoolMax),
 			TLSMode:               tlsMode,
 			AccessTokenExpirySecs: tokenExpiry,
+			NotifyChannel:         "pgr",
 		}
 
 		// If manual TLS, provide cert and key paths.

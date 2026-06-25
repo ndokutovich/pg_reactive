@@ -380,6 +380,17 @@ pgr_dep_add(const char *query_id, const char *query_text,
 			evicted->mode = oldest->mode;
 		}
 
+		/*
+		 * Warn loudly: the LRU is silently dropping a user's live
+		 * subscription because the shared-memory table is full. Without this
+		 * the victim's live query just stops updating with no signal. Emitted
+		 * before HASH_REMOVE while `oldest` is still valid; ereport(WARNING)
+		 * does not longjmp, so it is safe under the LWLock.
+		 */
+		ereport(WARNING,
+				(errmsg("pg_reactive: evicted live subscription \"%s\" — shared-memory dependency table is full (pg_reactive.max_subscriptions=%d); raise it and restart to keep all live queries active",
+						oldest->query_id, pgr_max_subscriptions)));
+
 		/* Remove the oldest entry (by its full per-database hash key) */
 		memset(evict_key, 0, PGR_HASHKEY_LEN);
 		strlcpy(evict_key, oldest->hashkey, PGR_HASHKEY_LEN);
@@ -388,9 +399,6 @@ pgr_dep_add(const char *query_id, const char *query_text,
 		pgr_journal_record(evict_key);
 		hash_search(pgr_dep_hash, evict_key, HASH_REMOVE, NULL);
 		pgr_state->eviction_count++;
-
-		elog(LOG, "pg_reactive: evicted oldest subscription '%s'",
-			 oldest->query_id);
 	}
 
 	/* Insert or find the entry */

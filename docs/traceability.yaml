@@ -240,11 +240,13 @@ FR-R.5:
     unit:
       - file: ext/sql/09_batch_invalidation.sql
         symbol: "09_batch_invalidation"
+      - file: ext/sql/16_recompute_role.sql
+        symbol: "16_recompute_role"
     integration: []
     e2e: []
     security: []
   manual_check: ""
-  notes: ""
+  notes: "16_recompute_role: the batch pre-commit recompute runs as the pgr-schema (extension) owner, not GetSessionUserId() — under the two-login-role proxy the session role is powerless, so a proxy-mediated write into a live-subscribed table got permission denied (SECURITY.md inv 22)."
 
 FR-R.6:
   title: "DDL handling — ProcessUtility hook auto-unsubscribes on TRUNCATE/ALTER/DROP"
@@ -525,7 +527,7 @@ FR-R.14:
         symbol: "p7_concurrent_subscribe"
     security: []
   manual_check: "Run via tests/perf/runner.sh (P1-P7, PASS/FAIL thresholds); long-running, not on every CI push"
-  notes: "Perf suite lives in tests/perf/; container Python tests map to integration, host .mjs tests to e2e."
+  notes: "Perf suite lives in tests/perf/; container Python tests map to integration, host .mjs tests to e2e. POSITIONING (honest): the live-query model re-runs the SELECT on every relevant write, so it is tuned for MANY READERS per query (dashboards, leaderboards, live aggregates) — NOT a high write-throughput firehose on subscribed tables. Published baselines (~222 TPS @1 sub, ~99 @10; fan-out clean @200, degrading @500; single-digit-ms e2e) are Docker-on-Windows DEV measurements — re-measure on native Linux/real hardware for production sizing (a Linux run is a follow-up; not done in the dev environment)."
 
 # =====================================================================
 # § 3  pgStack backend — Authentication (FR-B.3.*)

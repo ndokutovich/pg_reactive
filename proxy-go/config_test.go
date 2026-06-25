@@ -259,6 +259,55 @@ func TestValidate_TLSModeInvalid(t *testing.T) {
 	}
 }
 
+// --- NOTIFY_CHANNEL ---
+
+func TestFromEnv_NotifyChannelDefault(t *testing.T) {
+	setEnvs(t, map[string]string{"NOTIFY_CHANNEL": ""})
+	if cfg := FromEnv(); cfg.NotifyChannel != "pgr" {
+		t.Errorf("NotifyChannel default: got %q, want pgr", cfg.NotifyChannel)
+	}
+}
+
+func TestFromEnv_NotifyChannelCustom(t *testing.T) {
+	setEnvs(t, map[string]string{"NOTIFY_CHANNEL": "live_deltas"})
+	if cfg := FromEnv(); cfg.NotifyChannel != "live_deltas" {
+		t.Errorf("NotifyChannel custom: got %q, want live_deltas", cfg.NotifyChannel)
+	}
+}
+
+func TestValidate_NotifyChannel(t *testing.T) {
+	tests := []struct {
+		name    string
+		channel string
+		wantErr bool
+	}{
+		{"default", "pgr", false},
+		{"valid custom", "live_deltas", false},
+		{"valid leading underscore", "_chan1", false},
+		{"empty", "", true},
+		{"sql injection", "pgr; DROP", true},
+		{"dash", "pg-r", true},
+		{"leading digit", "1chan", true},
+		{"space", "pgr chan", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				TLSMode:               "off",
+				GzipLevel:             5,
+				MaxConnections:        1,
+				PGPoolMaxConns:        1,
+				AccessTokenExpirySecs: 3600,
+				NotifyChannel:         tt.channel,
+			}
+			hasErr := containsError(cfg.Validate(), "NOTIFY_CHANNEL")
+			if hasErr != tt.wantErr {
+				t.Errorf("channel=%q: hasErr=%v, wantErr=%v", tt.channel, hasErr, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidate_GzipLevelRange(t *testing.T) {
 	tests := []struct {
 		level   int
@@ -398,6 +447,7 @@ func TestValidate_RejectsPlaceholderAndShortSecrets(t *testing.T) {
 			GzipLevel:              5,
 			MaxConnections:         1,
 			PGPoolMaxConns:         1,
+			NotifyChannel:          "pgr",
 		}
 	}
 	if errs := base().Validate(); len(errs) != 0 {
@@ -432,6 +482,7 @@ func TestValidate_AllValid(t *testing.T) {
 		MaxConnections:        100,
 		PGPoolMaxConns:        50,
 		AccessTokenExpirySecs: 3600,
+		NotifyChannel:         "pgr",
 	}
 	errs := cfg.Validate()
 	if len(errs) != 0 {

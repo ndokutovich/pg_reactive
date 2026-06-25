@@ -11,7 +11,9 @@ import (
 )
 
 // ListenLoop is an infinite reconnect loop that keeps a dedicated PG
-// connection listening on the 'pgr' NOTIFY channel.
+// connection listening on the configured live-query NOTIFY channel
+// (notifyChannel, default 'pgr' — must match the extension's
+// pg_reactive.notify_channel GUC).
 //
 // On each NOTIFY payload it parses the JSON, extracts the query_id and
 // forwards the raw payload string to the matching broadcast channel in
@@ -19,11 +21,11 @@ import (
 //
 // The loop applies exponential back-off on failures: 1s → 2s → 4s → … up to
 // maxBackoff. On clean exit (context cancelled) it returns immediately.
-func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.Duration, webhookMgr *WebhookManager) {
+func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.Duration, webhookMgr *WebhookManager, notifyChannel string) {
 	backoff := time.Second
 	for {
 		connected.Store(false)
-		if err := listenOnce(context.Background(), dbURL, hub, connected, webhookMgr); err != nil {
+		if err := listenOnce(context.Background(), dbURL, hub, connected, webhookMgr, notifyChannel); err != nil {
 			log.Error().Err(err).Dur("retry_in", backoff).Msg("PG listener error, reconnecting")
 		} else {
 			log.Info().Msg("PG listener exited normally, reconnecting")
@@ -38,25 +40,29 @@ func ListenLoop(dbURL string, hub *Hub, connected *atomic.Bool, maxBackoff time.
 	}
 }
 
-// listenOnce opens a dedicated PG connection, executes LISTEN pgr and pumps
+// listenOnce opens a dedicated PG connection, executes LISTEN on the configured
+// live-query channel (notifyChannel) plus the webhook channel, and pumps
 // notifications until an error occurs or the context is cancelled.
-func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.Bool, webhookMgr *WebhookManager) error {
+func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.Bool, webhookMgr *WebhookManager, notifyChannel string) error {
 	conn, err := pgx.Connect(ctx, dbURL)
 	if err != nil {
 		return err
 	}
 	defer conn.Close(ctx)
 
-	if _, err = conn.Exec(ctx, "LISTEN pgr"); err != nil {
+	// notifyChannel is validated as a PG identifier at config load; Sanitize
+	// double-quotes it so the channel name PG reports back round-trips exactly
+	// (case-preserving) to the comparison below.
+	if _, err = conn.Exec(ctx, "LISTEN "+pgx.Identifier{notifyChannel}.Sanitize()); err != nil {
 		return err
 	}
 	// Webhooks ride a dedicated channel fed by the pgstack.webhook_notify()
-	// trigger — separate from the 'pgr' live-query delta stream.
+	// trigger — separate from the live-query delta stream.
 	if _, err = conn.Exec(ctx, "LISTEN pgstack_webhooks"); err != nil {
 		return err
 	}
 	connected.Store(true)
-	log.Info().Msg("connected to PG, listening on channels 'pgr' and 'pgstack_webhooks'")
+	log.Info().Str("channel", notifyChannel).Msg("connected to PG, listening on live-query channel and 'pgstack_webhooks'")
 
 	for {
 		notification, err := conn.WaitForNotification(ctx)
@@ -74,7 +80,15 @@ func listenOnce(ctx context.Context, dbURL string, hub *Hub, connected *atomic.B
 			continue
 		}
 
-		// 'pgr' channel carries two kinds of message, both stamped with the
+		// Anything that is not the configured live-query channel is unexpected
+		// (we only LISTEN on notifyChannel + pgstack_webhooks). Drop it loudly
+		// rather than misroute it as a delta.
+		if notification.Channel != notifyChannel {
+			log.Warn().Str("channel", notification.Channel).Msg("NOTIFY on unexpected channel, ignoring")
+			continue
+		}
+
+		// The live-query channel carries two kinds of message, both stamped with the
 		// subscription generation by the extension (round 39 batch-2):
 		//   - {"type":"resubscribed","query_id":...,"gen":N} — a subscribe or
 		//     unsubscribe bumped the generation. Revoke every connection bound to

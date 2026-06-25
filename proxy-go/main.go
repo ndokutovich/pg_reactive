@@ -177,6 +177,7 @@ func main() {
 		&state.PGConnected,
 		cfg.PGReconnectMaxBackoff,
 		state.WebhookManager,
+		cfg.NotifyChannel,
 	)
 
 	// Build and start the HTTP server.

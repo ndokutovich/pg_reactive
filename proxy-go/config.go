@@ -3,12 +3,19 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"pgstack-proxy-go/secrets"
 )
+
+// notifyChannelPattern restricts NOTIFY_CHANNEL to a bare PG identifier. The
+// value is interpolated into a `LISTEN <channel>` statement, so anything
+// outside this character class (whitespace, quotes, semicolons, dashes) is
+// rejected at startup to keep the LISTEN injection-free.
+var notifyChannelPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Config holds all proxy configuration loaded from environment variables.
 type Config struct {
@@ -107,6 +114,13 @@ type Config struct {
 
 	// PG listener reconnect
 	PGReconnectMaxBackoff time.Duration
+
+	// NotifyChannel is the LISTEN/NOTIFY channel the proxy subscribes to for
+	// live-query delta/overflow/invalidation messages. Must match the
+	// extension's pg_reactive.notify_channel GUC. Default "pgr". Validated as a
+	// PG identifier (it is interpolated into a LISTEN statement, so arbitrary
+	// strings are rejected).
+	NotifyChannel string
 
 	// Feature flags
 	EnableSQLEndpoint   bool
@@ -272,6 +286,8 @@ func FromEnv() Config {
 
 	pgBackoff := envIntOrDefault("PG_RECONNECT_MAX_BACKOFF", 30)
 	cfg.PGReconnectMaxBackoff = time.Duration(pgBackoff) * time.Second
+
+	cfg.NotifyChannel = envOrDefault("NOTIFY_CHANNEL", "pgr")
 
 	cfg.EnableSQLEndpoint = envBoolOrDefault("ENABLE_SQL_ENDPOINT", false)
 	cfg.EnableDemoEndpoint = envBoolOrDefault("ENABLE_DEMO_ENDPOINT", false)
@@ -492,6 +508,12 @@ func (c Config) Validate() []string {
 	}
 	if c.MaxConnections < 1 {
 		errs = append(errs, "MAX_CONNECTIONS must be >= 1")
+	}
+	if !notifyChannelPattern.MatchString(c.NotifyChannel) {
+		errs = append(errs, fmt.Sprintf(
+			"NOTIFY_CHANNEL=%q is not a valid PG identifier (must match ^[A-Za-z_][A-Za-z0-9_]*$); it is used in a LISTEN statement and must equal the extension's pg_reactive.notify_channel",
+			c.NotifyChannel,
+		))
 	}
 	if c.GzipLevel < 0 || c.GzipLevel > 9 {
 		errs = append(errs, fmt.Sprintf("GZIP_LEVEL=%d must be 0-9 (0=disabled)", c.GzipLevel))

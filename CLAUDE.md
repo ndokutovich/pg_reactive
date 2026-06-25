@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries with real-time delta notifications. Three-layer core: C extension (ext/) → two co-equal sibling WebSocket proxies, Go (proxy-go/) and Rust (proxy/), both first-class and security-hardened to parity (the SECURITY.md invariants apply to both) → TypeScript SDK (sdk/). Around that core lives the pgStack umbrella: a Supabase-compatible REST/RPC/auth/storage/edge-functions layer (also in `proxy-go/`), a CLI (`cli/`) that scaffolds new pgStack projects, a Studio SPA (`studio/`), and a Docusaurus docs site (`docs/site/`).
+pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries with real-time delta notifications. Three-layer core: C extension (ext/) → two sibling WebSocket proxies, Go (proxy-go/) and Rust (proxy/), co-equal in intent → TypeScript SDK (sdk/). **Go is the reference implementation** today — the traceability matrix and the SECURITY.md invariants are verified against it. The **Rust sibling is being brought to invariant parity** (the two-pool + verifyPoolRoles startup checks are ported; the WS-generation model and the remaining hardening are in progress), so do NOT assume every SECURITY.md invariant is proven in Rust yet — when you change a security surface, the Go proxy is the one held to the trust model. Around that core lives the pgStack umbrella: a Supabase-compatible REST/RPC/auth/storage/edge-functions layer (also in `proxy-go/`), a CLI (`cli/`) that scaffolds new pgStack projects, a Studio SPA (`studio/`), and a Docusaurus docs site (`docs/site/`).
 
 ## Security discipline — read this BEFORE touching auth / RLS / grants / secrets
 
@@ -195,7 +195,7 @@ Use `docker compose exec -T db bash -c '...'` with the command in quotes. Git Ba
 
 ### NOTIFY Wire Format
 
-Single channel for all queries, configurable via `pg_reactive.notify_channel` (default `pgr`; the Go proxy hardcodes `LISTEN pgr`, so only the default works end-to-end). Every data payload carries `gen` — the subscription generation it was computed under; the proxy delivers a message only to connections bound to the same generation, so a re-registered subscription's data never reaches a connection authorized under the old generation (round 39 batch-2 F-ORDER):
+Single channel for all queries, configurable via `pg_reactive.notify_channel` (default `pgr`). The Go proxy's data-notification channel is configurable via the `NOTIFY_CHANNEL` env var (default `pgr`, validated as a PG identifier) and must match the DB's `pg_reactive.notify_channel` for live queries to reach the proxy end-to-end. Every data payload carries `gen` — the subscription generation it was computed under; the proxy delivers a message only to connections bound to the same generation, so a re-registered subscription's data never reaches a connection authorized under the old generation (round 39 batch-2 F-ORDER):
 - Delta: `{"query_id":"...","seq":N,"gen":G,"inserted":[...],"deleted":[]}`
 - Overflow: `{"type":"overflow","query_id":"...","seq":N,"gen":G,"fetch":true}`
 - Invalidated (mode='notify'): `{"type":"invalidated","query_id":"...","seq":N,"gen":G}`
