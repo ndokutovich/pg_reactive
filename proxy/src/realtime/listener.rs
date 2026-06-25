@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tracing::{error, info, warn};
 
+use crate::realtime::webhooks::WebhookManager;
 use crate::state::Channels;
 
 /// Connects to PG and listens on the configured NOTIFY channel (default `pgr`,
@@ -15,11 +16,20 @@ pub async fn pg_listener_loop(
     pg_connected: Arc<AtomicBool>,
     max_backoff_secs: u64,
     notify_channel: &str,
+    webhook_manager: Arc<WebhookManager>,
 ) {
     let mut backoff_secs: u64 = 1;
     loop {
         pg_connected.store(false, Ordering::Relaxed);
-        match pg_listener_run(pg_url, &channels, &pg_connected, notify_channel).await {
+        match pg_listener_run(
+            pg_url,
+            &channels,
+            &pg_connected,
+            notify_channel,
+            &webhook_manager,
+        )
+        .await
+        {
             Ok(()) => {
                 info!("PG listener exited normally, reconnecting...");
                 backoff_secs = 1;
@@ -42,18 +52,29 @@ async fn pg_listener_run(
     channels: &Channels,
     pg_connected: &AtomicBool,
     notify_channel: &str,
+    webhook_manager: &Arc<WebhookManager>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut listener = sqlx::postgres::PgListener::connect(pg_url).await?;
     // sqlx double-quotes the identifier in the LISTEN statement; the channel is
     // also regex-validated at config load, so this is injection-free and must
     // equal the extension's pg_reactive.notify_channel GUC.
     listener.listen(notify_channel).await?;
+    // Webhooks ride a dedicated channel fed by the pgstack.webhook_notify()
+    // trigger — separate from the live-query delta stream (mirror Go listenOnce).
+    listener.listen("pgstack_webhooks").await?;
     pg_connected.store(true, Ordering::Relaxed);
-    info!("connected to PG, listening on channel '{notify_channel}'");
+    info!("connected to PG, listening on channel '{notify_channel}' and 'pgstack_webhooks'");
 
     loop {
         let notification = listener.recv().await?;
         let payload = notification.payload();
+
+        // Webhook trigger events: {table, event, record, old_record}. Dispatch
+        // to the manager and move on — these never enter the live-query fan-out.
+        if notification.channel() == "pgstack_webhooks" {
+            webhook_manager.deliver_from_webhook_notify(payload).await;
+            continue;
+        }
 
         let msg: serde_json::Value = match serde_json::from_str(payload) {
             Ok(v) => v,

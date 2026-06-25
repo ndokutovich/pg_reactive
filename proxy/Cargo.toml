@@ -36,10 +36,19 @@ getrandom = "0.3"
 base64ct = { version = "1", features = ["alloc"] }
 sha2 = "0.10"
 
-# HTTP client (OAuth provider token exchange)
+# HTTP client (OAuth provider token exchange; webhook delivery)
 reqwest = { version = "0.12", features = ["json"] }
 
-# URL parsing
+# At-rest secret encryption (webhook signing secrets): AES-256-GCM. Mirrors the
+# Go proxy's secrets.Box wire format byte-for-byte.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+# HMAC-SHA256 webhook payload signing (sha2 already in tree).
+hmac = "0.12"
+# Webhook SSRF guard: IANA-reserved CIDR membership tests (mirror Go ipv4/ipv6Reserved).
+ipnet = "2"
+
+# URL parsing (webhook target validation + general)
+url = "2"
 urlencoding = "2"
 
 # UUID parsing/validation (+ v4 for the anonymous-signin random sub)

@@ -6,6 +6,7 @@ mod middleware;
 mod realtime;
 mod rest;
 mod routes;
+mod secrets;
 mod state;
 
 use std::net::SocketAddr;
@@ -91,12 +92,18 @@ async fn main() {
         warn!("catalog refresh failed (REST API may not work): {}", e);
     }
 
+    // Load webhooks from the DB before the listener starts dispatching events.
+    if let Err(e) = state.webhook_manager.refresh().await {
+        warn!("initial webhook load failed — webhooks will retry on next refresh: {e}");
+    }
+
     // Spawn the PG LISTEN task
     let pg_channels = state.channels.clone();
     let pg_connected = state.pg_connected.clone();
     let pg_url = config.database_url.clone();
     let pg_max_backoff = config.pg_reconnect_max_backoff_secs;
     let pg_notify_channel = config.notify_channel.clone();
+    let pg_webhook_manager = state.webhook_manager.clone();
     tokio::spawn(async move {
         realtime::listener::pg_listener_loop(
             &pg_url,
@@ -104,6 +111,7 @@ async fn main() {
             pg_connected,
             pg_max_backoff,
             &pg_notify_channel,
+            pg_webhook_manager,
         )
         .await;
     });
@@ -206,6 +214,17 @@ fn build_router(state: AppState) -> Router {
         // Transaction batching — mounted BEFORE the {table} wildcard so "batch"
         // is not treated as a table name (mirrors Go's route order).
         .route("/rest/v1/batch", post(rest::batch::batch))
+        // Webhook CRUD (service_role only) — mounted BEFORE the {table} wildcard
+        // so "webhooks" is not treated as a table name (mirrors Go's route
+        // order). matchit prioritizes these static segments over {table}.
+        .route(
+            "/rest/v1/webhooks",
+            post(routes::webhooks::create_webhook).get(routes::webhooks::list_webhooks),
+        )
+        .route(
+            "/rest/v1/webhooks/{id}",
+            delete(routes::webhooks::delete_webhook),
+        )
         // REST API (PostgREST-compatible CRUD)
         .route(
             "/rest/v1/{table}",

@@ -86,6 +86,11 @@ pub struct Config {
     /// Maximum number of operations permitted in a single POST /rest/v1/batch
     /// request (env `MAX_BATCH_OPERATIONS`, default 20). Mirror Go config.go.
     pub max_batch_operations: usize,
+    /// Base64-encoded 32-byte AES-256 key (`SECRETS_ENCRYPTION_KEY`) for at-rest
+    /// secret encryption (webhook signing secrets). None when unset — features
+    /// that need encryption refuse to store/return plaintext. Validated as
+    /// decodable at load (fail-fast); required in production (mirror Go).
+    pub secrets_encryption_key: Option<String>,
 }
 
 impl Config {
@@ -247,6 +252,18 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(20);
 
+        // Fail-fast on a malformed SECRETS_ENCRYPTION_KEY (mirror Go config.go,
+        // which Fatals at load via secrets.DecodeKey) — refuse to boot rather
+        // than discover the key is unusable at first encrypt/decrypt.
+        let secrets_encryption_key = std::env::var("SECRETS_ENCRYPTION_KEY")
+            .ok()
+            .filter(|s| !s.is_empty());
+        if let Some(ref k) = secrets_encryption_key {
+            if let Err(e) = crate::secrets::decode_key(k) {
+                panic!("SECRETS_ENCRYPTION_KEY invalid: {e}");
+            }
+        }
+
         Self {
             database_url,
             admin_database_url,
@@ -290,6 +307,7 @@ impl Config {
             public_demo_site,
             notify_channel,
             max_batch_operations,
+            secrets_encryption_key,
         }
     }
 
@@ -393,6 +411,12 @@ impl Config {
                 "REQUIRE_EMAIL_VERIFICATION=true is incompatible with EMAIL_ENABLED=false".into(),
             );
         }
+        // At-rest secret encryption is required in production now that secretbox
+        // exists — webhook signing secrets (and any future encrypted column)
+        // must not be storable in plaintext (mirror Go config.go ~line 477).
+        if self.secrets_encryption_key.is_none() {
+            errs.push("PGSTACK_ENV=production: SECRETS_ENCRYPTION_KEY is required (at-rest encryption for webhook signing secrets)".into());
+        }
         errs
     }
 }
@@ -441,6 +465,10 @@ impl fmt::Debug for Config {
             .field(
                 "require_email_verification",
                 &self.require_email_verification,
+            )
+            .field(
+                "secrets_encryption_key",
+                &self.secrets_encryption_key.as_ref().map(|_| "[REDACTED]"),
             )
             .finish()
     }
@@ -496,12 +524,27 @@ mod tests {
             public_demo_site: false,
             notify_channel: "pgr".into(),
             max_batch_operations: 20,
+            secrets_encryption_key: Some("base64-key-placeholder-present".into()),
         }
     }
 
     #[test]
     fn prod_baseline_is_clean() {
         assert!(valid_prod().validate().is_empty());
+    }
+
+    // secretbox now exists, so at-rest encryption is mandatory in production.
+    #[test]
+    fn prod_requires_secrets_encryption_key() {
+        let mut c = valid_prod();
+        c.secrets_encryption_key = None;
+        assert!(
+            c.validate()
+                .iter()
+                .any(|e| e.contains("SECRETS_ENCRYPTION_KEY")),
+            "production without SECRETS_ENCRYPTION_KEY must fail: {:?}",
+            c.validate()
+        );
     }
 
     // inv 24: the admin plane must be a separate credential in production.

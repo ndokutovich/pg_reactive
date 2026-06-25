@@ -131,6 +131,13 @@ pub struct AppState {
     /// 17(a)(f)). The presence/broadcast fan-out itself rides the per-query
     /// `channels` broadcast (gen-gated in the WS receive loop).
     pub presence: crate::realtime::presence::PresenceStore,
+    /// At-rest secret box (AES-256-GCM). None when SECRETS_ENCRYPTION_KEY is
+    /// unset — CreateWebhook then refuses non-empty secrets and Refresh drops
+    /// rows with an encrypted secret (fail-closed).
+    pub secrets: Option<Arc<crate::secrets::SecretBox>>,
+    /// Loads webhooks from `pgstack.webhooks` and delivers them through an
+    /// SSRF-guarded client. Driven by the `pgstack_webhooks` NOTIFY channel.
+    pub webhook_manager: Arc<crate::realtime::webhooks::WebhookManager>,
 }
 
 impl AppState {
@@ -141,6 +148,31 @@ impl AppState {
         let ws_semaphore = Arc::new(Semaphore::new(config.max_connections));
         let ws_conn_limiter = WsConnLimiter::new(config.ws_max_per_ip);
         let mailer = Arc::new(crate::auth::mailer::Mailer::from_env());
+
+        // At-rest secret box. The key was validated as decodable at config load
+        // (Config::from_env), so building it here cannot fail on a good key.
+        let secrets: Option<Arc<crate::secrets::SecretBox>> = config
+            .secrets_encryption_key
+            .as_deref()
+            .map(|k| {
+                crate::secrets::SecretBox::from_b64(k)
+                    .expect("SECRETS_ENCRYPTION_KEY validated at config load")
+                    .expect("non-empty SECRETS_ENCRYPTION_KEY yields a box")
+            })
+            .map(Arc::new);
+        if secrets.is_some() {
+            tracing::info!("SECRETS_ENCRYPTION_KEY loaded — at-rest secret encryption enabled (webhook signing secrets)");
+        } else {
+            tracing::info!("SECRETS_ENCRYPTION_KEY unset — webhook signing secrets cannot be decrypted; CreateWebhook will refuse non-empty secrets and Refresh will drop encrypted-secret webhooks");
+        }
+
+        // Webhook delivery runs trusted backend ops (read pgstack.webhooks,
+        // install triggers) — admin pool, like Go's service_role-gated path.
+        let webhook_manager = Arc::new(crate::realtime::webhooks::WebhookManager::new(
+            admin_pool.clone(),
+            secrets.clone(),
+        ));
+
         Self {
             channels: Arc::new(RwLock::new(HashMap::new())),
             config,
@@ -154,6 +186,8 @@ impl AppState {
             ws_conn_limiter,
             mailer,
             presence: crate::realtime::presence::PresenceStore::new(),
+            secrets,
+            webhook_manager,
         }
     }
 
