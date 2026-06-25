@@ -39,6 +39,11 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, String> {
     // When exp IS present, it will be validated (rejects expired tokens).
     validation.required_spec_claims.remove("exp");
     validation.validate_exp = true;
+    // Strict expiry to match the Go reference (proxy-go/auth/jwt.go): jsonwebtoken
+    // defaults to 60s of clock-skew leeway, which would authenticate a token that
+    // expired up to ~59s ago — diverging from Go's zero-leeway enforcement and
+    // failing the shared adversarial test tests/security/auth__jwt_manipulation.
+    validation.leeway = 0;
 
     let claims = decode::<Claims>(token, &key, &validation)
         .map(|data| data.claims)
@@ -161,6 +166,18 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("JWT validation failed"));
+    }
+
+    #[test]
+    fn test_recently_expired_token_rejected_no_leeway() {
+        // exp = 30 s in the past — INSIDE jsonwebtoken's default 60 s clock-skew
+        // leeway, so it would be accepted unless we zero the leeway. Go enforces
+        // strict expiry (zero leeway); this asserts Rust matches that (parity with
+        // the shared adversarial test tests/security/auth__jwt_manipulation).
+        let claims = make_claims("user-recent-exp", Some(now_unix() - 30));
+        let token = generate_token(&claims, TEST_SECRET).unwrap();
+        let result = validate_token(&token, TEST_SECRET);
+        assert!(result.is_err(), "a token expired 30s ago must be rejected (leeway=0)");
     }
 
     #[test]
