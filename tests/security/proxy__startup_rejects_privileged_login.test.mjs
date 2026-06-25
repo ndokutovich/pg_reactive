@@ -32,15 +32,24 @@
 // one-off in PGSTACK_ENV=production pointed at them, and asserts it refuses to
 // start (non-zero exit) with the right reason rather than serving traffic.
 //
-// Requires: `docker compose up -d` (db reachable; trust auth; proxy-go image
-// built). The dev db uses POSTGRES_HOST_AUTH_METHOD=trust so the test roles
-// connect without a real password.
+// Both proxies are held to FULL parity here: the Go reference
+// (`verifyPoolRoles`, main.go) and the Rust reference (`verify_pool_roles`,
+// proxy/src/db_roles.rs) must reject every variant identically. Select the
+// target with PROXY_SERVICE: the compose service name to boot one-off —
+// `proxy-go` (default) or `proxy` (the Rust proxy). Both emit the same
+// "<pool> pool: ..." reason strings, so the per-case regexes are shared.
+//
+// Requires: `docker compose up -d` (db reachable; trust auth; the selected
+// proxy image built). The dev db uses POSTGRES_HOST_AUTH_METHOD=trust so the
+// test roles connect without a real password.
 
 import { spawnSync, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 const DB = process.env.PG_DB ?? "pg_reactive_test";
 const ADMIN_PW = process.env.AUTHENTICATOR_ADMIN_PASSWORD ?? "authenticator-admin-dev-pw";
+// Which proxy to hold to the contract: `proxy-go` (default) or `proxy` (Rust).
+const PROXY_SERVICE = process.env.PROXY_SERVICE ?? "proxy-go";
 const hex = (n) => randomBytes(n).toString("hex");
 const sek = randomBytes(32).toString("base64");
 
@@ -132,7 +141,7 @@ const withAdmin = (k, v) => [[k, v], ["ADMIN_DATABASE_URL", validAdmin]];
 
 function runProxy(extraEnv) {
   const r = spawnSync("docker",
-    ["compose", "run", "--rm", "--no-deps", ...COMMON, ...extraEnv, "proxy-go"],
+    ["compose", "run", "--rm", "--no-deps", ...COMMON, ...extraEnv, PROXY_SERVICE],
     { encoding: "utf-8", timeout: 120_000 });
   return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -216,7 +225,7 @@ const cases = [
 let fail = 0;
 const check = (ok, msg) => { ok ? console.log(`  ✓ ${msg}`) : (console.error(`  ✗ ${msg}`), fail++); };
 
-console.log("\n=== startup rejects every privileged / over-privileged login role ===");
+console.log(`\n=== startup rejects every privileged / over-privileged login role (${PROXY_SERVICE}) ===`);
 try {
   setup(); // INSIDE try so a partial setup() still runs teardown() (gemini R15-3)
   for (const c of cases) {
