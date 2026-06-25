@@ -166,9 +166,101 @@ pub async fn studio_security_headers(request: Request, next: Next) -> Response {
     response
 }
 
+/// Build the public-SPA Content-Security-Policy string. Mirror of Go
+/// `middleware.PublicSecurityHeaders`'s CSP construction.
+///
+/// `allow_inline_scripts` adds `'unsafe-inline'` + `https://cdn.jsdelivr.net` to
+/// `script-src` — off by default (strict). It is enabled only for legacy static
+/// apps that rely on inline `<script>` blocks (e.g. the pg_reactive examples).
+///
+/// `csp_override` (env `CSP_POLICY`) replaces the computed policy verbatim when
+/// non-empty.
+pub fn build_public_csp(allow_inline_scripts: bool, csp_override: Option<&str>) -> String {
+    if let Some(o) = csp_override {
+        if !o.is_empty() {
+            return o.to_string();
+        }
+    }
+    let script_src = if allow_inline_scripts {
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
+    } else {
+        "script-src 'self'"
+    };
+    format!(
+        "default-src 'self'; {script_src}; \
+style-src 'self' 'unsafe-inline'; \
+img-src 'self' data: blob:; \
+font-src 'self' data:; \
+connect-src 'self' ws: wss:; \
+worker-src 'self' blob:; \
+object-src 'none'; \
+base-uri 'self'; \
+form-action 'self'; \
+frame-ancestors 'none'"
+    )
+}
+
+/// Middleware applying the relaxed public-SPA security headers (mirror of Go
+/// `PublicSecurityHeaders`). More permissive than the API headers but still
+/// enforces frame protection and nosniff. Sets ONLY the four headers Go sets:
+/// X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and the CSP.
+pub async fn public_security_headers(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let csp = build_public_csp(
+        state.config.public_allow_inline_scripts,
+        state.config.csp_policy.as_deref(),
+    );
+
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    if let Ok(v) = HeaderValue::from_str(&csp) {
+        headers.insert(HeaderName::from_static("content-security-policy"), v);
+    }
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Mirror of Go PublicSecurityHeaders: strict default has no inline scripts,
+    // the inline-scripts opt-in adds 'unsafe-inline' + jsdelivr, and CSP_POLICY
+    // overrides verbatim.
+    #[test]
+    fn public_csp_strict_and_relaxed() {
+        let strict = build_public_csp(false, None);
+        assert!(strict.contains("script-src 'self';"));
+        assert!(
+            !strict.contains("script-src 'self' 'unsafe-inline'"),
+            "strict script-src has no inline scripts"
+        );
+        assert!(strict.contains("frame-ancestors 'none'"));
+        assert!(strict.contains("connect-src 'self' ws: wss:"));
+
+        let relaxed = build_public_csp(true, None);
+        assert!(relaxed.contains("script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"));
+
+        // CSP_POLICY override replaces the whole policy.
+        let overridden = build_public_csp(false, Some("default-src 'none'"));
+        assert_eq!(overridden, "default-src 'none'");
+        // Empty override is ignored.
+        assert_eq!(build_public_csp(false, Some("")), strict);
+    }
 
     fn hm(pairs: &[(&'static str, &str)]) -> HeaderMap {
         let mut h = HeaderMap::new();

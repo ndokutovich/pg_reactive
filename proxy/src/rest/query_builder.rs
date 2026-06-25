@@ -452,6 +452,8 @@ mod tests {
                 .map(|(col_name, pg_type)| ColumnMeta {
                     name: col_name.to_string(),
                     pg_type: pg_type.to_string(),
+                    is_nullable: true,
+                    has_default: false,
                 })
                 .collect(),
             primary_keys: Vec::new(),

@@ -255,6 +255,11 @@ fn build_router(state: AppState) -> Router {
             "/rest/v1/webhooks/{id}",
             delete(routes::webhooks::delete_webhook),
         )
+        // OpenAPI 3.0 spec, auto-generated from the table catalog. Served on
+        // BOTH `/rest/v1` and `/rest/v1/` (mirror Go). Distinct static paths
+        // from `/rest/v1/{table}`, so matchit never confuses them.
+        .route("/rest/v1", get(routes::openapi::openapi_spec))
+        .route("/rest/v1/", get(routes::openapi::openapi_spec))
         // REST API (PostgREST-compatible CRUD)
         .route(
             "/rest/v1/{table}",
@@ -314,6 +319,13 @@ fn build_router(state: AppState) -> Router {
             middleware::security_headers::studio_security_headers,
         ));
 
+    // Docs site (Docusaurus static build, served from DOCS_DIR). Mounted with NO
+    // security-headers middleware — Docusaurus emits its own, and Go mounts
+    // `/docs` outside both the API and Studio middleware groups.
+    let docs_router = Router::new()
+        .route("/docs", get(routes::docs::docs_redirect))
+        .nest_service("/docs/", routes::docs::docs_service());
+
     // Storage routes — own group with NO 1 MB RequestBodyLimit (uploads are
     // large); instead a per-route DefaultBodyLimit of MAX_FILE_SIZE + 1 KB caps
     // the stream, mirroring Go's MaxBytesReader (over-limit → 413). Route order
@@ -346,16 +358,36 @@ fn build_router(state: AppState) -> Router {
         ))
         .with_state(state.clone());
 
-    // Merge: studio checked first, then storage, then API.
+    // Merge: studio + docs first, then storage, then API.
     // CORS goes on the outer router so it applies to all.
-    Router::new()
+    let mut app = Router::new()
         .merge(studio_router)
+        .merge(docs_router)
         .merge(storage_router)
-        .merge(api_router)
-        .layer(middleware::cors::cors_layer(
-            state.config.allowed_origins.as_deref(),
-            state.config.allow_permissive_cors,
-        ))
+        .merge(api_router);
+
+    // Lowest-priority fallback: user static files from PUBLIC_DIR with SPA
+    // fallback + the relaxed public CSP. Mounted LAST as the router fallback so
+    // it never shadows API/auth/rest routes (mirror Go's r.NotFound handler).
+    // Only wired when the directory exists, so the server still boots without it.
+    if let Some(dir) = state.config.public_dir.clone() {
+        if std::path::Path::new(&dir).is_dir() {
+            let public_router = Router::new()
+                .fallback(routes::public::serve_public)
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    middleware::security_headers::public_security_headers,
+                ))
+                .with_state(state.clone());
+            app = app.fallback_service(public_router);
+            info!(dir = %dir, "serving user static files (PUBLIC_DIR)");
+        }
+    }
+
+    app.layer(middleware::cors::cors_layer(
+        state.config.allowed_origins.as_deref(),
+        state.config.allow_permissive_cors,
+    ))
 }
 
 /// WebSocket handler wrapper — axum needs `Request` parts for extractors.

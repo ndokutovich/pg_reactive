@@ -115,8 +115,13 @@ services:
       ANON_KEY: ${ANON_KEY:-dev-only-anon-key-do-not-use-in-production}
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"
+      # User static hosting (mirror proxy-go): serve ./public as the lowest-priority
+      # SPA fallback. The image bakes /public; the bind mount overrides it in dev.
+      PUBLIC_DIR: /public
     ports:
       - "127.0.0.1:${PROXY_RUST_PORT:-8081}:8080"
+    volumes:
+      - ./public:/public:ro
     depends_on:
       db:
         condition: service_healthy

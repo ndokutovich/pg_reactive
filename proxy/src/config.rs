@@ -110,6 +110,16 @@ pub struct Config {
     /// Enable the embedded (boa) JS runtime for runtime="embedded" functions
     /// (env `EMBEDDED_FUNCTIONS`, default true). Mirror Go EmbeddedFunctions.
     pub embedded_functions: bool,
+    /// Directory of user static files to serve as the lowest-priority SPA
+    /// fallback (env `PUBLIC_DIR`; unset = disabled). Mirror Go Config.PublicDir.
+    pub public_dir: Option<String>,
+    /// Add `'unsafe-inline'` + jsdelivr to the public-SPA `script-src` CSP for
+    /// legacy inline-script demos (env `PUBLIC_ALLOW_INLINE_SCRIPTS`, default
+    /// false/strict). Mirror Go Config.PublicAllowInlineScripts.
+    pub public_allow_inline_scripts: bool,
+    /// Verbatim public-SPA CSP override (env `CSP_POLICY`; unset = computed).
+    /// Mirror Go's CSP_POLICY env read in PublicSecurityHeaders.
+    pub csp_policy: Option<String>,
 }
 
 impl Config {
@@ -301,6 +311,11 @@ impl Config {
             .map(|v| v != "false" && v != "0")
             .unwrap_or(true);
 
+        // Static hosting: PUBLIC_DIR unset = disabled (mirror Go: os.Getenv).
+        let public_dir = std::env::var("PUBLIC_DIR").ok().filter(|s| !s.is_empty());
+        let public_allow_inline_scripts = bool_env("PUBLIC_ALLOW_INLINE_SCRIPTS", false);
+        let csp_policy = std::env::var("CSP_POLICY").ok().filter(|s| !s.is_empty());
+
         Self {
             database_url,
             admin_database_url,
@@ -351,6 +366,9 @@ impl Config {
             edge_runtime_url,
             edge_fn_timeout_ms,
             embedded_functions,
+            public_dir,
+            public_allow_inline_scripts,
+            csp_policy,
         }
     }
 
@@ -582,6 +600,9 @@ mod tests {
             edge_runtime_url: String::new(),
             edge_fn_timeout_ms: 60000,
             embedded_functions: true,
+            public_dir: None,
+            public_allow_inline_scripts: false,
+            csp_policy: None,
         }
     }
 

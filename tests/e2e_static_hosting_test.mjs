@@ -4,9 +4,13 @@
  * Verifies the proxy serves static files from PUBLIC_DIR with correct
  * SPA fallback, cache headers, security headers, content types, gzip,
  * and directory traversal protection. Requires docker compose running.
+ *
+ * Target is parameterized via BASE_URL / PROXY_URL (default the Go proxy on
+ * :8080) so the same assertions run against both the Go reference and the Rust
+ * sibling (:8081) — they must match.
  */
 
-const BASE = 'http://127.0.0.1:8080';
+const BASE = process.env.BASE_URL || process.env.PROXY_URL || 'http://127.0.0.1:8080';
 
 let passed = 0;
 let failed = 0;

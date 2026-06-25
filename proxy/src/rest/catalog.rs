@@ -30,6 +30,12 @@ pub struct TableMeta {
 pub struct ColumnMeta {
     pub name: String,
     pub pg_type: String,
+    /// True when the column accepts NULL (i.e. NOT `attnotnull`). The OpenAPI
+    /// generator uses it to decide whether a column is `required` for inserts.
+    pub is_nullable: bool,
+    /// True when the column has a DEFAULT (`atthasdef`). A NOT NULL column with
+    /// a default is still optional on insert, so it is not `required`.
+    pub has_default: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +64,23 @@ impl Catalog {
         Ok(())
     }
 
+    /// List all cached tables (clones). When `schema` is empty, returns every
+    /// table; otherwise restricts to that schema. Mirror of Go
+    /// `Catalog.ListTables`. Used by the OpenAPI generator.
+    pub async fn list_tables(&self, schema: &str) -> Vec<TableMeta> {
+        let inner = self.inner.read().await;
+        if schema.is_empty() {
+            return inner.tables.values().cloned().collect();
+        }
+        let prefix = format!("{schema}.");
+        inner
+            .tables
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix))
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
+
     /// Look up a table by name. Tries "public.{name}" first, then "{name}" as-is.
     pub async fn get_table(&self, name: &str) -> Option<TableMeta> {
         let inner = self.inner.read().await;
@@ -78,7 +101,9 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
             n.nspname AS schema_name,
             c.relname AS table_name,
             a.attname AS column_name,
-            format_type(a.atttypid, a.atttypmod) AS data_type
+            format_type(a.atttypid, a.atttypmod) AS data_type,
+            NOT a.attnotnull AS is_nullable,
+            a.atthasdef AS has_default
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          JOIN pg_attribute a ON a.attrelid = c.oid
@@ -109,6 +134,8 @@ async fn load_tables(pool: &PgPool) -> Result<HashMap<String, TableMeta>, sqlx::
         entry.columns.push(ColumnMeta {
             name: row.get("column_name"),
             pg_type: row.get("data_type"),
+            is_nullable: row.get("is_nullable"),
+            has_default: row.get("has_default"),
         });
     }
 
