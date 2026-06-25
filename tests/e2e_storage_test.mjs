@@ -167,6 +167,25 @@ async function run() {
   r = await fetch(`${BASE}/storage/v1/object/${pub}/logo.txt`, { headers: anon() });
   assert(r.status === 200 && (await r.text()) === pubContent, 'anon download from public bucket OK + identical');
 
+  // 8b. Stored-XSS hardening (round 46 / SECURITY.md invariant 28): an uploaded
+  // text/html (or SVG-with-script) object is untrusted content served inline
+  // from the proxy origin. The download MUST carry X-Content-Type-Options:
+  // nosniff AND a Content-Security-Policy containing `sandbox`, neutralising
+  // same-origin script execution. Worst case = a PUBLIC bucket (anon-readable).
+  console.log('Test: stored-XSS download headers (nosniff + CSP sandbox)');
+  r = await uploadFile(pub, 'evil.html', '<script>alert(1)</script>', tokenA, 'text/html');
+  assert(r.status === 200, `upload text/html to public bucket -> 200 (got ${r.status})`);
+  r = await fetch(`${BASE}/storage/v1/object/${pub}/evil.html`, { headers: anon() });
+  assert(r.status === 200, `anon download of html object -> 200 (got ${r.status})`);
+  assert(
+    (r.headers.get('x-content-type-options') || '').toLowerCase() === 'nosniff',
+    `download carries X-Content-Type-Options: nosniff (got '${r.headers.get('x-content-type-options')}')`,
+  );
+  assert(
+    (r.headers.get('content-security-policy') || '').toLowerCase().includes('sandbox'),
+    `download carries Content-Security-Policy with sandbox (got '${r.headers.get('content-security-policy')}')`,
+  );
+
   // 9. List objects (owner sees own object in private bucket).
   console.log('Test: list objects');
   r = await fetch(`${BASE}/storage/v1/object/list/${priv}`, { headers: jwt(tokenA) });

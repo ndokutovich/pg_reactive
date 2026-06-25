@@ -83,10 +83,13 @@ pub async fn security_headers(
         HeaderName::from_static("referrer-policy"),
         HeaderValue::from_static("strict-origin-when-cross-origin"),
     );
-    headers.insert(
-        HeaderName::from_static("content-security-policy"),
-        HeaderValue::from_static("default-src 'none'"),
-    );
+    // Default-deny CSP, but let a handler set its own first (Go's SecurityHeaders
+    // sets these BEFORE the handler runs, so a handler-set CSP wins there too).
+    // The storage download serves untrusted uploads under CSP `sandbox`
+    // (SECURITY.md invariant 28) — or_insert preserves it instead of clobbering.
+    headers
+        .entry(HeaderName::from_static("content-security-policy"))
+        .or_insert(HeaderValue::from_static("default-src 'none'"));
     headers.insert(
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static(API_PERMISSIONS_POLICY),

@@ -908,6 +908,15 @@ func DownloadObject(d *StorageDeps) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", mimeType)
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		// Stored XSS defence (round 46 / SECURITY.md invariant 28): uploaded
+		// objects are untrusted content served inline from the proxy's own
+		// origin. nosniff stops a non-HTML upload being MIME-sniffed into HTML;
+		// CSP `sandbox` gives the response a unique opaque origin with scripts
+		// disabled, so an HTML/SVG object rendered inline cannot execute
+		// same-origin against studio/auth/REST. Harmless for images/PDFs, which
+		// public buckets rely on serving inline.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "sandbox")
 		safeName := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(filename)
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, safeName))
 		if bucket.Public {

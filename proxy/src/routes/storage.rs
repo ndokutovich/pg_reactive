@@ -691,10 +691,19 @@ pub async fn download_object(
         "private, no-store"
     };
 
+    // Stored XSS defence (round 46 / SECURITY.md invariant 28): uploaded objects
+    // are untrusted content served inline from the proxy's own origin. nosniff
+    // stops a non-HTML upload being MIME-sniffed into HTML; CSP `sandbox` gives
+    // the response a unique opaque origin with scripts disabled, so an HTML/SVG
+    // object rendered inline cannot execute same-origin against studio/auth/REST.
+    // Harmless for images/PDFs, which public buckets rely on serving inline.
+    // Byte-identical to the Go reference (proxy-go/routes/storage.go) — keep parity.
     let resp = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime_type)
         .header(header::CONTENT_LENGTH, size.to_string())
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::CONTENT_SECURITY_POLICY, "sandbox")
         .header(
             header::CONTENT_DISPOSITION,
             format!("inline; filename=\"{safe_name}\""),

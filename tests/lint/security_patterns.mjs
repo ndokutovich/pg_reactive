@@ -558,6 +558,39 @@ function checkBatchTemplateEscape() {
   }
 }
 
+// Rule SEC-R46 — a storage object-download handler that serves uploaded content
+//   inline MUST emit X-Content-Type-Options: nosniff AND a Content-Security-Policy
+//   containing `sandbox`. SECURITY.md invariant #28 / round-46 HIGH.
+//   Storage objects are untrusted user uploads served inline from the proxy's own
+//   origin; a public bucket is anon-readable by design. Without nosniff a non-HTML
+//   upload can be MIME-sniffed into HTML, and without CSP `sandbox` an uploaded
+//   HTML/SVG executes scripts same-origin against studio/auth/REST (stored XSS →
+//   token theft / CSRF). The disposition stays `inline` (public buckets serve
+//   images/PDFs inline) — the nosniff + CSP-sandbox pair is the mitigation. Both
+//   sibling proxies are pinned so they cannot drift. This codifies the class
+//   file-scoped: if a storage handler still serves with `inline` content
+//   disposition but no longer carries both headers, fail.
+//   Override a verified-safe occurrence with `// lint:allow=SEC-R46`.
+function checkStorageDownloadXSSHeaders() {
+  const targets = [
+    join(ROOT, "proxy-go", "routes", "storage.go"),
+    join(ROOT, "proxy", "src", "routes", "storage.rs"),
+  ];
+  for (const fp of targets) {
+    let text;
+    try { text = readFileSync(fp, "utf-8"); } catch { continue; }
+    if (/lint:allow=SEC-R46/.test(text)) continue;
+    // Entry: the handler serves an uploaded object with `inline` disposition.
+    if (!/inline;\s*filename/i.test(text)) continue; // path renamed/removed — skip
+    const hasNosniff = /X[-_]Content[-_]Type[-_]Options/i.test(text) && /nosniff/i.test(text);
+    const hasSandbox = /Content[-_]Security[-_]Policy/i.test(text) && /sandbox/i.test(text);
+    if (!hasNosniff || !hasSandbox) {
+      report(fp, 1, "SEC-R46",
+        "storage download serves uploaded content `inline` but does not emit both X-Content-Type-Options: nosniff and Content-Security-Policy: sandbox — an uploaded HTML/SVG runs scripts same-origin (stored XSS); add both headers to the download response (SECURITY.md invariant 28, round-46)");
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -567,6 +600,7 @@ function runAll() {
   checkProxyNotSuperuser();
   checkAnonGrantNeedsRLS();
   checkBatchTemplateEscape();
+  checkStorageDownloadXSSHeaders();
 
   for (const f of files) {
     let text;
