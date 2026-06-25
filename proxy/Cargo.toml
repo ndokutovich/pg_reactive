@@ -37,7 +37,7 @@ base64ct = { version = "1", features = ["alloc"] }
 sha2 = "0.10"
 
 # HTTP client (OAuth provider token exchange; webhook delivery)
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # At-rest secret encryption (webhook signing secrets): AES-256-GCM. Mirrors the
 # Go proxy's secrets.Box wire format byte-for-byte.
@@ -56,6 +56,12 @@ uuid = { version = "1", features = ["v4"] }
 
 # Email
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls", "smtp-transport", "builder"], default-features = false }
+
+# Embedded edge-function JS runtime (runtime="embedded"; mirrors the Go proxy's
+# goja). Pure-Rust ECMAScript engine — needs NO C toolchain, so it builds on the
+# repo's MSVC host (unlike rquickjs, which bundles QuickJS C and needs cl.exe).
+# Licensed MIT OR Unlicense; maintained by the boa-dev org.
+boa_engine = "0.21"
 
 # Error handling
 anyhow = "1"

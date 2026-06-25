@@ -138,6 +138,10 @@ pub struct AppState {
     /// Loads webhooks from `pgstack.webhooks` and delivers them through an
     /// SSRF-guarded client. Driven by the `pgstack_webhooks` NOTIFY channel.
     pub webhook_manager: Arc<crate::realtime::webhooks::WebhookManager>,
+    /// In-memory cache of `pgstack.edge_functions`. Loaded at startup and
+    /// refreshed via the `pgstack_fn_changed` NOTIFY channel; reads on the admin
+    /// pool (the table is service_role-only).
+    pub functions: Arc<crate::functions::FunctionsCatalog>,
 }
 
 impl AppState {
@@ -173,6 +177,9 @@ impl AppState {
             secrets.clone(),
         ));
 
+        // Edge-function catalog: decrypts per-function env vars with the same box.
+        let functions = Arc::new(crate::functions::FunctionsCatalog::new(secrets.clone()));
+
         Self {
             channels: Arc::new(RwLock::new(HashMap::new())),
             config,
@@ -188,6 +195,7 @@ impl AppState {
             presence: crate::realtime::presence::PresenceStore::new(),
             secrets,
             webhook_manager,
+            functions,
         }
     }
 

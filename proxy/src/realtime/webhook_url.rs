@@ -82,6 +82,19 @@ pub fn validate_webhook_url(raw: &str) -> Result<Url, String> {
     Ok(u)
 }
 
+/// True when `host` is a reserved name that every libc resolver special-cases to
+/// the loopback interface. Shared by the webhook validator and the edge-function
+/// `http`-runtime upstream validator (`functions::http::validate_upstream_url`)
+/// so the loopback name set lives in ONE place (audit round 28 F3 / SECURITY.md
+/// invariant 9). A bare `localhost` (or `ip6-localhost`, etc.) would otherwise
+/// route an outbound request straight back to the proxy's own container.
+pub fn is_loopback_hostname(host: &str) -> bool {
+    matches!(
+        host.to_lowercase().as_str(),
+        "localhost" | "localhost.localdomain" | "ip6-localhost" | "ip6-loopback"
+    )
+}
+
 /// Returns true when `ip` is a routable, public unicast address. Everything else
 /// (loopback, private RFC1918/RFC6598, link-local / metadata-server, multicast,
 /// unspecified, broadcast, IANA special-purpose) is refused.

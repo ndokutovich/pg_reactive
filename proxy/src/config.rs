@@ -100,6 +100,16 @@ pub struct Config {
     /// Hard ceiling (bytes) on a single storage upload. Env `MAX_FILE_SIZE`
     /// (default 50 MB). A per-bucket `file_size_limit` may lower it. Mirror Go.
     pub max_file_size: i64,
+    /// Edge Functions: single global Deno edge-runtime container URL for
+    /// runtime="deno" (env `EDGE_RUNTIME_URL`); empty = disabled. Mirror Go.
+    pub edge_runtime_url: String,
+    /// Per-invocation edge-function deadline in ms (env `EDGE_FN_TIMEOUT_MS`,
+    /// default 60000). Bounds deno/http reverse-proxies and embedded/pl
+    /// execution; 0 means no proxy-imposed deadline. Mirror Go EdgeFnTimeout.
+    pub edge_fn_timeout_ms: u64,
+    /// Enable the embedded (boa) JS runtime for runtime="embedded" functions
+    /// (env `EMBEDDED_FUNCTIONS`, default true). Mirror Go EmbeddedFunctions.
+    pub embedded_functions: bool,
 }
 
 impl Config {
@@ -281,6 +291,16 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(52428800); // 50 MB default for storage uploads
 
+        let edge_runtime_url = std::env::var("EDGE_RUNTIME_URL").unwrap_or_default();
+        let edge_fn_timeout_ms: u64 = std::env::var("EDGE_FN_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60000); // 60s, mirror Go EDGE_FN_TIMEOUT_MS default
+        let embedded_functions = std::env::var("EMBEDDED_FUNCTIONS")
+            .ok()
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
+
         Self {
             database_url,
             admin_database_url,
@@ -328,6 +348,9 @@ impl Config {
             storage_backend,
             storage_dir,
             max_file_size,
+            edge_runtime_url,
+            edge_fn_timeout_ms,
+            embedded_functions,
         }
     }
 
@@ -556,6 +579,9 @@ mod tests {
             storage_backend: "database".into(),
             storage_dir: "/data/storage".into(),
             max_file_size: 52428800,
+            edge_runtime_url: String::new(),
+            edge_fn_timeout_ms: 60000,
+            embedded_functions: true,
         }
     }
 

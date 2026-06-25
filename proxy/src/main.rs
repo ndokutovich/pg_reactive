@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod db_roles;
 mod error;
+mod functions;
 mod middleware;
 mod realtime;
 mod rest;
@@ -110,6 +111,20 @@ async fn main() {
     if let Err(e) = state.webhook_manager.refresh().await {
         warn!("initial webhook load failed — webhooks will retry on next refresh: {e}");
     }
+
+    // Load the edge-functions catalog (admin pool — the table is service_role
+    // only), then auto-refresh on `pgstack_fn_changed` NOTIFY. Mirror Go's
+    // initial Refresh + StartAutoRefresh.
+    if let Err(e) = state.functions.refresh(&state.admin_pool).await {
+        warn!("initial edge functions catalog load failed — functions may 404 until refreshed: {e}");
+    } else {
+        info!("edge functions catalog loaded");
+    }
+    functions::spawn_auto_refresh(
+        state.functions.clone(),
+        state.admin_pool.clone(),
+        config.admin_database_url.clone(),
+    );
 
     // Spawn the PG LISTEN task
     let pg_channels = state.channels.clone();
@@ -260,6 +275,18 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/catalog/refresh",
             post(routes::catalog_refresh::catalog_refresh),
+        )
+        // Edge Functions (/functions/v1/). The literal `_health` / `_refresh` /
+        // trailing-slash routes are distinct paths from the `{name}` wildcard;
+        // matchit prioritises the static segments, so `_health` is never shadowed
+        // by a function named "_health" (gemini audit P3 — mirror Go's explicit
+        // ordering).
+        .route("/functions/v1/", get(functions::list))
+        .route("/functions/v1/_refresh", post(functions::refresh))
+        .route("/functions/v1/_health", get(functions::deno_health))
+        .route(
+            "/functions/v1/{name}",
+            get(functions::invoke).post(functions::invoke),
         );
 
     if mount_demo {
