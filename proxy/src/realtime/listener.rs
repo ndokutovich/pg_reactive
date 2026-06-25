@@ -5,18 +5,21 @@ use tracing::{error, info, warn};
 
 use crate::state::Channels;
 
-/// Connects to PG and listens on `pgr` channel, dispatching to broadcast channels.
-/// Uses exponential backoff on connection failures (1s -> 2s -> 4s -> ... -> max_backoff_secs).
+/// Connects to PG and listens on the configured NOTIFY channel (default `pgr`,
+/// validated as a bare PG identifier at config load), dispatching to broadcast
+/// channels. Uses exponential backoff on connection failures
+/// (1s -> 2s -> 4s -> ... -> max_backoff_secs).
 pub async fn pg_listener_loop(
     pg_url: &str,
     channels: Channels,
     pg_connected: Arc<AtomicBool>,
     max_backoff_secs: u64,
+    notify_channel: &str,
 ) {
     let mut backoff_secs: u64 = 1;
     loop {
         pg_connected.store(false, Ordering::Relaxed);
-        match pg_listener_run(pg_url, &channels, &pg_connected).await {
+        match pg_listener_run(pg_url, &channels, &pg_connected, notify_channel).await {
             Ok(()) => {
                 info!("PG listener exited normally, reconnecting...");
                 backoff_secs = 1;
@@ -38,11 +41,15 @@ async fn pg_listener_run(
     pg_url: &str,
     channels: &Channels,
     pg_connected: &AtomicBool,
+    notify_channel: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut listener = sqlx::postgres::PgListener::connect(pg_url).await?;
-    listener.listen("pgr").await?;
+    // sqlx double-quotes the identifier in the LISTEN statement; the channel is
+    // also regex-validated at config load, so this is injection-free and must
+    // equal the extension's pg_reactive.notify_channel GUC.
+    listener.listen(notify_channel).await?;
     pg_connected.store(true, Ordering::Relaxed);
-    info!("connected to PG, listening on channel 'pgr'");
+    info!("connected to PG, listening on channel '{notify_channel}'");
 
     loop {
         let notification = listener.recv().await?;

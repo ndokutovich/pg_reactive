@@ -96,9 +96,16 @@ async fn main() {
     let pg_connected = state.pg_connected.clone();
     let pg_url = config.database_url.clone();
     let pg_max_backoff = config.pg_reconnect_max_backoff_secs;
+    let pg_notify_channel = config.notify_channel.clone();
     tokio::spawn(async move {
-        realtime::listener::pg_listener_loop(&pg_url, pg_channels, pg_connected, pg_max_backoff)
-            .await;
+        realtime::listener::pg_listener_loop(
+            &pg_url,
+            pg_channels,
+            pg_connected,
+            pg_max_backoff,
+            &pg_notify_channel,
+        )
+        .await;
     });
 
     // Build router
@@ -134,8 +141,14 @@ fn build_router(state: AppState) -> Router {
             middleware::rate_limit::rate_limit_auth,
         ));
 
+    // /api/demo mutates demo tables — mount only when explicitly enabled or a
+    // service_role key is configured (the handler still gates every request).
+    // Mirrors Go main.go's `EnableDemoEndpoint || ServiceRoleKey != ""` gate.
+    let mount_demo =
+        state.config.enable_demo_endpoint || state.config.service_role_key.is_some();
+
     // All API routes with strict CSP
-    let api_router = Router::new()
+    let mut api_router = Router::new()
         // Health check
         .route("/health", get(routes::health::health))
         // WebSocket (pg_reactive)
@@ -187,14 +200,19 @@ fn build_router(state: AppState) -> Router {
         )
         // RLS debug (shows current PG role and JWT claims)
         .route("/rest/v1/rls-debug", get(routes::rls_debug::rls_debug))
-        // Legacy/demo routes (backwards compatibility with pg_reactive tutorial)
-        .route("/api/demo", post(routes::demo::demo_action))
+        // Legacy SQL route (backwards compatibility with pg_reactive tutorial)
         .route("/api/sql", post(routes::sql::sql_execute))
         // Catalog refresh (force-reload table metadata)
         .route(
             "/api/catalog/refresh",
             post(routes::catalog_refresh::catalog_refresh),
-        )
+        );
+
+    if mount_demo {
+        api_router = api_router.route("/api/demo", post(routes::demo::demo_action));
+    }
+
+    let api_router = api_router
         // Request body size limit
         .layer(tower_http::limit::RequestBodyLimitLayer::new(
             state.config.max_body_size,

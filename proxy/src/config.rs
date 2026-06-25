@@ -8,6 +8,10 @@ pub struct Config {
     /// Falls back to database_url when unset (legacy single-role). The proxy runs
     /// two pools so a data-plane compromise cannot reach service_role.
     pub admin_database_url: String,
+    /// Whether ADMIN_DATABASE_URL was explicitly set. In production the admin
+    /// plane MUST be a separate credential (inv 24), so the silent fallback to
+    /// `database_url` is rejected — `validate()` fails when this is false.
+    pub admin_database_url_set: bool,
     /// Deployment posture. Defaults to "production" (fail-secure) — verifyPoolRoles
     /// is fatal in production, a warning otherwise.
     pub pgstack_env: String,
@@ -55,6 +59,15 @@ pub struct Config {
     pub smtp_user: String,
     /// SMTP password (empty = not configured).
     pub smtp_pass: String,
+    /// Mount POST /api/demo (mutates demo tables). Off by default.
+    pub enable_demo_endpoint: bool,
+    /// Explicit opt-in: this deployment IS the public pg_reactive demo, so the
+    /// production validator tolerates ENABLE_DEMO_ENDPOINT=true.
+    pub public_demo_site: bool,
+    /// LISTEN/NOTIFY channel for live-query deltas (default `pgr`). Must equal
+    /// the extension's pg_reactive.notify_channel GUC. Validated as a bare PG
+    /// identifier (it is interpolated into a LISTEN statement).
+    pub notify_channel: String,
 }
 
 impl Config {
@@ -62,9 +75,13 @@ impl Config {
         let database_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@db:5432/app".into());
 
-        // Admin pool DSN; falls back to the data DSN (legacy single-role).
-        let admin_database_url =
-            std::env::var("ADMIN_DATABASE_URL").unwrap_or_else(|_| database_url.clone());
+        // Admin pool DSN; falls back to the data DSN (legacy single-role) but the
+        // production validator requires it to be set explicitly (inv 24).
+        let admin_database_url_env = std::env::var("ADMIN_DATABASE_URL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let admin_database_url_set = admin_database_url_env.is_some();
+        let admin_database_url = admin_database_url_env.unwrap_or_else(|| database_url.clone());
 
         // Fail-secure: unset/empty PGSTACK_ENV means production.
         let pgstack_env = std::env::var("PGSTACK_ENV")
@@ -181,9 +198,17 @@ impl Config {
         let smtp_user = std::env::var("SMTP_USER").unwrap_or_default();
         let smtp_pass = std::env::var("SMTP_PASS").unwrap_or_default();
 
+        let enable_demo_endpoint = bool_env("ENABLE_DEMO_ENDPOINT", false);
+        let public_demo_site = bool_env("PUBLIC_DEMO_SITE", false);
+        let notify_channel = std::env::var("NOTIFY_CHANNEL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "pgr".into());
+
         Self {
             database_url,
             admin_database_url,
+            admin_database_url_set,
             pgstack_env,
             listen_addr,
             jwt_secret,
@@ -214,7 +239,23 @@ impl Config {
             smtp_host,
             smtp_user,
             smtp_pass,
+            enable_demo_endpoint,
+            public_demo_site,
+            notify_channel,
         }
+    }
+
+    /// True when `s` is a bare PG identifier — mirror of the Go proxy's
+    /// `notifyChannelPattern` (`^[A-Za-z_][A-Za-z0-9_]*$`). The value is
+    /// interpolated into a `LISTEN <channel>` statement, so anything outside
+    /// this class is rejected to keep the LISTEN injection-free.
+    fn is_valid_notify_channel(s: &str) -> bool {
+        let mut chars = s.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+            _ => return false,
+        }
+        chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
     }
 
     /// Returns placeholder check: a publicly-known dev/example secret value.
@@ -236,6 +277,15 @@ impl Config {
     /// otherwise they are warnings. Mirrors the Go proxy's Config.Validate.
     pub fn validate(&self) -> Vec<String> {
         let mut errs = Vec::new();
+        // NOTIFY_CHANNEL is interpolated into a LISTEN statement, so it is
+        // validated in EVERY environment (mirror Go Config.Validate, which
+        // checks it outside the production block).
+        if !Self::is_valid_notify_channel(&self.notify_channel) {
+            errs.push(format!(
+                "NOTIFY_CHANNEL={:?} is not a valid PG identifier (must match ^[A-Za-z_][A-Za-z0-9_]*$); it is used in a LISTEN statement and must equal the extension's pg_reactive.notify_channel",
+                self.notify_channel
+            ));
+        }
         if self.pgstack_env != "production" {
             return errs;
         }
@@ -264,6 +314,17 @@ impl Config {
         }
         if self.enable_sql_endpoint {
             errs.push("PGSTACK_ENV=production: ENABLE_SQL_ENDPOINT=true is unsafe — raw SQL must not be network-reachable".into());
+        }
+        // The admin pool MUST use its own login role (authenticator_admin, member
+        // of service_role), separate from the data pool. Without ADMIN_DATABASE_URL
+        // the admin pool silently falls back to the data DSN (inv 24).
+        if !self.admin_database_url_set {
+            errs.push("PGSTACK_ENV=production: ADMIN_DATABASE_URL is required — point it at the authenticator_admin login role so the admin plane is a separate credential from the data plane (gemini audit findings 6 & R4-2)".into());
+        }
+        // POST /api/demo is a public demo-table mutator; it must not be exposed
+        // in production unless this IS the public pg_reactive demo deployment.
+        if self.enable_demo_endpoint && !self.public_demo_site {
+            errs.push("PGSTACK_ENV=production: ENABLE_DEMO_ENDPOINT=true exposes a public demo-table mutator — disable it (or set PUBLIC_DEMO_SITE=true if this IS the public pg_reactive demo deployment)".into());
         }
         if self.allow_permissive_cors {
             errs.push("PGSTACK_ENV=production: ALLOW_PERMISSIVE_CORS=true reflects any Origin — set ALLOWED_ORIGINS instead".into());
@@ -346,7 +407,8 @@ mod tests {
         let key = "x".repeat(40); // ≥32, not a placeholder
         Config {
             database_url: "postgres://a@db/x".into(),
-            admin_database_url: "postgres://a@db/x".into(),
+            admin_database_url: "postgres://admin@db/x".into(),
+            admin_database_url_set: true,
             pgstack_env: "production".into(),
             listen_addr: "0.0.0.0:8080".parse().unwrap(),
             jwt_secret: Some(key.clone()),
@@ -377,12 +439,81 @@ mod tests {
             smtp_host: String::new(),
             smtp_user: String::new(),
             smtp_pass: String::new(),
+            enable_demo_endpoint: false,
+            public_demo_site: false,
+            notify_channel: "pgr".into(),
         }
     }
 
     #[test]
     fn prod_baseline_is_clean() {
         assert!(valid_prod().validate().is_empty());
+    }
+
+    // inv 24: the admin plane must be a separate credential in production.
+    #[test]
+    fn prod_requires_admin_database_url() {
+        let mut c = valid_prod();
+        c.admin_database_url_set = false;
+        assert!(
+            c.validate().iter().any(|e| e.contains("ADMIN_DATABASE_URL")),
+            "production without an explicit ADMIN_DATABASE_URL must fail: {:?}",
+            c.validate()
+        );
+    }
+
+    // The public-demo escape: ENABLE_DEMO_ENDPOINT alone is rejected in prod.
+    #[test]
+    fn prod_demo_without_public_site_is_rejected() {
+        let mut c = valid_prod();
+        c.enable_demo_endpoint = true;
+        c.public_demo_site = false;
+        assert!(
+            c.validate().iter().any(|e| e.contains("ENABLE_DEMO_ENDPOINT")),
+            "demo endpoint without PUBLIC_DEMO_SITE must fail in production: {:?}",
+            c.validate()
+        );
+    }
+
+    #[test]
+    fn prod_demo_with_public_site_is_ok() {
+        let mut c = valid_prod();
+        c.enable_demo_endpoint = true;
+        c.public_demo_site = true;
+        assert!(
+            !c.validate().iter().any(|e| e.contains("ENABLE_DEMO_ENDPOINT")),
+            "demo endpoint WITH PUBLIC_DEMO_SITE must pass: {:?}",
+            c.validate()
+        );
+    }
+
+    // ITEM 6: NOTIFY_CHANNEL must be a bare PG identifier; default is `pgr`.
+    #[test]
+    fn notify_channel_identifier_validation() {
+        assert!(Config::is_valid_notify_channel("pgr")); // default
+        assert!(Config::is_valid_notify_channel("my_channel2"));
+        assert!(Config::is_valid_notify_channel("_underscore"));
+        assert!(!Config::is_valid_notify_channel("bad-name")); // dash
+        assert!(!Config::is_valid_notify_channel("2bad")); // leading digit
+        assert!(!Config::is_valid_notify_channel("")); // empty
+        assert!(!Config::is_valid_notify_channel("a b")); // space
+        assert!(!Config::is_valid_notify_channel("a;DROP")); // injection attempt
+        // The default constructed by from_env is `pgr`.
+        assert_eq!(valid_prod().notify_channel, "pgr");
+    }
+
+    // The NOTIFY_CHANNEL check runs in ALL environments (mirror Go), so an
+    // invalid channel is fatal even in development.
+    #[test]
+    fn invalid_notify_channel_fails_even_in_dev() {
+        let mut c = valid_prod();
+        c.pgstack_env = "development".into();
+        c.notify_channel = "bad;DROP".into();
+        assert!(
+            c.validate().iter().any(|e| e.contains("NOTIFY_CHANNEL")),
+            "invalid NOTIFY_CHANNEL must fail validation in any environment: {:?}",
+            c.validate()
+        );
     }
 
     // Regression (codex P1): EMAIL_ENABLED=true with only SMTP_HOST passed

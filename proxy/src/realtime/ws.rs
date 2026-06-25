@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use sqlx::PgPool;
@@ -6,6 +8,37 @@ use tracing::{info, warn};
 
 use crate::middleware::rls::RequestClaims;
 use crate::state::Channels;
+
+/// Bounds a single server-to-client write. Without a deadline a connection
+/// wedged on a slow/stuck TCP write blocks this task indefinitely — so a
+/// revoked socket (a `resubscribed` notice for a newer generation) would not
+/// observe the revoke until the write returned, defeating the disconnect and
+/// leaking the broadcast subscription. Mirrors the Go proxy's
+/// `realtime.wsWriteWait` (round 39 batch-2 F-LIVENESS, SECURITY.md inv 17(d)).
+const WS_WRITE_WAIT: Duration = Duration::from_secs(10);
+
+/// Apply [`WS_WRITE_WAIT`] to a WS send future. A socket error OR a write that
+/// exceeds the deadline both map to `Err(())`, which every caller treats as a
+/// disconnect — turning a stuck write into a clean force-close (F-LIVENESS).
+async fn bounded_send<Fut, E>(send: Fut) -> Result<(), ()>
+where
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    bounded_send_within(WS_WRITE_WAIT, send).await
+}
+
+/// Inner form with an explicit deadline so the timeout/error mapping is unit-
+/// testable without waiting the full [`WS_WRITE_WAIT`].
+async fn bounded_send_within<Fut, E>(deadline: Duration, send: Fut) -> Result<(), ()>
+where
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    match tokio::time::timeout(deadline, send).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(()), // socket-level write error → disconnect
+        Err(_) => Err(()),     // deadline exceeded (wedged writer) → disconnect
+    }
+}
 
 /// Proxy-reserved ad-hoc collaboration channels (catalog-less, public delta).
 fn is_adhoc(query_id: &str) -> bool {
@@ -127,8 +160,8 @@ async fn close_with(
     message: &str,
 ) {
     let err = serde_json::json!({ "type": "error", "message": message });
-    let _ = ws_tx.send(Message::Text(err.to_string().into())).await;
-    let _ = ws_tx.send(Message::Close(None)).await;
+    let _ = bounded_send(ws_tx.send(Message::Text(err.to_string().into()))).await;
+    let _ = bounded_send(ws_tx.send(Message::Close(None))).await;
 }
 
 /// Handle an established WebSocket connection for a given query_id, bound to the
@@ -186,8 +219,7 @@ pub async fn handle_websocket(
 
     // 4. Welcome.
     let welcome = serde_json::json!({ "type": "subscribed", "query_id": query_id });
-    if ws_tx
-        .send(Message::Text(welcome.to_string().into()))
+    if bounded_send(ws_tx.send(Message::Text(welcome.to_string().into())))
         .await
         .is_err()
     {
@@ -203,8 +235,7 @@ pub async fn handle_websocket(
                 "inserted": rows,
                 "deleted": [],
             });
-            if ws_tx
-                .send(Message::Text(snapshot_msg.to_string().into()))
+            if bounded_send(ws_tx.send(Message::Text(snapshot_msg.to_string().into())))
                 .await
                 .is_err()
             {
@@ -214,12 +245,12 @@ pub async fn handle_websocket(
         Ok(Some(_)) => {}
         Ok(None) => {
             info!("generation changed before snapshot; closing (query_id={query_id})");
-            let _ = ws_tx.send(Message::Close(None)).await;
+            let _ = bounded_send(ws_tx.send(Message::Close(None))).await;
             return;
         }
         Err(e) => {
             warn!("snapshot read failed for {query_id}: {e}; closing");
-            let _ = ws_tx.send(Message::Close(None)).await;
+            let _ = bounded_send(ws_tx.send(Message::Close(None))).await;
             return;
         }
     }
@@ -246,7 +277,7 @@ pub async fn handle_websocket(
                                 continue;
                             }
                         }
-                        if ws_tx.send(Message::Text(m.payload.into())).await.is_err() {
+                        if bounded_send(ws_tx.send(Message::Text(m.payload.into()))).await.is_err() {
                             break;
                         }
                     }
@@ -258,7 +289,9 @@ pub async fn handle_websocket(
                             "gen": my_gen,
                             "fetch": true,
                         });
-                        let _ = ws_tx.send(Message::Text(overflow.to_string().into())).await;
+                        if bounded_send(ws_tx.send(Message::Text(overflow.to_string().into()))).await.is_err() {
+                            break;
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -266,7 +299,11 @@ pub async fn handle_websocket(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Close(_))) | None => break,
-                    Some(Ok(Message::Ping(data))) => { let _ = ws_tx.send(Message::Pong(data)).await; }
+                    Some(Ok(Message::Ping(data))) => {
+                        if bounded_send(ws_tx.send(Message::Pong(data))).await.is_err() {
+                            break;
+                        }
+                    }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => { info!("WebSocket error: {e}"); break; }
                 }
@@ -282,5 +319,43 @@ pub async fn handle_websocket(
                 channels_write.remove(&query_id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // F-LIVENESS / SECURITY.md inv 17(d): a wedged writer must NOT pin the
+    // connection task past the write deadline — it has to surface as an error so
+    // the send loop disconnects. Uses a tiny injected deadline against a longer
+    // sleep so the timeout path is exercised deterministically and fast.
+    #[tokio::test]
+    async fn bounded_send_times_out_on_wedged_write() {
+        let wedged = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok::<(), std::convert::Infallible>(())
+        };
+        assert!(
+            bounded_send_within(Duration::from_millis(10), wedged)
+                .await
+                .is_err(),
+            "a write exceeding the deadline must report an error (disconnect)"
+        );
+    }
+
+    // The real send path uses the full WS_WRITE_WAIT.
+    #[test]
+    fn ws_write_wait_matches_go_deadline() {
+        assert_eq!(WS_WRITE_WAIT, Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn bounded_send_passes_success_and_propagates_error() {
+        let ok = async { Ok::<(), std::convert::Infallible>(()) };
+        assert!(bounded_send(ok).await.is_ok());
+
+        let failed = async { Err::<(), &str>("socket closed") };
+        assert!(bounded_send(failed).await.is_err());
     }
 }
