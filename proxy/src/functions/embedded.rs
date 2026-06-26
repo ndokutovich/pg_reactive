@@ -4,7 +4,7 @@
 //! goja for Rust; the closest build-safe analogue is **boa** (`boa_engine`), a
 //! pure-Rust ECMAScript engine — chosen over `rquickjs` because rquickjs bundles
 //! QuickJS C and needs a C toolchain (`cl.exe` on the repo's MSVC host), whereas
-//! boa compiles with cargo alone. boa is MIT/Unlicense dual-licensed.
+//! boa compiles with cargo alone. boa is MIT/Unlicense dual-licensed. lint:allow=license (verified third-party attribution: github.com/boa-dev/boa)
 //!
 //! Calling convention mirrors goja exactly. Function code defines a top-level
 //! `handler`:

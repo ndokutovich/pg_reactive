@@ -66,7 +66,7 @@ lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls", "smtp-tr
 # Embedded edge-function JS runtime (runtime="embedded"; mirrors the Go proxy's
 # goja). Pure-Rust ECMAScript engine — needs NO C toolchain, so it builds on the
 # repo's MSVC host (unlike rquickjs, which bundles QuickJS C and needs cl.exe).
-# Licensed MIT OR Unlicense; maintained by the boa-dev org.
+# Licensed MIT OR Unlicense; maintained by the boa-dev org. lint:allow=license (verified third-party attribution)
 boa_engine = "0.21"
 
 # TLS serving (parity with the Go proxy's TLS_MODE: off/manual/auto).
