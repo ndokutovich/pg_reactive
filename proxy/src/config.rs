@@ -25,6 +25,23 @@ pub struct Config {
     pub google_client_secret: Option<String>,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
+    /// Apple "Sign in with Apple" — the Services ID (client_id), plus the
+    /// team/key id and PKCS#8 EC private key (.p8) used to mint the ES256
+    /// client-secret JWT. Env: APPLE_CLIENT_ID / APPLE_TEAM_ID / APPLE_KEY_ID
+    /// / APPLE_PRIVATE_KEY. Mirror Go config.go.
+    pub apple_client_id: Option<String>,
+    pub apple_team_id: Option<String>,
+    pub apple_key_id: Option<String>,
+    pub apple_private_key: Option<String>,
+    /// Microsoft (Azure AD) OAuth client. Env: MICROSOFT_CLIENT_ID /
+    /// MICROSOFT_CLIENT_SECRET. Mirror Go config.go.
+    pub microsoft_client_id: Option<String>,
+    pub microsoft_client_secret: Option<String>,
+    /// Generic OIDC provider, discovery-document driven. Env: OIDC_CLIENT_ID /
+    /// OIDC_CLIENT_SECRET / OIDC_ISSUER_URL. Mirror Go config.go.
+    pub oidc_client_id: Option<String>,
+    pub oidc_client_secret: Option<String>,
+    pub oidc_issuer_url: Option<String>,
     pub site_url: Option<String>,
     pub auth_rate_limit: usize,
     pub auth_rate_window_secs: u64,
@@ -179,6 +196,16 @@ impl Config {
         let github_client_secret = std::env::var("GITHUB_CLIENT_SECRET")
             .ok()
             .filter(|s| !s.is_empty());
+        let opt_env = |key: &str| std::env::var(key).ok().filter(|s| !s.is_empty());
+        let apple_client_id = opt_env("APPLE_CLIENT_ID");
+        let apple_team_id = opt_env("APPLE_TEAM_ID");
+        let apple_key_id = opt_env("APPLE_KEY_ID");
+        let apple_private_key = opt_env("APPLE_PRIVATE_KEY");
+        let microsoft_client_id = opt_env("MICROSOFT_CLIENT_ID");
+        let microsoft_client_secret = opt_env("MICROSOFT_CLIENT_SECRET");
+        let oidc_client_id = opt_env("OIDC_CLIENT_ID");
+        let oidc_client_secret = opt_env("OIDC_CLIENT_SECRET");
+        let oidc_issuer_url = opt_env("OIDC_ISSUER_URL");
         let site_url = std::env::var("SITE_URL").ok().filter(|s| !s.is_empty());
 
         let auth_rate_limit: usize = std::env::var("AUTH_RATE_LIMIT")
@@ -330,6 +357,15 @@ impl Config {
             google_client_secret,
             github_client_id,
             github_client_secret,
+            apple_client_id,
+            apple_team_id,
+            apple_key_id,
+            apple_private_key,
+            microsoft_client_id,
+            microsoft_client_secret,
+            oidc_client_id,
+            oidc_client_secret,
+            oidc_issuer_url,
             site_url,
             auth_rate_limit,
             auth_rate_window_secs,
@@ -564,6 +600,15 @@ mod tests {
             google_client_secret: None,
             github_client_id: None,
             github_client_secret: None,
+            apple_client_id: None,
+            apple_team_id: None,
+            apple_key_id: None,
+            apple_private_key: None,
+            microsoft_client_id: None,
+            microsoft_client_secret: None,
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            oidc_issuer_url: None,
             site_url: None,
             auth_rate_limit: 30,
             auth_rate_window_secs: 60,

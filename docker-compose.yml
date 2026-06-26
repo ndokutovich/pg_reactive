@@ -75,6 +75,21 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       PUBLIC_DIR: /public
+      # OAuth dev knobs (test placeholders). A provider is "enabled" once its
+      # env is set; these let the authorize endpoints build redirects locally.
+      SITE_URL: ${SITE_URL:-http://127.0.0.1:8080}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-test-google-client}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-test-google-secret}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-test-github-client}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-test-github-secret}
+      APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-com.example.auth}
+      APPLE_TEAM_ID: ${APPLE_TEAM_ID:-ABCDE12345}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:-FGHIJ67890}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-test-ms-client}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-test-ms-secret}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-test-oidc-client}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-test-oidc-secret}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-https://accounts.google.com}
       # EDGE_RUNTIME_URL: http://edge-runtime:9000  # uncomment to enable Deno functions
     ports:
       - "127.0.0.1:${PROXY_PORT:-8080}:8080"
@@ -118,6 +133,21 @@ services:
       # User static hosting (mirror proxy-go): serve ./public as the lowest-priority
       # SPA fallback. The image bakes /public; the bind mount overrides it in dev.
       PUBLIC_DIR: /public
+      # OAuth dev knobs (same test placeholders as proxy-go) so the Rust
+      # authorize endpoints build identical redirects for parity checks.
+      SITE_URL: ${SITE_URL_RUST:-http://127.0.0.1:8081}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-test-google-client}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-test-google-secret}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-test-github-client}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-test-github-secret}
+      APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-com.example.auth}
+      APPLE_TEAM_ID: ${APPLE_TEAM_ID:-ABCDE12345}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:-FGHIJ67890}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-test-ms-client}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-test-ms-secret}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-test-oidc-client}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-test-oidc-secret}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-https://accounts.google.com}
     ports:
       - "127.0.0.1:${PROXY_RUST_PORT:-8081}:8080"
     volumes:

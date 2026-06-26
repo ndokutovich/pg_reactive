@@ -240,7 +240,13 @@ fn build_router(state: AppState) -> Router {
         )
         // OAuth
         .route("/auth/v1/authorize", get(auth::oauth::authorize))
-        .route("/auth/v1/callback", get(auth::oauth::callback))
+        // GET for the redirect-based providers; POST for Apple's form_post
+        // (response_mode=form_post) callback. Mirror Go main.go (r.Get + r.Post
+        // on the same path).
+        .route(
+            "/auth/v1/callback",
+            get(auth::oauth::callback).post(auth::oauth::callback_post),
+        )
         // Transaction batching — mounted BEFORE the {table} wildcard so "batch"
         // is not treated as a table name (mirrors Go's route order).
         .route("/rest/v1/batch", post(rest::batch::batch))

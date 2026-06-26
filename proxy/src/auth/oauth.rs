@@ -21,6 +21,18 @@ const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL: &str = "https://api.github.com/user";
 const GITHUB_EMAILS_URL: &str = "https://api.github.com/user/emails";
 
+// Apple OAuth endpoints (mirror proxy-go/auth/oauth.go)
+const APPLE_AUTH_URL: &str = "https://appleid.apple.com/auth/authorize";
+const APPLE_TOKEN_URL: &str = "https://appleid.apple.com/auth/token";
+const APPLE_JWKS_URL: &str = "https://appleid.apple.com/auth/keys";
+const APPLE_ISSUER: &str = "https://appleid.apple.com";
+
+// Microsoft (Azure AD "common" tenant) OAuth endpoints
+const MICROSOFT_AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const MICROSOFT_TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+const MICROSOFT_JWKS_URL: &str = "https://login.microsoftonline.com/common/discovery/v2.0/keys";
+const MICROSOFT_GRAPH_ME_URL: &str = "https://graph.microsoft.com/v1.0/me";
+
 // ---------- Query parameter types ----------
 
 #[derive(Deserialize)]
@@ -96,6 +108,87 @@ fn compute_code_challenge(verifier: &str) -> String {
     base64_url_encode(&hash)
 }
 
+/// Shared HTTP client for the new providers' token exchange / userinfo / graph
+/// calls. 10s timeout mirrors the Go proxy's `oauthHTTPClient` so a stalling
+/// IdP cannot pin a callback task. (Google/GitHub keep their inline clients.)
+fn oauth_client() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("build oauth http client")
+    })
+}
+
+/// Build an authorization URL with `application/x-www-form-urlencoded`-encoded
+/// query params (spaces → `+`), matching Go's `url.Values.Encode`.
+fn build_authorize_url(base: &str, params: &[(&str, &str)]) -> String {
+    let mut url = url::Url::parse(base).expect("static authorize base URL");
+    {
+        let mut qp = url.query_pairs_mut();
+        for (k, v) in params {
+            qp.append_pair(k, v);
+        }
+    }
+    url.to_string()
+}
+
+/// POST an `application/x-www-form-urlencoded` body and decode the JSON
+/// response into an object map (mirror Go's `httpPostForm`). `Accept: application/json`
+/// is set so GitHub-style providers return JSON.
+async fn http_post_form(
+    endpoint: &str,
+    params: &[(&str, &str)],
+) -> Result<serde_json::Map<String, serde_json::Value>, AppError> {
+    let resp = oauth_client()
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .form(params)
+        .send()
+        .await
+        .map_err(|e| AppError::ServiceUnavailable(format!("POST {endpoint}: {e}")))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(AppError::ServiceUnavailable(format!(
+            "POST {endpoint} returned {status}: {text}"
+        )));
+    }
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| AppError::Internal(format!("decode response from {endpoint}: {e}")))?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| AppError::Internal(format!("{endpoint} response was not a JSON object")))
+}
+
+/// GET a Bearer-authenticated JSON resource (userinfo / Graph). Mirror Go's
+/// `httpGetJSON`.
+async fn http_get_json(endpoint: &str, access_token: &str) -> Result<serde_json::Value, AppError> {
+    let mut req = oauth_client()
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .header("User-Agent", "pgstack-proxy/1.0");
+    if !access_token.is_empty() {
+        req = req.bearer_auth(access_token);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| AppError::ServiceUnavailable(format!("GET {endpoint}: {e}")))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(AppError::ServiceUnavailable(format!(
+            "GET {endpoint} returned {status}: {text}"
+        )));
+    }
+    serde_json::from_str(&text)
+        .map_err(|e| AppError::Internal(format!("decode response from {endpoint}: {e}")))
+}
+
 // ---------- GET /auth/v1/authorize ----------
 
 pub async fn authorize(
@@ -159,6 +252,77 @@ pub async fn authorize(
             info!(provider = "github", "OAuth authorize redirect");
             Ok(Redirect::temporary(&url))
         }
+        "apple" => {
+            // Apple does NOT support PKCE and posts the callback back as a
+            // form_post (response_mode=form_post). Mirror Go's exact params.
+            let client_id = state
+                .config
+                .apple_client_id
+                .as_ref()
+                .ok_or_else(|| AppError::BadRequest("Apple OAuth is not configured".into()))?;
+            let url = build_authorize_url(
+                APPLE_AUTH_URL,
+                &[
+                    ("client_id", client_id),
+                    ("redirect_uri", &callback_uri),
+                    ("response_type", "code"),
+                    ("scope", "email name"),
+                    ("state", &csrf_state),
+                    ("response_mode", "form_post"),
+                ],
+            );
+            info!(provider = "apple", "OAuth authorize redirect");
+            Ok(Redirect::temporary(&url))
+        }
+        "microsoft" => {
+            let client_id =
+                state.config.microsoft_client_id.as_ref().ok_or_else(|| {
+                    AppError::BadRequest("Microsoft OAuth is not configured".into())
+                })?;
+            let url = build_authorize_url(
+                MICROSOFT_AUTH_URL,
+                &[
+                    ("client_id", client_id),
+                    ("redirect_uri", &callback_uri),
+                    ("response_type", "code"),
+                    ("scope", "openid email profile"),
+                    ("state", &csrf_state),
+                    ("code_challenge", &code_challenge),
+                    ("code_challenge_method", "S256"),
+                ],
+            );
+            info!(provider = "microsoft", "OAuth authorize redirect");
+            Ok(Redirect::temporary(&url))
+        }
+        "oidc" => {
+            let client_id = state
+                .config
+                .oidc_client_id
+                .as_ref()
+                .ok_or_else(|| AppError::BadRequest("OIDC is not configured".into()))?;
+            let issuer = state
+                .config
+                .oidc_issuer_url
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| AppError::BadRequest("OIDC_ISSUER_URL is not configured".into()))?;
+            // Discover the authorization endpoint from the issuer's well-known doc.
+            let cfg = discover_oidc(issuer).await?;
+            let url = build_authorize_url(
+                &cfg.authorization_endpoint,
+                &[
+                    ("client_id", client_id),
+                    ("redirect_uri", &callback_uri),
+                    ("response_type", "code"),
+                    ("scope", "openid email profile"),
+                    ("state", &csrf_state),
+                    ("code_challenge", &code_challenge),
+                    ("code_challenge_method", "S256"),
+                ],
+            );
+            info!(provider = "oidc", "OAuth authorize redirect");
+            Ok(Redirect::temporary(&url))
+        }
         other => Err(AppError::BadRequest(format!(
             "unsupported OAuth provider: {other}"
         ))),
@@ -194,6 +358,92 @@ pub async fn callback(
     }
 }
 
+// ---------- POST /auth/v1/callback (Apple form_post) ----------
+
+/// Apple's `response_mode=form_post` delivers the callback as an HTTP POST with
+/// an `application/x-www-form-urlencoded` body (`code`, `state`, and on first
+/// consent an optional `user` JSON blob) rather than the GET redirect the other
+/// providers use. This handler parses that body and funnels into the same
+/// exchange path. Mounted at the same path as the GET callback (mirror Go's
+/// `r.Post("/auth/v1/callback", ...)`).
+pub async fn callback_post(
+    State(state): State<AppState>,
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    let site = site_url(&state.config)?;
+
+    // Provider-side denial arrives as `error`/`error_description` form fields.
+    if let Some((err, desc)) = parse_form_error(&body) {
+        return Ok(error_redirect(&site, &err, &desc));
+    }
+
+    let (code, csrf_state, _user) = match parse_form_callback(&body) {
+        Ok(parsed) => parsed,
+        Err(e) => return Err(e),
+    };
+    let params = CallbackParams {
+        code,
+        state: csrf_state,
+    };
+
+    match callback_inner(&state, &params, &site).await {
+        Ok(redirect) => Ok(redirect),
+        Err(e) => {
+            warn!(error = ?e, "OAuth form_post callback failed");
+            Ok(error_redirect(
+                &site,
+                "server_error",
+                "authentication failed",
+            ))
+        }
+    }
+}
+
+/// Parse a urlencoded form-post callback body, returning `(code, state, user)`.
+/// `code` and `state` are required (both non-empty); `user` is optional (Apple
+/// sends it only on the first consent). Mirror Go's `r.FormValue` reads in
+/// `Callback`, which 400s when code/state are absent.
+pub(crate) fn parse_form_callback(
+    body: &str,
+) -> Result<(String, String, Option<String>), AppError> {
+    let mut code = None;
+    let mut state = None;
+    let mut user = None;
+    for (k, v) in url::form_urlencoded::parse(body.as_bytes()) {
+        match k.as_ref() {
+            "code" => code = Some(v.into_owned()),
+            "state" => state = Some(v.into_owned()),
+            "user" => user = Some(v.into_owned()),
+            _ => {}
+        }
+    }
+    let code = code
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("code and state are required".into()))?;
+    let state = state
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::BadRequest("code and state are required".into()))?;
+    Ok((code, state, user))
+}
+
+/// Extract a provider denial (`error` / `error_description`) from a form-post body.
+fn parse_form_error(body: &str) -> Option<(String, String)> {
+    let mut err = None;
+    let mut desc = None;
+    for (k, v) in url::form_urlencoded::parse(body.as_bytes()) {
+        match k.as_ref() {
+            "error" => err = Some(v.into_owned()),
+            "error_description" => desc = Some(v.into_owned()),
+            _ => {}
+        }
+    }
+    let err = err.filter(|s| !s.is_empty())?;
+    let desc = desc
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| err.clone());
+    Some((err, desc))
+}
+
 async fn callback_inner(
     state: &AppState,
     params: &CallbackParams,
@@ -222,6 +472,9 @@ async fn callback_inner(
     let (email, name, provider) = match provider.as_str() {
         "google" => exchange_google(state, &params.code, site, Some(&code_verifier)).await?,
         "github" => exchange_github(state, &params.code, site).await?,
+        "apple" => exchange_apple(state, &params.code, site).await?,
+        "microsoft" => exchange_microsoft(state, &params.code, site, &code_verifier).await?,
+        "oidc" => exchange_oidc(state, &params.code, site, &code_verifier).await?,
         other => {
             return Err(AppError::BadRequest(format!(
                 "unsupported provider: {other}"
@@ -463,4 +716,530 @@ async fn exchange_github(
     };
 
     Ok((email, github_user.name, "github".to_string()))
+}
+
+// ---------- Apple exchange ----------
+
+/// Exchange an Apple authorization code for an `id_token` and return the email.
+/// Apple has no userinfo endpoint — identity lives in the JWKS-verified id_token
+/// (ES256, iss=appleid.apple.com, aud=our Services ID). Mirror Go's `exchangeApple`.
+async fn exchange_apple(
+    state: &AppState,
+    code: &str,
+    site: &str,
+) -> Result<(String, Option<String>, String), AppError> {
+    let client_id = state
+        .config
+        .apple_client_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Internal("APPLE_CLIENT_ID not configured".into()))?;
+    let callback_uri = format!("{site}/auth/v1/callback");
+    let client_secret = generate_apple_client_secret(&state.config)?;
+
+    let token_resp = http_post_form(
+        APPLE_TOKEN_URL,
+        &[
+            ("code", code),
+            ("client_id", client_id),
+            ("client_secret", &client_secret),
+            ("redirect_uri", &callback_uri),
+            ("grant_type", "authorization_code"),
+        ],
+    )
+    .await?;
+
+    let id_token = token_resp
+        .get("id_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::Unauthorized("apple token exchange: no id_token in response".into())
+        })?;
+
+    let (email, _verified) = crate::auth::idtoken::verify_id_token(
+        id_token,
+        APPLE_JWKS_URL,
+        crate::auth::idtoken::issuer_equals(APPLE_ISSUER),
+        client_id,
+    )
+    .await
+    .map_err(|e| AppError::Unauthorized(format!("apple id_token: {e:?}")))?;
+
+    Ok((email.trim().to_lowercase(), None, "apple".to_string()))
+}
+
+/// Whether `s` is a compact-serialised JWT (three dot-separated segments, no
+/// PEM armour) rather than a PEM private key. Mirror Go's `looksLikeJWT`.
+pub(crate) fn looks_like_jwt(s: &str) -> bool {
+    let s = s.trim();
+    s.matches('.').count() == 2 && !s.contains("BEGIN")
+}
+
+/// Sign the ES256 client-secret JWT Apple requires in place of a static secret.
+/// Claims: iss=team_id, sub=client_id, aud=appleid.apple.com; header kid=key_id.
+/// `private_key_pem` is the PKCS#8 EC key (the .p8 file contents). Pure — the
+/// caching wrapper is `generate_apple_client_secret`.
+fn sign_apple_client_secret(
+    team_id: &str,
+    key_id: &str,
+    client_id: &str,
+    private_key_pem: &str,
+) -> Result<String, AppError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let key = jsonwebtoken::EncodingKey::from_ec_pem(private_key_pem.as_bytes())
+        .map_err(|e| AppError::Internal(format!("apple: cannot parse private key: {e}")))?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
+    header.kid = Some(key_id.to_string());
+    let claims = serde_json::json!({
+        "iss": team_id,
+        "iat": now,
+        "exp": now + 3600,
+        "aud": "https://appleid.apple.com",
+        "sub": client_id,
+    });
+    jsonwebtoken::encode(&header, &claims, &key)
+        .map_err(|e| AppError::Internal(format!("apple: cannot sign client_secret JWT: {e}")))
+}
+
+/// Return the Apple client-secret JWT, memoised for ~1h. If `APPLE_PRIVATE_KEY`
+/// is already a pre-generated client-secret JWT (not PEM) it is returned
+/// verbatim. Mirror Go's `generateAppleClientSecret`.
+fn generate_apple_client_secret(cfg: &crate::config::Config) -> Result<String, AppError> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    let private_key = cfg.apple_private_key.as_deref().unwrap_or("");
+    if looks_like_jwt(private_key) {
+        return Ok(private_key.trim().to_string());
+    }
+
+    static CACHE: OnceLock<Mutex<Option<(String, Instant)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((val, exp)) = guard.as_ref() {
+            // Regenerate shortly (5 min) before expiry.
+            if Instant::now() + Duration::from_secs(300) < *exp {
+                return Ok(val.clone());
+            }
+        }
+    }
+
+    let team_id = cfg
+        .apple_team_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Internal("APPLE_TEAM_ID not configured".into()))?;
+    let key_id = cfg
+        .apple_key_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Internal("APPLE_KEY_ID not configured".into()))?;
+    let client_id = cfg
+        .apple_client_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Internal("APPLE_CLIENT_ID not configured".into()))?;
+    if private_key.trim().is_empty() {
+        return Err(AppError::Internal(
+            "APPLE_PRIVATE_KEY not configured".into(),
+        ));
+    }
+
+    let signed = sign_apple_client_secret(team_id, key_id, client_id, private_key)?;
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((signed.clone(), Instant::now() + Duration::from_secs(3600)));
+    }
+    Ok(signed)
+}
+
+// ---------- Microsoft exchange ----------
+
+/// Exchange a Microsoft authorization code, preferring the JWKS-verified
+/// id_token (multi-tenant `common` issuer prefix) and falling back to Graph
+/// `/me`. Mirror Go's `exchangeMicrosoft`.
+async fn exchange_microsoft(
+    state: &AppState,
+    code: &str,
+    site: &str,
+    verifier: &str,
+) -> Result<(String, Option<String>, String), AppError> {
+    let client_id = state
+        .config
+        .microsoft_client_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Internal("MICROSOFT_CLIENT_ID not configured".into()))?;
+    let client_secret = state
+        .config
+        .microsoft_client_secret
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Internal("MICROSOFT_CLIENT_SECRET not configured".into()))?;
+    let callback_uri = format!("{site}/auth/v1/callback");
+
+    let token_resp = http_post_form(
+        MICROSOFT_TOKEN_URL,
+        &[
+            ("code", code),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("redirect_uri", &callback_uri),
+            ("grant_type", "authorization_code"),
+            ("code_verifier", verifier),
+        ],
+    )
+    .await?;
+
+    // Prefer the id_token. Microsoft's "common" tenant rewrites iss per-user
+    // (tenant id in the path), so the issuer is matched by prefix/suffix.
+    if let Some(id_token) = token_resp
+        .get("id_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        if let Ok((email, _verified)) = crate::auth::idtoken::verify_id_token(
+            id_token,
+            MICROSOFT_JWKS_URL,
+            |iss: &str| {
+                iss.starts_with("https://login.microsoftonline.com/") && iss.ends_with("/v2.0")
+            },
+            client_id,
+        )
+        .await
+        {
+            if !email.is_empty() {
+                return Ok((email.trim().to_lowercase(), None, "microsoft".to_string()));
+            }
+        }
+    }
+
+    // Fallback: Graph /me. Graph carries no verified claim.
+    let access_token = token_resp
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::Unauthorized("microsoft token exchange: no access_token in response".into())
+        })?;
+    let info = http_get_json(MICROSOFT_GRAPH_ME_URL, access_token).await?;
+    let email = info
+        .get("mail")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            info.get("userPrincipalName")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        })
+        .ok_or_else(|| {
+            AppError::Unauthorized("microsoft graph: email not found in user profile".into())
+        })?;
+    Ok((email.trim().to_lowercase(), None, "microsoft".to_string()))
+}
+
+// ---------- Generic OIDC exchange ----------
+
+/// Subset of an OpenID Provider configuration discovery document.
+#[derive(Deserialize, Default)]
+struct OidcConfig {
+    #[serde(default)]
+    issuer: String,
+    #[serde(default)]
+    authorization_endpoint: String,
+    #[serde(default)]
+    token_endpoint: String,
+    #[serde(default)]
+    userinfo_endpoint: String,
+    #[serde(default)]
+    jwks_uri: String,
+}
+
+/// Fetch and validate the issuer's `.well-known/openid-configuration`.
+/// Mirror Go's `discoverOIDC`.
+async fn discover_oidc(issuer_url: &str) -> Result<OidcConfig, AppError> {
+    if issuer_url.is_empty() {
+        return Err(AppError::BadRequest(
+            "OIDC_ISSUER_URL is not configured".into(),
+        ));
+    }
+    let well_known = format!(
+        "{}/.well-known/openid-configuration",
+        issuer_url.trim_end_matches('/')
+    );
+    let cfg: OidcConfig = serde_json::from_value(http_get_json(&well_known, "").await?)
+        .map_err(|e| AppError::Internal(format!("parse OIDC discovery {well_known}: {e}")))?;
+    if cfg.authorization_endpoint.is_empty() || cfg.token_endpoint.is_empty() {
+        return Err(AppError::ServiceUnavailable(
+            "OIDC discovery: missing required endpoints".into(),
+        ));
+    }
+    Ok(cfg)
+}
+
+/// Exchange a generic-OIDC authorization code, preferring the JWKS-verified
+/// id_token and falling back to the userinfo endpoint. Mirror Go's `exchangeOIDC`.
+async fn exchange_oidc(
+    state: &AppState,
+    code: &str,
+    site: &str,
+    verifier: &str,
+) -> Result<(String, Option<String>, String), AppError> {
+    let client_id = state
+        .config
+        .oidc_client_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Internal("OIDC_CLIENT_ID not configured".into()))?;
+    let client_secret = state.config.oidc_client_secret.as_deref().unwrap_or("");
+    let issuer = state
+        .config
+        .oidc_issuer_url
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Internal("OIDC_ISSUER_URL not configured".into()))?;
+    let cfg = discover_oidc(issuer).await?;
+    let callback_uri = format!("{site}/auth/v1/callback");
+
+    let token_resp = http_post_form(
+        &cfg.token_endpoint,
+        &[
+            ("code", code),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("redirect_uri", &callback_uri),
+            ("grant_type", "authorization_code"),
+            ("code_verifier", verifier),
+        ],
+    )
+    .await?;
+
+    // Prefer the id_token when both jwks_uri and issuer are present (required by
+    // OIDC core).
+    if let Some(id_token) = token_resp
+        .get("id_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        if !cfg.jwks_uri.is_empty() && !cfg.issuer.is_empty() {
+            if let Ok((email, _verified)) = crate::auth::idtoken::verify_id_token(
+                id_token,
+                &cfg.jwks_uri,
+                crate::auth::idtoken::issuer_equals(&cfg.issuer),
+                client_id,
+            )
+            .await
+            {
+                if !email.is_empty() {
+                    return Ok((email.trim().to_lowercase(), None, "oidc".to_string()));
+                }
+            }
+        }
+    }
+
+    let access_token = token_resp
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::Unauthorized("oidc token exchange: no access_token in response".into())
+        })?;
+
+    if !cfg.userinfo_endpoint.is_empty() {
+        let info = http_get_json(&cfg.userinfo_endpoint, access_token).await?;
+        if let Some(email) = info
+            .get("email")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            return Ok((email.trim().to_lowercase(), None, "oidc".to_string()));
+        }
+    }
+
+    Err(AppError::Unauthorized(
+        "oidc: email not found in id_token or userinfo".into(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- Apple form_post body parsing ----
+
+    #[test]
+    fn form_post_parses_code_state_user() {
+        let body = "code=abc123&state=xyz789&user=%7B%22name%22%3A%22a%22%7D";
+        let (code, state, user) = parse_form_callback(body).expect("parse");
+        assert_eq!(code, "abc123");
+        assert_eq!(state, "xyz789");
+        assert_eq!(user.as_deref(), Some(r#"{"name":"a"}"#));
+    }
+
+    #[test]
+    fn form_post_user_optional() {
+        let (code, state, user) = parse_form_callback("code=c&state=s").expect("parse");
+        assert_eq!(code, "c");
+        assert_eq!(state, "s");
+        assert!(user.is_none());
+    }
+
+    #[test]
+    fn form_post_missing_state_rejected() {
+        assert!(parse_form_callback("code=abc").is_err());
+    }
+
+    #[test]
+    fn form_post_missing_code_rejected() {
+        assert!(parse_form_callback("state=xyz").is_err());
+    }
+
+    #[test]
+    fn form_post_empty_body_rejected() {
+        assert!(parse_form_callback("").is_err());
+    }
+
+    #[test]
+    fn form_post_error_extracted() {
+        let body = "error=access_denied&error_description=user%20cancelled";
+        let (err, desc) = parse_form_error(body).expect("error present");
+        assert_eq!(err, "access_denied");
+        assert_eq!(desc, "user cancelled");
+        assert!(parse_form_error("code=c&state=s").is_none());
+    }
+
+    // ---- looks_like_jwt ----
+
+    #[test]
+    fn looks_like_jwt_shapes() {
+        assert!(looks_like_jwt("a.b.c"));
+        assert!(looks_like_jwt("  a.b.c  "));
+        assert!(!looks_like_jwt("a.b"));
+        assert!(!looks_like_jwt("a.b.c.d"));
+        assert!(!looks_like_jwt("plainstring"));
+        assert!(!looks_like_jwt(
+            "-----BEGIN PRIVATE KEY-----\na.b.c\n-----END---"
+        ));
+    }
+
+    // ---- Apple client-secret JWT (ES256) ----
+
+    // A P-256 PKCS#8 key, same shape as an Apple .p8 file.
+    const APPLE_TEST_P8: &str = "-----BEGIN PRIVATE KEY-----\n\
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgx+Y5pHGNC/FW/ggt\n\
+4hRpvz7D/AYjtDw2j6iTVa6wQeihRANCAAQqA81Nv/hrVENyqlTuNbNw5Ir+rSLb\n\
+CX0AJpCEgyAJlemdUUcsPKtKsKHKThLWWXLOCdEyU5ta0EEooXsC/k5n\n\
+-----END PRIVATE KEY-----\n";
+
+    #[test]
+    fn apple_client_secret_signs_es256_with_expected_claims() {
+        let jwt = sign_apple_client_secret(
+            "ABCDE12345",
+            "FGHIJ67890",
+            "com.example.auth",
+            APPLE_TEST_P8,
+        )
+        .expect("sign");
+
+        // Header: alg=ES256, kid=key_id.
+        let header = jsonwebtoken::decode_header(&jwt).expect("header");
+        assert_eq!(header.alg, jsonwebtoken::Algorithm::ES256);
+        assert_eq!(header.kid.as_deref(), Some("FGHIJ67890"));
+
+        // Decode the payload (no verification needed for claim inspection).
+        let payload_b64 = jwt.split('.').nth(1).unwrap();
+        use base64ct::{Base64UrlUnpadded, Encoding};
+        let payload = Base64UrlUnpadded::decode_vec(payload_b64).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(claims["iss"], "ABCDE12345");
+        assert_eq!(claims["sub"], "com.example.auth");
+        assert_eq!(claims["aud"], "https://appleid.apple.com");
+        assert!(claims["exp"].as_u64().unwrap() > claims["iat"].as_u64().unwrap());
+    }
+
+    #[test]
+    fn apple_client_secret_rejects_bad_key() {
+        assert!(sign_apple_client_secret("t", "k", "c", "not-a-pem").is_err());
+    }
+
+    // ---- authorize URL parity (endpoint / scope / response_type / PKCE) ----
+    //
+    // These pin the exact param sets each authorize arm builds, matching the Go
+    // reference (proxy-go/auth/oauth.go). The live smoke confirms the running
+    // handler emits them.
+
+    fn qpairs(url: &str) -> std::collections::HashMap<String, String> {
+        url::Url::parse(url)
+            .unwrap()
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn apple_authorize_url_matches_go() {
+        let url = build_authorize_url(
+            APPLE_AUTH_URL,
+            &[
+                ("client_id", "cid"),
+                ("redirect_uri", "https://site/auth/v1/callback"),
+                ("response_type", "code"),
+                ("scope", "email name"),
+                ("state", "st"),
+                ("response_mode", "form_post"),
+            ],
+        );
+        assert!(url.starts_with("https://appleid.apple.com/auth/authorize?"));
+        let q = qpairs(&url);
+        assert_eq!(q["response_type"], "code");
+        assert_eq!(q["scope"], "email name");
+        assert_eq!(q["response_mode"], "form_post");
+        // Apple does NOT use PKCE.
+        assert!(!q.contains_key("code_challenge"));
+    }
+
+    #[test]
+    fn microsoft_authorize_url_matches_go() {
+        let url = build_authorize_url(
+            MICROSOFT_AUTH_URL,
+            &[
+                ("client_id", "cid"),
+                ("redirect_uri", "https://site/auth/v1/callback"),
+                ("response_type", "code"),
+                ("scope", "openid email profile"),
+                ("state", "st"),
+                ("code_challenge", "ch"),
+                ("code_challenge_method", "S256"),
+            ],
+        );
+        assert!(url.starts_with("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?"));
+        let q = qpairs(&url);
+        assert_eq!(q["response_type"], "code");
+        assert_eq!(q["scope"], "openid email profile");
+        assert_eq!(q["code_challenge_method"], "S256");
+        assert_eq!(q["code_challenge"], "ch");
+    }
+
+    #[test]
+    fn oidc_authorize_url_uses_pkce_and_openid_scope() {
+        let url = build_authorize_url(
+            "https://idp.example/authorize",
+            &[
+                ("client_id", "cid"),
+                ("redirect_uri", "https://site/auth/v1/callback"),
+                ("response_type", "code"),
+                ("scope", "openid email profile"),
+                ("state", "st"),
+                ("code_challenge", "ch"),
+                ("code_challenge_method", "S256"),
+            ],
+        );
+        let q = qpairs(&url);
+        assert_eq!(q["scope"], "openid email profile");
+        assert_eq!(q["code_challenge_method"], "S256");
+    }
 }
