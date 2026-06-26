@@ -253,7 +253,7 @@ mod tests {
             .as_bytes(),
         );
         // "none" algorithm has an empty signature
-        let forged = format!("{}.{}.", header, payload);
+        let forged = format!("{header}.{payload}.");
         let result = validate_token(&forged, TEST_SECRET);
         assert!(result.is_err(), "alg:none token must be rejected");
     }

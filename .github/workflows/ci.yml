@@ -135,7 +135,10 @@ jobs:
 
       - name: Clippy
         working-directory: proxy
-        run: cargo clippy -- -D warnings
+        # --all-targets lints test/example code too (where uninlined_format_args
+        # debt accumulated unseen by the bin-only command); --all-features keeps
+        # the gate matching the strict local command CLAUDE.md claims passes.
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Format check
         working-directory: proxy

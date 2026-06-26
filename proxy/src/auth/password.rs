@@ -58,23 +58,19 @@ mod tests {
         // A standard argon2id PHC string includes v= and m=, t=, p= segments
         assert!(
             hash.contains("v="),
-            "hash must include version; got: {}",
-            hash
+            "hash must include version; got: {hash}"
         );
         assert!(
             hash.contains("m="),
-            "hash must include memory param; got: {}",
-            hash
+            "hash must include memory param; got: {hash}"
         );
         assert!(
             hash.contains("t="),
-            "hash must include time param; got: {}",
-            hash
+            "hash must include time param; got: {hash}"
         );
         assert!(
             hash.contains("p="),
-            "hash must include parallelism param; got: {}",
-            hash
+            "hash must include parallelism param; got: {hash}"
         );
     }
 

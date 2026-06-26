@@ -408,7 +408,7 @@ mod tests {
     fn test_column_too_long_rejected() {
         // 64-char column name exceeds 63-char PG limit
         let long_col = "a".repeat(64);
-        let qs = format!("{}=eq.1", long_col);
+        let qs = format!("{long_col}=eq.1");
         let result = RestQuery::parse(Some(&qs));
         assert!(result.is_err());
     }
