@@ -48,6 +48,18 @@ fn is_https(headers: &HeaderMap, remote_ip: Option<IpAddr>, trusted_proxies: &st
     trusted && xfp == "https"
 }
 
+/// Build the `Strict-Transport-Security` header value (GAP 3 — configurable
+/// max-age, mirror Go `middleware.HSTSHeaders`). A non-positive max-age falls
+/// back to the 63072000 (2y) default, matching Go's `if cfg.MaxAge <= 0`.
+fn hsts_header_value(max_age: i64, preload: bool) -> String {
+    let max_age = if max_age <= 0 { 63072000 } else { max_age };
+    if preload {
+        format!("max-age={max_age}; includeSubDomains; preload")
+    } else {
+        format!("max-age={max_age}; includeSubDomains")
+    }
+}
+
 /// Middleware that adds strict security headers to every API response.
 pub async fn security_headers(
     State(state): State<AppState>,
@@ -59,11 +71,22 @@ pub async fn security_headers(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0.ip());
-    let https = is_https(
-        request.headers(),
-        remote_ip,
-        state.config.trusted_proxies.as_deref().unwrap_or(""),
-    );
+    // DirectTls is injected by the TLS-serving paths (tls::serve_manual /
+    // serve_auto) — the Rust analogue of Go's `r.TLS != nil`. When this proxy
+    // terminates TLS itself the handler has no other HTTPS signal, so HSTS would
+    // never fire without it. Mirror Go isHTTPS's `r.TLS != nil || trusted-XFP`
+    // OR-logic (GAP 1, SECURITY.md inv 10). The plain-HTTP path never injects it,
+    // so a spoofed XFP from an untrusted source still cannot trigger HSTS.
+    let direct_tls = request
+        .extensions()
+        .get::<crate::tls::DirectTls>()
+        .is_some();
+    let https = direct_tls
+        || is_https(
+            request.headers(),
+            remote_ip,
+            state.config.trusted_proxies.as_deref().unwrap_or(""),
+        );
 
     let mut response = next.run(request).await;
 
@@ -98,17 +121,15 @@ pub async fn security_headers(
         HeaderValue::from_static(API_PERMISSIONS_POLICY),
     );
     // HSTS (SECURITY.md invariant 10). Emitted ONLY on a demonstrably-HTTPS
-    // request (trusted-proxy XFP=https) — NEVER on plain HTTP or from an
-    // untrusted XFP. `preload` is irreversible → opt-in only via HSTS_PRELOAD.
+    // request (direct TLS via DirectTls, or trusted-proxy XFP=https) — NEVER on
+    // plain HTTP or from an untrusted XFP. max-age is configurable via
+    // HSTS_MAX_AGE_SECONDS (GAP 3, default 63072000 = 2y); `preload` is
+    // irreversible → opt-in only via HSTS_PRELOAD.
     if https {
-        headers.insert(
-            header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static(if state.config.hsts_preload {
-                "max-age=63072000; includeSubDomains; preload"
-            } else {
-                "max-age=63072000; includeSubDomains"
-            }),
-        );
+        let value = hsts_header_value(state.config.hsts_max_age_seconds, state.config.hsts_preload);
+        if let Ok(v) = HeaderValue::from_str(&value) {
+            headers.insert(header::STRICT_TRANSPORT_SECURITY, v);
+        }
     }
 
     response
@@ -310,5 +331,28 @@ mod tests {
             Some(proxy),
             ""
         ));
+    }
+
+    // GAP 3: HSTS max-age is configurable; preload stays opt-in; a non-positive
+    // value falls back to the 2y default (mirror Go HSTSHeaders' `MaxAge <= 0`).
+    #[test]
+    fn hsts_value_uses_configurable_max_age() {
+        assert_eq!(
+            hsts_header_value(31536000, false),
+            "max-age=31536000; includeSubDomains"
+        );
+        assert_eq!(
+            hsts_header_value(63072000, true),
+            "max-age=63072000; includeSubDomains; preload"
+        );
+        // Non-positive → default 2y.
+        assert_eq!(
+            hsts_header_value(0, false),
+            "max-age=63072000; includeSubDomains"
+        );
+        assert_eq!(
+            hsts_header_value(-5, false),
+            "max-age=63072000; includeSubDomains"
+        );
     }
 }

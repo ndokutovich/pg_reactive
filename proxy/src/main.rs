@@ -16,7 +16,6 @@ use std::net::SocketAddr;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use sqlx::postgres::PgPoolOptions;
-use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -62,8 +61,14 @@ async fn main() {
         warn!("ALLOWED_ORIGINS not set — CORS is permissive (set to restrict in production)");
     }
 
+    // PG pool sizing knobs (GAP 3, mirror Go PG_POOL_MAX_CONNS / PG_POOL_MIN_CONNS
+    // / PG_POOL_MAX_CONN_IDLE_TIME). Applied to BOTH pools, like Go's buildPool /
+    // buildPoolAs, which pass the same sizing to the data and admin pools.
+    let pool_idle = std::time::Duration::from_secs(config.pg_pool_max_conn_idle_time_secs);
     let pg_pool = PgPoolOptions::new()
-        .max_connections(50)
+        .max_connections(config.pg_pool_max_conns)
+        .min_connections(config.pg_pool_min_conns)
+        .idle_timeout(pool_idle)
         .connect(&config.database_url)
         .await
         .expect("failed to connect to PostgreSQL (data pool)");
@@ -72,7 +77,9 @@ async fn main() {
     // (auth, catalog, /api/sql, demo). Uses a SEPARATE login role
     // (authenticator_admin) so a data-plane compromise can't reach service_role.
     let admin_pool = PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(config.pg_pool_max_conns)
+        .min_connections(config.pg_pool_min_conns)
+        .idle_timeout(pool_idle)
         .after_connect(|conn, _meta| {
             Box::pin(async move {
                 sqlx::query("SET ROLE service_role").execute(&mut *conn).await?;
@@ -82,7 +89,10 @@ async fn main() {
         .connect(&config.admin_database_url)
         .await
         .expect("failed to connect to PostgreSQL (admin pool) — set ADMIN_DATABASE_URL to the authenticator_admin login role");
-    info!("PG pools ready (data max=50, admin max=20)");
+    info!(
+        "PG pools ready (data+admin max={}, min={})",
+        config.pg_pool_max_conns, config.pg_pool_min_conns
+    );
 
     // Startup role verification — refuse to boot with an unsafe DB role in production.
     db_roles::verify_pool_roles(&pg_pool, &admin_pool, &config).await;
@@ -151,29 +161,15 @@ async fn main() {
     // Build router
     let app = build_router(state);
 
-    // Serve according to TLS_MODE (parity with Go main.go). off => plain HTTP on
-    // listen_addr (unchanged); manual/auto => HTTPS on https_addr.
+    // Serve according to TLS_MODE (parity with Go main.go). All three paths go
+    // through axum-server so the HTTP timeout knobs (GAP 2) and bounded
+    // graceful-shutdown apply uniformly. off => plain HTTP on listen_addr (no
+    // DirectTls marker → HSTS never fires over plaintext); manual/auto => HTTPS on
+    // https_addr (DirectTls injected → HSTS fires on direct TLS, GAP 1).
     match config.tls_mode.as_str() {
         "manual" => tls::serve_manual(app, &config).await,
         "auto" => tls::serve_auto(app, &config).await,
-        _ => {
-            // off (default): plain HTTP — byte-for-byte the prior behavior.
-            let listener = TcpListener::bind(config.listen_addr)
-                .await
-                .expect("failed to bind");
-            info!(
-                "pgstack-proxy listening on {} (max_connections={})",
-                config.listen_addr, config.max_connections
-            );
-
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .expect("server error");
-        }
+        _ => tls::serve_plain(app, &config).await,
     }
 
     info!("shutdown complete");
@@ -399,10 +395,41 @@ fn build_router(state: AppState) -> Router {
         }
     }
 
-    app.layer(middleware::cors::cors_layer(
+    let gzip_level = state.config.gzip_level;
+    let write_timeout = state.config.write_timeout_secs;
+
+    let app = app.layer(middleware::cors::cors_layer(
         state.config.allowed_origins.as_deref(),
         state.config.allow_permissive_cors,
-    ))
+    ));
+
+    // Per-request deadline (GAP 2 — mirror Go http.Server WriteTimeout). Bounds a
+    // single request→response; the WebSocket upgrade response is produced before
+    // the socket is handed to on_upgrade, so live connections are not capped here.
+    // 0 disables. tower-http returns 408 Request Timeout on elapse.
+    let app = if write_timeout > 0 {
+        app.layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(write_timeout),
+        ))
+    } else {
+        app
+    };
+
+    // Response gzip (GAP 3 — mirror Go chiMiddleware.Compress(GZIP_LEVEL)). 0
+    // (or unset, which defaults to 5) disables the layer entirely; 1-9 selects the
+    // compression level, honoured via CompressionLevel::Precise.
+    if gzip_level > 0 {
+        app.layer(
+            tower_http::compression::CompressionLayer::new()
+                .gzip(true)
+                .quality(tower_http::compression::CompressionLevel::Precise(
+                    gzip_level,
+                )),
+        )
+    } else {
+        app
+    }
 }
 
 /// WebSocket handler wrapper — axum needs `Request` parts for extractors.
@@ -697,9 +724,4 @@ async fn presence_handler(
     // Restrict to the current committed generation (inv 17(f)).
     let presence_map = state.presence.list(&channel, current_gen).await;
     Ok(axum::Json(presence_map))
-}
-
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    info!("shutdown signal received");
 }

@@ -153,7 +153,7 @@ impl AppState {
         );
         let ws_semaphore = Arc::new(Semaphore::new(config.max_connections));
         let ws_conn_limiter = WsConnLimiter::new(config.ws_max_per_ip);
-        let mailer = Arc::new(crate::auth::mailer::Mailer::from_env());
+        let mailer = Arc::new(crate::auth::mailer::Mailer::from_config(&config));
 
         // At-rest secret box. The key was validated as decodable at config load
         // (Config::from_env), so building it here cannot fail on a good key.

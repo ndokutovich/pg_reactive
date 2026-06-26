@@ -65,6 +65,39 @@ pub struct Config {
     pub broadcast_capacity: usize,
     pub max_body_size: usize,
     pub pg_reconnect_max_backoff_secs: u64,
+    /// HTTP server timeout knobs (seconds). Mirror Go http.Server ReadTimeout /
+    /// WriteTimeout / IdleTimeout / shutdown ctx (env READ_TIMEOUT /
+    /// WRITE_TIMEOUT / IDLE_TIMEOUT / SHUTDOWN_TIMEOUT; Go defaults 30/60/120/15).
+    /// 0 disables the corresponding deadline.
+    pub read_timeout_secs: u64,
+    pub write_timeout_secs: u64,
+    pub idle_timeout_secs: u64,
+    pub shutdown_timeout_secs: u64,
+    /// Response gzip compression level (env `GZIP_LEVEL`, default 5). 0 disables
+    /// compression entirely (no layer mounted); 1-9 selects the level. Mirror Go
+    /// Config.GzipLevel + `chiMiddleware.Compress`.
+    pub gzip_level: i32,
+    /// HSTS `max-age` in seconds (env `HSTS_MAX_AGE_SECONDS`, default 63072000 =
+    /// 2y, the hstspreload submission minimum). Mirror Go Config.HSTSMaxAgeSeconds.
+    pub hsts_max_age_seconds: i64,
+    /// PG connection-pool sizing, applied to BOTH the data and admin pools (env
+    /// `PG_POOL_MAX_CONNS` / `PG_POOL_MIN_CONNS`, Go defaults 50/5). Mirror Go
+    /// Config.PGPoolMaxConns / PGPoolMinConns.
+    pub pg_pool_max_conns: u32,
+    pub pg_pool_min_conns: u32,
+    /// Max idle time before a pooled connection is reaped (env
+    /// `PG_POOL_MAX_CONN_IDLE_TIME` seconds, Go default 300). Mirror Go
+    /// Config.PGPoolMaxConnIdleTime.
+    pub pg_pool_max_conn_idle_time_secs: u64,
+    /// Allow plaintext / non-TLS SMTP delivery. Default false: in production the
+    /// mailer refuses to send AUTH credentials and token-bearing bodies over an
+    /// un-upgraded connection. Set true only for a trusted private-network relay
+    /// in dev (env `ALLOW_INSECURE_SMTP`). Mirror Go Config.AllowInsecureSMTP.
+    pub allow_insecure_smtp: bool,
+    /// SMTP submission port (env `SMTP_PORT`, default 587). Mirror Go
+    /// Config.SMTPPort; consulted by the mailer's TLS policy (465 = implicit
+    /// TLS, 587 = STARTTLS required).
+    pub smtp_port: u16,
     /// Allow /api/sql without service_role auth (dev/tutorial only).
     pub enable_sql_endpoint: bool,
     /// Comma-separated allowed origins for CORS, or None for permissive (dev mode).
@@ -282,6 +315,46 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30); // 30 seconds
 
+        // HTTP server timeout knobs (mirror Go config.go defaults 30/60/120/15s).
+        let u64_env = |key: &str, def: u64| -> u64 {
+            std::env::var(key)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(def)
+        };
+        let read_timeout_secs = u64_env("READ_TIMEOUT", 30);
+        let write_timeout_secs = u64_env("WRITE_TIMEOUT", 60);
+        let idle_timeout_secs = u64_env("IDLE_TIMEOUT", 120);
+        let shutdown_timeout_secs = u64_env("SHUTDOWN_TIMEOUT", 15);
+
+        // Response gzip level (mirror Go GZIP_LEVEL default 5; 0 = disabled).
+        let gzip_level: i32 = std::env::var("GZIP_LEVEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5);
+
+        // HSTS max-age (mirror Go HSTS_MAX_AGE_SECONDS default 63072000 = 2y).
+        let hsts_max_age_seconds: i64 = std::env::var("HSTS_MAX_AGE_SECONDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(63072000);
+
+        // PG pool sizing (mirror Go PG_POOL_MAX_CONNS / PG_POOL_MIN_CONNS /
+        // PG_POOL_MAX_CONN_IDLE_TIME defaults 50/5/300).
+        let pg_pool_max_conns: u32 = std::env::var("PG_POOL_MAX_CONNS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(50);
+        let pg_pool_min_conns: u32 = std::env::var("PG_POOL_MIN_CONNS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5);
+        let pg_pool_max_conn_idle_time_secs: u64 = u64_env("PG_POOL_MAX_CONN_IDLE_TIME", 300);
+        let smtp_port: u16 = std::env::var("SMTP_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(587);
+
         let enable_sql_endpoint = std::env::var("ENABLE_SQL_ENDPOINT")
             .ok()
             .map(|v| v == "true" || v == "1")
@@ -317,6 +390,7 @@ impl Config {
             .unwrap_or(10);
         let hsts_preload = bool_env("HSTS_PRELOAD", false);
         let email_enabled = bool_env("EMAIL_ENABLED", true);
+        let allow_insecure_smtp = bool_env("ALLOW_INSECURE_SMTP", false);
         let smtp_host = std::env::var("SMTP_HOST").unwrap_or_default();
         let smtp_user = std::env::var("SMTP_USER").unwrap_or_default();
         let smtp_pass = std::env::var("SMTP_PASS").unwrap_or_default();
@@ -424,6 +498,17 @@ impl Config {
             broadcast_capacity,
             max_body_size,
             pg_reconnect_max_backoff_secs,
+            read_timeout_secs,
+            write_timeout_secs,
+            idle_timeout_secs,
+            shutdown_timeout_secs,
+            gzip_level,
+            hsts_max_age_seconds,
+            pg_pool_max_conns,
+            pg_pool_min_conns,
+            pg_pool_max_conn_idle_time_secs,
+            allow_insecure_smtp,
+            smtp_port,
             enable_sql_endpoint,
             allowed_origins,
             allow_permissive_cors,
@@ -515,6 +600,17 @@ impl Config {
             other => errs.push(format!(
                 "STORAGE_BACKEND={other:?} is invalid (use database or disk)"
             )),
+        }
+        // GZIP_LEVEL / PG_POOL_MAX_CONNS are validated in EVERY environment (mirror
+        // Go Config.Validate, which checks them outside the production block).
+        if self.gzip_level < 0 || self.gzip_level > 9 {
+            errs.push(format!(
+                "GZIP_LEVEL={} must be 0-9 (0=disabled)",
+                self.gzip_level
+            ));
+        }
+        if self.pg_pool_max_conns < 1 {
+            errs.push("PG_POOL_MAX_CONNS must be >= 1".into());
         }
         // TLS is validated in EVERY environment (mirror Go Config.Validate, whose
         // TLS_MODE switch sits outside the production block). A misconfigured TLS
@@ -702,6 +798,17 @@ mod tests {
             broadcast_capacity: 1024,
             max_body_size: 1024 * 1024,
             pg_reconnect_max_backoff_secs: 30,
+            read_timeout_secs: 30,
+            write_timeout_secs: 60,
+            idle_timeout_secs: 120,
+            shutdown_timeout_secs: 15,
+            gzip_level: 5,
+            hsts_max_age_seconds: 63072000,
+            pg_pool_max_conns: 50,
+            pg_pool_min_conns: 5,
+            pg_pool_max_conn_idle_time_secs: 300,
+            allow_insecure_smtp: false,
+            smtp_port: 587,
             enable_sql_endpoint: false,
             allowed_origins: Some("https://app.example.com".into()),
             allow_permissive_cors: false,
@@ -968,6 +1075,70 @@ mod tests {
                 .iter()
                 .any(|e| e.contains("TLS_MODE") || e.contains("TLS_CERT_FILE")),
             "manual with both cert+key must pass: {:?}",
+            c.validate()
+        );
+    }
+
+    // GAP 2/3: the HTTP-server timeout, pool, gzip, HSTS-max-age and SMTP knobs
+    // default to Go's exact values (config.go FromEnv). valid_prod() is the
+    // from_env baseline (each field set to its documented default).
+    #[test]
+    fn timeout_and_pool_defaults_match_go() {
+        let c = valid_prod();
+        // Go http.Server timeouts: READ_TIMEOUT=30 WRITE_TIMEOUT=60
+        // IDLE_TIMEOUT=120 SHUTDOWN_TIMEOUT=15 (seconds).
+        assert_eq!(c.read_timeout_secs, 30);
+        assert_eq!(c.write_timeout_secs, 60);
+        assert_eq!(c.idle_timeout_secs, 120);
+        assert_eq!(c.shutdown_timeout_secs, 15);
+        // Go PG pool: PG_POOL_MAX_CONNS=50 PG_POOL_MIN_CONNS=5
+        // PG_POOL_MAX_CONN_IDLE_TIME=300s.
+        assert_eq!(c.pg_pool_max_conns, 50);
+        assert_eq!(c.pg_pool_min_conns, 5);
+        assert_eq!(c.pg_pool_max_conn_idle_time_secs, 300);
+        // Go GZIP_LEVEL=5, HSTS_MAX_AGE_SECONDS=63072000.
+        assert_eq!(c.gzip_level, 5);
+        assert_eq!(c.hsts_max_age_seconds, 63072000);
+        // Go ALLOW_INSECURE_SMTP=false, SMTP_PORT=587.
+        assert!(!c.allow_insecure_smtp);
+        assert_eq!(c.smtp_port, 587);
+    }
+
+    // GZIP_LEVEL must be 0-9 in any environment (mirror Go Config.Validate).
+    #[test]
+    fn gzip_level_out_of_range_is_rejected() {
+        for bad in [-1, 10, 99] {
+            let mut c = valid_prod();
+            c.pgstack_env = "development".into();
+            c.gzip_level = bad;
+            assert!(
+                c.validate().iter().any(|e| e.contains("GZIP_LEVEL")),
+                "GZIP_LEVEL={bad} must fail validation in any environment: {:?}",
+                c.validate()
+            );
+        }
+        // 0 (disabled) and 1-9 are accepted.
+        for ok in [0, 1, 5, 9] {
+            let mut c = valid_prod();
+            c.pgstack_env = "development".into();
+            c.gzip_level = ok;
+            assert!(
+                !c.validate().iter().any(|e| e.contains("GZIP_LEVEL")),
+                "GZIP_LEVEL={ok} must be accepted: {:?}",
+                c.validate()
+            );
+        }
+    }
+
+    // PG_POOL_MAX_CONNS must be >= 1 in any environment (mirror Go).
+    #[test]
+    fn pg_pool_max_conns_zero_is_rejected() {
+        let mut c = valid_prod();
+        c.pgstack_env = "development".into();
+        c.pg_pool_max_conns = 0;
+        assert!(
+            c.validate().iter().any(|e| e.contains("PG_POOL_MAX_CONNS")),
+            "PG_POOL_MAX_CONNS=0 must fail validation: {:?}",
             c.validate()
         );
     }

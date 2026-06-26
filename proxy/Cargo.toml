@@ -8,10 +8,16 @@ license = "Apache-2.0"
 # Web framework
 axum = { version = "0.8", features = ["ws", "multipart"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "limit", "fs"] }
+# compression-gzip: GZIP_LEVEL response compression (mirror Go chiMiddleware.Compress).
+# timeout: per-request deadline (mirror Go http.Server WriteTimeout via TimeoutLayer).
+tower-http = { version = "0.6", features = ["cors", "trace", "limit", "fs", "compression-gzip", "timeout"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+# hyper-util: TokioTimer for the axum-server HTTP builder's header-read timeout
+# (mirror Go http.Server ReadTimeout). Already in tree transitively via axum /
+# axum-server; named directly here only to reach TokioTimer.
+hyper-util = { version = "0.1", features = ["tokio"] }
 
 # WebSocket (axum's built-in ws uses tungstenite internally)
 futures-util = "0.3"
