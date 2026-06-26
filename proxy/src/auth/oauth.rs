@@ -13,7 +13,9 @@ use crate::state::AppState;
 // Google OAuth endpoints
 const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
+// v3 userinfo carries the `email_verified` claim (v2 does not); the F3
+// email-verification gate needs it. Mirror Go's `oauth2/v3/userinfo`.
+const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
 
 // GitHub OAuth endpoints
 const GITHUB_AUTH_URL: &str = "https://github.com/login/oauth/authorize";
@@ -57,6 +59,10 @@ struct GoogleTokenResponse {
 struct GoogleUserInfo {
     email: String,
     name: Option<String>,
+    // F3 gate: Google asserts ownership via `email_verified` (bool, or rarely
+    // the string "true"). Decoded as a Value and normalised by `claim_true`.
+    #[serde(default)]
+    email_verified: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -444,6 +450,62 @@ fn parse_form_error(body: &str) -> Option<(String, String)> {
     Some((err, desc))
 }
 
+// ---------- Account-takeover defense (audit F3, round 14 — Rust parity) ----------
+//
+// An OAuth provider that returns an unverified or attacker-controlled email
+// could otherwise hijack an existing `pgstack.users` row simply by completing a
+// successful OAuth flow with that email (accounts are keyed on email). The Go
+// reference (`proxy-go/auth/oauth.go`) gates on this uniformly; these mirror it.
+
+/// Refusal shown when the provider did not assert `email_verified=true`.
+const OAUTH_UNVERIFIED_DESC: &str = "provider did not verify email ownership";
+/// Refusal shown when an OAuth login would merge into an existing account whose
+/// email was never verified (`email_confirmed_at IS NULL`).
+const OAUTH_TAKEOVER_DESC: &str =
+    "an unverified account already exists for this email; complete verification or contact support";
+
+/// Pure admission decision for an OAuth callback (audit F3). Returns `Err(desc)`
+/// to refuse the login, `Ok(())` to admit. Refuses when the provider did not
+/// assert `email_verified=true` (`verified` is false), and refuses when merging
+/// into an existing, still-unverified account (`conflict_block` is true — the
+/// `(email_confirmed_at IS NULL)` flag the upsert returns for the conflicting
+/// row). Called twice in `callback_inner`: once after the provider resolve (the
+/// verified gate), once after the upsert (the takeover gate).
+fn oauth_admission(verified: bool, conflict_block: bool) -> Result<(), &'static str> {
+    if !verified {
+        return Err(OAUTH_UNVERIFIED_DESC);
+    }
+    if conflict_block {
+        return Err(OAUTH_TAKEOVER_DESC);
+    }
+    Ok(())
+}
+
+/// User upsert for an OAuth login. `email_confirmed_at` is set only on INSERT —
+/// never elevated on the `ON CONFLICT` (UPDATE) path — and the UPDATE leaves an
+/// existing **unverified** row (`email_confirmed_at IS NULL`) untouched, surfacing
+/// `(email_confirmed_at IS NULL) AS conflict_block` so the caller refuses the
+/// merge. Mirror Go's upsert (`proxy-go/auth/oauth.go`, audit F3).
+const OAUTH_UPSERT_SQL: &str = r#"
+        INSERT INTO pgstack.users (email, encrypted_password, provider, providers, raw_user_meta, email_confirmed_at)
+        VALUES ($1, NULL, $2, ARRAY[$2]::text[], $3, now())
+        ON CONFLICT (email) DO UPDATE
+            SET providers = CASE
+                    WHEN pgstack.users.email_confirmed_at IS NULL THEN pgstack.users.providers
+                    WHEN $2 = ANY(pgstack.users.providers) THEN pgstack.users.providers
+                    ELSE array_append(pgstack.users.providers, $2)
+                  END,
+                raw_user_meta = CASE
+                    WHEN pgstack.users.email_confirmed_at IS NULL THEN pgstack.users.raw_user_meta
+                    ELSE pgstack.users.raw_user_meta || $3
+                  END,
+                updated_at = CASE
+                    WHEN pgstack.users.email_confirmed_at IS NULL THEN pgstack.users.updated_at
+                    ELSE now()
+                  END
+        RETURNING id::text, email, role, created_at::text, updated_at::text, (email_confirmed_at IS NULL) AS conflict_block
+        "#;
+
 async fn callback_inner(
     state: &AppState,
     params: &CallbackParams,
@@ -468,8 +530,10 @@ async fn callback_inner(
     let (code_verifier, provider) =
         session.ok_or_else(|| AppError::Unauthorized("invalid or expired OAuth state".into()))?;
 
-    // Exchange code for access token and fetch user info
-    let (email, name, provider) = match provider.as_str() {
+    // Exchange code for access token and fetch user info. Each resolver now
+    // surfaces the provider's `email_verified` assertion (audit F3) instead of
+    // discarding it.
+    let (email, name, provider, verified) = match provider.as_str() {
         "google" => exchange_google(state, &params.code, site, Some(&code_verifier)).await?,
         "github" => exchange_github(state, &params.code, site).await?,
         "apple" => exchange_apple(state, &params.code, site).await?,
@@ -482,34 +546,42 @@ async fn callback_inner(
         }
     };
 
+    // Gate 1 (audit F3): refuse the login outright if the provider did not
+    // assert `email_verified=true` — otherwise any IdP/tenant can mint an
+    // id_token for a victim's email and take over the email-keyed account.
+    if let Err(desc) = oauth_admission(verified, false) {
+        warn!(provider = %provider, "oauth refused: provider did not assert email_verified");
+        return Ok(error_redirect(site, "access_denied", desc));
+    }
+
     let user_meta = serde_json::json!({
         "full_name": name.unwrap_or_default(),
         "provider": provider,
     });
 
-    // Upsert user: insert or update existing
-    let row = sqlx::query_as::<_, (String, String, String, String, String)>(
-        r#"
-        INSERT INTO pgstack.users (email, encrypted_password, provider, providers, raw_user_meta, email_confirmed_at)
-        VALUES ($1, NULL, $2, ARRAY[$2]::text[], $3, now())
-        ON CONFLICT (email) DO UPDATE
-            SET providers = (
-                    SELECT array_agg(DISTINCT p)
-                    FROM unnest(pgstack.users.providers || ARRAY[$2]::text[]) AS p
-                ),
-                raw_user_meta = pgstack.users.raw_user_meta || $3,
-                updated_at = now(),
-                email_confirmed_at = COALESCE(pgstack.users.email_confirmed_at, now())
-        RETURNING id::text, email, role, created_at::text, updated_at::text
-        "#,
-    )
-    .bind(&email)
-    .bind(&provider)
-    .bind(&user_meta)
-    .fetch_one(&state.admin_pool)
-    .await?;
+    // Upsert user, appending this provider. `email_confirmed_at` is set only on
+    // INSERT; an existing unverified row is left untouched and flagged via
+    // `conflict_block` so we can refuse the merge below.
+    let row = sqlx::query_as::<_, (String, String, String, String, String, bool)>(OAUTH_UPSERT_SQL)
+        .bind(&email)
+        .bind(&provider)
+        .bind(&user_meta)
+        .fetch_one(&state.admin_pool)
+        .await?;
 
-    let (user_id, user_email, role, _created_at, _updated_at) = row;
+    let (user_id, user_email, role, _created_at, _updated_at, conflict_block) = row;
+
+    // Gate 2 (audit F3): refuse merging an OAuth login into an existing account
+    // that was created (e.g. via email+password) but never verified. Otherwise
+    // an unverified signup becomes a free OAuth on-ramp for anyone who knows the
+    // victim's email.
+    if let Err(desc) = oauth_admission(true, conflict_block) {
+        warn!(
+            provider = %provider,
+            "oauth refused: existing account with this email is not verified — possible takeover attempt"
+        );
+        return Ok(error_redirect(site, "access_denied", desc));
+    }
 
     // Generate token pair
     let (access_token, refresh_token) =
@@ -539,7 +611,7 @@ async fn exchange_google(
     code: &str,
     site: &str,
     code_verifier: Option<&str>,
-) -> Result<(String, Option<String>, String), AppError> {
+) -> Result<(String, Option<String>, String, bool), AppError> {
     let client_id = state
         .config
         .google_client_id
@@ -608,7 +680,13 @@ async fn exchange_google(
         .await
         .map_err(|e| AppError::Internal(format!("Google userinfo parse failed: {e}")))?;
 
-    Ok((user_info.email, user_info.name, "google".to_string()))
+    let verified = crate::auth::idtoken::claim_true(user_info.email_verified.as_ref());
+    Ok((
+        user_info.email.trim().to_lowercase(),
+        user_info.name,
+        "google".to_string(),
+        verified,
+    ))
 }
 
 // ---------- GitHub exchange ----------
@@ -617,7 +695,7 @@ async fn exchange_github(
     state: &AppState,
     code: &str,
     site: &str,
-) -> Result<(String, Option<String>, String), AppError> {
+) -> Result<(String, Option<String>, String, bool), AppError> {
     let client_id = state
         .config
         .github_client_id
@@ -681,7 +759,11 @@ async fn exchange_github(
         .map_err(|e| AppError::Internal(format!("GitHub user parse failed: {e}")))?;
 
     // GitHub may not include email in the user profile if it's private.
-    // In that case, fetch from the emails endpoint.
+    // In that case, fetch from the emails endpoint. Either source is a verified
+    // address: GitHub only exposes a *verified* address as the public profile
+    // email, and the emails-endpoint branch below explicitly filters on the
+    // per-row `verified` flag (mirror Go's `exchangeGitHub`, audit F3 — which
+    // requires a verified email and otherwise errors).
     let email = if let Some(email) = github_user.email {
         email
     } else {
@@ -715,7 +797,12 @@ async fn exchange_github(
             .ok_or_else(|| AppError::Internal("no email found on GitHub account".into()))?
     };
 
-    Ok((email, github_user.name, "github".to_string()))
+    Ok((
+        email.trim().to_lowercase(),
+        github_user.name,
+        "github".to_string(),
+        true,
+    ))
 }
 
 // ---------- Apple exchange ----------
@@ -727,7 +814,7 @@ async fn exchange_apple(
     state: &AppState,
     code: &str,
     site: &str,
-) -> Result<(String, Option<String>, String), AppError> {
+) -> Result<(String, Option<String>, String, bool), AppError> {
     let client_id = state
         .config
         .apple_client_id
@@ -757,7 +844,7 @@ async fn exchange_apple(
             AppError::Unauthorized("apple token exchange: no id_token in response".into())
         })?;
 
-    let (email, _verified) = crate::auth::idtoken::verify_id_token(
+    let (email, verified) = crate::auth::idtoken::verify_id_token(
         id_token,
         APPLE_JWKS_URL,
         crate::auth::idtoken::issuer_equals(APPLE_ISSUER),
@@ -766,7 +853,12 @@ async fn exchange_apple(
     .await
     .map_err(|e| AppError::Unauthorized(format!("apple id_token: {e:?}")))?;
 
-    Ok((email.trim().to_lowercase(), None, "apple".to_string()))
+    Ok((
+        email.trim().to_lowercase(),
+        None,
+        "apple".to_string(),
+        verified,
+    ))
 }
 
 /// Whether `s` is a compact-serialised JWT (three dot-separated segments, no
@@ -867,7 +959,7 @@ async fn exchange_microsoft(
     code: &str,
     site: &str,
     verifier: &str,
-) -> Result<(String, Option<String>, String), AppError> {
+) -> Result<(String, Option<String>, String, bool), AppError> {
     let client_id = state
         .config
         .microsoft_client_id
@@ -902,7 +994,7 @@ async fn exchange_microsoft(
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
     {
-        if let Ok((email, _verified)) = crate::auth::idtoken::verify_id_token(
+        if let Ok((email, verified)) = crate::auth::idtoken::verify_id_token(
             id_token,
             MICROSOFT_JWKS_URL,
             |iss: &str| {
@@ -913,12 +1005,18 @@ async fn exchange_microsoft(
         .await
         {
             if !email.is_empty() {
-                return Ok((email.trim().to_lowercase(), None, "microsoft".to_string()));
+                return Ok((
+                    email.trim().to_lowercase(),
+                    None,
+                    "microsoft".to_string(),
+                    verified,
+                ));
             }
         }
     }
 
-    // Fallback: Graph /me. Graph carries no verified claim.
+    // Fallback: Graph /me. Graph carries no verified claim — treat as unverified
+    // (mirror Go), so the F3 gate refuses a Graph-only login.
     let access_token = token_resp
         .get("access_token")
         .and_then(|v| v.as_str())
@@ -939,7 +1037,12 @@ async fn exchange_microsoft(
         .ok_or_else(|| {
             AppError::Unauthorized("microsoft graph: email not found in user profile".into())
         })?;
-    Ok((email.trim().to_lowercase(), None, "microsoft".to_string()))
+    Ok((
+        email.trim().to_lowercase(),
+        None,
+        "microsoft".to_string(),
+        false,
+    ))
 }
 
 // ---------- Generic OIDC exchange ----------
@@ -988,7 +1091,7 @@ async fn exchange_oidc(
     code: &str,
     site: &str,
     verifier: &str,
-) -> Result<(String, Option<String>, String), AppError> {
+) -> Result<(String, Option<String>, String, bool), AppError> {
     let client_id = state
         .config
         .oidc_client_id
@@ -1026,7 +1129,7 @@ async fn exchange_oidc(
         .filter(|s| !s.is_empty())
     {
         if !cfg.jwks_uri.is_empty() && !cfg.issuer.is_empty() {
-            if let Ok((email, _verified)) = crate::auth::idtoken::verify_id_token(
+            if let Ok((email, verified)) = crate::auth::idtoken::verify_id_token(
                 id_token,
                 &cfg.jwks_uri,
                 crate::auth::idtoken::issuer_equals(&cfg.issuer),
@@ -1035,7 +1138,12 @@ async fn exchange_oidc(
             .await
             {
                 if !email.is_empty() {
-                    return Ok((email.trim().to_lowercase(), None, "oidc".to_string()));
+                    return Ok((
+                        email.trim().to_lowercase(),
+                        None,
+                        "oidc".to_string(),
+                        verified,
+                    ));
                 }
             }
         }
@@ -1056,7 +1164,16 @@ async fn exchange_oidc(
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
         {
-            return Ok((email.trim().to_lowercase(), None, "oidc".to_string()));
+            // Per OIDC core the userinfo `email_verified` claim accompanies
+            // `email`; propagate it (mirror Go) so the F3 gate can refuse a
+            // non-compliant IdP that omits it.
+            let verified = crate::auth::idtoken::claim_true(info.get("email_verified"));
+            return Ok((
+                email.trim().to_lowercase(),
+                None,
+                "oidc".to_string(),
+                verified,
+            ));
         }
     }
 
@@ -1241,5 +1358,58 @@ CX0AJpCEgyAJlemdUUcsPKtKsKHKThLWWXLOCdEyU5ta0EEooXsC/k5n\n\
         let q = qpairs(&url);
         assert_eq!(q["scope"], "openid email profile");
         assert_eq!(q["code_challenge_method"], "S256");
+    }
+
+    // ---- Account-takeover defense (audit F3, round 14 — Rust parity) ----
+    //
+    // Regression for the just-introduced HIGH: the id_token providers
+    // (Microsoft/OIDC/Apple) discarded the `email_verified` claim (binding it to
+    // a throwaway `_verified`), so a user from ANY tenant/IdP could mint an
+    // id_token asserting a victim's email and take over the email-keyed
+    // account. The fix threads `verified` out of every resolver and gates the
+    // callback on it (Gate 1), plus refuses merging into an unverified existing
+    // account (Gate 2). These pin the gate decision + the upsert SQL semantics.
+
+    #[test]
+    fn oauth_admission_refuses_unverified_provider() {
+        // Gate 1: a resolver returning verified=false must refuse the login
+        // (no session minted) regardless of the conflict flag.
+        assert_eq!(
+            oauth_admission(false, false).unwrap_err(),
+            OAUTH_UNVERIFIED_DESC
+        );
+        assert_eq!(
+            oauth_admission(false, true).unwrap_err(),
+            OAUTH_UNVERIFIED_DESC
+        );
+        // A verified login against a clean/verified account is admitted.
+        assert!(oauth_admission(true, false).is_ok());
+    }
+
+    #[test]
+    fn oauth_admission_refuses_unverified_existing_account() {
+        // Gate 2: even a verified provider assertion must NOT merge into an
+        // existing account whose email was never verified (conflict_block=true).
+        assert_eq!(
+            oauth_admission(true, true).unwrap_err(),
+            OAUTH_TAKEOVER_DESC
+        );
+    }
+
+    #[test]
+    fn oauth_upsert_sql_flags_takeover_and_never_elevates_verification() {
+        // (a) the upsert surfaces the unverified-existing-account flag so the
+        // caller can refuse the merge,
+        assert!(OAUTH_UPSERT_SQL.contains("(email_confirmed_at IS NULL) AS conflict_block"));
+        // (b) it sets email_confirmed_at ONLY on INSERT — never on the UPDATE
+        // path. The previous (buggy) SQL did `email_confirmed_at = COALESCE(...,
+        // now())` on conflict, which elevated/created a verified status for an
+        // attacker-completed flow; that must not return.
+        assert!(!OAUTH_UPSERT_SQL.contains("email_confirmed_at = COALESCE"));
+        assert!(!OAUTH_UPSERT_SQL.contains("email_confirmed_at ="));
+        // and the UPDATE leaves an unverified existing row's providers untouched.
+        assert!(OAUTH_UPSERT_SQL.contains(
+            "WHEN pgstack.users.email_confirmed_at IS NULL THEN pgstack.users.providers"
+        ));
     }
 }

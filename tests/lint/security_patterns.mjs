@@ -591,6 +591,52 @@ function checkStorageDownloadXSSHeaders() {
   }
 }
 
+// Rule SEC-R47 — the OAuth callback must gate on a provider-asserted
+//   email_verified, and the Rust resolvers must not discard the verified flag.
+//   SECURITY.md invariant #29 / audit F3 round 14.
+//   Accounts are keyed on email, so an OAuth provider/tenant/IdP that returns an
+//   unverified or attacker-controlled email could hijack an existing account by
+//   completing an OAuth flow with the victim's address. Each provider resolver
+//   returns (email, email_verified) and the callback MUST refuse the login when
+//   verified is false. The Rust id_token providers (Microsoft/OIDC/Apple) once
+//   regressed by discarding the flag (`let (email, _verified) = ...`), removing
+//   the gate. This codifies the class file-scoped on BOTH sibling proxies: if a
+//   callback no longer carries the email_verified refusal, or the Rust file
+//   reintroduces a discarded-verified binding, fail.
+//   Override a verified-safe occurrence with `// lint:allow=SEC-R47`.
+function checkOAuthEmailVerifiedGate() {
+  const targets = [
+    {
+      file: join(ROOT, "proxy", "src", "auth", "oauth.rs"),
+      entry: /async fn callback_inner\s*\(/,
+      // The verified gate lives in `oauth_admission` (`if !verified`).
+      gate: /if\s+!verified/,
+      // ...and no resolver may silently discard a verified flag.
+      discard: /\(\s*email\s*,\s*_verified\s*\)/,
+    },
+    {
+      file: join(ROOT, "proxy-go", "auth", "oauth.go"),
+      entry: /func\s+Callback\s*\(/,
+      gate: /if\s+!emailVerified/,
+      discard: null,
+    },
+  ];
+  for (const t of targets) {
+    let text;
+    try { text = readFileSync(t.file, "utf-8"); } catch { continue; }
+    if (/lint:allow=SEC-R47/.test(text)) continue;
+    if (!t.entry.test(text)) continue; // callback renamed/removed — skip
+    if (!t.gate.test(text)) {
+      report(t.file, 1, "SEC-R47",
+        "the OAuth callback no longer refuses a login the provider did not assert email_verified for — an unverified/attacker-controlled email can take over an email-keyed account (SECURITY.md invariant 29, audit F3 round 14)");
+    }
+    if (t.discard && t.discard.test(text)) {
+      report(t.file, 1, "SEC-R47",
+        "an OAuth resolver discards the provider's email_verified flag (`let (email, _verified) = ...`) — thread it through and gate the callback on it (SECURITY.md invariant 29, audit F3 round 14)");
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -601,6 +647,7 @@ function runAll() {
   checkAnonGrantNeedsRLS();
   checkBatchTemplateEscape();
   checkStorageDownloadXSSHeaders();
+  checkOAuthEmailVerifiedGate();
 
   for (const f of files) {
     let text;
