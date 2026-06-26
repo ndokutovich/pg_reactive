@@ -137,6 +137,31 @@ pub struct Config {
     /// Verbatim public-SPA CSP override (env `CSP_POLICY`; unset = computed).
     /// Mirror Go's CSP_POLICY env read in PublicSecurityHeaders.
     pub csp_policy: Option<String>,
+
+    // --- TLS serving (mirror Go config.go: TLSMode/TLSDomains/...) ---
+    /// TLS serving mode: "off" (plain HTTP, default), "manual" (user cert/key
+    /// files), or "auto" (ACME / Let's Encrypt). Env `TLS_MODE`. Mirror Go.
+    pub tls_mode: String,
+    /// ACME domains to obtain certificates for (TLS_MODE=auto). Comma-separated
+    /// in env `TLS_DOMAINS`, trimmed. Mirror Go TLSDomains.
+    pub tls_domains: Vec<String>,
+    /// On-disk ACME certificate cache directory. Env `TLS_CERT_DIR`
+    /// (default `/data/certs`). Mirror Go TLSCertDir.
+    pub tls_cert_dir: String,
+    /// Manual-mode PEM certificate file. Env `TLS_CERT_FILE`. Mirror Go.
+    pub tls_cert_file: Option<String>,
+    /// Manual-mode PEM private-key file. Env `TLS_KEY_FILE`. Mirror Go.
+    pub tls_key_file: Option<String>,
+    /// ACME account contact email (TLS_MODE=auto). Env `TLS_ACME_EMAIL`.
+    /// Mirror Go TLSACMEEmail.
+    pub tls_acme_email: Option<String>,
+    /// HTTPS listen address for manual/auto modes. Env `HTTPS_ADDR`
+    /// (default `:443`). A leading-colon value (Go style) binds all interfaces.
+    /// Mirror Go HTTPSAddr.
+    pub https_addr: String,
+    /// Plaintext HTTP address for the HTTP->HTTPS redirect in auto mode. Env
+    /// `HTTP_ADDR` (default `:80`). Mirror Go HTTPAddr.
+    pub http_addr: String,
 }
 
 impl Config {
@@ -343,6 +368,26 @@ impl Config {
         let public_allow_inline_scripts = bool_env("PUBLIC_ALLOW_INLINE_SCRIPTS", false);
         let csp_policy = std::env::var("CSP_POLICY").ok().filter(|s| !s.is_empty());
 
+        // TLS serving (mirror Go config.go FromEnv defaults exactly).
+        let tls_mode =
+            std::env::var("TLS_MODE").unwrap_or_else(|_| Self::default_tls_mode().into());
+        let tls_domains: Vec<String> = std::env::var("TLS_DOMAINS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let tls_cert_dir = std::env::var("TLS_CERT_DIR").unwrap_or_else(|_| "/data/certs".into());
+        let tls_cert_file = std::env::var("TLS_CERT_FILE")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let tls_key_file = std::env::var("TLS_KEY_FILE").ok().filter(|s| !s.is_empty());
+        let tls_acme_email = std::env::var("TLS_ACME_EMAIL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let https_addr = std::env::var("HTTPS_ADDR").unwrap_or_else(|_| ":443".into());
+        let http_addr = std::env::var("HTTP_ADDR").unwrap_or_else(|_| ":80".into());
+
         Self {
             database_url,
             admin_database_url,
@@ -405,7 +450,21 @@ impl Config {
             public_dir,
             public_allow_inline_scripts,
             csp_policy,
+            tls_mode,
+            tls_domains,
+            tls_cert_dir,
+            tls_cert_file,
+            tls_key_file,
+            tls_acme_email,
+            https_addr,
+            http_addr,
         }
+    }
+
+    /// Default TLS serving mode when `TLS_MODE` is unset — "off" (plain HTTP).
+    /// Mirror of Go config.go's `envOrDefault("TLS_MODE", "off")`.
+    pub const fn default_tls_mode() -> &'static str {
+        "off"
     }
 
     /// True when `s` is a bare PG identifier — mirror of the Go proxy's
@@ -455,6 +514,27 @@ impl Config {
             "" | "database" | "disk" => {}
             other => errs.push(format!(
                 "STORAGE_BACKEND={other:?} is invalid (use database or disk)"
+            )),
+        }
+        // TLS is validated in EVERY environment (mirror Go Config.Validate, whose
+        // TLS_MODE switch sits outside the production block). A misconfigured TLS
+        // request must fail closed — never silently fall back to plaintext.
+        match self.tls_mode.as_str() {
+            "off" => {}
+            "auto" => {
+                if self.tls_domains.is_empty() {
+                    errs.push(
+                        "TLS_MODE=auto requires TLS_DOMAINS (comma-separated domain list)".into(),
+                    );
+                }
+            }
+            "manual" => {
+                if self.tls_cert_file.is_none() || self.tls_key_file.is_none() {
+                    errs.push("TLS_MODE=manual requires TLS_CERT_FILE and TLS_KEY_FILE".into());
+                }
+            }
+            other => errs.push(format!(
+                "TLS_MODE={other:?} is invalid (use off, auto, or manual)"
             )),
         }
         if self.pgstack_env != "production" {
@@ -648,6 +728,14 @@ mod tests {
             public_dir: None,
             public_allow_inline_scripts: false,
             csp_policy: None,
+            tls_mode: "off".into(),
+            tls_domains: Vec::new(),
+            tls_cert_dir: "/data/certs".into(),
+            tls_cert_file: None,
+            tls_key_file: None,
+            tls_acme_email: None,
+            https_addr: ":443".into(),
+            http_addr: ":80".into(),
         }
     }
 
@@ -802,5 +890,98 @@ mod tests {
         c.email_enabled = false;
         c.smtp_host = String::new();
         assert!(!c.validate().iter().any(|e| e.contains("SMTP")));
+    }
+
+    // --- TLS_MODE validation (parity with Go config.go's TLS switch) ---
+
+    // off is the default and passes validation in any environment with no
+    // cert/domain knobs set (mirror Go default TLS_MODE="off").
+    #[test]
+    fn tls_mode_off_is_default_and_valid() {
+        assert_eq!(Config::default_tls_mode(), "off");
+        let mut c = valid_prod();
+        c.tls_mode = "off".into();
+        assert!(
+            !c.validate().iter().any(|e| e.contains("TLS_MODE")),
+            "TLS_MODE=off must pass: {:?}",
+            c.validate()
+        );
+    }
+
+    // auto with no TLS_DOMAINS must fail closed — we never start ACME without a
+    // host policy (mirror Go "TLS_MODE=auto requires TLS_DOMAINS").
+    #[test]
+    fn tls_mode_auto_requires_domain() {
+        let mut c = valid_prod();
+        c.tls_mode = "auto".into();
+        c.tls_domains = Vec::new();
+        assert!(
+            c.validate().iter().any(|e| e.contains("TLS_DOMAINS")),
+            "TLS_MODE=auto without domains must fail: {:?}",
+            c.validate()
+        );
+        // With a domain it passes the TLS check.
+        c.tls_domains = vec!["example.com".into()];
+        assert!(
+            !c.validate()
+                .iter()
+                .any(|e| e.contains("TLS_MODE") || e.contains("TLS_DOMAINS")),
+            "TLS_MODE=auto with a domain must pass: {:?}",
+            c.validate()
+        );
+    }
+
+    // manual requires BOTH cert and key files — a half-configured manual mode
+    // must fail closed, never silently serve plaintext (mirror Go
+    // "TLS_MODE=manual requires TLS_CERT_FILE and TLS_KEY_FILE").
+    #[test]
+    fn tls_mode_manual_requires_cert_and_key() {
+        // Neither set.
+        let mut c = valid_prod();
+        c.tls_mode = "manual".into();
+        assert!(
+            c.validate().iter().any(|e| e.contains("TLS_CERT_FILE")),
+            "manual with no cert/key must fail: {:?}",
+            c.validate()
+        );
+        // Only cert set.
+        c.tls_cert_file = Some("/c.pem".into());
+        c.tls_key_file = None;
+        assert!(
+            c.validate().iter().any(|e| e.contains("TLS_CERT_FILE")),
+            "manual with cert but no key must fail: {:?}",
+            c.validate()
+        );
+        // Only key set.
+        c.tls_cert_file = None;
+        c.tls_key_file = Some("/k.pem".into());
+        assert!(
+            c.validate().iter().any(|e| e.contains("TLS_CERT_FILE")),
+            "manual with key but no cert must fail: {:?}",
+            c.validate()
+        );
+        // Both set → passes the TLS check.
+        c.tls_cert_file = Some("/c.pem".into());
+        c.tls_key_file = Some("/k.pem".into());
+        assert!(
+            !c.validate()
+                .iter()
+                .any(|e| e.contains("TLS_MODE") || e.contains("TLS_CERT_FILE")),
+            "manual with both cert+key must pass: {:?}",
+            c.validate()
+        );
+    }
+
+    // An unknown TLS_MODE is rejected in every environment (mirror Go default arm).
+    #[test]
+    fn tls_mode_unknown_is_rejected() {
+        let mut c = valid_prod();
+        c.pgstack_env = "development".into();
+        c.tls_mode = "ssl".into();
+        assert!(
+            c.validate().iter().any(|e| e.contains("TLS_MODE")),
+            "unknown TLS_MODE must fail even in development: {:?}",
+            c.validate()
+        );
     }
 }

@@ -63,6 +63,15 @@ lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls", "smtp-tr
 # Licensed MIT OR Unlicense; maintained by the boa-dev org.
 boa_engine = "0.21"
 
+# TLS serving (parity with the Go proxy's TLS_MODE: off/manual/auto).
+# axum-server serves HTTPS over rustls for TLS_MODE=manual; rustls-acme adds
+# ACME / Let's Encrypt (TLS-ALPN-01) for TLS_MODE=auto. Both are pinned to the
+# `ring` crypto provider — the rustls already in tree (via reqwest/sqlx) uses
+# ring, so this avoids dragging in aws-lc-rs and its C/NASM build toolchain.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls-acme = { version = "0.15", default-features = false, features = ["ring", "tls12", "webpki-roots", "axum", "tokio"] }
+
 # Error handling
 anyhow = "1"
 

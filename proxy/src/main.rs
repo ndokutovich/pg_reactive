@@ -9,6 +9,7 @@ mod rest;
 mod routes;
 mod secrets;
 mod state;
+mod tls;
 
 use std::net::SocketAddr;
 
@@ -150,22 +151,30 @@ async fn main() {
     // Build router
     let app = build_router(state);
 
-    // Start server
-    let listener = TcpListener::bind(config.listen_addr)
-        .await
-        .expect("failed to bind");
-    info!(
-        "pgstack-proxy listening on {} (max_connections={})",
-        config.listen_addr, config.max_connections
-    );
+    // Serve according to TLS_MODE (parity with Go main.go). off => plain HTTP on
+    // listen_addr (unchanged); manual/auto => HTTPS on https_addr.
+    match config.tls_mode.as_str() {
+        "manual" => tls::serve_manual(app, &config).await,
+        "auto" => tls::serve_auto(app, &config).await,
+        _ => {
+            // off (default): plain HTTP — byte-for-byte the prior behavior.
+            let listener = TcpListener::bind(config.listen_addr)
+                .await
+                .expect("failed to bind");
+            info!(
+                "pgstack-proxy listening on {} (max_connections={})",
+                config.listen_addr, config.max_connections
+            );
 
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .expect("server error");
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .expect("server error");
+        }
+    }
 
     info!("shutdown complete");
 }
