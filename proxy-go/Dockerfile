@@ -16,7 +16,11 @@
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS studio-builder
 WORKDIR /studio-build
 COPY studio/package.json studio/package-lock.json ./
-RUN npm ci --prefer-offline --no-audit --fetch-retries=6 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=180000 --fetch-timeout=600000
+# Shared npm cache (same id as proxy/Dockerfile) so the warm download cache survives
+# across builds on the persistent buildx builder — --prefer-offline then serves the
+# packages without hitting the registry, which is what kept flaking the candidate.
+RUN --mount=type=cache,target=/root/.npm,id=npm-studio \
+    npm ci --prefer-offline --no-audit --fetch-retries=6 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=180000 --fetch-timeout=600000
 COPY studio/ .
 RUN npm run build
 
@@ -25,7 +29,8 @@ FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d
 ARG DOCS_BASE_URL=/docs/
 WORKDIR /docs-build
 COPY docs/site/package.json docs/site/package-lock.json ./
-RUN npm ci --prefer-offline --no-audit --fetch-retries=6 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=180000 --fetch-timeout=600000
+RUN --mount=type=cache,target=/root/.npm,id=npm-docs \
+    npm ci --prefer-offline --no-audit --fetch-retries=6 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=180000 --fetch-timeout=600000
 COPY docs/site/ .
 ENV DOCS_URL=http://localhost:8080 DOCS_BASE_URL=${DOCS_BASE_URL}
 RUN npm run build
@@ -36,12 +41,17 @@ WORKDIR /app
 ENV GOTOOLCHAIN=auto
 
 # Download dependencies first (layer-cached separately from source).
+ARG TARGETARCH
 COPY proxy-go/go.mod proxy-go/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod,id=go-mod \
+    go mod download
 
-# Copy source and build a fully static binary.
+# Copy source and build a fully static binary. The Go module + build caches persist
+# across builds on the kept buildx builder (build cache is per-arch).
 COPY proxy-go/ .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o pgstack-proxy-go .
+RUN --mount=type=cache,target=/go/pkg/mod,id=go-mod \
+    --mount=type=cache,target=/root/.cache/go-build,id=go-build-${TARGETARCH} \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o pgstack-proxy-go .
 
 # ── Stage 3: Runtime image ────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:67b30a61dc87758f0caf819646104f29ecbda97d920aaf5edc834128ac8493d3
