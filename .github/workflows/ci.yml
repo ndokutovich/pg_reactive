@@ -755,6 +755,16 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          # Reuse one named builder across runs and DON'T tear it down at the end.
+          # The Dockerfile's `--mount=type=cache` (cargo registry + per-arch target)
+          # lives inside the builder's BuildKit instance; a fresh builder per run
+          # left it empty every time, so the Rust build recompiled all ~300 deps
+          # (~1h40m). On this persistent self-hosted runner a kept builder makes the
+          # cache survive → an unchanged-deps build recompiles only the proxy crate
+          # (~2m, measured locally cold ~1h40m vs warm 105s).
+          name: pgstack-buildx
+          cleanup: false
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
