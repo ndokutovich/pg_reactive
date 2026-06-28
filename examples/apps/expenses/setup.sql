@@ -7,6 +7,13 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 
+-- Re-seed-safe: DROP first so a table left over from an OLDER demo schema is
+-- replaced with the current one. `CREATE TABLE IF NOT EXISTS` silently keeps a
+-- stale table when the schema EVOLVED, so subscribe_my_expenses would select
+-- columns that don't exist → "column ... does not exist" (SQLSTATE 42703) →
+-- 400. Demo data is disposable and the setup service re-seeds on boot, so a
+-- drop+recreate is the right idempotency. (Mirrors examples/apps/todo.)
+DROP TABLE IF EXISTS public.expenses CASCADE;
 CREATE TABLE IF NOT EXISTS expenses (
   id          serial PRIMARY KEY,
   user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,

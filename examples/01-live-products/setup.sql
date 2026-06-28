@@ -3,6 +3,15 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 
+-- Re-seed-safe: DROP first so a table left over from an OLDER demo schema is
+-- replaced with the current one. `CREATE TABLE IF NOT EXISTS` silently keeps a
+-- stale table when the schema EVOLVED, so a subscribe query could select a
+-- column that no longer exists → "column ... does not exist" (SQLSTATE 42703).
+-- Demo data is disposable and the setup service re-seeds every example on boot,
+-- so a drop+recreate is the right idempotency. CASCADE also clears dependent
+-- FK tables (orders, inventory) — examples 02/06 recreate them later in the
+-- glob, in dependency order. (Mirrors examples/apps/todo.)
+DROP TABLE IF EXISTS public.products CASCADE;
 CREATE TABLE IF NOT EXISTS products (
   id serial PRIMARY KEY,
   name text NOT NULL,

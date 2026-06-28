@@ -4,6 +4,17 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 
+-- Re-seed-safe: DROP first so tables left over from an OLDER demo schema are
+-- replaced with the current ones. `CREATE TABLE IF NOT EXISTS` silently keeps a
+-- stale table when the schema EVOLVED, so a subscribe query could select a
+-- column that no longer exists → "column ... does not exist" (SQLSTATE 42703).
+-- Demo data is disposable and the setup service re-seeds on boot, so a
+-- drop+recreate is the right idempotency. Drop children before parents
+-- (tut_orders → tut_customers/tut_products). (Mirrors examples/apps/todo.)
+DROP TABLE IF EXISTS public.tut_orders CASCADE;
+DROP TABLE IF EXISTS public.tut_customers CASCADE;
+DROP TABLE IF EXISTS public.tut_products CASCADE;
+
 -- Products table
 CREATE TABLE IF NOT EXISTS tut_products (
   id SERIAL PRIMARY KEY,
