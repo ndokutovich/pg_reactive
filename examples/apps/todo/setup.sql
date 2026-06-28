@@ -6,7 +6,15 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_reactive;
 
-CREATE TABLE IF NOT EXISTS todos (
+-- Re-seed-safe: DROP first so a table left over from an OLDER demo schema is
+-- replaced with the current one. `CREATE TABLE IF NOT EXISTS` silently kept a
+-- stale table (e.g. an early `title`/`done`-only todos), so subscribe_my_todos
+-- selected columns (text, priority, due_at, created_at) that didn't exist →
+-- "column \"text\" does not exist" (SQLSTATE 42703) → 400 → the app's boot()
+-- surfaced it as a misleading "auth failed". Demo data is disposable and the
+-- setup service re-seeds on boot, so a drop+recreate is the right idempotency.
+DROP TABLE IF EXISTS public.todos CASCADE;
+CREATE TABLE public.todos (
   id          serial PRIMARY KEY,
   user_id     uuid NOT NULL REFERENCES pgstack.users(id) ON DELETE CASCADE,
   text        text NOT NULL,
