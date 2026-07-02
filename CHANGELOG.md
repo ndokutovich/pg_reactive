@@ -7,42 +7,138 @@ declared in `ext/pg_reactive.control`).
 
 ## [Unreleased]
 
-### Added
-- **pg_reactive 0.1.3** (`ext/pg_reactive--0.1.2--0.1.3.sql`): security-only
-  upgrade — `REVOKE EXECUTE` on `pgr.get_subscriptions()` and `pgr.stats()`,
-  `REVOKE SELECT` on `pgr.subscriptions` from PUBLIC, giving pre-0.1.2
-  installs the same default-deny posture (audit finding L8).
-- **pg_reactive 0.1.4** (`ext/pg_reactive--0.1.3--0.1.4.sql`): durable
-  subscription persistence — new `pgr.persisted_subscriptions` catalog and
-  `pgr.restore_subscriptions()` to rebuild shmem state after restart;
-  `pgr.subscribe`/`pgr.unsubscribe` re-shaped as plpgsql wrappers over new
-  `pgr._subscribe_internal`/`pgr._unsubscribe_internal` C entry points
-  (SQL API signatures unchanged).
-- Dual licensing scheme: `ext/` under PostgreSQL License, everything else
-  under Apache License 2.0. New `NOTICE`, `SECURITY.md`, `CONTRIBUTING.md`,
-  and this `CHANGELOG.md`.
+### Fixed
+- Example app and lesson `setup.sql` scripts are re-seed-safe: they DROP and
+  recreate their tables instead of `CREATE TABLE IF NOT EXISTS`, so schema
+  drift on a persistent production database can no longer survive a
+  re-deploy (root cause of the "todo demo auth failed" incident).
 
 ### Changed
-- `LICENSE` in repo root is now Apache 2.0. The PostgreSQL License was moved
-  to `ext/LICENSE` to make the extension layer's licensing explicit.
+- CI resilience: the buildx builder persists across runs so Dockerfile cache
+  mounts survive, and proxy images use npm / Go module + build cache mounts.
+
+## [0.2.3] — 2026-06-26
+
+### Added
+- **The Rust proxy reaches parity with the Go reference** across all three
+  surfaces:
+  - *Core/server API*: transaction batching, webhooks (secretbox at-rest
+    encryption + the SSRF guard), storage (buckets/objects, disk + db
+    backends), edge functions (Deno reverse-proxy, `http` upstream with the
+    SSRF guard, PL/v8 / PL/Python routing, embedded **boa** JS runtime).
+  - *Release/product*: `/docs` + the bundled Docusaurus site, `PUBLIC_DIR`
+    static hosting with SPA fallback, OpenAPI on `/rest/v1`, the full OAuth
+    provider set (Google/GitHub/Apple/Microsoft/OIDC, Apple `form_post`
+    callback, id_token JWKS verification), TLS serving
+    (`TLS_MODE` off/manual/auto via `rustls-acme`).
+  - *Ops/drop-in*: HSTS on direct TLS, `READ/WRITE/IDLE/SHUTDOWN_TIMEOUT`,
+    `PG_POOL_*`, `GZIP_LEVEL`, `HSTS_MAX_AGE_SECONDS`, `ALLOW_INSECURE_SMTP`.
+
+  Two documented deltas remain: the embedded edge-function JS engine is boa
+  (not goja — ~90% ES coverage, no `fetch` shim, no wall-clock interrupt),
+  and auto-TLS uses TLS-ALPN-01 on :443 (not HTTP-01 on :80).
 
 ### Fixed
-- SDK property tests no longer flake when run as part of the full vitest
-  suite — removed `setTimeout(5)` waits that were unnecessary (the SDK wires
-  WebSocket `onmessage` synchronously) and added defensive
-  `vi.useRealTimers()` cleanup in both `index.test.ts` and
-  `index.property.test.ts`.
-- Security audit document (`docs/SECURITY_AUDIT_2026-03-07.md`) updated to
-  reflect that M3 (refresh tokens) and M14 (edge function env vars) are
-  resolved. Broken link to a non-existent `SECURITY.md` removed.
-- Landing variants under `docs/pgstack-landing/` no longer ship
-  copy-pasteable dev secrets (`POSTGRES_PASSWORD=secret`, `JWT_SECRET=...`).
-  They now show `--env-file .env` and instruct readers to generate secrets
-  with `openssl rand -base64 32`.
-- Webhooks plan (`docs/plans/fluttering-mapping-teapot.md`) brought in line
-  with the implemented `secret_encrypted BYTEA` schema, the fail-closed
-  `Refresh()` posture, the dedicated `pgstack.webhook_notify()` trigger, and
-  the SSRF-hardened HTTP client.
+- Storage uploads are served with `X-Content-Type-Options: nosniff` and a
+  CSP sandbox, closing stored XSS via uploaded HTML (round 46).
+- Batch template substitution JSON-escapes substituted values
+  (round 45 F1, invariant 27).
+- OAuth sign-in enforces the provider's `email_verified` claim and refuses
+  the unverified-account takeover path.
+- Rust JWT validation leeway zeroed to match Go's strict expiry check.
+- `pgx/v5` bumped 5.7.1 → 5.9.2 (GO-2026-5004).
+
+## [0.2.2] — 2026-06-25
+
+### Fixed
+- Five honesty gaps between documentation and shipped behavior:
+  `NOTIFY_CHANNEL` wiring, LRU-eviction warning visibility, the Rust proxy's
+  framing in docs, all-in-one quickstart accuracy, and performance-claims
+  positioning. Published images rebuilt.
+
+## [0.2.1] — 2026-06-25
+
+### Added
+- Live example pages served on the pgstack.org apex: landing, the 12
+  pedagogical lessons, and the demo apps — same-origin with the API.
+- CLI + SDK dogfood e2e in CI: `pgstack init` → compile → live delta,
+  run against the published all-in-one image.
+- `docs/LINKS.md` (index of every live URL and published artifact) and
+  `docs/DEPLOYMENTS.md` (map of published artifacts + live environments).
+
+### Fixed
+- **pg_reactive**: batch recompute runs as the pgr extension owner, not the
+  session user.
+- The all-in-one image bakes `shared_preload_libraries=pg_reactive`
+  (fresh containers previously booted without the extension loaded).
+- `PublicSPA` serves subdirectory `index.html`; the public CSP admits the
+  example pages' inline scripts and `cdn.jsdelivr.net`.
+
+## [0.2.0] — 2026-06-22
+
+First published release: npm, Docker Hub/GHCR, GitHub Releases.
+
+### Added — publishing
+- npm packages `@pgstack/sdk` (client SDK) and `pgstack` (CLI).
+- Four Docker images — `pgstack-proxy` (Go), `pgstack-proxy-rust` (R52),
+  `pgstack-postgres` (PG16 + extension), `pgstack-all-in-one` quickstart
+  (R54). CI builds and smoke-tests on GHCR; the release workflow promotes
+  the **exact smoked digest** and mirrors it to Docker Hub `pgstack/*`
+  (R53, no rebuild).
+- VPS deploy workflow (SSH), gated on CI.
+
+### Added — extension 0.1.3 → 0.1.8
+- **0.1.3**: security-only default-deny upgrade — `REVOKE EXECUTE` on
+  `pgr.get_subscriptions()`/`pgr.stats()`, `REVOKE SELECT` on
+  `pgr.subscriptions` from PUBLIC (audit finding L8).
+- **0.1.4**: durable subscription persistence — `pgr.persisted_subscriptions`
+  catalog + `pgr.restore_subscriptions()` rebuild shmem state after restart
+  (SQL API signatures unchanged).
+- **0.1.5**: `pgr.subscription_meta(query_id)` — the transactional
+  audience/mode source the WebSocket proxy gate reads (round 37 F1).
+- **0.1.6**: generation-based revocation of stale WebSocket connections —
+  every subscribe/unsubscribe bumps a monotonic generation stamped into
+  every NOTIFY payload; the proxy delivers only on exact generation match
+  and disconnects stale connections on `resubscribed` (round 39).
+- **0.1.7/0.1.8**: `pgr.restore_subscriptions()` privilege-escalation fix —
+  replay runs `SECURITY INVOKER` with per-row `SET LOCAL ROLE` to the
+  captured subscriber, never as superuser (Gemini audit P1, both rounds).
+
+### Added — security
+- The proxy connects as a non-superuser `authenticator` LOGIN role
+  (NOINHERIT + `SET ROLE`): data pool under RLS, admin pool as
+  `service_role`; `verifyPoolRoles` fail-closed startup check across six
+  dimensions (invariant 22).
+- Audience-bound subscriptions (finding F1 deep fix).
+- Anonymous sign-in (`POST /auth/v1/anonymous`) with its own rate-limit
+  bucket.
+- Email verification enforced end-to-end (no auto-confirmed default);
+  password reset/update revokes all refresh sessions.
+- Rust proxy security-parity phases 1–3: two-pool model, token hashing,
+  production validator, generation-gated WebSocket isolation.
+
+### Added — product
+- Polyglot showcase: one reference engine ported to Go, Node, FastAPI,
+  Rust, .NET, and Spring, with a live dashboard.
+- The 12 pedagogical example lessons (guest-JWT discipline) and the
+  "What to Buy" shopping PWA.
+- pgstack.org landing served from the proxy (`PUBLIC_DIR`).
+- Dual licensing: `ext/` under the PostgreSQL License, everything else
+  under Apache 2.0. New `NOTICE`, `SECURITY.md`, `CONTRIBUTING.md`, and
+  this `CHANGELOG.md`.
+
+### Changed
+- `LICENSE` in the repo root is now Apache 2.0; the PostgreSQL License
+  moved to `ext/LICENSE`.
+- Landing variants no longer ship copy-pasteable dev secrets; they show
+  `--env-file .env` and instruct generating secrets with
+  `openssl rand -base64 32`.
+
+### Fixed
+- SDK property tests no longer flake in the full vitest suite (removed
+  unnecessary `setTimeout(5)` waits, defensive `vi.useRealTimers()`).
+- Security audit document updated (M3/M14 resolved); webhooks plan brought
+  in line with the implemented schema and fail-closed refresh posture.
 
 ## [0.1.2] — 2026-05 (Security Hardening Series)
 
@@ -146,5 +242,9 @@ adversarial review and the following security hardening lands across them.
 - TypeScript SDK with `LiveQuery` and `createClient`.
 - pg_regress and isolation test suites.
 
-[Unreleased]: https://github.com/ndokutovich/pg_reactive/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ndokutovich/pg_reactive/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/ndokutovich/pg_reactive/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/ndokutovich/pg_reactive/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/ndokutovich/pg_reactive/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/ndokutovich/pg_reactive/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/ndokutovich/pg_reactive/releases/tag/v0.1.1
