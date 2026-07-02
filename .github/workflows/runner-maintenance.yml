@@ -1,0 +1,74 @@
+# One-shot VPS maintenance: install a Docker Hub pull-through cache on the
+# runner host and point the docker daemon at it. Fixes the recurring CI flak
+# where docker.io metadata fetches time out on the VPS network
+# ("failed to resolve source metadata for docker.io/library/postgres:16...").
+#
+# Idempotent — safe to re-dispatch. NOTE: `systemctl restart docker` briefly
+# restarts every container on the VPS (runners, prod stack, mirror itself);
+# everything comes back via restart policies, but expect ~30s of downtime.
+# Runs from a GitHub-hosted runner ON PURPOSE: a self-hosted job would kill
+# itself when it restarts the docker daemon it lives on.
+name: Runner maintenance — registry mirror
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-mirror:
+    name: Install docker.io pull-through cache on the VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install mirror via SSH
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            # 1. Pull-through cache (registry:2 proxying registry-1.docker.io).
+            #    Bound to loopback + the docker bridge only — never the public
+            #    interface (an open unauthenticated mirror invites disk-fill).
+            BRIDGE_IP=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
+            if ! docker inspect registry-mirror >/dev/null 2>&1; then
+              docker run -d --name registry-mirror --restart=always \
+                -p 127.0.0.1:5000:5000 \
+                -p "${BRIDGE_IP}:5000:5000" \
+                -e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io \
+                -e REGISTRY_STORAGE_DELETE_ENABLED=true \
+                -v /opt/registry-mirror:/var/lib/registry \
+                registry:2
+            fi
+
+            # 2. Merge registry-mirrors into daemon.json (idempotent).
+            python3 - <<'PYEOF'
+            import json, os
+            p = '/etc/docker/daemon.json'
+            cfg = json.load(open(p)) if os.path.exists(p) else {}
+            mirrors = cfg.get('registry-mirrors', [])
+            if 'http://127.0.0.1:5000' in mirrors:
+                print('daemon.json already configured')
+            else:
+                cfg['registry-mirrors'] = mirrors + ['http://127.0.0.1:5000']
+                json.dump(cfg, open(p, 'w'), indent=2)
+                print('daemon.json updated')
+            PYEOF
+
+            # 3. Restart the daemon so the mirror takes effect. Every container
+            #    (runners, prod, the mirror) restarts via its restart policy.
+            #    Docker falls back to registry-1.docker.io if the mirror is
+            #    ever down, so this cannot make pulls WORSE than today.
+            systemctl restart docker
+            sleep 15
+
+            # 4. Verify.
+            docker info 2>/dev/null | grep -A2 'Registry Mirrors'
+            docker pull alpine:3.20 >/dev/null
+            # A repository listed in the mirror's catalog proves the pull
+            # actually went through the cache, not the upstream fallback.
+            curl -sf http://127.0.0.1:5000/v2/_catalog

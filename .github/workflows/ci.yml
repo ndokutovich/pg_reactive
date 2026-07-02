@@ -765,6 +765,18 @@ jobs:
           # (~2m, measured locally cold ~1h40m vs warm 105s).
           name: pgstack-buildx
           cleanup: false
+          # Route docker.io metadata/pulls through the VPS pull-through cache
+          # (installed by runner-maintenance.yml; docker0 gateway = 172.17.0.1,
+          # reachable from the buildkitd container). BuildKit falls back to the
+          # upstream registry when the mirror is down, so this is safe even
+          # before the mirror exists. Applies only when the builder is
+          # (re)created — an existing pgstack-buildx keeps its old config AND
+          # its warm cargo cache; do not rm it just to pick this up.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["172.17.0.1:5000"]
+            [registry."172.17.0.1:5000"]
+              http = true
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

@@ -66,6 +66,10 @@ services:
       # can flip it on for the adversarial-security suite without
       # editing compose (round 32 F2). Default in dev: empty (= false).
       REQUIRE_AUTHENTICATED_WS: ${REQUIRE_AUTHENTICATED_WS:-}
+      # Propagated from the host so the perf suite (tests/perf/) can raise the
+      # per-IP WS cap for loopback fan-out benchmarks (P4/P7 connect hundreds
+      # of clients from 127.0.0.1). Default stays the hardened 10.
+      WS_MAX_PER_IP: ${WS_MAX_PER_IP:-10}
       # Propagated from the host so the email-verification security E2E can flip
       # it on without editing compose (mirrors REQUIRE_AUTHENTICATED_WS).
       # REQUIRE_EMAIL_VERIFICATION=true also requires SMTP_* (the proxy refuses to
