@@ -7,7 +7,29 @@ declared in `ext/pg_reactive.control`).
 
 ## [Unreleased]
 
+### Added
+- All-in-one image: `/app/services.d/*.sh` sidecar hook in
+  `docker/all-in-one-entrypoint.sh`. Executable scripts there are started
+  after the proxy answers `/health`, log to `/var/log/pgstack/<name>.log`,
+  and receive SIGTERM on shutdown (sidecars → proxy → PostgreSQL). A sidecar
+  exiting never stops the container. First consumer: the Stardust game's
+  multiplayer netcode (`docs/plans/stardust-on-pgstack.md`).
+
 ### Fixed
+- All-in-one entrypoint: `docker stop` now shuts PostgreSQL down cleanly
+  (exit 0 in ~10s, no WAL replay on the next start). `cmd | tee … &` put
+  tee's PID in `$!`, so the SIGTERM handler signalled tee while
+  postgres/proxy never got the signal — every stop ended in Docker's
+  grace-period SIGKILL (exit 137). Both processes now log via `> >(tee …)`
+  so `$!` is the real PID, and the handler stops sidecars → proxy →
+  PostgreSQL in order with a bounded wait each (`wait_bounded`, SIGKILL as
+  the fallback). Deployments should set `stop_grace_period: 30s`.
+  **Known, not fixed here:** the Go proxy itself never exits after logging
+  `shutdown complete` — `defer pool.Close()` waits for every connection
+  while `realtime.ListenLoop` holds its LISTEN connection forever — so the
+  entrypoint SIGKILLs it after `SHUTDOWN_TIMEOUT + 2s`. Harmless for data
+  (PostgreSQL still stops cleanly afterwards); the proxy-side fix is to
+  cancel the listen loop before the pools close.
 - Example app and lesson `setup.sql` scripts are re-seed-safe: they DROP and
   recreate their tables instead of `CREATE TABLE IF NOT EXISTS`, so schema
   drift on a persistent production database can no longer survive a
@@ -16,6 +38,12 @@ declared in `ext/pg_reactive.control`).
 ### Changed
 - CI resilience: the buildx builder persists across runs so Dockerfile cache
   mounts survive, and proxy images use npm / Go module + build cache mounts.
+- `PUBLIC_DIR` static cache policy: every `.html` and any unhashed
+  `.js`/`.mjs`/`.css` now gets `Cache-Control: no-cache` (revalidate every
+  load) instead of `max-age=3600`. No-bundler apps serve code by its real
+  filename, and the 1h TTL left players on stale code for an hour after a
+  deploy. Hashed filenames keep the 1-year immutable policy; images, audio,
+  fonts, wasm and json keep 1h.
 
 ## [0.2.3] — 2026-06-26
 

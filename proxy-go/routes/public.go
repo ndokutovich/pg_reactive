@@ -82,16 +82,29 @@ func PublicSPA(dir string) http.Handler {
 	})
 }
 
+// revalidateExt lists extensions that are served by their real names in
+// no-bundler apps (index.html + <script src="js/game.js">). Without a
+// content hash in the filename a deploy can only reach the browser through
+// revalidation, so these get no-cache: the browser keeps its copy and asks
+// (cheap 304 via Last-Modified) on every load. Hashed filenames are checked
+// FIRST in setCacheHeaders, so bundler output still gets the immutable path.
+var revalidateExt = map[string]bool{
+	".html": true,
+	".js":   true,
+	".mjs":  true,
+	".css":  true,
+}
+
 // setCacheHeaders sets Cache-Control based on the filename:
-//   - index.html → no-cache (always revalidate)
 //   - hashed assets (e.g. app.a1b2c3.js) → immutable, 1 year
-//   - everything else → 1 hour
+//   - .html / unhashed .js .mjs .css → no-cache (always revalidate)
+//   - everything else (images, audio, fonts, wasm, json) → 1 hour
 func setCacheHeaders(w http.ResponseWriter, filename string) {
 	switch {
-	case filename == "index.html":
-		w.Header().Set("Cache-Control", "no-cache")
 	case hashedAssetRe.MatchString(filename):
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	case revalidateExt[strings.ToLower(filepath.Ext(filename))]:
+		w.Header().Set("Cache-Control", "no-cache")
 	default:
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 	}

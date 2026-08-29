@@ -13,7 +13,21 @@
 # executable /app/post-init.sh exists, it runs after PostgreSQL is ready and
 # before the proxy starts, with PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE
 # exported (loopback TCP, superuser). Use it to apply migrations, run
-# seed/setup SQL, register edge functions, etc.
+# seed/setup SQL, register edge functions, etc. It is SYNCHRONOUS and piped
+# through tee — never background a daemon from it (the pipe would keep the
+# entrypoint waiting forever); that is what services.d is for.
+#
+# Long-running sidecar processes (a game netcode server, a queue worker, a
+# cron-ish loop) go in OPTIONAL /app/services.d/*.sh: every EXECUTABLE script
+# there is started in the background once the proxy answers /health, with
+# the same environment the proxy got (DATABASE_URL = the powerless
+# `authenticator` role; note the PG* superuser vars are inherited too — a
+# sidecar that should not hold them must drop or override them itself).
+# Each script must `exec` its process in the foreground: the entrypoint owns
+# the PID, forwards SIGTERM on shutdown (sidecars → proxy → PostgreSQL) and
+# writes its output to $LOG_DIR/<script-name>.log. A sidecar exiting does
+# NOT stop the container — the proxy stays the lifecycle leader and the
+# static app keeps serving.
 #
 # The SIGTERM/SIGINT trap is registered BEFORE PostgreSQL starts, so initdb
 # and the post-init hook are covered too.
@@ -24,20 +38,69 @@ mkdir -p "$LOG_DIR"
 
 PG_PID=""
 PROXY_PID=""
+SIDECAR_PIDS=()
+
+# wait_bounded PID SECONDS NAME — wait for a child to exit, SIGKILL it if it
+# hasn't within the budget. Polls /proc state instead of a bare `wait` so
+# the budget is enforceable (bash `wait` has no timeout); a zombie ('Z') is
+# an exited child that only needs reaping. The budgets below are sized so
+# the whole handler fits in a 30s `stop_grace_period` (compose) — set that
+# on all-in-one deployments; Docker's default is 10s.
+wait_bounded() {
+  local pid=$1 secs=$2 name=$3 i st
+  for ((i = 0; i < secs * 10; i++)); do
+    st=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || echo X)
+    case "$st" in
+      X|Z) wait "$pid" 2>/dev/null || true; return 0 ;;
+    esac
+    sleep 0.1
+  done
+  echo "==> $name did not exit within ${secs}s — SIGKILL" >&2
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
 
 shutdown() {
   echo "==> Shutting down..."
-  [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
-  [ -n "$PG_PID" ]    && kill "$PG_PID"    2>/dev/null || true
+  # Order: sidecars (may hold proxy/DB connections) → proxy → PostgreSQL,
+  # each waited for (bounded) before the next is signalled, so PostgreSQL
+  # sees its clients gone and does a clean fast shutdown. The proxy gets
+  # its own drain budget (SHUTDOWN_TIMEOUT, default 15s) plus a little;
+  # PostgreSQL gets 12s — a fast shutdown normally takes well under 1s.
+  # ${arr[@]+...} keeps `set -u` happy on an empty array.
+  for p in ${SIDECAR_PIDS[@]+"${SIDECAR_PIDS[@]}"}; do
+    kill "$p" 2>/dev/null || true
+  done
+  for p in ${SIDECAR_PIDS[@]+"${SIDECAR_PIDS[@]}"}; do
+    wait_bounded "$p" 5 "sidecar $p"
+  done
+  if [ -n "$PROXY_PID" ]; then
+    kill "$PROXY_PID" 2>/dev/null || true
+    wait_bounded "$PROXY_PID" "$(( ${SHUTDOWN_TIMEOUT:-15} + 2 ))" "pgstack proxy"
+  fi
+  if [ -n "$PG_PID" ]; then
+    kill "$PG_PID" 2>/dev/null || true
+    wait_bounded "$PG_PID" 12 "PostgreSQL"
+  fi
   wait 2>/dev/null || true
+  echo "==> Shutdown complete."
   exit 0
 }
 trap shutdown SIGTERM SIGINT
 
 # ── Start PostgreSQL via the stock entrypoint ───────────────────────────────
 # $@ is forwarded to postgres — pass GUC flags via the compose `command:`.
+#
+# Logging via process substitution, NOT `cmd 2>&1 | tee … &`: in a
+# background pipeline $! is the PID of the LAST stage (tee), so the old
+# `kill "$PG_PID"` signalled tee while postgres itself never saw SIGTERM.
+# The container then sat in `wait` until Docker's stop grace period ran
+# out and SIGKILLed everything — exit 137 on every `docker stop`, and
+# crash-recovery (WAL replay) on the next start. With `> >(tee …)` $! is
+# the real process; the stock entrypoint exec's postgres, so the PID stays
+# valid for the whole lifetime.
 echo "==> Starting PostgreSQL..."
-docker-entrypoint.sh postgres "$@" 2>&1 | tee "$LOG_DIR/postgres.log" &
+docker-entrypoint.sh postgres "$@" > >(tee "$LOG_DIR/postgres.log") 2>&1 &
 PG_PID=$!
 
 # Export connection env UP FRONT — both the readiness probe below and the
@@ -162,8 +225,37 @@ fi
 
 # ── Start the pgstack proxy (lifecycle leader) ──────────────────────────────
 echo "==> Starting pgstack proxy..."
-pgstack-proxy 2>&1 | tee "$LOG_DIR/proxy.log" &
+# Process substitution for the same reason as PostgreSQL above: $! must be
+# the proxy itself so SIGTERM reaches it and `wait "$PROXY_PID"` tracks it.
+pgstack-proxy > >(tee "$LOG_DIR/proxy.log") 2>&1 &
 PROXY_PID=$!
+
+# ── Sidecar services (optional) ─────────────────────────────────────────────
+# See the header: executable /app/services.d/*.sh, started after the proxy is
+# healthy, each logging to its own file, SIGTERM-forwarded on shutdown. Not
+# piped through tee on purpose — $! must be the real process so the signal
+# reaches it, and the log file is the durable record anyway.
+if compgen -G "/app/services.d/*.sh" > /dev/null; then
+  PROXY_PORT="${LISTEN_ADDR:-0.0.0.0:8080}"
+  PROXY_PORT="${PROXY_PORT##*:}"
+  if command -v curl >/dev/null 2>&1; then
+    echo "==> Waiting for proxy /health on :${PROXY_PORT} before starting sidecars..."
+    for _ in $(seq 1 60); do
+      curl -fsS "http://127.0.0.1:${PROXY_PORT}/health" >/dev/null 2>&1 && break
+      sleep 0.5
+    done
+  fi
+  for svc in /app/services.d/*.sh; do
+    if [ ! -x "$svc" ]; then
+      echo "==> services.d: skipping non-executable $svc" >&2
+      continue
+    fi
+    name=$(basename "$svc" .sh)
+    "$svc" > "$LOG_DIR/$name.log" 2>&1 &
+    SIDECAR_PIDS+=("$!")
+    echo "==> sidecar '$name' started (pid $!) — log: $LOG_DIR/$name.log"
+  done
+fi
 
 echo "==> All services running. Logs in $LOG_DIR/"
 
