@@ -1,6 +1,6 @@
 {
   "name": "pgstack",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Postgres-native backend platform. One PostgreSQL. Zero extra containers.",
   "type": "module",
   "bin": {
