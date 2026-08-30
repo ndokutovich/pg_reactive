@@ -5,7 +5,20 @@ All notable changes to pg_reactive / pgStack are tracked here. Format follows
 semantic versioning per component (the PostgreSQL extension version is
 declared in `ext/pg_reactive.control`).
 
-## [Unreleased]
+## [0.2.4] — 2026-08-31
+
+### Security
+- Go toolchain 1.25.11 → **1.25.13** across go.mod, CI, and every published
+  image base — closes 8 stdlib CVEs flagged by govulncheck (GO-2026-6218 /
+  6090 / 6089 / 6088 / 5972 / 5856 / 5026 in net/url, crypto/tls, net/http,
+  encoding/xml, encoding/asn1) plus GO-2026-5970 via `golang.org/x/text`
+  0.39.0. The 0.2.3 images ship binaries built on the vulnerable stdlib.
+- Rust proxy: `h2` 0.4.13 → 0.4.19 (RUSTSEC-2026-0258, unbounded empty
+  DATA frames).
+- Docs site: Docusaurus 3.10.2 + `scripts/npm-audit-gate.mjs` — the CI npm
+  audit gate now allowlists only the two unfixable `image-size` advisories
+  (build-time image prober, never shipped) and fails the moment upstream
+  publishes a fix, so the exception self-expires.
 
 ### Added
 - SDK: sessions persist across page loads. `PgStackAuth` stores sessions
