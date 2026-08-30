@@ -87,7 +87,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.11"
+          go-version: "1.25.13"
           cache-dependency-path: proxy-go/go.sum
 
       - name: Build
@@ -688,9 +688,14 @@ jobs:
       # GHSA-w7jw-789q-3m8p) is pinned to the patched ^1.8.4 via an override in
       # docs/site/package.json, so this gate stays meaningful instead of being
       # permanently red on an unshipped dev-server transitive.
+      #
+      # 2026-08-30: image-size (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq —
+      # ICNS/JXL/HEIF infinite-loop DoS) has NO patched release; it is the
+      # build-time image prober in @docusaurus/mdx-loader and never ships in
+      # the static output. The gate script allowlists those two ids and FAILS
+      # the moment upstream publishes a fix, so the exception self-expires.
       - name: npm audit — Docs site
-        working-directory: docs/site
-        run: npm audit --audit-level=high --omit=dev
+        run: node scripts/npm-audit-gate.mjs docs/site GHSA-w3rx-r6r6-pgpr GHSA-5p2g-fcmc-qvqq
 
       - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:

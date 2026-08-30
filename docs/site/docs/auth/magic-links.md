@@ -66,7 +66,7 @@ SMTP_PASS=your-smtp-password
 SMTP_FROM=noreply@your-app.com
 ```
 
-See [Environment Variables](../installation#smtp--email-optional) for details.
+See [Environment Variables](../installation#email--smtp) for details.
 
 ## Custom OTP flows
 

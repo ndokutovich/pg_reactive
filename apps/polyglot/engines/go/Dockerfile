@@ -4,7 +4,7 @@
 #   docker build -t pgstack/polyglot-engine-go:dev apps/polyglot/engines/go/
 # Run (via deploy/templates/polyglot-showcase/docker-compose.yml).
 
-FROM golang:1.25.11-bookworm AS build
+FROM golang:1.25.13-bookworm AS build
 WORKDIR /app
 ENV GOTOOLCHAIN=auto
 
