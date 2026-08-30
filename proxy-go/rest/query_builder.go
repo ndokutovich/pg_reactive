@@ -85,9 +85,99 @@ func BuildSelect(table *TableMeta, q *RestQuery, selectCols []string) (*BuiltQue
 	return &BuiltQuery{SQL: sb.String(), Params: params}, nil
 }
 
+// UpsertSpec turns an INSERT into an upsert. It mirrors the SDK's upsert():
+// the client sends `Prefer: resolution=merge-duplicates` (or
+// `resolution=ignore-duplicates`) plus an optional `?on_conflict=` query
+// param naming the conflict-target columns. merge-duplicates renders
+// ON CONFLICT (...) DO UPDATE SET with every inserted column except the
+// conflict target taken from EXCLUDED; ignore-duplicates renders
+// ON CONFLICT (...) DO NOTHING. Before this existed the proxy built a plain
+// INSERT for upsert requests, so the second write of an existing row died
+// as 23505 → 409 "duplicate value violates unique constraint".
+type UpsertSpec struct {
+	Columns          []string // conflict-target columns (validated by the builders)
+	IgnoreDuplicates bool     // DO NOTHING instead of DO UPDATE SET
+}
+
+// ParseUpsertSpec derives an UpsertSpec from the Prefer header and the
+// on_conflict query parameter. No resolution= token in Prefer → (nil, nil):
+// the request is a plain insert and on_conflict alone is ignored (PostgREST
+// semantics). With a resolution but no on_conflict the conflict target
+// defaults to the table's primary key. Column names are NOT validated here —
+// the builders own that check.
+func ParseUpsertSpec(prefer, onConflict string, table *TableMeta) (*UpsertSpec, error) {
+	var ignore bool
+	switch {
+	case strings.Contains(prefer, "resolution=merge-duplicates"):
+		ignore = false
+	case strings.Contains(prefer, "resolution=ignore-duplicates"):
+		ignore = true
+	default:
+		return nil, nil
+	}
+
+	var cols []string
+	for _, c := range strings.Split(onConflict, ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			cols = append(cols, c)
+		}
+	}
+	if len(cols) == 0 {
+		cols = append(cols, table.PrimaryKeys...)
+	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("upsert: on_conflict required (table has no primary key)")
+	}
+	return &UpsertSpec{Columns: cols, IgnoreDuplicates: ignore}, nil
+}
+
+// buildConflictClause renders the ON CONFLICT clause for an upsert (leading
+// space included) or "" for a plain insert. insertCols is the sorted column
+// list the INSERT writes; the DO UPDATE SET list is those minus the conflict
+// target. When that leaves nothing to update (every inserted column is part
+// of the conflict target) DO UPDATE SET would be empty — invalid SQL — so
+// DO NOTHING is the only correct rendering.
+func buildConflictClause(table *TableMeta, insertCols []string, spec *UpsertSpec) (string, error) {
+	if spec == nil {
+		return "", nil
+	}
+
+	colSet := table.columnSet()
+	conflict := make(map[string]struct{}, len(spec.Columns))
+	var target strings.Builder
+	for i, c := range spec.Columns {
+		if _, ok := colSet[c]; !ok {
+			return "", fmt.Errorf("upsert: unknown on_conflict column %q", c)
+		}
+		if i > 0 {
+			target.WriteString(", ")
+		}
+		target.WriteString(QuoteIdent(c))
+		conflict[c] = struct{}{}
+	}
+
+	var set strings.Builder
+	for _, c := range insertCols {
+		if _, ok := conflict[c]; ok {
+			continue
+		}
+		if set.Len() > 0 {
+			set.WriteString(", ")
+		}
+		q := QuoteIdent(c)
+		set.WriteString(q + " = EXCLUDED." + q)
+	}
+
+	if spec.IgnoreDuplicates || set.Len() == 0 {
+		return fmt.Sprintf(" ON CONFLICT (%s) DO NOTHING", target.String()), nil
+	}
+	return fmt.Sprintf(" ON CONFLICT (%s) DO UPDATE SET %s", target.String(), set.String()), nil
+}
+
 // BuildInsert builds a parameterised INSERT ... RETURNING * wrapped in a CTE
-// so the caller can wrap it with json_agg.
-func BuildInsert(table *TableMeta, body map[string]any) (*BuiltQuery, error) {
+// so the caller can wrap it with json_agg. A non-nil upsert appends the
+// ON CONFLICT clause (see UpsertSpec); nil keeps the plain INSERT.
+func BuildInsert(table *TableMeta, body map[string]any, upsert *UpsertSpec) (*BuiltQuery, error) {
 	if len(body) == 0 {
 		return nil, fmt.Errorf("insert: empty body")
 	}
@@ -119,10 +209,15 @@ func BuildInsert(table *TableMeta, body map[string]any) (*BuiltQuery, error) {
 		idx++
 	}
 
+	conflictSQL, err := buildConflictClause(table, cols, upsert)
+	if err != nil {
+		return nil, err
+	}
+
 	sql := fmt.Sprintf(
-		`WITH result AS (INSERT INTO %s (%s) VALUES (%s) RETURNING *)`+
+		`WITH result AS (INSERT INTO %s (%s) VALUES (%s)%s RETURNING *)`+
 			` SELECT COALESCE(json_agg(row_to_json(result)), '[]'::json) AS data FROM result`,
-		qualifiedTable(table), colSQL.String(), valSQL.String(),
+		qualifiedTable(table), colSQL.String(), valSQL.String(), conflictSQL,
 	)
 	return &BuiltQuery{SQL: sql, Params: params}, nil
 }
@@ -131,8 +226,9 @@ func BuildInsert(table *TableMeta, body map[string]any) (*BuiltQuery, error) {
 // clauses for an array of rows.  All rows must use the same set of columns
 // (determined as the union of all keys across all rows).  Missing keys in
 // individual rows are bound as NULL.  The result is wrapped in a CTE with
-// json_agg, returning a JSON array of all inserted rows.
-func BuildBulkInsert(table *TableMeta, rows []map[string]any) (*BuiltQuery, error) {
+// json_agg, returning a JSON array of all inserted rows. A non-nil upsert
+// appends the ON CONFLICT clause (see UpsertSpec); nil keeps the plain INSERT.
+func BuildBulkInsert(table *TableMeta, rows []map[string]any, upsert *UpsertSpec) (*BuiltQuery, error) {
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("insert: empty row array")
 	}
@@ -192,10 +288,15 @@ func BuildBulkInsert(table *TableMeta, rows []map[string]any) (*BuiltQuery, erro
 		valuesSQL.WriteString(")")
 	}
 
+	conflictSQL, err := buildConflictClause(table, cols, upsert)
+	if err != nil {
+		return nil, err
+	}
+
 	sql := fmt.Sprintf(
-		`WITH result AS (INSERT INTO %s (%s) VALUES %s RETURNING *)`+
+		`WITH result AS (INSERT INTO %s (%s) VALUES %s%s RETURNING *)`+
 			` SELECT COALESCE(json_agg(row_to_json(result)), '[]'::json) AS data FROM result`,
-		qualifiedTable(table), colSQL.String(), valuesSQL.String(),
+		qualifiedTable(table), colSQL.String(), valuesSQL.String(), conflictSQL,
 	)
 	return &BuiltQuery{SQL: sql, Params: params}, nil
 }

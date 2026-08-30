@@ -163,7 +163,7 @@ func TestProperty_ParamCountMatchesPlaceholders(t *testing.T) {
 		for i := 0; i < nBodyCols; i++ {
 			body[table.Columns[i].Name] = "test_val"
 		}
-		bq, err = BuildInsert(table, body)
+		bq, err = BuildInsert(table, body, nil)
 		if err != nil {
 			return
 		}
@@ -216,7 +216,7 @@ func TestProperty_BulkInsertParamCount(t *testing.T) {
 			rows[i] = row
 		}
 
-		bq, err := BuildBulkInsert(table, rows)
+		bq, err := BuildBulkInsert(table, rows, nil)
 		if err != nil {
 			return
 		}

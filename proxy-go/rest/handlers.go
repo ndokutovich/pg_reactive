@@ -256,6 +256,16 @@ func Insert(d *RestDeps) http.HandlerFunc {
 
 		minimal := strings.Contains(r.Header.Get("Prefer"), "return=minimal")
 
+		// Upsert semantics — the SDK's upsert() sends Prefer: resolution=…
+		// plus ?on_conflict=…. Without this parse the request degraded to a
+		// plain INSERT and the second write of an existing row surfaced as
+		// 23505 → 409 despite the client asking for merge.
+		spec, err := ParseUpsertSpec(r.Header.Get("Prefer"), r.URL.Query().Get("on_conflict"), tm)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
 		claims, err := d.ResolveClaims(r)
 		if err != nil {
 			writeJSONError(w, http.StatusUnauthorized, "authentication required")
@@ -291,7 +301,7 @@ func Insert(d *RestDeps) http.HandlerFunc {
 				return
 			}
 
-			bq, err := BuildBulkInsert(tm, rows)
+			bq, err := BuildBulkInsert(tm, rows, spec)
 			if err != nil {
 				log.Warn().Err(err).Str("table", tableName).Msg("insert: query build failed")
 				writeJSONError(w, http.StatusBadRequest, "unknown column in request")
@@ -329,7 +339,7 @@ func Insert(d *RestDeps) http.HandlerFunc {
 			return
 		}
 
-		bq, err := BuildInsert(tm, row)
+		bq, err := BuildInsert(tm, row, spec)
 		if err != nil {
 			log.Warn().Err(err).Str("table", tableName).Msg("insert: query build failed")
 			writeJSONError(w, http.StatusBadRequest, "unknown column in request")

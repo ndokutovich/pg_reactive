@@ -342,7 +342,9 @@ func batchInsert(ctx context.Context, tx pgx.Tx, op BatchOperation, tm *TableMet
 			return nil, fmt.Errorf("invalid JSON array body")
 		}
 		var err error
-		bq, err = BuildBulkInsert(tm, rows)
+		// Batch operations stay plain inserts for now — upsert threading
+		// through batch op paths (Prefer/on_conflict per op) is a separate change.
+		bq, err = BuildBulkInsert(tm, rows, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -352,7 +354,7 @@ func batchInsert(ctx context.Context, tx pgx.Tx, op BatchOperation, tm *TableMet
 			return nil, fmt.Errorf("invalid JSON body")
 		}
 		var err error
-		bq, err = BuildInsert(tm, row)
+		bq, err = BuildInsert(tm, row, nil) // plain insert — see the bulk note above
 		if err != nil {
 			return nil, err
 		}

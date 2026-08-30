@@ -16,6 +16,15 @@ declared in `ext/pg_reactive.control`).
   multiplayer netcode (`docs/plans/stardust-on-pgstack.md`).
 
 ### Fixed
+- REST upsert is now honored: `POST /rest/v1/{table}` with
+  `Prefer: resolution=merge-duplicates` (or `ignore-duplicates`) and an
+  optional `?on_conflict=col,col` renders `ON CONFLICT (…) DO UPDATE SET
+  col = EXCLUDED.col, …` (or `DO NOTHING`); `on_conflict` defaults to the
+  table's primary key. The SDK's `upsert()` has sent these since 0.2.x but
+  the Go proxy ignored them and ran a plain INSERT — the second save of the
+  same row died with 23505 → 409 "duplicate value violates unique
+  constraint" (found by Stardust's cloud saves). Batch operations still run
+  plain inserts. Contract tests in `rest/upsert_test.go`.
 - All-in-one entrypoint: `docker stop` now shuts PostgreSQL down cleanly
   (exit 0 in ~10s, no WAL replay on the next start). `cmd | tee … &` put
   tee's PID in `$!`, so the SIGTERM handler signalled tee while
