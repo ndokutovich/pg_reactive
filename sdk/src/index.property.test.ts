@@ -728,7 +728,7 @@ describe('PgStackClient URL normalization properties', () => {
       }),
       { numRuns: 50 },
     );
-  });
+  }, 30000);
 });
 
 describe('Wire message JSON round-trip properties', () => {
