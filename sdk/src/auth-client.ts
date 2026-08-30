@@ -32,10 +32,42 @@ export type AuthStateChangeCallback = (
   session: AuthSession | null,
 ) => void;
 
+/**
+ * Minimal storage contract for session persistence — structurally satisfied
+ * by window.localStorage. Injectable for tests and non-browser hosts.
+ */
+export interface AuthStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
 export interface AuthOptions {
   autoRefreshToken?: boolean;
   /** Automatically detect OAuth session in URL hash fragment (default: true). */
   detectSessionInUrl?: boolean;
+  /**
+   * Persist sessions that carry a refresh token into `storage` and restore
+   * them on the next page load, so closing the tab does not log the user
+   * out (default: true). Anonymous sessions have no refresh token by design
+   * and are never persisted.
+   */
+  persistSession?: boolean;
+  /**
+   * Where persisted sessions live (default: globalThis.localStorage when
+   * available; persistence is silently disabled otherwise). Every access is
+   * failure-tolerant — a throwing storage never breaks auth.
+   */
+  storage?: AuthStorage;
+}
+
+/** localStorage key for the persisted session envelope. */
+const STORAGE_KEY = 'pgstack.auth.token';
+
+/** What actually lands in storage: the session plus its absolute expiry. */
+interface PersistedSession {
+  session: AuthSession;
+  expires_at: number;
 }
 
 export interface OAuthSessionResult {
@@ -51,6 +83,7 @@ export class PgStackAuth {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private autoRefresh: boolean;
   private detectSessionInUrl: boolean;
+  private storage?: AuthStorage;
   private _initialized: Promise<void>;
 
   constructor(url: string, anonKey: string, options?: AuthOptions) {
@@ -58,12 +91,94 @@ export class PgStackAuth {
     this.anonKey = anonKey;
     this.autoRefresh = options?.autoRefreshToken ?? true;
     this.detectSessionInUrl = options?.detectSessionInUrl ?? true;
+    // this.storage stays undefined when persistence is off — every persist
+    // helper gates on it, so persistSession:false means ZERO storage calls
+    // even when a storage object was injected.
+    if (options?.persistSession ?? true) {
+      if (options?.storage) {
+        this.storage = options.storage;
+      } else {
+        try {
+          // Touching localStorage itself can throw (e.g. sandboxed iframes,
+          // browsers set to block site data) — probe inside the try.
+          if (typeof globalThis.localStorage !== 'undefined') {
+            this.storage = globalThis.localStorage;
+          }
+        } catch {
+          // No usable default storage — run without persistence.
+        }
+      }
+    }
     this._initialized = this._initialize();
   }
 
   private async _initialize(): Promise<void> {
+    // Restore a persisted session BEFORE the OAuth-redirect check: a fresh
+    // redirect (below) then overwrites the restored session, which is the
+    // correct precedence.
+    const stored = this.readPersisted();
+    if (stored) {
+      if (stored.expires_at > Date.now() + 30_000) {
+        // Still fresh (30s safety margin) — adopt without any network.
+        // Recompute expires_in to the REMAINING lifetime so the auto-
+        // refresh timer fires relative to the real expiry, not the
+        // original issue time.
+        const remaining = Math.floor((stored.expires_at - Date.now()) / 1000);
+        this.session = { ...stored.session, expires_in: remaining };
+        this.scheduleRefresh();
+        this.emit('SIGNED_IN', this.session);
+      } else {
+        // Expired (or about to) — trade the stored refresh token for a new
+        // session. Success re-persists the rotation via setSession; failure
+        // clears both the session and the storage via clearSession.
+        this.session = stored.session;
+        await this.refreshSessionInternal();
+      }
+    }
+
     if (this.detectSessionInUrl && typeof window !== 'undefined') {
       await this.handleOAuthRedirect();
+    }
+  }
+
+  // ---- Persistence helpers — every storage access is failure-tolerant ----
+
+  private readPersisted(): PersistedSession | null {
+    if (!this.storage) return null;
+    try {
+      const raw = this.storage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as Partial<PersistedSession>;
+      if (!parsed?.session?.access_token || typeof parsed.expires_at !== 'number') {
+        this.removePersisted();
+        return null;
+      }
+      return parsed as PersistedSession;
+    } catch {
+      this.removePersisted();
+      return null;
+    }
+  }
+
+  private writePersisted(session: AuthSession): void {
+    if (!this.storage) return;
+    try {
+      const envelope: PersistedSession = {
+        session,
+        expires_at: Date.now() + session.expires_in * 1000,
+      };
+      this.storage.setItem(STORAGE_KEY, JSON.stringify(envelope));
+    } catch {
+      // Quota / blocked storage — auth still works, just not persisted.
+    }
+  }
+
+  private removePersisted(): void {
+    if (!this.storage) return;
+    try {
+      this.storage.removeItem(STORAGE_KEY);
+    } catch {
+      // Ignore — nothing useful to do.
     }
   }
 
@@ -231,19 +346,21 @@ export class PgStackAuth {
     return { error: res.error };
   }
 
-  /** Get the current session. */
+  /** Get the current session. Waits for the restore-from-storage step. */
   async getSession(): Promise<{
     data: { session: AuthSession | null };
     error: null;
   }> {
+    await this._initialized;
     return { data: { session: this.session }, error: null };
   }
 
-  /** Get the current user. */
+  /** Get the current user. Waits for the restore-from-storage step. */
   async getUser(): Promise<{
     data: { user: AuthUser | null };
     error: AuthError | null;
   }> {
+    await this._initialized;
     if (!this.session) return { data: { user: null }, error: null };
 
     const res = await this.fetch('/auth/v1/user', 'GET', undefined, this.session.access_token);
@@ -275,6 +392,16 @@ export class PgStackAuth {
 
   /** Refresh the current session. */
   async refreshSession(): Promise<{
+    data: { session: AuthSession } | null;
+    error: AuthError | null;
+  }> {
+    // Public entry waits for initialization; _initialize() itself calls the
+    // internal variant directly (awaiting _initialized there would deadlock).
+    await this._initialized;
+    return this.refreshSessionInternal();
+  }
+
+  private async refreshSessionInternal(): Promise<{
     data: { session: AuthSession } | null;
     error: AuthError | null;
   }> {
@@ -319,6 +446,12 @@ export class PgStackAuth {
     this.session = session;
     this.emit(event, session);
     this.scheduleRefresh();
+    // Persist only sessions that can outlive their access token. Anonymous
+    // JWTs carry no refresh token — persisting them would restore a dead
+    // session at best.
+    if (session.refresh_token) {
+      this.writePersisted(session);
+    }
   }
 
   private clearSession(): void {
@@ -327,6 +460,7 @@ export class PgStackAuth {
       clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
     }
+    this.removePersisted();
     this.emit('SIGNED_OUT', null);
   }
 

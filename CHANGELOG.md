@@ -8,6 +8,16 @@ declared in `ext/pg_reactive.control`).
 ## [Unreleased]
 
 ### Added
+- SDK: sessions persist across page loads. `PgStackAuth` stores sessions
+  that carry a refresh token (never anonymous JWTs) under
+  `pgstack.auth.token` — injectable via `AuthOptions.storage`, defaulting
+  to `localStorage`, disabled with `persistSession: false`. On construction
+  a fresh stored session is adopted without a network call; an expired one
+  is refreshed through the rotation endpoint (a rejected token clears the
+  store). `getSession()`/`getUser()` await the restore, so an app's boot
+  code sees the recovered login. Every storage access is failure-tolerant.
+  Driven by Stardust: closing the tab forced a new Google redirect on every
+  visit while 30-day rotating refresh tokens sat unused.
 - All-in-one image: `/app/services.d/*.sh` sidecar hook in
   `docker/all-in-one-entrypoint.sh`. Executable scripts there are started
   after the proxy answers `/health`, log to `/var/log/pgstack/<name>.log`,
