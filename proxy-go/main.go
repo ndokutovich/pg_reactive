@@ -768,6 +768,19 @@ func buildRouter(state *AppState) http.Handler {
 	r.Get("/docs", routes.DocsRedirect)
 	r.Handle("/docs/*", routes.DocsSite(state.Config.DocsDir))
 
+	// ── Sidecar routes (SIDECAR_ROUTES) ───────────────────────────────────
+	// Registered before the static handler on purpose: PublicDir is installed
+	// as chi's NotFound, so an unrouted prefix does not 404 — it answers 200
+	// with index.html, and a caller expecting a WebSocket sees a successful
+	// HTTP response instead of an upgrade. Whoever added the route would have
+	// no way to tell it was never wired.
+	for _, route := range state.Config.SidecarRoutes {
+		h := route.Handler()
+		r.Handle(route.Prefix, h)
+		r.Handle(route.Prefix+"/*", h)
+		log.Info().Str("prefix", route.Prefix).Str("upstream", route.Upstream.String()).Msg("sidecar route")
+	}
+
 	// ── API routes (strict CSP, body size limit) ──────────────────────────
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.SecurityHeaders)

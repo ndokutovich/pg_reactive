@@ -177,6 +177,26 @@ type Config struct {
 	// Docs site (Docusaurus)
 	DocsDir string
 
+	// SidecarRoutes forwards whole path prefixes to another process, chosen by
+	// the deployment rather than known to the platform. An all-in-one image
+	// often runs more than a database and this proxy — a match server, a job
+	// runner, anything with its own HTTP or WebSocket surface — and without
+	// this those paths fall through to the static handler and answer 200 with
+	// index.html, which looks like a working route and is not one.
+	//
+	// Set SIDECAR_ROUTES to a comma-separated list of prefix=upstream:
+	//
+	//	SIDECAR_ROUTES=/coop=http://127.0.0.1:8787,/jobs=http://127.0.0.1:9000
+	//
+	// The upstream MUST be a loopback address: this forwards unauthenticated,
+	// so a routable one would turn the proxy into an open relay. WebSocket
+	// upgrades pass through, which is usually the reason a sidecar exists.
+	SidecarRoutes []SidecarRoute
+	// SidecarRoutesErr carries a malformed SIDECAR_ROUTES to Validate. A bad
+	// route must refuse the boot rather than be dropped: a silently missing
+	// route is exactly the 200-with-index.html this exists to prevent.
+	SidecarRoutesErr error
+
 	// User static files (public/ directory)
 	PublicDir string
 	// PublicAllowInlineScripts adds 'unsafe-inline' to the PublicSPA CSP
@@ -348,6 +368,10 @@ func FromEnv() Config {
 	cfg.PublicDir = os.Getenv("PUBLIC_DIR")
 	cfg.PublicAllowInlineScripts = envBoolOrDefault("PUBLIC_ALLOW_INLINE_SCRIPTS", false)
 
+	// FromEnv does not fail; a malformed value is carried to Validate, which is
+	// where this repo reports bad configuration.
+	cfg.SidecarRoutes, cfg.SidecarRoutesErr = ParseSidecarRoutes(os.Getenv("SIDECAR_ROUTES"))
+
 	cfg.StorageBackend = envOrDefault("STORAGE_BACKEND", "database")
 	cfg.StorageDir = envOrDefault("STORAGE_DIR", "/data/storage")
 
@@ -423,6 +447,9 @@ func isPlaceholderSecret(s string) bool {
 // Callers should log all errors and abort startup if any are returned.
 func (c Config) Validate() []string {
 	var errs []string
+	if c.SidecarRoutesErr != nil {
+		errs = append(errs, "SIDECAR_ROUTES: "+c.SidecarRoutesErr.Error())
+	}
 	if c.JWTSecret != "" && len(c.JWTSecret) < 32 {
 		errs = append(errs, fmt.Sprintf(
 			"JWT_SECRET must be at least 32 characters (got %d); use a cryptographically random string",
