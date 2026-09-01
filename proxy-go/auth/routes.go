@@ -64,7 +64,15 @@ func consumeEmailToken(ctx context.Context, q interface {
 // generateTokenPair mints a JWT access token and an opaque refresh token,
 // persists the refresh token in pgstack.refresh_tokens, and returns both.
 func generateTokenPair(ctx context.Context, d *Deps, userID, email, role string) (access, refresh string, err error) {
-	access, err = GenerateToken(userID, role, email, d.JWTSecret, d.AccessTokenExpirySecs)
+	return generateTokenPairTTL(ctx, d, userID, email, role, d.AccessTokenExpirySecs)
+}
+
+// generateTokenPairTTL is generateTokenPair with the access-token lifetime named
+// explicitly. Anonymous signin has its own (AnonymousJWTTTLSecs) and would
+// otherwise have to choose between honouring that setting and having a refresh
+// token at all.
+func generateTokenPairTTL(ctx context.Context, d *Deps, userID, email, role string, accessTTLSecs int) (access, refresh string, err error) {
+	access, err = GenerateToken(userID, role, email, d.JWTSecret, accessTTLSecs)
 	if err != nil {
 		return "", "", fmt.Errorf("generate access token: %w", err)
 	}

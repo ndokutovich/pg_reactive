@@ -1,13 +1,16 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Negative test: with the gate off (default), /auth/v1/anonymous must
@@ -33,15 +36,30 @@ func TestAnonymous_GateOffReturns503(t *testing.T) {
 	}
 }
 
-// Gate-on test: returns an AuthResponse whose access_token parses as a
-// valid JWT with role=anon and sub=UUID, and whose user payload carries
-// the is_anonymous flag — the shape SDKs and example pages rely on.
-func TestAnonymous_GateOnIssuesValidJWT(t *testing.T) {
+// Gate-on: a guest gets a REAL account. Needs a database, because that is now
+// the point — the handler used to mint a token for a `sub` no table had ever
+// heard of, and everything that verifies a caller against pgstack.users refused
+// it. Opt in with PGSTACK_TEST_DSN pointing at a booted pgstack:
+//
+//	PGSTACK_TEST_DSN=postgres://postgres:<pw>@127.0.0.1:5432/pgstack go test ./auth/
+func TestAnonymous_GateOnCreatesRealAccount(t *testing.T) {
+	dsn := os.Getenv("PGSTACK_TEST_DSN")
+	if dsn == "" {
+		t.Skip("PGSTACK_TEST_DSN not set — anonymous signin writes a row and cannot be unit-tested")
+	}
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+
 	secret := "test-secret-32-chars-xxxxxxxxxx"
 	d := &Deps{
-		JWTSecret:            secret,
-		AllowAnonymousSignin: true,
-		AnonymousJWTTTLSecs:  900,
+		Pool:                   pool,
+		JWTSecret:              secret,
+		AllowAnonymousSignin:   true,
+		AnonymousJWTTTLSecs:    900,
+		RefreshTokenExpiryDays: 30,
 	}
 
 	rec := httptest.NewRecorder()
@@ -63,16 +81,16 @@ func TestAnonymous_GateOnIssuesValidJWT(t *testing.T) {
 		t.Errorf("token_type = %q, want bearer", resp.TokenType)
 	}
 	if resp.ExpiresIn != 900 {
-		t.Errorf("expires_in = %d, want 900", resp.ExpiresIn)
+		t.Errorf("expires_in = %d, want 900 — AnonymousJWTTTLSecs still governs the access token", resp.ExpiresIn)
 	}
-	if resp.RefreshToken != "" {
-		t.Errorf("refresh_token = %q, want empty (anon must not be refreshable)", resp.RefreshToken)
+	if resp.RefreshToken == "" {
+		t.Error("refresh_token is empty — a guest that cannot refresh loses the account on reload, which is the whole thing this exists to prevent")
 	}
 	if !resp.User.IsAnonymous {
 		t.Error("user.is_anonymous = false, want true")
 	}
-	if resp.User.Role != "anon" {
-		t.Errorf("user.role = %q, want anon", resp.User.Role)
+	if resp.User.Role != "authenticated" {
+		t.Errorf("user.role = %q, want authenticated — RLS policies are written TO authenticated", resp.User.Role)
 	}
 	if resp.User.Provider != "anonymous" {
 		t.Errorf("user.provider = %q, want anonymous", resp.User.Provider)
@@ -81,14 +99,32 @@ func TestAnonymous_GateOnIssuesValidJWT(t *testing.T) {
 		t.Errorf("user.id = %q, want UUID: %v", resp.User.ID, err)
 	}
 
+	// The row is the point: this is what net_load_loadout and every other
+	// "is this a real user" check consults.
+	var provider, email string
+	err = pool.QueryRow(context.Background(),
+		`SELECT provider, email FROM pgstack.users WHERE id = $1`, resp.User.ID).Scan(&provider, &email)
+	if err != nil {
+		t.Fatalf("the guest has no row in pgstack.users: %v", err)
+	}
+	if provider != "anonymous" {
+		t.Errorf("row provider = %q, want anonymous", provider)
+	}
+	if !strings.HasSuffix(email, anonymousEmailDomain) {
+		t.Errorf("row email = %q, want a reserved .invalid address", email)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM pgstack.users WHERE id = $1`, resp.User.ID)
+	})
+
 	// The minted JWT must round-trip through the proxy's own validator
 	// with the same role and sub — the WS gate will run this same check.
 	claims, err := ValidateToken(resp.AccessToken, secret)
 	if err != nil {
 		t.Fatalf("ValidateToken: %v", err)
 	}
-	if claims.Role != "anon" {
-		t.Errorf("claim role = %q, want anon", claims.Role)
+	if claims.Role != "authenticated" {
+		t.Errorf("claim role = %q, want authenticated", claims.Role)
 	}
 	if claims.Sub != resp.User.ID {
 		t.Errorf("claim sub = %q, want %q", claims.Sub, resp.User.ID)
