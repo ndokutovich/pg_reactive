@@ -99,6 +99,54 @@ async fn main() {
 
     let state = AppState::new(config.clone(), pg_pool, admin_pool);
 
+    // Guest lifecycle (0.3.0): boot notice + the opt-in reaper. Mirrors Go.
+    if config.allow_anonymous_signin {
+        info!(
+            role = %config.anonymous_role,
+            "ALLOW_ANONYMOUS_SIGNIN=true — guests sign in as real accounts (0.3.0)"
+        );
+        if config.anonymous_account_ttl_days == 0 {
+            warn!("ANONYMOUS_ACCOUNT_TTL_DAYS=0 — stale guest accounts are never reaped; pgstack.users grows with every guest signin");
+        }
+    }
+    if config.anonymous_account_ttl_days > 0 {
+        let reaper_pool = state.admin_pool.clone();
+        let ttl_days = config.anonymous_account_ttl_days;
+        tokio::spawn(async move {
+            // 6h cadence, jittered ±10% so replicas do not herd. Deletes ONLY
+            // never-upgraded guests (providers = {anonymous}) with no live
+            // refresh token — an upgraded account is never reaped (INV-B).
+            loop {
+                let base = 6.0 * 3600.0;
+                let jitter = (rand_unit() * 0.2 - 0.1) * base;
+                tokio::time::sleep(std::time::Duration::from_secs_f64(base + jitter)).await;
+                match sqlx::query(
+                    "DELETE FROM pgstack.users u
+                     WHERE u.providers = ARRAY['anonymous']
+                       AND u.updated_at < now() - make_interval(days => $1::int)
+                       AND NOT EXISTS (
+                             SELECT 1 FROM pgstack.refresh_tokens rt
+                             WHERE rt.user_id = u.id
+                               AND NOT rt.revoked
+                               AND rt.expires_at > now())",
+                )
+                .bind(ttl_days as i32)
+                .execute(&reaper_pool)
+                .await
+                {
+                    Ok(r) if r.rows_affected() > 0 => {
+                        info!(
+                            deleted = r.rows_affected(),
+                            ttl_days, "anonymous reaper: stale guest accounts removed"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("anonymous reaper: delete failed: {e}"),
+                }
+            }
+        });
+    }
+
     // One-shot orphan sweep for the disk storage backend (audit F1 round 19/20):
     // clears partial-upload staging/backup files left by uploads killed mid-flight.
     // Runs only when STORAGE_BACKEND=disk. Mirror of Go main.go's startup sweep.
@@ -724,4 +772,12 @@ async fn presence_handler(
     // Restrict to the current committed generation (inv 17(f)).
     let presence_map = state.presence.list(&channel, current_gen).await;
     Ok(axum::Json(presence_map))
+}
+
+/// Uniform sample in [0,1) from the OS CSPRNG — enough for reaper jitter
+/// without pulling a rand crate into the dependency tree.
+fn rand_unit() -> f64 {
+    let mut b = [0u8; 8];
+    getrandom::fill(&mut b).expect("OS CSPRNG unavailable");
+    (u64::from_le_bytes(b) >> 11) as f64 / (1u64 << 53) as f64
 }

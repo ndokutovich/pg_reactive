@@ -51,7 +51,7 @@ pub async fn verify_pool_roles(data: &PgPool, admin: &PgPool, config: &Config) {
     let mut problems: Vec<String> = Vec::new();
 
     // --- data pool: powerless login role, member of anon/authenticated only ---
-    match check_login_role(data, &["anon", "authenticated"]).await {
+    match check_login_role(data, &["anon", "authenticated", "anonymous"]).await {
         Ok(ps) => problems.extend(ps.into_iter().map(|p| format!("data pool: {p}"))),
         Err(e) => problems.push(format!("data pool: role check failed: {e}")),
     }

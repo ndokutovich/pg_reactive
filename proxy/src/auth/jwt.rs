@@ -18,6 +18,11 @@ pub struct Claims {
     /// Expiration (Unix timestamp)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exp: Option<u64>,
+    /// Guest marker (0.3.0): present and true only on tokens minted for a
+    /// never-upgraded anonymous account. DERIVED from the user row at every
+    /// mint site, never copied from a previous token (SECURITY.md INV-B).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_anonymous: Option<bool>,
 }
 
 fn default_role() -> String {
@@ -112,6 +117,7 @@ mod tests {
             email: None,
             iat: Some(now_unix()),
             exp,
+            is_anonymous: None,
         }
     }
 
@@ -276,6 +282,7 @@ mod tests {
             email: None,
             iat: None,
             exp: Some(now_unix() + 3600),
+            is_anonymous: None,
         };
         let token = generate_token(&claims, TEST_SECRET).unwrap();
         let decoded = validate_token(&token, TEST_SECRET).unwrap();

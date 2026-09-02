@@ -184,6 +184,8 @@ pub async fn rls_transaction(
     // Cannot use bind parameter with SET ROLE, so we whitelist valid roles.
     let role_sql = match claims.role.as_str() {
         "authenticated" => "SET LOCAL ROLE authenticated",
+        // Guests (0.3.0) — INV-A tier between anon and authenticated.
+        "anonymous" => "SET LOCAL ROLE anonymous",
         "service_role" => "SET LOCAL ROLE service_role",
         _ => "SET LOCAL ROLE anon",
     };

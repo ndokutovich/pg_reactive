@@ -60,6 +60,10 @@ struct UserResponse {
     app_metadata: Option<serde_json::Value>,
     created_at: String,
     updated_at: String,
+    /// Present (true) only for never-upgraded guest accounts (0.3.0) —
+    /// mirrors Go's omitempty wire shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_anonymous: Option<bool>,
 }
 
 // ---------- Handlers ----------
@@ -190,6 +194,7 @@ pub async fn signup(
                     role,
                     user_metadata: Some(raw_user_meta),
                     app_metadata: Some(raw_app_meta),
+                    is_anonymous: None,
                     created_at,
                     updated_at,
                 },
@@ -297,6 +302,7 @@ async fn token_password(
                 app_metadata: Some(raw_app_meta),
                 created_at,
                 updated_at,
+                is_anonymous: None,
             },
         }),
     ))
@@ -360,16 +366,32 @@ async fn token_refresh(
             String,
             serde_json::Value,
             serde_json::Value,
+            Vec<String>,
         ),
     >(
-        "SELECT email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta
+        "SELECT email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta,
+                COALESCE(providers, ARRAY[]::text[])
          FROM pgstack.users WHERE id = $1::uuid",
     )
     .bind(&user_id)
     .fetch_one(&mut *tx)
     .await?;
 
-    let (email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = user;
+    let (email, role, created_at, updated_at, raw_user_meta, raw_app_meta, providers) = user;
+
+    // INV-B: the guest marker derives from the ROW at every mint site. A guest
+    // keeps is_anonymous (and the guest TTL, D7) across rotation; an upgraded
+    // account loses both here because the row flipped.
+    let is_anon = providers.len() == 1 && providers[0] == "anonymous";
+    let ttl = if is_anon {
+        if state.config.anonymous_jwt_ttl_secs == 0 {
+            3600
+        } else {
+            state.config.anonymous_jwt_ttl_secs
+        }
+    } else {
+        state.config.access_token_expiry_secs
+    };
 
     // Generate new token pair (same family for reuse detection) within transaction
     let (access_token, new_refresh_token) = generate_token_pair_tx(
@@ -380,6 +402,8 @@ async fn token_refresh(
         &email,
         &role,
         family_id.as_deref(),
+        ttl,
+        is_anon,
     )
     .await?;
 
@@ -390,7 +414,7 @@ async fn token_refresh(
         Json(AuthResponse {
             access_token,
             token_type: "bearer".into(),
-            expires_in: state.config.access_token_expiry_secs,
+            expires_in: ttl,
             refresh_token: new_refresh_token,
             user: UserResponse {
                 id: user_id,
@@ -400,6 +424,7 @@ async fn token_refresh(
                 app_metadata: Some(raw_app_meta),
                 created_at,
                 updated_at,
+                is_anonymous: if is_anon { Some(true) } else { None },
             },
         }),
     ))
@@ -431,6 +456,7 @@ pub async fn get_user(
         app_metadata: Some(raw_app_meta),
         created_at,
         updated_at,
+        is_anonymous: None,
     }))
 }
 
@@ -493,7 +519,14 @@ pub async fn update_user(
             }
         } else {
             sqlx::query(
-                "UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2::uuid",
+                // No verification required -> the address change IS the
+                // upgrade for a guest row (0.3.0); no confirm step will run.
+                "UPDATE pgstack.users SET email = $1,
+                     role       = CASE WHEN role = 'anonymous' THEN 'authenticated' ELSE role END,
+                     provider   = CASE WHEN providers = ARRAY['anonymous'] THEN 'email' ELSE provider END,
+                     providers  = CASE WHEN providers = ARRAY['anonymous'] THEN ARRAY['anonymous','email'] ELSE providers END,
+                     updated_at = now()
+                 WHERE id = $2::uuid",
             )
             .bind(email)
             .bind(&claims.sub)
@@ -558,6 +591,7 @@ pub async fn update_user(
         app_metadata: Some(raw_app_meta),
         created_at,
         updated_at,
+        is_anonymous: None,
     }))
 }
 
@@ -579,13 +613,13 @@ pub async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /auth/v1/anonymous — mint a short-lived role=anon JWT.
+/// POST /auth/v1/anonymous — create a REAL guest account and sign it in (0.3.0).
 ///
-/// Mirror of Go `auth.Anonymous` (round 34). Lets public-read demo pages satisfy
-/// REQUIRE_AUTHENTICATED_WS=true without embedding the raw anon-key as a fake
-/// credential — the WS gate receives a real signed token, expirable and
-/// attributable. No DB row is created; there is no refresh token (clients
-/// re-mint when the access token expires).
+/// Mirror of Go `auth.Anonymous`. Strict mode (default) creates the row with
+/// role=anonymous so `TO authenticated` policies never match a guest
+/// (SECURITY.md INV-A); ANONYMOUS_ROLE=authenticated is the Supabase-compatible
+/// flat model. The JWT carries is_anonymous either way, derived from the row
+/// (INV-B). A refresh token is issued so the guest survives closing the tab.
 ///
 /// Default-deny (SECURITY.md trust-matrix row "Auth: anonymous signin"):
 /// returns 503 unless ALLOW_ANONYMOUS_SIGNIN is explicitly set.
@@ -596,6 +630,8 @@ pub async fn anonymous(State(state): State<AppState>) -> Result<impl IntoRespons
         ));
     }
 
+    // Before the row, not after (Go lesson: empty-secret defect): a request
+    // that can never be answered must leave no guest account behind.
     let secret = state
         .config
         .jwt_secret
@@ -608,24 +644,46 @@ pub async fn anonymous(State(state): State<AppState>) -> Result<impl IntoRespons
         state.config.anonymous_jwt_ttl_secs
     };
 
-    let sub = uuid::Uuid::new_v4().to_string();
-    let claims = anon_claims(&sub, ttl);
-    let access_token = jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
+    let guest_role = match state.config.anonymous_role.as_str() {
+        "authenticated" => "authenticated",
+        _ => "anonymous", // validate() refuses other values; belt-and-braces
+    };
 
-    // Shape mirrors Go AuthResponse + UserResponse (provider="anonymous",
-    // is_anonymous=true, empty refresh_token, "{}" metadata).
+    // The id is chosen here so the synthetic RFC 2606 `.invalid` address names
+    // the row it belongs to; it can never collide with a provider address.
+    let id = uuid::Uuid::new_v4().to_string();
+    let email = format!("anon-{id}@anonymous.invalid");
+
+    let row = sqlx::query_as::<_, (String, String, String, String)>(
+        "INSERT INTO pgstack.users (id, email, role, provider, providers)
+         VALUES ($1::uuid, $2, $3, 'anonymous', ARRAY['anonymous'])
+         RETURNING id::text, role, created_at::text, updated_at::text",
+    )
+    .bind(&id)
+    .bind(&email)
+    .bind(guest_role)
+    .fetch_one(&state.admin_pool)
+    .await?;
+    let (user_id, role, created_at, updated_at) = row;
+
+    let (access_token, refresh_token) =
+        generate_token_pair_opts(&state, secret, &user_id, &email, &role, None, ttl, true).await?;
+
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({
             "access_token": access_token,
             "token_type": "bearer",
             "expires_in": ttl,
-            "refresh_token": "",
+            "refresh_token": refresh_token,
             "user": {
-                "id": sub,
-                "role": "anon",
+                "id": user_id,
+                "email": email,
+                "role": role,
                 "user_metadata": {},
                 "app_metadata": {},
+                "created_at": created_at,
+                "updated_at": updated_at,
                 "provider": "anonymous",
                 "is_anonymous": true,
             }
@@ -634,22 +692,6 @@ pub async fn anonymous(State(state): State<AppState>) -> Result<impl IntoRespons
 }
 
 // ---------- Helpers ----------
-
-/// Build the claims for an anonymous-signin token: role=anon, the given random
-/// `sub`, no email, exp = now + ttl. Mirror of Go `GenerateToken(sub,"anon",...)`.
-fn anon_claims(sub: &str, ttl_secs: u64) -> Claims {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    Claims {
-        sub: sub.to_string(),
-        role: "anon".into(),
-        email: None,
-        iat: Some(now),
-        exp: Some(now + ttl_secs),
-    }
-}
 
 /// Validate an email address: non-empty local part, non-empty domain with at
 /// least one dot, total length <= 254.
@@ -701,6 +743,33 @@ pub(crate) async fn generate_token_pair(
     role: &str,
     family_id: Option<&str>,
 ) -> Result<(String, String), AppError> {
+    generate_token_pair_opts(
+        state,
+        secret,
+        user_id,
+        email,
+        role,
+        family_id,
+        state.config.access_token_expiry_secs,
+        false,
+    )
+    .await
+}
+
+/// `generate_token_pair` with the access-token lifetime and the guest marker
+/// named explicitly. Anonymous signin has its own TTL (ANONYMOUS_JWT_TTL) and
+/// carries is_anonymous (INV-B: derived from the row at every mint site).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn generate_token_pair_opts(
+    state: &AppState,
+    secret: &str,
+    user_id: &str,
+    email: &str,
+    role: &str,
+    family_id: Option<&str>,
+    ttl_secs: u64,
+    is_anonymous: bool,
+) -> Result<(String, String), AppError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -711,7 +780,8 @@ pub(crate) async fn generate_token_pair(
         role: role.to_string(),
         email: Some(email.to_string()),
         iat: Some(now),
-        exp: Some(now + state.config.access_token_expiry_secs),
+        exp: Some(now + ttl_secs),
+        is_anonymous: if is_anonymous { Some(true) } else { None },
     };
 
     let access_token = jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
@@ -735,6 +805,7 @@ pub(crate) async fn generate_token_pair(
 }
 
 /// Like `generate_token_pair`, but executes the INSERT within an existing transaction.
+#[allow(clippy::too_many_arguments)]
 async fn generate_token_pair_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
@@ -743,6 +814,8 @@ async fn generate_token_pair_tx(
     email: &str,
     role: &str,
     family_id: Option<&str>,
+    ttl_secs: u64,
+    is_anonymous: bool,
 ) -> Result<(String, String), AppError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -754,7 +827,8 @@ async fn generate_token_pair_tx(
         role: role.to_string(),
         email: Some(email.to_string()),
         iat: Some(now),
-        exp: Some(now + state.config.access_token_expiry_secs),
+        exp: Some(now + ttl_secs),
+        is_anonymous: if is_anonymous { Some(true) } else { None },
     };
 
     let access_token = jwt::generate_token(&claims, secret).map_err(AppError::Internal)?;
@@ -1102,7 +1176,12 @@ pub async fn magiclink_verify(
         .await?;
 
     sqlx::query(
-        "UPDATE pgstack.users SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
+        // Guest upgrade (0.3.0) — same flip as verify_email; see there.
+        "UPDATE pgstack.users SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
+             role       = CASE WHEN role = 'anonymous' THEN 'authenticated' ELSE role END,
+             provider   = CASE WHEN providers = ARRAY['anonymous'] THEN 'email' ELSE provider END,
+             providers  = CASE WHEN providers = ARRAY['anonymous'] THEN ARRAY['anonymous','email'] ELSE providers END,
+             updated_at = now()
          WHERE id = $1::uuid",
     )
     .bind(&user_id)
@@ -1150,7 +1229,14 @@ pub async fn verify_email(
         row.ok_or_else(|| AppError::BadRequest("Invalid or expired verification token".into()))?;
 
     sqlx::query(
-        "UPDATE pgstack.users SET email_confirmed_at = now(), updated_at = now()
+        // Guest upgrade (0.3.0): confirming a real address on a never-upgraded
+        // guest row completes the account (INV-B: the flip is what drops the
+        // is_anonymous claim on the next mint). Non-guest rows: CASEs are no-ops.
+        "UPDATE pgstack.users SET email_confirmed_at = now(),
+             role       = CASE WHEN role = 'anonymous' THEN 'authenticated' ELSE role END,
+             provider   = CASE WHEN providers = ARRAY['anonymous'] THEN 'email' ELSE provider END,
+             providers  = CASE WHEN providers = ARRAY['anonymous'] THEN ARRAY['anonymous','email'] ELSE providers END,
+             updated_at = now()
          WHERE id = $1::uuid",
     )
     .bind(&user_id)
@@ -1331,6 +1417,7 @@ pub async fn admin_create_user(
             email,
             role: user_role,
             user_metadata: Some(serde_json::json!({})),
+            is_anonymous: None,
             app_metadata: Some(serde_json::json!({})),
             created_at,
             updated_at,
@@ -1348,26 +1435,57 @@ mod tests {
     // anon-key — is what lets a public-read demo open a WS under
     // REQUIRE_AUTHENTICATED_WS=true while remaining expirable/attributable.
     #[test]
-    fn anon_claims_have_role_anon_and_ttl() {
-        let sub = "11111111-2222-3333-4444-555555555555";
-        let claims = anon_claims(sub, 3600);
-        assert_eq!(claims.role, "anon");
-        assert_eq!(claims.sub, sub);
-        assert!(claims.email.is_none());
-        let iat = claims.iat.unwrap();
-        assert_eq!(claims.exp.unwrap(), iat + 3600);
+    fn is_anonymous_claim_round_trips_and_is_omitted_when_absent() {
+        let now = 1_700_000_000u64;
+        let guest = Claims {
+            sub: "u1".into(),
+            role: "anonymous".into(),
+            email: None,
+            iat: Some(now),
+            exp: Some(now + 900),
+            is_anonymous: Some(true),
+        };
+        let j = serde_json::to_string(&guest).unwrap();
+        assert!(j.contains("\"is_anonymous\":true"));
+        let back: Claims = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.is_anonymous, Some(true));
+        assert_eq!(back.role, "anonymous");
+
+        let member = Claims {
+            sub: "u2".into(),
+            role: "authenticated".into(),
+            email: None,
+            iat: Some(now),
+            exp: Some(now + 900),
+            is_anonymous: None,
+        };
+        let j2 = serde_json::to_string(&member).unwrap();
+        assert!(!j2.contains("is_anonymous"), "omitempty parity with Go");
     }
 
-    // The minted token must round-trip through validate_token (it is what the
-    // WS gate runs) and come back as role=anon with the same sub.
+    // The minted guest token must round-trip through validate_token (it is
+    // what the WS gate runs) and come back with the same sub, role=anonymous
+    // and the is_anonymous marker intact (0.3.0).
     #[test]
-    fn anon_token_validates_as_anon() {
+    fn guest_token_validates_with_role_and_marker() {
         let secret = "anon-test-secret-key-at-least-32-bytes-long";
         let sub = uuid::Uuid::new_v4().to_string();
-        let claims = anon_claims(&sub, 3600);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let claims = Claims {
+            sub: sub.clone(),
+            role: "anonymous".into(),
+            email: None,
+            iat: Some(now),
+            exp: Some(now + 3600),
+            is_anonymous: Some(true),
+        };
         let token = jwt::generate_token(&claims, secret).unwrap();
         let decoded = jwt::validate_token(&token, secret).unwrap();
-        assert_eq!(decoded.role, "anon");
+        assert_eq!(decoded.role, "anonymous");
         assert_eq!(decoded.sub, sub);
+        assert_eq!(decoded.is_anonymous, Some(true));
     }
 }

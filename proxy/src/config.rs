@@ -56,6 +56,12 @@ pub struct Config {
     pub allow_anonymous_signin: bool,
     /// TTL (seconds) of the minted anon JWT. Default 3600 (mirror Go).
     pub anonymous_jwt_ttl_secs: u64,
+    /// PG role guests sign in as (0.3.0). "anonymous" (strict, default):
+    /// TO authenticated policies never match guests (SECURITY.md INV-A);
+    /// "authenticated": Supabase-compatible flat model. Validated in validate().
+    pub anonymous_role: String,
+    /// Opt-in guest reaper TTL in days; 0 (default) disables it.
+    pub anonymous_account_ttl_days: i64,
     /// Per-source-IP cap on concurrent WebSocket connections so one client can't
     /// exhaust the global pool. 0 disables the cap. Default 10 (mirror Go
     /// WS_MAX_PER_IP).
@@ -384,6 +390,11 @@ impl Config {
             .filter(|s| !s.is_empty());
         let require_authenticated_ws = bool_env("REQUIRE_AUTHENTICATED_WS", false);
         let allow_anonymous_signin = bool_env("ALLOW_ANONYMOUS_SIGNIN", false);
+        let anonymous_role = std::env::var("ANONYMOUS_ROLE").unwrap_or_else(|_| "anonymous".into());
+        let anonymous_account_ttl_days: i64 = std::env::var("ANONYMOUS_ACCOUNT_TTL_DAYS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         let ws_max_per_ip: usize = std::env::var("WS_MAX_PER_IP")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -492,6 +503,8 @@ impl Config {
             anonymous_rate_window_secs,
             allow_anonymous_signin,
             anonymous_jwt_ttl_secs,
+            anonymous_role,
+            anonymous_account_ttl_days,
             ws_max_per_ip,
             access_token_expiry_secs,
             refresh_token_expiry_days,
@@ -584,6 +597,17 @@ impl Config {
     /// otherwise they are warnings. Mirrors the Go proxy's Config.Validate.
     pub fn validate(&self) -> Vec<String> {
         let mut errs = Vec::new();
+
+        // "" is impossible via from_env (defaulted); guard the literal values.
+        if self.anonymous_role != "anonymous" && self.anonymous_role != "authenticated" {
+            errs_anon_role(&mut errs, &self.anonymous_role);
+        }
+        if self.anonymous_account_ttl_days < 0 {
+            errs.push(format!(
+                "ANONYMOUS_ACCOUNT_TTL_DAYS must be >= 0 (0 disables the reaper), got {}",
+                self.anonymous_account_ttl_days
+            ));
+        }
         // NOTIFY_CHANNEL is interpolated into a LISTEN statement, so it is
         // validated in EVERY environment (mirror Go Config.Validate, which
         // checks it outside the production block).
@@ -792,6 +816,8 @@ mod tests {
             anonymous_rate_window_secs: 60,
             allow_anonymous_signin: false,
             anonymous_jwt_ttl_secs: 3600,
+            anonymous_role: "anonymous".into(),
+            anonymous_account_ttl_days: 0,
             ws_max_per_ip: 10,
             access_token_expiry_secs: 3600,
             refresh_token_expiry_days: 30,
@@ -1155,4 +1181,10 @@ mod tests {
             c.validate()
         );
     }
+}
+
+fn errs_anon_role(errs: &mut Vec<String>, got: &str) {
+    errs.push(format!(
+        "ANONYMOUS_ROLE must be \"anonymous\" (strict; default) or \"authenticated\" (Supabase-compatible), got {got:?}"
+    ));
 }
