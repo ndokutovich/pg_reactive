@@ -24,7 +24,7 @@ const ROOT = new URL("../..", import.meta.url).pathname
 // skipped to keep noise down.
 const ROOTS = [
   "docker", "docs", "examples", "ext/sql", "ext/expected",
-  "migrations", "cli/src", "cli/templates", "proxy-go", "tests",
+  "migrations", "cli/src", "cli/templates", "proxy-go", "proxy/src", "tests",
   "sdk/src", "studio/src", "apps",
 ];
 const SKIP_SEGMENTS = new Set([
@@ -637,6 +637,67 @@ function checkOAuthEmailVerifiedGate() {
   }
 }
 
+
+// Rule SEC-R31 — INV-A: every grant/policy that names `anon` must also name
+// `anonymous` (0.3.0). The guest tier sits BETWEEN anon and authenticated:
+// anything a logged-out visitor may do, a guest may do. A `TO ... anon` that
+// forgot `anonymous` silently demotes guests below visitors — the demo blog
+// tables did exactly this on the first pass. Scope: live SQL (init.sql,
+// examples, app fixtures, cli template). Historical migrations are exempt —
+// they already ran; new migrations must comply.
+//   Override a verified-safe occurrence with `-- lint:allow=SEC-R31`.
+function checkAnonWithoutAnonymous(file, text) {
+  if (!/\.sql$/.test(file)) return;
+  const rel = relative(ROOT, file).replace(/\\/g, "/");
+  // Pre-0.3.0 migrations predate the anonymous role; only 20260902+ and every
+  // other live SQL source are held to INV-A.
+  const mig = /^migrations\/(?:[^/]+\/)*(\d{14})_/.exec(rel);
+  if (mig && mig[1] < "20260902000000") return;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/lint:allow=SEC-R31/.test(line)) continue;
+    if (/^\s*--/.test(line)) continue;
+    // Role lists live after a TO keyword: GRANT ... TO r1, r2 | CREATE/ALTER
+    // POLICY ... TO r1, r2 | FOR SELECT TO r1, r2 (policy continuation line).
+    const m = /\bTO\s+([A-Za-z_,\s]+?)(?:;|$|USING|WITH)/i.exec(line);
+    if (!m) continue;
+    const roleList = m[1];
+    if (!/\banon\b/i.test(roleList)) continue;
+    if (/\banonymous\b/i.test(roleList)) continue;
+    report(file, i + 1, "SEC-R31",
+      "grant/policy names `anon` without `anonymous` — INV-A (guest >= visitor): mirror every anon capability to the anonymous role, or lint:allow with justification");
+  }
+}
+
+// Rule SEC-R31b — the SET LOCAL ROLE whitelists in BOTH proxies must agree on
+// the canonical four roles. A role present in one proxy but not its sibling is
+// a silent trust-model fork (the 26b6af0 lesson).
+function checkRoleWhitelistSync(allFiles) {
+  const CANON = ["anon", "anonymous", "authenticated", "service_role"];
+  const SITES = [
+    "proxy-go/rest/rest.go",
+    "proxy-go/middleware/rls.go",
+    "proxy-go/functions/functions.go",
+    "proxy/src/middleware/rls.rs",
+  ];
+  for (const relPath of SITES) {
+    const f = allFiles.find((x) => relative(ROOT, x).replace(/\\/g, "/") === relPath);
+    if (!f) { report(relPath, 1, "SEC-R31b", "role-whitelist file not found by the lint walk"); continue; }
+    const text = readFileSync(f, "utf-8");
+    const found = new Set();
+    const re = /"(anon|anonymous|authenticated|service_role)"[^\n]*SET LOCAL ROLE/g;
+    let m;
+    while ((m = re.exec(text)) !== null) found.add(m[1]);
+    if (/_\s*=>\s*"SET LOCAL ROLE anon"/.test(text)) found.add("anon");
+    const missing = CANON.filter((r) => !found.has(r));
+    if (missing.length > 0) {
+      report(f, 1, "SEC-R31b",
+        `role whitelist is missing [${missing.join(", ")}] — both proxies must carry the same four roles (anon, anonymous, authenticated, service_role)`);
+    }
+  }
+}
+
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -660,7 +721,10 @@ function runAll() {
     checkProxyAudienceSource(f, text);
     checkDeltaReauth(f, text);
     checkProxyRoleGrantOptions(f, text);
+    checkAnonWithoutAnonymous(f, text);
   }
+
+  checkRoleWhitelistSync(files);
 
   if (findings.length === 0) {
     console.log("OK — no unsafe patterns found.");

@@ -47,10 +47,10 @@ ALTER TABLE tut_orders    ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tut_products_public_read  ON tut_products;
 DROP POLICY IF EXISTS tut_customers_public_read ON tut_customers;
 DROP POLICY IF EXISTS tut_orders_public_read    ON tut_orders;
-CREATE POLICY tut_products_public_read  ON tut_products  FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY tut_customers_public_read ON tut_customers FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY tut_orders_public_read    ON tut_orders    FOR SELECT TO anon, authenticated USING (true);
-GRANT SELECT ON tut_products, tut_customers, tut_orders TO anon, authenticated;
+CREATE POLICY tut_products_public_read  ON tut_products  FOR SELECT TO anon, authenticated, anonymous USING (true);
+CREATE POLICY tut_customers_public_read ON tut_customers FOR SELECT TO anon, authenticated, anonymous USING (true);
+CREATE POLICY tut_orders_public_read    ON tut_orders    FOR SELECT TO anon, authenticated, anonymous USING (true);
+GRANT SELECT ON tut_products, tut_customers, tut_orders TO anon, authenticated, anonymous;
 
 -- Clean slate (idempotent: TRUNCATE tut_products CASCADE wipes tut_orders too;
 -- a separate TRUNCATE customers is needed because no FK links it to products)

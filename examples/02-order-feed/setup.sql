@@ -35,9 +35,9 @@ ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders    ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS customers_public_read ON customers;
 DROP POLICY IF EXISTS orders_public_read    ON orders;
-CREATE POLICY customers_public_read ON customers FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY orders_public_read    ON orders    FOR SELECT TO anon, authenticated USING (true);
-GRANT SELECT ON customers, orders TO anon, authenticated;
+CREATE POLICY customers_public_read ON customers FOR SELECT TO anon, authenticated, anonymous USING (true);
+CREATE POLICY orders_public_read    ON orders    FOR SELECT TO anon, authenticated, anonymous USING (true);
+GRANT SELECT ON customers, orders TO anon, authenticated, anonymous;
 
 -- Clean slate. TRUNCATE customers RESTART IDENTITY CASCADE wipes both
 -- customers AND orders (via FK cascade) and resets the SERIALs so the

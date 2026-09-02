@@ -321,7 +321,7 @@ jobs:
       # the "no token at all" path, which is the trivial reject.
       - name: Bring up stack (REQUIRE_AUTHENTICATED_WS=true)
         run: |
-          REQUIRE_AUTHENTICATED_WS=true docker compose up -d --build
+          REQUIRE_AUTHENTICATED_WS=true ALLOW_ANONYMOUS_SIGNIN=true docker compose up -d --build
           # Health-check from inside the proxy-go container — works regardless
           # of host port mapping (self-hosted runner can't see 127.0.0.1:8080
           # on the daemon host).

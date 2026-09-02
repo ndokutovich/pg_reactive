@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS products (
 -- INSERT/UPDATE via psql), never browser-anon writes — so anon never needs DML.
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS products_public_read ON products;
-CREATE POLICY products_public_read ON products FOR SELECT TO anon, authenticated USING (true);
-GRANT SELECT ON products TO anon, authenticated;
+CREATE POLICY products_public_read ON products FOR SELECT TO anon, authenticated, anonymous USING (true);
+GRANT SELECT ON products TO anon, authenticated, anonymous;
 
 -- Clean slate (idempotent: RESTART IDENTITY keeps product ids stable across re-runs;
 -- CASCADE wipes dependent FK rows in orders/inventory if those tables already exist)

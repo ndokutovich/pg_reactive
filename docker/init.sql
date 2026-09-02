@@ -570,11 +570,11 @@ DROP POLICY IF EXISTS authors_public_read  ON authors;
 DROP POLICY IF EXISTS posts_public_read     ON posts;
 DROP POLICY IF EXISTS comments_public_read  ON comments;
 
-CREATE POLICY authors_public_read  ON authors  FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY posts_public_read    ON posts    FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY comments_public_read ON comments FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY authors_public_read  ON authors  FOR SELECT TO anon, authenticated, anonymous USING (true);
+CREATE POLICY posts_public_read    ON posts    FOR SELECT TO anon, authenticated, anonymous USING (true);
+CREATE POLICY comments_public_read ON comments FOR SELECT TO anon, authenticated, anonymous USING (true);
 
-GRANT SELECT ON authors, posts, comments TO anon, authenticated;
+GRANT SELECT ON authors, posts, comments TO anon, authenticated, anonymous;
 
 -- Seed data for embedding/RPC tests
 INSERT INTO authors (name, bio) VALUES
@@ -605,10 +605,10 @@ RETURNS TABLE(total_posts bigint, published_posts bigint) AS $$
   SELECT COUNT(*)::bigint, COUNT(*) FILTER (WHERE published)::bigint FROM posts;
 $$ LANGUAGE sql;
 
-GRANT EXECUTE ON FUNCTION public.add_numbers(integer, integer) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.get_greeting(text) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.list_active_authors() TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.get_post_stats() TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.add_numbers(integer, integer) TO anon, authenticated, anonymous, service_role;
+GRANT EXECUTE ON FUNCTION public.get_greeting(text) TO anon, authenticated, anonymous, service_role;
+GRANT EXECUTE ON FUNCTION public.list_active_authors() TO anon, authenticated, anonymous, service_role;
+GRANT EXECUTE ON FUNCTION public.get_post_stats() TO anon, authenticated, anonymous, service_role;
 
 -- Edge Functions registry
 -- Runtimes:

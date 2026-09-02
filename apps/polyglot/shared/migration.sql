@@ -107,10 +107,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.engine_stats    TO polyglot_engin
 GRANT USAGE, SELECT ON SEQUENCE public.order_events_id_seq     TO polyglot_engine;
 GRANT USAGE, SELECT ON SEQUENCE public.engine_fills_id_seq     TO polyglot_engine;
 
-GRANT SELECT ON public.order_events  TO authenticated, anon;
-GRANT SELECT ON public.engine_fills  TO authenticated, anon;
-GRANT SELECT ON public.engine_book   TO authenticated, anon;
-GRANT SELECT ON public.engine_stats  TO authenticated, anon;
+GRANT SELECT ON public.order_events  TO anon, authenticated, anonymous;
+GRANT SELECT ON public.engine_fills  TO anon, authenticated, anonymous;
+GRANT SELECT ON public.engine_book   TO anon, authenticated, anonymous;
+GRANT SELECT ON public.engine_stats  TO anon, authenticated, anonymous;
 
 -- ─── NOTIFY trigger ───────────────────────────────────────────────
 -- Engines LISTEN on 'order_event_added'; payload is the new id. They
@@ -211,7 +211,7 @@ END;
 $fn$;
 
 REVOKE EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) FROM PUBLIC;
-GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) TO authenticated, anon;
+GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) TO anon, authenticated, anonymous;
 -- anon = the guest-JWT path used by signInAnonymously — without this the
 -- "Send order" button on the public dashboard returns "insufficient
 -- privileges" because the proxy runs the RPC under the JWT's role and

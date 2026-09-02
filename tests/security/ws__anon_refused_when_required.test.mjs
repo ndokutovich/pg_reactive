@@ -66,9 +66,9 @@ function cleanup() {
   } catch { /* best effort */ }
 }
 
-function probe() {
+function probe(query = `apikey=${encodeURIComponent(ANON_KEY)}`) {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`${WS_URL}/ws/${QID}?apikey=${encodeURIComponent(ANON_KEY)}`);
+    const ws = new WebSocket(`${WS_URL}/ws/${QID}?${query}`);
     let settled = false;
     const done = (outcome) => {
       if (settled) return;
@@ -113,6 +113,29 @@ async function main() {
         console.error(`✗ REQUIRE_AUTHENTICATED_WS unset but anon-key WS upgrade was REFUSED (${out.reason})`);
         console.error("  either the anon-key path is broken OR REQUIRE_AUTHENTICATED_WS is actually enabled here.");
         code = 1;
+      }
+    }
+    // 0.3.0 D6: a GUEST (role=anonymous) is not the anon key — the token is
+    // signed, expiring, attributable to a row — and must PASS the gate even
+    // when REQUIRE_AUTHENTICATED_WS=true. Only runs when the stack has guest
+    // signin enabled (CI does); the gate-off half is covered above.
+    const PROXY = (process.env.PROXY_URL ?? "http://127.0.0.1:8080");
+    const GUESTS = (process.env.ALLOW_ANONYMOUS_SIGNIN ?? "").toLowerCase() === "true";
+    if (REQUIRE && GUESTS) {
+      const r = await fetch(`${PROXY}/auth/v1/anonymous`, { method: "POST" });
+      if (r.status !== 200) {
+        console.error(`✗ guest signin unavailable (${r.status}) though ALLOW_ANONYMOUS_SIGNIN=true`);
+        code = 1;
+      } else {
+        const { access_token, user } = await r.json();
+        const out2 = await probe(`token=${encodeURIComponent(access_token)}`);
+        if (!out2.refused) {
+          console.log("✓ role=anonymous guest PASSES the gate (signed, expiring, attributable — D6)");
+        } else {
+          console.error(`✗ guest WS upgrade refused (${out2.reason}) — role=anonymous must pass REQUIRE_AUTHENTICATED_WS`);
+          code = 1;
+        }
+        try { psql(`DELETE FROM pgstack.users WHERE id = '${user.id}';`); } catch {}
       }
     }
   } finally {

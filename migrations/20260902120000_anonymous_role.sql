@@ -81,6 +81,35 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- 5. Shipped blog demo fixtures + demo RPC functions (INV-A mirrors; only
+--    when present).
+DO $$ BEGIN
+  IF to_regclass('public.authors') IS NOT NULL THEN
+    GRANT SELECT ON public.authors, public.posts, public.comments TO anonymous;
+    IF EXISTS (SELECT FROM pg_policies WHERE schemaname='public' AND tablename='authors' AND policyname='authors_public_read') THEN
+      ALTER POLICY authors_public_read ON public.authors TO anon, authenticated, anonymous;
+    END IF;
+    IF EXISTS (SELECT FROM pg_policies WHERE schemaname='public' AND tablename='posts' AND policyname='posts_public_read') THEN
+      ALTER POLICY posts_public_read ON public.posts TO anon, authenticated, anonymous;
+    END IF;
+    IF EXISTS (SELECT FROM pg_policies WHERE schemaname='public' AND tablename='comments' AND policyname='comments_public_read') THEN
+      ALTER POLICY comments_public_read ON public.comments TO anon, authenticated, anonymous;
+    END IF;
+  END IF;
+  IF to_regprocedure('public.add_numbers(integer, integer)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.add_numbers(integer, integer) TO anonymous;
+  END IF;
+  IF to_regprocedure('public.get_greeting(text)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.get_greeting(text) TO anonymous;
+  END IF;
+  IF to_regprocedure('public.list_active_authors()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.list_active_authors() TO anonymous;
+  END IF;
+  IF to_regprocedure('public.get_post_stats()') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.get_post_stats() TO anonymous;
+  END IF;
+END $$;
+
 -- migrate:down
 -- Deliberately empty: dropping a role that live JWTs still name would strand
 -- sessions mid-flight. Roll back by redeploying a pre-0.3.0 proxy (it never

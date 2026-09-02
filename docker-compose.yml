@@ -75,6 +75,10 @@ services:
       # REQUIRE_EMAIL_VERIFICATION=true also requires SMTP_* (the proxy refuses to
       # boot otherwise); the test passes dummy values and injects tokens directly.
       REQUIRE_EMAIL_VERIFICATION: ${REQUIRE_EMAIL_VERIFICATION:-}
+      # Propagated so the anonymous-identity security tests can flip guest
+      # signin on without editing compose (0.3.0; mirrors the pattern above).
+      ALLOW_ANONYMOUS_SIGNIN: ${ALLOW_ANONYMOUS_SIGNIN:-}
+      ANONYMOUS_ROLE: ${ANONYMOUS_ROLE:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
@@ -132,6 +136,10 @@ services:
       RUST_LOG: pgstack_proxy=info,tower_http=info
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-do-not-use-in-production}
       ANON_KEY: ${ANON_KEY:-dev-only-anon-key-do-not-use-in-production}
+      # 0.3.0 guest-signin passthroughs (parity with proxy-go above).
+      REQUIRE_AUTHENTICATED_WS: ${REQUIRE_AUTHENTICATED_WS:-}
+      ALLOW_ANONYMOUS_SIGNIN: ${ALLOW_ANONYMOUS_SIGNIN:-}
+      ANONYMOUS_ROLE: ${ANONYMOUS_ROLE:-}
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-dev-only-service-role-key-do-not-use-in-production}
       ENABLE_SQL_ENDPOINT: "true"
       # User static hosting (mirror proxy-go): serve ./public as the lowest-priority

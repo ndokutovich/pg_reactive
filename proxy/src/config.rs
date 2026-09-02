@@ -390,7 +390,12 @@ impl Config {
             .filter(|s| !s.is_empty());
         let require_authenticated_ws = bool_env("REQUIRE_AUTHENTICATED_WS", false);
         let allow_anonymous_signin = bool_env("ALLOW_ANONYMOUS_SIGNIN", false);
-        let anonymous_role = std::env::var("ANONYMOUS_ROLE").unwrap_or_else(|_| "anonymous".into());
+        // Empty string == unset (compose passthroughs pass "" when the host
+        // env is absent) — same semantics as Go's envOrDefault.
+        let anonymous_role = std::env::var("ANONYMOUS_ROLE")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "anonymous".into());
         let anonymous_account_ttl_days: i64 = std::env::var("ANONYMOUS_ACCOUNT_TTL_DAYS")
             .ok()
             .and_then(|v| v.parse().ok())
