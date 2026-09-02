@@ -71,11 +71,29 @@ describe('session persistence', () => {
     expect(typeof stored.expires_at).toBe('number');
   });
 
-  it('does NOT persist an anonymous session (no refresh token)', async () => {
+  it('persists a GUEST session — 0.3.0 guests carry refresh tokens', async () => {
     const storage = memStorage();
     const auth = new PgStackAuth('http://x', 'anon', { storage, detectSessionInUrl: false });
     fetchMock.mockReturnValue(
-      mockResponse(200, session({ refresh_token: '', user: { ...session().user, is_anonymous: true } })),
+      mockResponse(200, session({
+        refresh_token: 'guest-rt',
+        user: { ...session().user, role: 'anonymous', is_anonymous: true },
+      })),
+    );
+
+    await auth.signInAnonymously();
+
+    // A guest is a real account: closing the tab must not destroy it.
+    const stored = JSON.parse(storage._map.get(KEY)!);
+    expect(stored.session.refresh_token).toBe('guest-rt');
+    expect(stored.session.user.is_anonymous).toBe(true);
+  });
+
+  it('still skips persisting any session WITHOUT a refresh token', async () => {
+    const storage = memStorage();
+    const auth = new PgStackAuth('http://x', 'anon', { storage, detectSessionInUrl: false });
+    fetchMock.mockReturnValue(
+      mockResponse(200, session({ refresh_token: '' })),
     );
 
     await auth.signInAnonymously();

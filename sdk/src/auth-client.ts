@@ -17,7 +17,11 @@ export interface AuthUser {
   user_metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
-  /** True when issued by signInAnonymously(); no email, no refresh token. */
+  /**
+   * True for guest sessions from signInAnonymously() (0.3.0: guests are real
+   * accounts — synthetic .invalid email, refresh token present, JWT carries
+   * is_anonymous:true and role=anonymous unless ANONYMOUS_ROLE=authenticated).
+   */
   is_anonymous?: boolean;
 }
 
@@ -293,10 +297,12 @@ export class PgStackAuth {
   }
 
   /**
-   * Sign in anonymously — mints a short-lived role=anon JWT with a random
-   * sub, no DB row, no refresh token. Lets public-read demo pages satisfy
-   * the proxy's REQUIRE_AUTHENTICATED_WS gate without embedding the raw
-   * anon-key as a fake credential.
+   * Sign in anonymously — creates a REAL guest account (0.3.0): a row in
+   * pgstack.users with a stable id, an access token carrying
+   * is_anonymous:true (role=anonymous by default), and a refresh token, so
+   * the guest survives closing the tab (the session persists like any
+   * other). Attach a permanent identity later with upgradeToEmail() — the id
+   * and all auth.uid()-keyed data survive the upgrade.
    *
    * The server must run with ALLOW_ANONYMOUS_SIGNIN=true; otherwise this
    * resolves to { data: null, error: { status: 503 } }.
@@ -390,6 +396,24 @@ export class PgStackAuth {
     return { data: { user }, error: null };
   }
 
+  /**
+   * Upgrade a guest (anonymous) session to a permanent email+password
+   * account (0.3.0). The user id — and every auth.uid()-keyed row — is
+   * retained. With email verification enabled the flip completes on
+   * confirm; without it, this call itself completes it. Setting the
+   * password revokes guest-era refresh tokens server-side, so call
+   * signInWithPassword() (or rely on the fresh session from the next
+   * refresh) afterwards.
+   *
+   * Thin wrapper over updateUser() — named so the intent is searchable.
+   */
+  async upgradeToEmail(
+    email: string,
+    password: string,
+  ): Promise<{ data: { user: AuthUser } | null; error: AuthError | null }> {
+    return this.updateUser({ email, password });
+  }
+
   /** Refresh the current session. */
   async refreshSession(): Promise<{
     data: { session: AuthSession } | null;
@@ -446,9 +470,10 @@ export class PgStackAuth {
     this.session = session;
     this.emit(event, session);
     this.scheduleRefresh();
-    // Persist only sessions that can outlive their access token. Anonymous
-    // JWTs carry no refresh token — persisting them would restore a dead
-    // session at best.
+    // Persist only sessions that can outlive their access token — i.e. those
+    // carrying a refresh token. Since 0.3.0 guest sessions carry one too and
+    // therefore persist: a guest keeps progress across reloads, which is the
+    // point of anonymous signin being a real account.
     if (session.refresh_token) {
       this.writePersisted(session);
     }
