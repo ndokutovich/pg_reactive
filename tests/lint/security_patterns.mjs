@@ -16,8 +16,15 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
+// Strip the URL-pathname's leading slash ONLY for Windows drive paths
+// ("/W:/repo" -> "W:/repo"). On POSIX the leading slash IS the absolute
+// root — stripping it unconditionally (as this did until 0.3.0) turned
+// ROOT into a broken relative path on Linux, walk() then scanned ZERO
+// files, and the whole lint was a silent no-op in CI ("OK" over an empty
+// set). SEC-R31b's fail-closed missing-file report is what exposed it;
+// the runAll() positive control below keeps it from ever recurring.
 const ROOT = new URL("../..", import.meta.url).pathname
-  .replace(/^\//, "")
+  .replace(/^\/([A-Za-z]:)/, "$1")
   .replace(/\/$/, "");
 
 // Sources we walk. cli/dist, node_modules, build, vendored deps are
@@ -705,6 +712,17 @@ function runAll() {
   const files = [];
   for (const r of ROOTS) {
     walk(join(ROOT, r), files);
+  }
+  // Positive control (the instrument must prove it can see): an empty or
+  // implausibly small walk means ROOT resolution broke — "OK" over zero
+  // files is a lie, not a pass. The repo has thousands of walkable files;
+  // 100 is far below any legitimate state.
+  if (files.length < 100) {
+    console.error(
+      `LINT HARNESS ERROR: walk() found only ${files.length} file(s) under ROOT=${ROOT} — ` +
+      "path resolution is broken (this exact failure hid every rule on Linux until 0.3.0). Refusing to report OK.",
+    );
+    process.exit(2);
   }
   checkExtSDRevoke();
   checkProxyNotSuperuser();
