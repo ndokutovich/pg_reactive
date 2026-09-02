@@ -23,8 +23,11 @@ if (!existsSync(join(_testDir, 'node_modules', 'ws'))) {
 }
 const { default: WebSocket } = await import('ws');
 
-const PROXY_HOST = process.env.PROXY_HOST ?? '127.0.0.1';
-const PROXY_PORT = Number(process.env.PROXY_PORT ?? 8080);
+// E2E_-prefixed on purpose: the self-hosted runners carry per-runner
+// PROXY_PORT/PG_PORT in their container env (compose port de-confliction) —
+// un-namespaced overrides would leak those into the test (0.3.0 lesson).
+const PROXY_HOST = process.env.E2E_PROXY_HOST ?? '127.0.0.1';
+const PROXY_PORT = Number(process.env.E2E_PROXY_PORT ?? 8080);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-jwt-secret-do-not-use-in-production';
 
 /**

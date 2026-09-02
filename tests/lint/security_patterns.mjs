@@ -682,7 +682,10 @@ function checkRoleWhitelistSync(allFiles) {
     "proxy/src/middleware/rls.rs",
   ];
   for (const relPath of SITES) {
-    const f = allFiles.find((x) => relative(ROOT, x).replace(/\\/g, "/") === relPath);
+    // Suffix match, not relative(): ROOT's leading-slash strip makes
+    // relative() emit ../.. on Linux while the same code worked on Windows —
+    // match the normalized path tail instead (platform-independent).
+    const f = allFiles.find((x) => x.replace(/\\/g, "/").endsWith("/" + relPath));
     if (!f) { report(relPath, 1, "SEC-R31b", "role-whitelist file not found by the lint walk"); continue; }
     const text = readFileSync(f, "utf-8");
     const found = new Set();

@@ -110,15 +110,14 @@ async fn main() {
         }
         // Half-applied-migration probe (umbrella finding, 2026-09-03; mirrors Go):
         // role exists but holds no grants -> warn, do not boot-fail.
-        match sqlx::query_scalar::<_, bool>(
+        if let Ok(false) = sqlx::query_scalar::<_, bool>(
             "SELECT CASE WHEN to_regnamespace('pgstack') IS NULL THEN true
                     ELSE has_schema_privilege('anonymous', 'pgstack', 'USAGE') END",
         )
         .fetch_one(&state.admin_pool)
         .await
         {
-            Ok(false) => warn!("role `anonymous` exists but lacks USAGE on schema pgstack — the 0.3.0 migration looks HALF-APPLIED; re-run migrations/20260902120000_anonymous_role.sql (it is idempotent)"),
-            _ => {}
+            warn!("role `anonymous` exists but lacks USAGE on schema pgstack — the 0.3.0 migration looks HALF-APPLIED; re-run migrations/20260902120000_anonymous_role.sql (it is idempotent)");
         }
     }
     if config.anonymous_account_ttl_days > 0 {

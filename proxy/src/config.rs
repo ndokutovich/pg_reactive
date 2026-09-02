@@ -784,6 +784,12 @@ impl fmt::Debug for Config {
     }
 }
 
+fn errs_anon_role(errs: &mut Vec<String>, got: &str) {
+    errs.push(format!(
+        "ANONYMOUS_ROLE must be \"anonymous\" (strict; default) or \"authenticated\" (Supabase-compatible), got {got:?}"
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1186,10 +1192,4 @@ mod tests {
             c.validate()
         );
     }
-}
-
-fn errs_anon_role(errs: &mut Vec<String>, got: &str) {
-    errs.push(format!(
-        "ANONYMOUS_ROLE must be \"anonymous\" (strict; default) or \"authenticated\" (Supabase-compatible), got {got:?}"
-    ));
 }
