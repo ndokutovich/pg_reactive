@@ -401,7 +401,10 @@ jobs:
           ALLOW_ANONYMOUS_SIGNIN: "true"
         run: |
           set -e
-          timeout 120 bash -c 'until docker compose exec -T proxy curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
+          # The Rust runtime image is distroless-ish (no curl/wget) — probe
+          # from the RUNNER over the compose network it joined at bring-up,
+          # exactly how the tests below will connect.
+          timeout 180 bash -c 'until curl -sf http://proxy:8080/health >/dev/null 2>&1; do sleep 2; done'
           node tests/security/auth__anonymous_role_isolation.test.mjs
           node tests/security/auth__anonymous_upgrade.test.mjs
           node tests/security/ws__anon_refused_when_required.test.mjs
