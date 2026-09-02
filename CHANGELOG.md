@@ -5,7 +5,7 @@ All notable changes to pg_reactive / pgStack are tracked here. Format follows
 semantic versioning per component (the PostgreSQL extension version is
 declared in `ext/pg_reactive.control`).
 
-## [Unreleased]
+## [0.3.0] — 2026-09-03
 
 ### Changed — BREAKING (only for `ALLOW_ANONYMOUS_SIGNIN=true` deployments)
 - **Anonymous identity 0.3.0** (`docs/plans/anonymous-identity-0.3.md`): a
