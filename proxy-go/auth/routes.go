@@ -64,15 +64,15 @@ func consumeEmailToken(ctx context.Context, q interface {
 // generateTokenPair mints a JWT access token and an opaque refresh token,
 // persists the refresh token in pgstack.refresh_tokens, and returns both.
 func generateTokenPair(ctx context.Context, d *Deps, userID, email, role string) (access, refresh string, err error) {
-	return generateTokenPairTTL(ctx, d, userID, email, role, d.AccessTokenExpirySecs)
+	return generateTokenPairTTL(ctx, d, userID, email, role, d.AccessTokenExpirySecs, nil)
 }
 
-// generateTokenPairTTL is generateTokenPair with the access-token lifetime named
-// explicitly. Anonymous signin has its own (AnonymousJWTTTLSecs) and would
-// otherwise have to choose between honouring that setting and having a refresh
-// token at all.
-func generateTokenPairTTL(ctx context.Context, d *Deps, userID, email, role string, accessTTLSecs int) (access, refresh string, err error) {
-	access, err = GenerateToken(userID, role, email, d.JWTSecret, accessTTLSecs)
+// generateTokenPairTTL is generateTokenPair with the access-token lifetime and
+// extra claims named explicitly. Anonymous signin has its own TTL
+// (AnonymousJWTTTLSecs) and carries is_anonymous; it would otherwise have to
+// choose between honouring those and having a refresh token at all.
+func generateTokenPairTTL(ctx context.Context, d *Deps, userID, email, role string, accessTTLSecs int, extra map[string]any) (access, refresh string, err error) {
+	access, err = GenerateTokenExtra(userID, role, email, d.JWTSecret, accessTTLSecs, extra)
 	if err != nil {
 		return "", "", fmt.Errorf("generate access token: %w", err)
 	}
@@ -421,7 +421,19 @@ func handleRefreshGrant(w http.ResponseWriter, r *http.Request, ctx context.Cont
 		return
 	}
 
-	access, err := GenerateToken(userID, user.Role, user.Email, d.JWTSecret, d.AccessTokenExpirySecs)
+	// INV-B: is_anonymous is derived from the row at every mint site. A guest
+	// keeps the claim (and the guest TTL, D7) across rotation; an upgraded
+	// account loses both on its next refresh because the row flipped.
+	ttl := d.AccessTokenExpirySecs
+	var extra map[string]any
+	if user.IsAnonymous {
+		extra = map[string]any{"is_anonymous": true}
+		ttl = d.AnonymousJWTTTLSecs
+		if ttl <= 0 {
+			ttl = 3600
+		}
+	}
+	access, err := GenerateTokenExtra(userID, user.Role, user.Email, d.JWTSecret, ttl, extra)
 	if err != nil {
 		log.Error().Err(err).Msg("generate access token for refresh grant")
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -431,7 +443,7 @@ func handleRefreshGrant(w http.ResponseWriter, r *http.Request, ctx context.Cont
 	writeJSON(w, http.StatusOK, AuthResponse{
 		AccessToken:  access,
 		TokenType:    "bearer",
-		ExpiresIn:    d.AccessTokenExpirySecs,
+		ExpiresIn:    ttl,
 		RefreshToken: newRefresh,
 		User:         *user,
 	})
@@ -518,8 +530,17 @@ func UpdateUser(d *Deps) http.HandlerFunc {
 					UPDATE pgstack.users SET email = $1, email_confirmed_at = NULL, updated_at = now() WHERE id = $2
 				`, newEmail, claims.Sub)
 			} else {
+				// No verification required → the address change IS the upgrade
+				// for a guest row (0.3.0): flip role/provider here, since no
+				// confirm step will run. Non-guest rows: CASEs are no-ops.
 				_, err = tx.Exec(ctx, `
-					UPDATE pgstack.users SET email = $1, updated_at = now() WHERE id = $2
+					UPDATE pgstack.users
+					SET email      = $1,
+					    role       = CASE WHEN role = 'anonymous' THEN 'authenticated' ELSE role END,
+					    provider   = CASE WHEN providers = ARRAY['anonymous'] THEN 'email' ELSE provider END,
+					    providers  = CASE WHEN providers = ARRAY['anonymous'] THEN ARRAY['anonymous','email'] ELSE providers END,
+					    updated_at = now()
+					WHERE id = $2
 				`, newEmail, claims.Sub)
 			}
 			if err != nil {
@@ -896,7 +917,12 @@ func MagiclinkVerify(d *Deps) http.HandlerFunc {
 
 		_, err = tx.Exec(ctx, `
 			UPDATE pgstack.users
-			SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
+			-- Guest upgrade (0.3.0) — same flip as VerifyEmail; see there.
+			SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
+			    role       = CASE WHEN role = 'anonymous' THEN 'authenticated' ELSE role END,
+			    provider   = CASE WHEN providers = ARRAY['anonymous'] THEN 'email' ELSE provider END,
+			    providers  = CASE WHEN providers = ARRAY['anonymous'] THEN ARRAY['anonymous','email'] ELSE providers END,
+			    updated_at = now()
 			WHERE id = $1
 		`, userID)
 		if err != nil {
@@ -977,7 +1003,15 @@ func VerifyEmail(d *Deps) http.HandlerFunc {
 		}
 		ct, err := tx.Exec(ctx, `
 			UPDATE pgstack.users
-			SET email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
+			-- Guest upgrade (0.3.0): confirming a real address on a
+			-- never-upgraded guest row completes the account — the row flips
+			-- to authenticated/email and is_anonymous derives to false on the
+			-- next mint (INV-B). Non-guest rows are untouched by the CASEs.
+			SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
+			    role       = CASE WHEN role = 'anonymous' THEN 'authenticated' ELSE role END,
+			    provider   = CASE WHEN providers = ARRAY['anonymous'] THEN 'email' ELSE provider END,
+			    providers  = CASE WHEN providers = ARRAY['anonymous'] THEN ARRAY['anonymous','email'] ELSE providers END,
+			    updated_at = now()
 			WHERE id = $1 AND email = $2
 		`, userID, *tokenEmail)
 		if err != nil {
@@ -1208,18 +1242,23 @@ func fetchUserByID(ctx context.Context, pool *pgxpool.Pool, userID string) (*Use
 	var u UserResponse
 	var userMeta, appMeta []byte
 
+	var providers []string
 	err := pool.QueryRow(ctx, `
 		SELECT id, email, role,
 		       COALESCE(raw_user_meta, '{}')::jsonb,
 		       COALESCE(raw_app_meta, '{}')::jsonb,
-		       created_at, updated_at, email_confirmed_at, provider
+		       created_at, updated_at, email_confirmed_at, provider,
+		       COALESCE(providers, '{}')
 		FROM pgstack.users
 		WHERE id = $1
 	`, userID).Scan(&u.ID, &u.Email, &u.Role, &userMeta, &appMeta,
-		&u.CreatedAt, &u.UpdatedAt, &u.EmailConfirmedAt, &u.Provider)
+		&u.CreatedAt, &u.UpdatedAt, &u.EmailConfirmedAt, &u.Provider, &providers)
 	if err != nil {
 		return nil, err
 	}
+	// A guest is a never-upgraded anonymous account: the moment any real
+	// provider is attached, providers grows and this turns false (INV-B).
+	u.IsAnonymous = len(providers) == 1 && providers[0] == "anonymous"
 
 	u.UserMetadata = json.RawMessage(userMeta)
 	u.AppMetadata = json.RawMessage(appMeta)

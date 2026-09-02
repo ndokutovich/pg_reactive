@@ -107,8 +107,11 @@ func WSHandler(
 			}
 
 			// REQUIRE_AUTHENTICATED_WS: anon-key holders cannot subscribe — only
-			// real JWTs (authenticated or service_role). Closes the "anon key +
-			// guessable query_id = read-anyone's-live-query" vector.
+			// real JWTs. Closes the "anon key + guessable query_id =
+			// read-anyone's-live-query" vector. role=anonymous guests PASS this
+			// gate by design (0.3.0 D6): their token is signed, expiring, and
+			// attributable to a row — which is the entire reason /auth/v1/anonymous
+			// exists. Only the raw anon KEY (no identity at all) is refused.
 			if isAnon && requireAuthenticated {
 				writeWSError(w, http.StatusUnauthorized, "authenticated subscription required")
 				return

@@ -235,6 +235,7 @@ func RLSTransaction(ctx context.Context, pool *pgxpool.Pool, claims RequestClaim
 	// SET LOCAL ROLE — only whitelisted roles are permitted (SQL injection prevention).
 	roleSQLMap := map[string]string{
 		"authenticated": "SET LOCAL ROLE authenticated",
+		"anonymous":     "SET LOCAL ROLE anonymous", // guests (0.3.0) — INV-A tier between anon and authenticated
 		"service_role":  "SET LOCAL ROLE service_role",
 		"anon":          "SET LOCAL ROLE anon",
 	}

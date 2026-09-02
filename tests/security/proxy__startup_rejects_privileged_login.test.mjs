@@ -64,30 +64,30 @@ function setup() {
     -- member of a dangerous predefined role (pg_execute_server_program → COPY TO PROGRAM)
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r7_execprog') THEN
       CREATE ROLE r7_execprog LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
-      GRANT anon, authenticated TO r7_execprog; GRANT pg_execute_server_program TO r7_execprog;
+      GRANT anon, authenticated, anonymous TO r7_execprog; GRANT pg_execute_server_program TO r7_execprog;
     END IF;
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r7_inherit') THEN
       CREATE ROLE r7_inherit LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
-      GRANT anon, authenticated TO r7_inherit;
+      GRANT anon, authenticated, anonymous TO r7_inherit;
     END IF;
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r7_bypass') THEN
       CREATE ROLE r7_bypass LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS;
-      GRANT anon, authenticated TO r7_bypass;
+      GRANT anon, authenticated, anonymous TO r7_bypass;
     END IF;
     -- REPLICATION + CREATEROLE + CREATEDB, but NOT superuser
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r7_attrs') THEN
       CREATE ROLE r7_attrs LOGIN NOINHERIT NOSUPERUSER REPLICATION CREATEROLE CREATEDB;
-      GRANT anon, authenticated TO r7_attrs;
+      GRANT anon, authenticated, anonymous TO r7_attrs;
     END IF;
     -- a direct ACL grant (no inherited privilege; applies after RESET ROLE)
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r7_acl') THEN
       CREATE ROLE r7_acl LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
-      GRANT anon, authenticated TO r7_acl; GRANT SELECT ON pgstack.users TO r7_acl;
+      GRANT anon, authenticated, anonymous TO r7_acl; GRANT SELECT ON pgstack.users TO r7_acl;
     END IF;
     -- owns an object
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r7_owner') THEN
       CREATE ROLE r7_owner LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
-      GRANT anon, authenticated TO r7_owner;
+      GRANT anon, authenticated, anonymous TO r7_owner;
       CREATE TABLE IF NOT EXISTS public.r7_owned(id int);
       ALTER TABLE public.r7_owned OWNER TO r7_owner;
     END IF;
@@ -97,23 +97,30 @@ function setup() {
     END IF;
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r7_trans') THEN
       CREATE ROLE r7_trans LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
-      GRANT anon, authenticated TO r7_trans; GRANT r7_mid TO r7_trans;
+      GRANT anon, authenticated, anonymous TO r7_trans; GRANT r7_mid TO r7_trans;
     END IF;
     -- R8: allowlisted membership, but the EDGE carries an unsafe option.
     -- WITH INHERIT TRUE → ambient authenticated privileges despite NOINHERIT (PG16).
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r8_inherit') THEN
       CREATE ROLE r8_inherit LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
-      GRANT anon TO r8_inherit; GRANT authenticated TO r8_inherit WITH INHERIT TRUE;
+      GRANT anon, anonymous TO r8_inherit; GRANT authenticated TO r8_inherit WITH INHERIT TRUE;
     END IF;
     -- WITH ADMIN OPTION → can GRANT authenticated to other roles without CREATEROLE.
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r8_admin') THEN
       CREATE ROLE r8_admin LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
-      GRANT anon TO r8_admin; GRANT authenticated TO r8_admin WITH ADMIN OPTION;
+      GRANT anon, anonymous TO r8_admin; GRANT authenticated TO r8_admin WITH ADMIN OPTION;
     END IF;
     -- WITH SET FALSE → the proxy cannot SET LOCAL ROLE authenticated (fail-closed).
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r8_setfalse') THEN
       CREATE ROLE r8_setfalse LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
-      GRANT anon TO r8_setfalse; GRANT authenticated TO r8_setfalse WITH SET FALSE;
+      GRANT anon, anonymous TO r8_setfalse; GRANT authenticated TO r8_setfalse WITH SET FALSE;
+    END IF;
+    -- 0.3.0: a data login that is NOT a member of anonymous — startup must
+    -- refuse (missing membership breaks guest requests at runtime though
+    -- boot looked healthy; same class as gemini R11-2).
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r_anon_missing') THEN
+      CREATE ROLE r_anon_missing LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
+      GRANT anon, authenticated TO r_anon_missing;
     END IF;
     -- admin plane: ADMIN OPTION on service_role = delegation / persistence path.
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='r8_admin_svc') THEN
@@ -156,6 +163,20 @@ const cases = [
   { name: "direct ACL grant (SELECT on pgstack.users)",   env: withAdmin("DATABASE_URL", dsn("r7_acl")),    re: /owns objects or holds direct ACL grants/i },
   { name: "object ownership",                             env: withAdmin("DATABASE_URL", dsn("r7_owner")),  re: /owns objects or holds direct ACL grants/i },
   { name: "SUPERUSER admin DSN",                          env: [["ADMIN_DATABASE_URL", dsn("postgres")]],   re: /admin pool.*SUPERUSER/i },
+  // 0.3.0 — the anonymous role is part of the data-plane trust boundary.
+  { name: "data login NOT a member of anonymous (pre-0.3.0 grant set)",
+    env: withAdmin("DATABASE_URL", dsn("r_anon_missing")),
+    re: /data pool.*NOT a member of required role.*anonymous/i },
+  { name: "data: reachable anonymous non-terminal (anonymous -> authenticated INHERIT TRUE)",
+    env: withAdmin("DATABASE_URL", dsn("authenticator")),
+    pre: "GRANT authenticated TO anonymous WITH INHERIT TRUE",
+    post: "REVOKE authenticated FROM anonymous",
+    re: /data pool.*TERMINAL/i },
+  { name: "anonymous role with LOGIN attribute (target-profile check)",
+    env: withAdmin("DATABASE_URL", dsn("authenticator")),
+    pre: "ALTER ROLE anonymous LOGIN",
+    post: "ALTER ROLE anonymous NOLOGIN",
+    re: /target role\(s\) have an unexpected privilege profile.*anonymous:LOGIN/i },
   // R8 — allowlisted membership, unsafe edge option.
   { name: "data edge WITH INHERIT TRUE (ambient despite NOINHERIT)", env: withAdmin("DATABASE_URL", dsn("r8_inherit")),  re: /data pool.*unsafe options.*INHERIT TRUE/i },
   { name: "data edge WITH ADMIN OPTION (can delegate authenticated)", env: withAdmin("DATABASE_URL", dsn("r8_admin")),     re: /data pool.*unsafe options.*ADMIN OPTION/i },

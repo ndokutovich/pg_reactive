@@ -39,6 +39,9 @@ type Deps struct {
 	// /auth/v1/anonymous handler returns 503 (default-deny).
 	AllowAnonymousSignin bool
 	AnonymousJWTTTLSecs  int
+	// AnonymousRole — the PG role guest rows are created with. See
+	// Config.AnonymousRole ("anonymous" strict / "authenticated" compat).
+	AnonymousRole string
 
 	Mailer                   MailerIface // optional; nil → no email sent
 	RequireEmailVerification bool

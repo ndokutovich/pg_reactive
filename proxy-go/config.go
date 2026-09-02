@@ -86,6 +86,17 @@ type Config struct {
 	// endpoint returns 503 until AllowAnonymousSignin is explicitly true.
 	AllowAnonymousSignin bool
 	AnonymousJWTTTLSecs  int
+	// AnonymousRole is the PG role guests sign in as (0.3.0). "anonymous"
+	// (strict, default): TO authenticated policies never match guests —
+	// SECURITY.md INV-A. "authenticated": Supabase-compatible flat model; the
+	// is_anonymous JWT claim is carried either way. Validated in Validate.
+	AnonymousRole string
+	// AnonymousAccountTTLDays enables the guest reaper: never-upgraded guest
+	// accounts (providers = {anonymous}) with no live refresh token and no
+	// activity for this many days are deleted. 0 (default) disables the
+	// reaper — destructive cleanup is opt-in; a boot warning marks the
+	// unbounded-growth trade-off when anonymous signin is enabled.
+	AnonymousAccountTTLDays int
 
 	// WebSocket
 	BroadcastCapacity int
@@ -285,6 +296,8 @@ func FromEnv() Config {
 	cfg.RefreshTokenExpiryDays = envIntOrDefault("REFRESH_TOKEN_EXPIRY_DAYS", 30)
 	cfg.AllowAnonymousSignin = envBoolOrDefault("ALLOW_ANONYMOUS_SIGNIN", false)
 	cfg.AnonymousJWTTTLSecs = envIntOrDefault("ANONYMOUS_JWT_TTL", 3600)
+	cfg.AnonymousRole = envOrDefault("ANONYMOUS_ROLE", "anonymous")
+	cfg.AnonymousAccountTTLDays = envIntOrDefault("ANONYMOUS_ACCOUNT_TTL_DAYS", 0)
 
 	cfg.BroadcastCapacity = envIntOrDefault("BROADCAST_CAPACITY", 1024)
 	cfg.WSMaxPerIP = envIntOrDefault("WS_MAX_PER_IP", 10)
@@ -449,6 +462,15 @@ func (c Config) Validate() []string {
 	var errs []string
 	if c.SidecarRoutesErr != nil {
 		errs = append(errs, "SIDECAR_ROUTES: "+c.SidecarRoutesErr.Error())
+	}
+	// "" = the strict default (a Config built in code without FromEnv);
+	// auth falls back to "anonymous" for the zero value too.
+	if c.AnonymousRole != "" && c.AnonymousRole != "anonymous" && c.AnonymousRole != "authenticated" {
+		errs = append(errs, fmt.Sprintf(
+			"ANONYMOUS_ROLE must be \"anonymous\" (strict; default) or \"authenticated\" (Supabase-compatible), got %q", c.AnonymousRole))
+	}
+	if c.AnonymousAccountTTLDays < 0 {
+		errs = append(errs, fmt.Sprintf("ANONYMOUS_ACCOUNT_TTL_DAYS must be >= 0 (0 disables the reaper), got %d", c.AnonymousAccountTTLDays))
 	}
 	if c.JWTSecret != "" && len(c.JWTSecret) < 32 {
 		errs = append(errs, fmt.Sprintf(

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -36,10 +37,11 @@ func TestAnonymous_GateOffReturns503(t *testing.T) {
 	}
 }
 
-// Gate-on: a guest gets a REAL account. Needs a database, because that is now
-// the point — the handler used to mint a token for a `sub` no table had ever
-// heard of, and everything that verifies a caller against pgstack.users refused
-// it. Opt in with PGSTACK_TEST_DSN pointing at a booted pgstack:
+// Gate-on: a guest gets a REAL account as the FOURTH principal (0.3.0).
+// Strict mode (default): role=anonymous, so `TO authenticated` policies never
+// match a guest (SECURITY.md INV-A). The JWT carries is_anonymous either way
+// (INV-B: derived from the row at every mint site). Needs a database — having
+// one is the point. Opt in with PGSTACK_TEST_DSN pointing at a booted pgstack:
 //
 //	PGSTACK_TEST_DSN=postgres://postgres:<pw>@127.0.0.1:5432/pgstack go test ./auth/
 func TestAnonymous_GateOnCreatesRealAccount(t *testing.T) {
@@ -54,84 +56,145 @@ func TestAnonymous_GateOnCreatesRealAccount(t *testing.T) {
 	defer pool.Close()
 
 	secret := "test-secret-32-chars-xxxxxxxxxx"
-	d := &Deps{
-		Pool:                   pool,
-		JWTSecret:              secret,
-		AllowAnonymousSignin:   true,
-		AnonymousJWTTTLSecs:    900,
-		RefreshTokenExpiryDays: 30,
-	}
 
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/auth/v1/anonymous", nil)
-	Anonymous(d).ServeHTTP(rec, r)
+	for _, tc := range []struct {
+		name     string
+		cfgRole  string // Deps.AnonymousRole ("" exercises the zero-value fallback)
+		wantRole string
+	}{
+		{"strict (default): role=anonymous", "anonymous", "anonymous"},
+		{"zero-value falls back to strict", "", "anonymous"},
+		{"compat: ANONYMOUS_ROLE=authenticated", "authenticated", "authenticated"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Deps{
+				Pool:                   pool,
+				JWTSecret:              secret,
+				AllowAnonymousSignin:   true,
+				AnonymousJWTTTLSecs:    900,
+				AnonymousRole:          tc.cfgRole,
+				RefreshTokenExpiryDays: 30,
+				AccessTokenExpirySecs:  3600,
+			}
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("gate-on status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
+			rec := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/auth/v1/anonymous", nil)
+			Anonymous(d).ServeHTTP(rec, r)
 
-	var resp AuthResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.AccessToken == "" {
-		t.Fatal("access_token is empty")
-	}
-	if resp.TokenType != "bearer" {
-		t.Errorf("token_type = %q, want bearer", resp.TokenType)
-	}
-	if resp.ExpiresIn != 900 {
-		t.Errorf("expires_in = %d, want 900 — AnonymousJWTTTLSecs still governs the access token", resp.ExpiresIn)
-	}
-	if resp.RefreshToken == "" {
-		t.Error("refresh_token is empty — a guest that cannot refresh loses the account on reload, which is the whole thing this exists to prevent")
-	}
-	if !resp.User.IsAnonymous {
-		t.Error("user.is_anonymous = false, want true")
-	}
-	if resp.User.Role != "authenticated" {
-		t.Errorf("user.role = %q, want authenticated — RLS policies are written TO authenticated", resp.User.Role)
-	}
-	if resp.User.Provider != "anonymous" {
-		t.Errorf("user.provider = %q, want anonymous", resp.User.Provider)
-	}
-	if _, err := uuid.Parse(resp.User.ID); err != nil {
-		t.Errorf("user.id = %q, want UUID: %v", resp.User.ID, err)
-	}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("gate-on status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
 
-	// The row is the point: this is what net_load_loadout and every other
-	// "is this a real user" check consults.
-	var provider, email string
-	err = pool.QueryRow(context.Background(),
-		`SELECT provider, email FROM pgstack.users WHERE id = $1`, resp.User.ID).Scan(&provider, &email)
+			var resp AuthResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			t.Cleanup(func() {
+				_, _ = pool.Exec(context.Background(), `DELETE FROM pgstack.users WHERE id = $1`, resp.User.ID)
+			})
+			if resp.AccessToken == "" {
+				t.Fatal("access_token is empty")
+			}
+			if resp.ExpiresIn != 900 {
+				t.Errorf("expires_in = %d, want 900 — AnonymousJWTTTLSecs still governs the access token", resp.ExpiresIn)
+			}
+			if resp.RefreshToken == "" {
+				t.Error("refresh_token is empty — a guest that cannot refresh loses the account on reload")
+			}
+			if !resp.User.IsAnonymous {
+				t.Error("user.is_anonymous = false, want true")
+			}
+			if resp.User.Role != tc.wantRole {
+				t.Errorf("user.role = %q, want %q", resp.User.Role, tc.wantRole)
+			}
+			if resp.User.Provider != "anonymous" {
+				t.Errorf("user.provider = %q, want anonymous", resp.User.Provider)
+			}
+			if _, err := uuid.Parse(resp.User.ID); err != nil {
+				t.Errorf("user.id = %q, want UUID: %v", resp.User.ID, err)
+			}
+
+			// The row is the point: what every "is this a real user" check consults.
+			var rowRole, provider, email string
+			err = pool.QueryRow(context.Background(),
+				`SELECT role, provider, email FROM pgstack.users WHERE id = $1`, resp.User.ID).
+				Scan(&rowRole, &provider, &email)
+			if err != nil {
+				t.Fatalf("the guest has no row in pgstack.users: %v", err)
+			}
+			if rowRole != tc.wantRole {
+				t.Errorf("row role = %q, want %q", rowRole, tc.wantRole)
+			}
+			if provider != "anonymous" {
+				t.Errorf("row provider = %q, want anonymous", provider)
+			}
+			if !strings.HasSuffix(email, anonymousEmailDomain) {
+				t.Errorf("row email = %q, want a reserved .invalid address", email)
+			}
+
+			// The minted JWT round-trips through the proxy's own validator with
+			// the same role/sub, expires, and carries is_anonymous (INV-B).
+			claims, err := ValidateToken(resp.AccessToken, secret)
+			if err != nil {
+				t.Fatalf("ValidateToken: %v", err)
+			}
+			if claims.Role != tc.wantRole {
+				t.Errorf("claim role = %q, want %q", claims.Role, tc.wantRole)
+			}
+			if claims.Sub != resp.User.ID {
+				t.Errorf("claim sub = %q, want %q", claims.Sub, resp.User.ID)
+			}
+			if claims.Exp == 0 {
+				t.Error("claim exp is zero — anonymous tokens MUST expire")
+			}
+			if !jwtPayloadHasAnonymous(t, resp.AccessToken) {
+				t.Error("access token payload lacks is_anonymous:true")
+			}
+
+			// Rotation (INV-B + D7): the refreshed access token still carries
+			// is_anonymous and still uses the guest TTL, derived from the ROW.
+			rec2 := httptest.NewRecorder()
+			body := strings.NewReader(`{"grant_type":"refresh_token","refresh_token":"` + resp.RefreshToken + `"}`)
+			r2 := httptest.NewRequest(http.MethodPost, "/auth/v1/token", body)
+			Token(d).ServeHTTP(rec2, r2)
+			if rec2.Code != http.StatusOK {
+				t.Fatalf("refresh status = %d, body=%s", rec2.Code, rec2.Body.String())
+			}
+			var rot AuthResponse
+			if err := json.Unmarshal(rec2.Body.Bytes(), &rot); err != nil {
+				t.Fatalf("decode refresh response: %v", err)
+			}
+			if rot.ExpiresIn != 900 {
+				t.Errorf("refreshed expires_in = %d, want 900 — the guest TTL must survive rotation (D7)", rot.ExpiresIn)
+			}
+			if !jwtPayloadHasAnonymous(t, rot.AccessToken) {
+				t.Error("refreshed token lost is_anonymous — INV-B says it derives from the row, not the old token")
+			}
+			if !rot.User.IsAnonymous {
+				t.Error("refreshed user.is_anonymous = false, want true")
+			}
+		})
+	}
+}
+
+// jwtPayloadHasAnonymous decodes the (already signature-verified elsewhere)
+// payload segment and reports whether is_anonymous is literally true.
+func jwtPayloadHasAnonymous(t *testing.T, token string) bool {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("malformed JWT: %d segments", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		t.Fatalf("the guest has no row in pgstack.users: %v", err)
+		t.Fatalf("decode payload: %v", err)
 	}
-	if provider != "anonymous" {
-		t.Errorf("row provider = %q, want anonymous", provider)
+	var m map[string]any
+	if err := json.Unmarshal(payload, &m); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if !strings.HasSuffix(email, anonymousEmailDomain) {
-		t.Errorf("row email = %q, want a reserved .invalid address", email)
-	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM pgstack.users WHERE id = $1`, resp.User.ID)
-	})
-
-	// The minted JWT must round-trip through the proxy's own validator
-	// with the same role and sub — the WS gate will run this same check.
-	claims, err := ValidateToken(resp.AccessToken, secret)
-	if err != nil {
-		t.Fatalf("ValidateToken: %v", err)
-	}
-	if claims.Role != "authenticated" {
-		t.Errorf("claim role = %q, want authenticated", claims.Role)
-	}
-	if claims.Sub != resp.User.ID {
-		t.Errorf("claim sub = %q, want %q", claims.Sub, resp.User.ID)
-	}
-	if claims.Exp == 0 {
-		t.Error("claim exp is zero — anonymous tokens MUST expire")
-	}
+	v, ok := m["is_anonymous"].(bool)
+	return ok && v
 }
 
 // Defence-in-depth: with the gate ON but an empty JWT_SECRET, we MUST

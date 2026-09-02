@@ -336,6 +336,26 @@ jobs:
       - name: Static lint for unsafe SQL / Markdown patterns
         run: node tests/lint/security_patterns.mjs
 
+      # 0.3.0: the anonymous-signin gate-on test writes a real row and needs a
+      # database, so it self-skips without PGSTACK_TEST_DSN. Run it HERE, where
+      # the compose stack is already up — otherwise it is permanently skipped
+      # and the endpoint's row/claim/rotation behavior is untested.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25.13"
+          cache-dependency-path: proxy-go/go.sum
+
+      - name: Anonymous signin gate-on (real DB row + claim + rotation)
+        working-directory: proxy-go
+        run: |
+          DSN="postgres://postgres:postgres@127.0.0.1:15432/pg_reactive_test"
+          # Self-hosted runners cannot see published ports on the daemon host;
+          # they were joined to the compose network above — use the service name.
+          if ! (exec 3<>/dev/tcp/127.0.0.1/15432) 2>/dev/null; then
+            DSN="postgres://postgres:postgres@db:5432/pg_reactive_test"
+          fi
+          PGSTACK_TEST_DSN="$DSN" go test -count=1 -run TestAnonymous -v ./auth/
+
       - name: Run adversarial fixtures
         env:
           # Address proxy-go by its compose service name — the runner was

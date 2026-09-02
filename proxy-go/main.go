@@ -64,6 +64,12 @@ func main() {
 	} else if cfg.JWTSecret != "" && cfg.AnonKey != "" {
 		log.Warn().Msg("REQUIRE_AUTHENTICATED_WS=false — anon key can open live-query WS for any query_id; set true to require JWT")
 	}
+	if cfg.AllowAnonymousSignin {
+		log.Info().Str("role", cfg.AnonymousRole).Msg("ALLOW_ANONYMOUS_SIGNIN=true — guests sign in as real accounts (0.3.0)")
+		if cfg.AnonymousAccountTTLDays == 0 {
+			log.Warn().Msg("ANONYMOUS_ACCOUNT_TTL_DAYS=0 — stale guest accounts are never reaped; pgstack.users grows with every guest signin (rate-limited per IP, but unbounded over time)")
+		}
+	}
 	switch {
 	case len(cfg.AllowedOrigins) > 0:
 		log.Info().Strs("origins", cfg.AllowedOrigins).Msg("CORS / WS origin: restricted")
@@ -169,6 +175,10 @@ func main() {
 	if err := state.WebhookManager.Refresh(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("initial webhook load failed — webhooks will retry on next refresh")
 	}
+
+	// Guest reaper (0.3.0, opt-in): cleanupCtx cancels it on shutdown with
+	// the other background sweepers.
+	auth.StartAnonymousReaper(cleanupCtx, state.AdminPool, cfg.AnonymousAccountTTLDays)
 
 	// Kick off the dedicated PG LISTEN connection in a background goroutine.
 	go realtime.ListenLoop(
@@ -462,7 +472,7 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			}
 		}
 		if len(absent) > 0 {
-			report(fmt.Sprintf("%s required SET ROLE target role(s) do not exist [%s] — the pgStack core roles (anon/authenticated/service_role) must be bootstrapped before the proxy connects; for standalone pg_reactive WITHOUT pgStack run with PGSTACK_ENV=development (absent roles are fatal only in production) (gemini audit R12-2)", label, strings.Join(absent, ",")))
+			report(fmt.Sprintf("%s required SET ROLE target role(s) do not exist [%s] — the pgStack core roles (anon/authenticated/anonymous/service_role) must be bootstrapped before the proxy connects — a pre-0.3.0 database is missing `anonymous`: run migrations/20260902120000_anonymous_role.sql; for standalone pg_reactive WITHOUT pgStack run with PGSTACK_ENV=development (absent roles are fatal only in production) (gemini audit R12-2)", label, strings.Join(absent, ",")))
 		}
 		if len(missing) > 0 {
 			report(fmt.Sprintf("%s login role %q is NOT a member of required role(s) [%s] — it must be a member of every role it SET ROLEs into ([%s]); without it those requests fail at runtime though startup looked healthy (gemini audit R11-2)", label, su, strings.Join(missing, ","), strings.Join(allowed, ",")))
@@ -639,7 +649,7 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 			}
 		}
 		if len(targetBad) > 0 {
-			report(fmt.Sprintf("%s SET ROLE target role(s) have an unexpected privilege profile [%s] — anon/authenticated must be NOSUPERUSER NOBYPASSRLS NOLOGIN and own nothing (an owner bypasses RLS); service_role must be BYPASSRLS (admin contract) but NOSUPERUSER NOLOGIN; the proxy assumes these roles per request (gemini audit R10-1/R10-2/R11-3)", label, strings.Join(targetBad, ", ")))
+			report(fmt.Sprintf("%s SET ROLE target role(s) have an unexpected privilege profile [%s] — anon/authenticated/anonymous must be NOSUPERUSER NOBYPASSRLS NOLOGIN and own nothing (an owner bypasses RLS); service_role must be BYPASSRLS (admin contract) but NOSUPERUSER NOLOGIN; the proxy assumes these roles per request (gemini audit R10-1/R10-2/R11-3)", label, strings.Join(targetBad, ", ")))
 		}
 
 		if len(bad) == 0 && len(unexpected) == 0 && directDeps == 0 && len(unsafeEdges) == 0 && len(nonTerminal) == 0 && len(missing) == 0 && len(absent) == 0 && len(targetBad) == 0 {
@@ -649,7 +659,7 @@ func verifyPoolRoles(ctx context.Context, production bool, dataPool, adminPool *
 
 	// Data plane: member of ONLY anon + authenticated (so it cannot reach
 	// service_role / BYPASSRLS, directly or transitively).
-	checkLoginRole(dataPool, "data pool", []string{"anon", "authenticated"})
+	checkLoginRole(dataPool, "data pool", []string{"anon", "authenticated", "anonymous"})
 
 	// Admin plane: member of ONLY service_role, AND its connections actually
 	// assume it (AfterConnect SET ROLE makes current_user = service_role while
@@ -684,6 +694,7 @@ func buildRouter(state *AppState) http.Handler {
 		RefreshTokenExpiryDays:   state.Config.RefreshTokenExpiryDays,
 		AllowAnonymousSignin:     state.Config.AllowAnonymousSignin,
 		AnonymousJWTTTLSecs:      state.Config.AnonymousJWTTTLSecs,
+		AnonymousRole:            state.Config.AnonymousRole,
 		Mailer:                   state.Mailer,
 		RequireEmailVerification: state.Config.RequireEmailVerification,
 		EmailEnabled:             state.Config.EmailEnabled,

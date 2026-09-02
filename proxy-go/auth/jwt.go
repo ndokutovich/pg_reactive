@@ -28,16 +28,27 @@ type Claims struct {
 // paths surface this as 500 "internal error" — better than handing out
 // a worthless token the same attacker can replay.
 func GenerateToken(sub, role, email, secret string, expirySecs int) (string, error) {
+	return GenerateTokenExtra(sub, role, email, secret, expirySecs, nil)
+}
+
+// GenerateTokenExtra is GenerateToken with additional claims merged in.
+// Standard claims (sub/role/iat/email/exp) always win over extra — a caller
+// cannot forge or shadow them through the map. Used for is_anonymous (0.3.0):
+// the claim is DERIVED from the user row at every mint site, never copied from
+// a previous token (SECURITY.md INV-B).
+func GenerateTokenExtra(sub, role, email, secret string, expirySecs int, extra map[string]any) (string, error) {
 	if secret == "" {
 		return "", fmt.Errorf("JWT_SECRET is not configured")
 	}
 	now := time.Now().UTC()
 
-	mc := jwt.MapClaims{
-		"sub":  sub,
-		"role": role,
-		"iat":  now.Unix(),
+	mc := jwt.MapClaims{}
+	for k, v := range extra {
+		mc[k] = v
 	}
+	mc["sub"] = sub
+	mc["role"] = role
+	mc["iat"] = now.Unix()
 	if email != "" {
 		mc["email"] = email
 	}

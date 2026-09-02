@@ -277,6 +277,7 @@ func beginRLSTx(ctx context.Context, pool *pgxpool.Pool, claims *rest.RequestCla
 
 var validRoles = map[string]string{
 	"anon":          "SET LOCAL ROLE anon",
+	"anonymous":     "SET LOCAL ROLE anonymous", // guests (0.3.0) — INV-A tier between anon and authenticated
 	"authenticated": "SET LOCAL ROLE authenticated",
 	"service_role":  "SET LOCAL ROLE service_role",
 }

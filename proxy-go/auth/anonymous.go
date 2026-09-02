@@ -66,20 +66,31 @@ func Anonymous(d *Deps) http.HandlerFunc {
 		id := uuid.New().String()
 		email := "anon-" + id + anonymousEmailDomain
 
+		// 0.3.0: guests are a fourth principal. Strict mode (default) creates
+		// the row with role=anonymous, so `TO authenticated` policies never
+		// match a guest (SECURITY.md INV-A); ANONYMOUS_ROLE=authenticated is
+		// the Supabase-compatible flat model. Either way the JWT carries
+		// is_anonymous, derived from the row (INV-B).
+		guestRole := d.AnonymousRole
+		if guestRole != "anonymous" && guestRole != "authenticated" {
+			guestRole = "anonymous" // Config.Validate refuses other values; belt-and-braces
+		}
+
 		var userID, role string
 		var createdAt, updatedAt time.Time
 		row := d.Pool.QueryRow(ctx, `
 			INSERT INTO pgstack.users (id, email, role, provider, providers)
-			VALUES ($1, $2, 'authenticated', 'anonymous', ARRAY['anonymous'])
+			VALUES ($1, $2, $3, 'anonymous', ARRAY['anonymous'])
 			RETURNING id, role, created_at, updated_at
-		`, id, email)
+		`, id, email, guestRole)
 		if err := row.Scan(&userID, &role, &createdAt, &updatedAt); err != nil {
 			log.Error().Err(err).Msg("create anonymous user")
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 
-		access, refresh, err := generateTokenPairTTL(ctx, d, userID, email, role, ttl)
+		access, refresh, err := generateTokenPairTTL(ctx, d, userID, email, role, ttl,
+			map[string]any{"is_anonymous": true})
 		if err != nil {
 			log.Error().Err(err).Msg("generate token pair for anonymous signin")
 			writeError(w, http.StatusInternalServerError, "internal error")
