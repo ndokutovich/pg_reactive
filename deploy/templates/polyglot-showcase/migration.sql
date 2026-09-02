@@ -95,6 +95,10 @@ ON CONFLICT (engine) DO NOTHING;
 -- write _snap_* under the engine's identity to compute the delta. Grant
 -- the schema and a default-privilege so subscriptions registered now
 -- AND in the future are accessible.
+-- 0.3.0 explicit decision: this app is members-only — shared lists bind to
+-- durable accounts, so guests (role anonymous) are deliberately EXCLUDED:
+-- every policy/GRANT below names authenticated alone (SECURITY.md INV-A allows
+-- exactly this; the exclusion must simply be a decision, and this is it).
 GRANT USAGE ON SCHEMA pgr TO polyglot_engine;
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA pgr TO polyglot_engine;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA pgr
@@ -107,10 +111,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.engine_stats    TO polyglot_engin
 GRANT USAGE, SELECT ON SEQUENCE public.order_events_id_seq     TO polyglot_engine;
 GRANT USAGE, SELECT ON SEQUENCE public.engine_fills_id_seq     TO polyglot_engine;
 
-GRANT SELECT ON public.order_events  TO authenticated, anon;
-GRANT SELECT ON public.engine_fills  TO authenticated, anon;
-GRANT SELECT ON public.engine_book   TO authenticated, anon;
-GRANT SELECT ON public.engine_stats  TO authenticated, anon;
+GRANT SELECT ON public.order_events  TO anon, authenticated, anonymous;
+GRANT SELECT ON public.engine_fills  TO anon, authenticated, anonymous;
+GRANT SELECT ON public.engine_book   TO anon, authenticated, anonymous;
+GRANT SELECT ON public.engine_stats  TO anon, authenticated, anonymous;
 
 -- ─── NOTIFY trigger ───────────────────────────────────────────────
 -- Engines LISTEN on 'order_event_added'; payload is the new id. They
@@ -211,7 +215,7 @@ END;
 $fn$;
 
 REVOKE EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) FROM PUBLIC;
-GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) TO authenticated, anon;
+GRANT  EXECUTE ON FUNCTION public.place_order(text,text,text,numeric,numeric,bigint) TO anon, authenticated, anonymous;
 -- anon = the guest-JWT path used by signInAnonymously — without this the
 -- "Send order" button on the public dashboard returns "insufficient
 -- privileges" because the proxy runs the RPC under the JWT's role and

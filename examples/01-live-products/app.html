@@ -544,6 +544,8 @@ ws.<span class="fn">onmessage</span> = (e) =&gt; {
   // ── Boot ──
   emptyEl.style.display = 'block';
   // Mint a guest JWT (POST /auth/v1/anonymous) BEFORE opening the WS.
+  // 0.3.0: this creates a real guest account (role=anonymous + refresh token);
+  // it still passes REQUIRE_AUTHENTICATED_WS — that is the endpoint's job.
   // REQUIRE_AUTHENTICATED_WS=true rejects raw anon-key; signInAnonymously
   // populates PGR.token so config.js's monkey-patch hands the WS a real
   // signed JWT. .catch keeps the page usable in dev where the gate is off.

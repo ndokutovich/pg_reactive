@@ -65,8 +65,10 @@ These must be set for production. In development, the compose file provides inse
 | `AUTH_RATE_LIMIT` | `30` | Auth endpoint rate limit (requests per window). |
 | `AUTH_RATE_WINDOW` | `60` | Rate limit window in seconds. |
 | `REQUIRE_EMAIL_VERIFICATION` | `false` | Block login for unverified emails. Requires SMTP to be configured. |
-| `ALLOW_ANONYMOUS_SIGNIN` | `false` | Enable `POST /auth/v1/anonymous` (SDK `auth.signInAnonymously()`), which mints a short-lived `role=anon` JWT without creating a user row. Default-deny: when `false` the endpoint returns `503`. |
-| `ANONYMOUS_JWT_TTL` | `3600` | Lifetime in seconds of anonymous JWTs. No refresh token is issued — clients must re-mint before expiry. |
+| `ALLOW_ANONYMOUS_SIGNIN` | `false` | Enable `POST /auth/v1/anonymous` (SDK `auth.signInAnonymously()`). Since 0.3.0 a guest gets a **real account row** plus a refresh token; the JWT carries `is_anonymous: true`. Default-deny: when `false` the endpoint returns `503` and creates nothing. |
+| `ANONYMOUS_JWT_TTL` | `3600` | Lifetime in seconds of guest ACCESS tokens — honoured at sign-in **and on refresh rotation** (0.3.0). Guests hold a normal refresh token, so sessions persist. |
+| `ANONYMOUS_ROLE` | `anonymous` | PG role guests sign in as. `anonymous` (strict): `TO authenticated` policies never match guests — see [RLS: guests](../auth/rls#guests-and-to-authenticated). `authenticated`: Supabase-compatible flat model (the `is_anonymous` claim is then the only distinction). Any other value refuses boot. |
+| `ANONYMOUS_ACCOUNT_TTL_DAYS` | `0` | Opt-in guest reaper: never-upgraded guest accounts (`providers = {anonymous}`) with no live refresh token and no activity for this many days are deleted. `0` disables (a boot warning notes the unbounded growth). Mind your FK `ON DELETE` behaviour before enabling. |
 | `ANONYMOUS_RATE_LIMIT` | `300` | Per-IP rate limit for `/auth/v1/anonymous` (requests per window). Defaults to `10 × AUTH_RATE_LIMIT`; uses a limiter separate from the other auth endpoints. |
 | `ANONYMOUS_RATE_WINDOW` | `60` | Anonymous sign-in rate limit window in seconds. |
 

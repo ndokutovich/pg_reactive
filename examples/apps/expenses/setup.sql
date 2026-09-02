@@ -33,13 +33,15 @@ DROP POLICY IF EXISTS exp_own_insert ON expenses;
 DROP POLICY IF EXISTS exp_own_update ON expenses;
 DROP POLICY IF EXISTS exp_own_delete ON expenses;
 
-CREATE POLICY exp_own_select ON expenses FOR SELECT TO authenticated USING (user_id = auth.uid());
-CREATE POLICY exp_own_insert ON expenses FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
-CREATE POLICY exp_own_update ON expenses FOR UPDATE TO authenticated USING (user_id = auth.uid());
-CREATE POLICY exp_own_delete ON expenses FOR DELETE TO authenticated USING (user_id = auth.uid());
+-- 0.3.0: guests welcome — the demo IS the guest experience; auth.uid()
+-- still isolates rows per user (guest ids are real and stable).
+CREATE POLICY exp_own_select ON expenses FOR SELECT TO authenticated, anonymous USING (user_id = auth.uid());
+CREATE POLICY exp_own_insert ON expenses FOR INSERT TO authenticated, anonymous WITH CHECK (user_id = auth.uid());
+CREATE POLICY exp_own_update ON expenses FOR UPDATE TO authenticated, anonymous USING (user_id = auth.uid());
+CREATE POLICY exp_own_delete ON expenses FOR DELETE TO authenticated, anonymous USING (user_id = auth.uid());
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON expenses TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE expenses_id_seq TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON expenses TO authenticated, anonymous;
+GRANT USAGE, SELECT ON SEQUENCE expenses_id_seq TO authenticated, anonymous;
 
 -- SECURITY DEFINER with a pinned search_path of pg_catalog + pg_temp
 -- (audit round 28 F2). Every app object is fully qualified so a
@@ -88,4 +90,4 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.subscribe_my_expenses() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.subscribe_my_expenses() TO authenticated, anonymous;

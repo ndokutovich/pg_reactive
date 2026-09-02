@@ -10,7 +10,7 @@ pg_reactive is a PostgreSQL C extension that turns SQL SELECTs into live queries
 
 [`SECURITY.md`](SECURITY.md) is the single source of truth for the project's trust boundaries. The "Trust model" section there has:
 
-- the role list (`anon` / `authenticated` / `service_role` / `admin`),
+- the role list (`anon` / `anonymous` / `authenticated` / `service_role` / `admin` — `anonymous` is the 0.3.0 guest tier, `anon ⊆ anonymous ⊂ authenticated`, invariants 30/31),
 - a capability × role matrix for every network-reachable surface, and
 - 13 cross-cutting invariants (no PUBLIC EXECUTE on functions, chi.RealIP must never be added, empty JWT_SECRET fails closed, etc).
 

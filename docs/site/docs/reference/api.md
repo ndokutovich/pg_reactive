@@ -43,7 +43,7 @@ When both `Authorization` and `apikey` headers are present, the JWT is validated
 | `POST` | `/auth/v1/signup` | None (rate-limited) | Register new user |
 | `POST` | `/auth/v1/token?grant_type=password` | None (rate-limited) | Sign in with email/password |
 | `POST` | `/auth/v1/token?grant_type=refresh_token` | None (rate-limited) | Refresh access token |
-| `POST` | `/auth/v1/anonymous` | None | Mint an anonymous (anon-role) JWT; requires `ALLOW_ANONYMOUS_SIGNIN=true`, otherwise `503`. Separate rate-limit bucket (`ANONYMOUS_RATE_LIMIT`) |
+| `POST` | `/auth/v1/anonymous` | None | Create a guest account (0.3.0): real `pgstack.users` row, access token with `role=anonymous` (`ANONYMOUS_ROLE`) + `is_anonymous:true`, **and a refresh token**. Requires `ALLOW_ANONYMOUS_SIGNIN=true`, otherwise `503`. Separate rate-limit bucket (`ANONYMOUS_RATE_LIMIT`) |
 | `GET` | `/auth/v1/user` | JWT | Get current user profile |
 | `PATCH` | `/auth/v1/user` | JWT | Update current user |
 | `POST` | `/auth/v1/logout` | JWT | Sign out, invalidate refresh token |

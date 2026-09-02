@@ -67,6 +67,10 @@ ALTER TABLE public.list_members   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.shopping_items ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS lists_select ON public.shopping_lists;
+-- 0.3.0 explicit decision: this app is members-only — shared lists bind to
+-- durable accounts, so guests (role anonymous) are deliberately EXCLUDED:
+-- every policy/GRANT below names authenticated alone (SECURITY.md INV-A allows
+-- exactly this; the exclusion must simply be a decision, and this is it).
 CREATE POLICY lists_select ON public.shopping_lists FOR SELECT TO authenticated
   USING (id IN (SELECT list_id FROM public.list_members WHERE user_id = auth.uid()));
 

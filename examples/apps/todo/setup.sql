@@ -32,13 +32,15 @@ DROP POLICY IF EXISTS todos_own_insert ON todos;
 DROP POLICY IF EXISTS todos_own_update ON todos;
 DROP POLICY IF EXISTS todos_own_delete ON todos;
 
-CREATE POLICY todos_own_select ON todos FOR SELECT TO authenticated USING (user_id = auth.uid());
-CREATE POLICY todos_own_insert ON todos FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
-CREATE POLICY todos_own_update ON todos FOR UPDATE TO authenticated USING (user_id = auth.uid());
-CREATE POLICY todos_own_delete ON todos FOR DELETE TO authenticated USING (user_id = auth.uid());
+-- 0.3.0: guests welcome — the demo IS the guest experience; auth.uid()
+-- still isolates rows per user (guest ids are real and stable).
+CREATE POLICY todos_own_select ON todos FOR SELECT TO authenticated, anonymous USING (user_id = auth.uid());
+CREATE POLICY todos_own_insert ON todos FOR INSERT TO authenticated, anonymous WITH CHECK (user_id = auth.uid());
+CREATE POLICY todos_own_update ON todos FOR UPDATE TO authenticated, anonymous USING (user_id = auth.uid());
+CREATE POLICY todos_own_delete ON todos FOR DELETE TO authenticated, anonymous USING (user_id = auth.uid());
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO authenticated, anonymous;
+GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO authenticated, anonymous;
 
 -- SECURITY DEFINER + pinned search_path (audit round 28 F2):
 -- pg_catalog + pg_temp only, every app object fully qualified
@@ -69,4 +71,4 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.subscribe_my_todos() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.subscribe_my_todos() TO authenticated, anonymous;

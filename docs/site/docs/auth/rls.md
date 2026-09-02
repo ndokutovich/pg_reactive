@@ -208,11 +208,18 @@ Use `SET LOCAL ROLE` in psql to test policies as a specific user:
 -- SET LOCAL only takes effect inside a transaction block,
 -- so wrap each test in BEGIN ... ROLLBACK.
 
--- Test as anonymous user
+-- Test as an unauthenticated visitor
 BEGIN;
 SET LOCAL ROLE anon;
 SET LOCAL request.jwt.claims = '{"role":"anon"}';
 SELECT * FROM orders; -- should return 0 rows (or public rows only)
+ROLLBACK;
+
+-- Test as a guest (anonymous sign-in, 0.3.0)
+BEGIN;
+SET LOCAL ROLE anonymous;
+SET LOCAL request.jwt.claims = '{"role":"anonymous","sub":"00000000-0000-0000-0000-000000000001","is_anonymous":true}';
+SELECT * FROM orders; -- TO authenticated policies do NOT apply here
 ROLLBACK;
 
 -- Test as authenticated user
@@ -284,3 +291,33 @@ ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Public read" ON products FOR SELECT USING (true);
 -- Only SELECT is allowed; INSERT/UPDATE/DELETE require explicit policies
 ```
+
+## Guests and `TO authenticated`
+
+Since 0.3.0, anonymous sign-in creates guests with the PG role `anonymous`
+(strict default). The trust ordering is:
+
+```
+anon  ⊆  anonymous  ⊂  authenticated
+```
+
+Consequences for policy authors:
+
+- **`TO authenticated` never matches a guest.** A policy you wrote before
+  guests existed keeps meaning what it meant. This is the safe default.
+- **Let guests in explicitly** where they belong:
+  `TO authenticated, anonymous` — per-user isolation via `auth.uid()` works
+  unchanged, because a guest has a real, stable id.
+- **Everything granted `TO anon` must also be granted `TO anonymous`**
+  (guest ≥ visitor). The repo lint `SEC-R31` enforces this for shipped SQL;
+  apply the same rule to your own migrations.
+- **Claim-based checks work too** (and are the only way in the
+  Supabase-compatible `ANONYMOUS_ROLE=authenticated` mode):
+
+```sql
+CREATE POLICY no_guests ON payments FOR INSERT TO authenticated
+  WITH CHECK (COALESCE((auth.jwt() ->> 'is_anonymous')::boolean, false) = false);
+```
+
+Upgrading a guest (attaching email+password) keeps `auth.uid()` stable — no
+data migration is ever needed when a guest becomes a member.

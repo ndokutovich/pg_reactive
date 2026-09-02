@@ -397,6 +397,10 @@ The trigger function runs as `SECURITY DEFINER` so that recompute and snapshot S
 
 `pgr.subscribe` and `pgr.unsubscribe` are revoked from `PUBLIC` by default and
 **MUST be treated as a privileged admin API**, not a per-tenant grant.
+(When granting EXECUTE on a purpose-built wrapper to app roles, remember the
+0.3.0 guest tier: `GRANT ... TO authenticated, anonymous` where guests are
+meant to subscribe — a `TO authenticated` grant alone excludes them, by
+design.)
 
 **Why:** the SQL text passed to `pgr.subscribe` is stored verbatim and later
 re-executed by the extension's trigger path. That path runs as `SECURITY

@@ -376,6 +376,9 @@ jobs:
           # proxy was started with this flag above; the test reads it
           # from its own env to decide expected pass condition.
           REQUIRE_AUTHENTICATED_WS: "true"
+          # 0.3.0: the stack above is brought up with guest signin enabled;
+          # the anonymous suites read this to run their gate-on battery.
+          ALLOW_ANONYMOUS_SIGNIN: "true"
         run: |
           set -e
           for t in tests/security/*.test.mjs; do
@@ -383,6 +386,25 @@ jobs:
             echo "=== $t ==="
             node "$t"
           done
+
+      # 0.3.0 trust-model changes must hold on BOTH proxies (CLAUDE.md). The
+      # full suite historically ran against :8081 manually at parity passes;
+      # the anonymous-identity suites are cheap enough to pin in CI forever.
+      - name: Anonymous identity fixtures against the Rust sibling
+        env:
+          PROXY_URL: http://proxy:8080
+          BASE_URL: http://proxy:8080
+          JWT_SECRET: dev-only-jwt-secret-do-not-use-in-production
+          ANON_KEY: dev-only-anon-key-do-not-use-in-production
+          SERVICE_ROLE_KEY: dev-only-service-role-key-do-not-use-in-production
+          REQUIRE_AUTHENTICATED_WS: "true"
+          ALLOW_ANONYMOUS_SIGNIN: "true"
+        run: |
+          set -e
+          timeout 120 bash -c 'until docker compose exec -T proxy curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
+          node tests/security/auth__anonymous_role_isolation.test.mjs
+          node tests/security/auth__anonymous_upgrade.test.mjs
+          node tests/security/ws__anon_refused_when_required.test.mjs
 
       - name: Run doc-SQL smoke
         run: node tests/doc_sql_smoke_test.mjs

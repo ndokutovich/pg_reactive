@@ -25,7 +25,7 @@ const ROOT = new URL("../..", import.meta.url).pathname
 const ROOTS = [
   "docker", "docs", "examples", "ext/sql", "ext/expected",
   "migrations", "cli/src", "cli/templates", "proxy-go", "proxy/src", "tests",
-  "sdk/src", "studio/src", "apps",
+  "sdk/src", "studio/src", "apps", "deploy",
 ];
 const SKIP_SEGMENTS = new Set([
   "node_modules", "build", "dist", "target", ".git", "__pycache__", ".cache",

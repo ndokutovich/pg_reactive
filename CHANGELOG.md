@@ -5,6 +5,30 @@ All notable changes to pg_reactive / pgStack are tracked here. Format follows
 semantic versioning per component (the PostgreSQL extension version is
 declared in `ext/pg_reactive.control`).
 
+## [Unreleased]
+
+### Changed — BREAKING (only for `ALLOW_ANONYMOUS_SIGNIN=true` deployments)
+- **Anonymous identity 0.3.0** (`docs/plans/anonymous-identity-0.3.md`): a
+  guest is a fourth principal. `/auth/v1/anonymous` creates a real
+  `pgstack.users` row (building on the prior real-account change) and signs
+  it in with PG role **`anonymous`** — `TO authenticated` policies no longer
+  match guests. `ANONYMOUS_ROLE=authenticated` restores the
+  Supabase-compatible flat model. The JWT carries `is_anonymous: true`,
+  derived from the row at every mint site (rotation keeps it; upgrade drops
+  it). Guest refresh honours `ANONYMOUS_JWT_TTL`. New: guest→member upgrade
+  via `PATCH /auth/v1/user` (id and `auth.uid()` data survive; guest-era
+  refresh tokens are revoked by the password set), opt-in stale-guest reaper
+  (`ANONYMOUS_ACCOUNT_TTL_DAYS`), invariants 30 (INV-A: guest ⊇ visitor,
+  guest ⊂ member) + 31 (INV-B: claim derives from the row) with lint
+  SEC-R31/R31b, an `anonymous` column across the SECURITY.md matrix, and the
+  `migrations/20260902120000_anonymous_role.sql` upgrade (the proxy refuses
+  to boot in production without it). Both proxies at parity, proven by the
+  new adversarial suites against :8080 and :8081. Operator guide:
+  `docs/site/docs/deploy/upgrade-0.3.0.md`.
+- SECURITY.md: the `SIDECAR_ROUTES` forward surface is now a documented
+  trust-matrix row (loopback-only upstream, reserved platform prefixes,
+  registered outside the strict-CSP group).
+
 ## [0.2.4] — 2026-08-31
 
 ### Security

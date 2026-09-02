@@ -23,8 +23,8 @@ if (!existsSync(join(_testDir, 'node_modules', 'ws'))) {
 }
 const { default: WebSocket } = await import('ws');
 
-const PROXY_HOST = '127.0.0.1';
-const PROXY_PORT = 8080;
+const PROXY_HOST = process.env.PROXY_HOST ?? '127.0.0.1';
+const PROXY_PORT = Number(process.env.PROXY_PORT ?? 8080);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-jwt-secret-do-not-use-in-production';
 
 /**

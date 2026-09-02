@@ -130,7 +130,7 @@ SELECT auth.jwt();
 | `GET` | `/auth/v1/user` | Get current user profile |
 | `PATCH` | `/auth/v1/user` | Update user profile |
 | `POST` | `/auth/v1/logout` | Sign out (invalidate refresh token) |
-| `POST` | `/auth/v1/anonymous` | Anonymous sign-in — mints a short-lived `role=anon` JWT (random `sub`, no DB row, no refresh token). Default-deny: returns `503` unless the proxy runs with `ALLOW_ANONYMOUS_SIGNIN=true` |
+| `POST` | `/auth/v1/anonymous` | Anonymous sign-in — creates a **real guest account** (row in `pgstack.users`, `provider='anonymous'`, synthetic `.invalid` address) and returns an access token carrying `is_anonymous: true` **plus a refresh token**, so the guest survives closing the tab. The PG role is `anonymous` by default (`ANONYMOUS_ROLE=authenticated` for the Supabase-compatible flat model). Default-deny: returns `503` unless the proxy runs with `ALLOW_ANONYMOUS_SIGNIN=true` |
 | `POST` | `/auth/v1/recover` | Request password reset email |
 | `POST` | `/auth/v1/recover/confirm` | Confirm password reset with token |
 | `POST` | `/auth/v1/magiclink` | Request magic-link email |
@@ -145,12 +145,55 @@ SELECT auth.jwt();
 Anonymous sign-in from the SDK:
 
 ```typescript
-// Lets public-read demo pages satisfy REQUIRE_AUTHENTICATED_WS
-// without embedding the raw anon key as a fake credential
+// A guest gets a REAL account: stable id, refresh token, own row in
+// pgstack.users. The JWT carries role=anonymous + is_anonymous:true.
 const { data, error } = await pgstack.auth.signInAnonymously();
-// data.session.access_token expires after ANONYMOUS_JWT_TTL (default 3600s);
-// there is no refresh token
+// The access token expires after ANONYMOUS_JWT_TTL (default 3600s) and is
+// refreshed automatically through the session — including across reloads.
 ```
+
+### The guest role
+
+Guests are a **fourth principal** between `anon` and `authenticated`:
+
+| | `anon` | `anonymous` (guest) | `authenticated` |
+|---|---|---|---|
+| identity | none | real row, stable `auth.uid()` | real row, provider-attached |
+| `TO authenticated` policies | no | **no** (strict default) | yes |
+| `TO anon` capabilities | yes | yes (guest ≥ visitor) | yes |
+
+Write guest-aware policies explicitly:
+
+```sql
+-- guests welcome (per-user data still isolated by auth.uid()):
+CREATE POLICY saves_own ON saves FOR ALL TO authenticated, anonymous
+  USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+
+-- members only (the default for any TO authenticated policy):
+CREATE POLICY billing_own ON billing FOR SELECT TO authenticated
+  USING (user_id = auth.uid());
+```
+
+Migrating from Supabase? Set `ANONYMOUS_ROLE=authenticated` and guests sign
+in with `role=authenticated` exactly like there; `auth.jwt()->>'is_anonymous'`
+remains the way to tell them apart.
+
+### Upgrading a guest to a full account
+
+The id — and therefore every `auth.uid()`-keyed row — survives:
+
+```typescript
+// while signed in as a guest:
+await pgstack.auth.updateUser({ email: "player@example.com", password: "…" });
+// with email verification on, the account flips on confirm;
+// with it off, the PATCH itself completes the upgrade.
+```
+
+Setting the password revokes guest-era refresh tokens (a new credential never
+coexists with old sessions), and freshly minted tokens drop `is_anonymous`.
+
+Stale guests can be reaped: set `ANONYMOUS_ACCOUNT_TTL_DAYS` (default `0` =
+off). Only never-upgraded guests with no live refresh token are deleted.
 
 ## Next steps
 

@@ -260,6 +260,7 @@ Functions are owned by `postgres` by default. Grant execute permission to the re
 -- Allow authenticated users to call this function
 GRANT EXECUTE ON FUNCTION get_order_total(BIGINT) TO authenticated;
 
--- Allow anonymous users
-GRANT EXECUTE ON FUNCTION app_version() TO anon;
+-- Allow unauthenticated visitors AND guests (0.3.0: everything a visitor
+-- may do, a guest may do — grant the pair together)
+GRANT EXECUTE ON FUNCTION app_version() TO anon, anonymous;
 ```
