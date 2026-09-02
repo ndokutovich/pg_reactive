@@ -180,6 +180,22 @@ func main() {
 	// the other background sweepers.
 	auth.StartAnonymousReaper(cleanupCtx, state.AdminPool, cfg.AnonymousAccountTTLDays)
 
+	// Half-applied-migration probe (umbrella finding, 2026-09-03): the first
+	// cut of the 0.3.0 migration could abort after CREATE ROLE but before any
+	// grant, leaving a state where the role EXISTS (so the verifyPoolRoles
+	// absent-check passes) yet holds nothing — guests then fail at runtime in
+	// ways indistinguishable from an app bug. Warn-only: grants are
+	// deployment-specific, but USAGE on pgstack is the unconditional floor.
+	if cfg.AllowAnonymousSignin {
+		var ok bool
+		err := state.AdminPool.QueryRow(context.Background(),
+			`SELECT CASE WHEN to_regnamespace('pgstack') IS NULL THEN true
+			        ELSE has_schema_privilege('anonymous', 'pgstack', 'USAGE') END`).Scan(&ok)
+		if err == nil && !ok {
+			log.Warn().Msg("role `anonymous` exists but lacks USAGE on schema pgstack — the 0.3.0 migration looks HALF-APPLIED; re-run migrations/20260902120000_anonymous_role.sql (it is idempotent)")
+		}
+	}
+
 	// Kick off the dedicated PG LISTEN connection in a background goroutine.
 	go realtime.ListenLoop(
 		cfg.DatabaseURL,

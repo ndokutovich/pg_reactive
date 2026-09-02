@@ -1,5 +1,13 @@
 -- Migration: anonymous_role
 -- Created at: 2026-09-02T12:00:00.000Z
+-- Revised 2026-09-03: every statement is guarded. The first cut left an
+-- UNGUARDED `GRANT anonymous TO authenticator` after the guarded CREATE ROLE:
+-- on a database without the authenticator login role (standalone pg_reactive,
+-- pre-two-pool installs) psql -v ON_ERROR_STOP=1 aborted EXACTLY there —
+-- role created, zero grants applied, everything below skipped (found by the
+-- umbrella VPS deployment: 3 of 7 containers). A migration that can stop
+-- halfway must be composed of steps that each tolerate the worlds they run
+-- in; anything referencing an object that may not exist checks first.
 --
 -- pgStack 0.3.0: guests from /auth/v1/anonymous become a first-class
 -- principal. A guest signs in as PG role `anonymous` (strict default;
@@ -17,32 +25,50 @@
 -- auth.uid() keeps working unchanged — guest ids are stable and survive the
 -- upgrade-to-email flow.
 --
--- Idempotent: safe to re-run.
+-- Idempotent AND partial-state-safe: safe to re-run on a fresh, a migrated,
+-- a half-migrated, or a bare (no pgStack core) database.
 
 -- migrate:up
 
--- 1. The role itself + login-role membership (the request pool may SET ROLE it).
+-- 1. The role itself + login-role memberships. Membership grants are guarded:
+--    the grantee may not exist (standalone pg_reactive has no authenticator;
+--    a managed cluster may name its superuser differently).
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anonymous') THEN
     CREATE ROLE anonymous NOLOGIN;
   END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres') THEN
+    GRANT anonymous TO postgres;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticator') THEN
+    GRANT anonymous TO authenticator;
+  END IF;
 END $$;
 
-GRANT anonymous TO postgres;
-GRANT anonymous TO authenticator;
-
--- 2. INV-A: mirror the anon baseline.
-GRANT USAGE ON SCHEMA pgstack TO anonymous;
-GRANT USAGE ON SCHEMA auth TO anonymous;
-GRANT USAGE ON SCHEMA public TO anonymous;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anonymous;
-GRANT SELECT ON pgstack.storage_buckets TO anonymous;
-GRANT SELECT ON pgstack.storage_objects TO anonymous;
+-- 2. INV-A: mirror the anon baseline. Schemas/tables exist only on a pgStack
+--    core database — each grant checks its object first.
+DO $$ BEGIN
+  IF to_regnamespace('pgstack') IS NOT NULL THEN
+    GRANT USAGE ON SCHEMA pgstack TO anonymous;
+  END IF;
+  IF to_regnamespace('auth') IS NOT NULL THEN
+    GRANT USAGE ON SCHEMA auth TO anonymous;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anonymous;
+  END IF;
+  GRANT USAGE ON SCHEMA public TO anonymous;
+  IF to_regclass('pgstack.storage_buckets') IS NOT NULL THEN
+    GRANT SELECT ON pgstack.storage_buckets TO anonymous;
+  END IF;
+  IF to_regclass('pgstack.storage_objects') IS NOT NULL THEN
+    GRANT SELECT ON pgstack.storage_objects TO anonymous;
+  END IF;
+END $$;
 
 -- 3. Own-identity: a guest that cannot read its own row is not an account.
-GRANT SELECT ON pgstack.users TO anonymous;
-
 DO $$ BEGIN
+  IF to_regclass('pgstack.users') IS NOT NULL THEN
+    GRANT SELECT ON pgstack.users TO anonymous;
+  END IF;
   IF EXISTS (SELECT FROM pg_policies WHERE schemaname = 'pgstack'
              AND tablename = 'users' AND policyname = 'users_self_select') THEN
     ALTER POLICY users_self_select ON pgstack.users TO authenticated, anonymous;
@@ -85,13 +111,19 @@ END $$;
 --    when present).
 DO $$ BEGIN
   IF to_regclass('public.authors') IS NOT NULL THEN
-    GRANT SELECT ON public.authors, public.posts, public.comments TO anonymous;
+    GRANT SELECT ON public.authors TO anonymous;
     IF EXISTS (SELECT FROM pg_policies WHERE schemaname='public' AND tablename='authors' AND policyname='authors_public_read') THEN
       ALTER POLICY authors_public_read ON public.authors TO anon, authenticated, anonymous;
     END IF;
+  END IF;
+  IF to_regclass('public.posts') IS NOT NULL THEN
+    GRANT SELECT ON public.posts TO anonymous;
     IF EXISTS (SELECT FROM pg_policies WHERE schemaname='public' AND tablename='posts' AND policyname='posts_public_read') THEN
       ALTER POLICY posts_public_read ON public.posts TO anon, authenticated, anonymous;
     END IF;
+  END IF;
+  IF to_regclass('public.comments') IS NOT NULL THEN
+    GRANT SELECT ON public.comments TO anonymous;
     IF EXISTS (SELECT FROM pg_policies WHERE schemaname='public' AND tablename='comments' AND policyname='comments_public_read') THEN
       ALTER POLICY comments_public_read ON public.comments TO anon, authenticated, anonymous;
     END IF;
