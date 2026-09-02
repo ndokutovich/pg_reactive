@@ -18,6 +18,13 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
     CREATE ROLE authenticated NOLOGIN;
   END IF;
+  -- Guests from /auth/v1/anonymous (0.3.0): a real account row, but a lower
+  -- trust tier than authenticated. INV-A: anonymous receives every grant anon
+  -- has; grants TO authenticated reach guests only by an explicit decision at
+  -- the policy site. See docs/plans/anonymous-identity-0.3.md.
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anonymous') THEN
+    CREATE ROLE anonymous NOLOGIN;
+  END IF;
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
     CREATE ROLE service_role NOLOGIN BYPASSRLS;
   END IF;
@@ -49,21 +56,22 @@ END $$;
 -- Let postgres switch to these roles
 GRANT anon TO postgres;
 GRANT authenticated TO postgres;
+GRANT anonymous TO postgres;
 GRANT service_role TO postgres;
 
 -- Data plane: authenticator may ASSUME (SET ROLE) only the request roles. It is
 -- deliberately NOT a member of service_role — that is the finding-6 boundary.
-GRANT anon, authenticated TO authenticator;
+GRANT anon, authenticated, anonymous TO authenticator;
 -- Admin plane: a separate login role that can assume service_role (and only it).
 GRANT service_role TO authenticator_admin;
 
 -- Auth schema
 CREATE SCHEMA IF NOT EXISTS pgstack;
-GRANT USAGE ON SCHEMA pgstack TO authenticated, anon, service_role;
+GRANT USAGE ON SCHEMA pgstack TO authenticated, anon, anonymous, service_role;
 
 -- Supabase-compatible auth helper functions
 CREATE SCHEMA IF NOT EXISTS auth;
-GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
+GRANT USAGE ON SCHEMA auth TO anon, authenticated, anonymous, service_role;
 
 CREATE OR REPLACE FUNCTION auth.uid()
 RETURNS uuid LANGUAGE sql STABLE AS $$
@@ -91,7 +99,7 @@ RETURNS jsonb LANGUAGE sql STABLE AS $$
   )
 $$;
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anon, authenticated, service_role;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anon, authenticated, anonymous, service_role;
 
 CREATE TABLE IF NOT EXISTS pgstack.users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -116,8 +124,10 @@ CREATE TABLE IF NOT EXISTS pgstack.users (
 ALTER TABLE pgstack.users ENABLE ROW LEVEL SECURITY;
 
 -- Users can only see their own record
+-- anonymous included (0.3.0): a guest that cannot read its own row is not an
+-- account. The USING clause still pins each caller to exactly their row.
 CREATE POLICY users_self_select ON pgstack.users
-  FOR SELECT TO authenticated
+  FOR SELECT TO authenticated, anonymous
   USING (id = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
 
 -- Refresh tokens are stored as SHA-256 hex hashes (since 2026-05 audit F6).
@@ -183,7 +193,7 @@ CREATE TABLE IF NOT EXISTS pgstack.storage_buckets (
 
 ALTER TABLE pgstack.storage_buckets ENABLE ROW LEVEL SECURITY;
 CREATE POLICY storage_buckets_select ON pgstack.storage_buckets
-  FOR SELECT TO anon, authenticated USING (true);
+  FOR SELECT TO anon, authenticated, anonymous USING (true);
 
 CREATE TABLE IF NOT EXISTS pgstack.storage_objects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -206,7 +216,7 @@ ALTER TABLE pgstack.storage_objects ENABLE ROW LEVEL SECURITY;
 
 -- Public bucket objects: anyone can read
 CREATE POLICY storage_objects_public_select ON pgstack.storage_objects
-  FOR SELECT TO anon, authenticated
+  FOR SELECT TO anon, authenticated, anonymous
   USING (EXISTS (SELECT 1 FROM pgstack.storage_buckets b WHERE b.id = bucket_id AND b.public = true));
 
 -- Private bucket objects: only owner can read
@@ -293,10 +303,10 @@ GRANT EXECUTE ON FUNCTION pgstack.enable_webhook_trigger(regclass)  TO service_r
 GRANT EXECUTE ON FUNCTION pgstack.disable_webhook_trigger(regclass) TO service_role;
 
 -- Table grants for pgstack schema objects
-GRANT SELECT ON pgstack.storage_buckets TO anon, authenticated;
+GRANT SELECT ON pgstack.storage_buckets TO anon, authenticated, anonymous;
 GRANT SELECT, INSERT, UPDATE, DELETE ON pgstack.storage_objects TO authenticated;
-GRANT SELECT ON pgstack.storage_objects TO anon;
-GRANT SELECT ON pgstack.users TO authenticated;
+GRANT SELECT ON pgstack.storage_objects TO anon, anonymous;
+GRANT SELECT ON pgstack.users TO authenticated, anonymous;
 
 -- service_role is the trusted backend role the proxy's ADMIN connection assumes
 -- (SET ROLE) for auth and admin operations. These DML grants were implicit when
@@ -319,7 +329,7 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA pgstack TO service_role;
 -- ── Schema usage ─────────────────────────────────────────────────────────────
 -- USAGE on the public schema is needed for any access at all; grants on
 -- individual tables/functions still gate what each role can DO.
-GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, anonymous, service_role;
 
 -- ── service_role: full access (admin) ───────────────────────────────────────
 -- service_role is the admin role used by the proxy when impersonating "no RLS"
@@ -513,15 +523,16 @@ DROP POLICY IF EXISTS todos_own_insert ON todos;
 DROP POLICY IF EXISTS todos_own_update ON todos;
 DROP POLICY IF EXISTS todos_own_delete ON todos;
 
-CREATE POLICY todos_own_select ON todos FOR SELECT TO authenticated USING (user_id = auth.uid());
-CREATE POLICY todos_own_insert ON todos FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
-CREATE POLICY todos_own_update ON todos FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
-CREATE POLICY todos_own_delete ON todos FOR DELETE TO authenticated USING (user_id = auth.uid());
+-- Demo tables allow guests (0.3.0 explicit decision): the demo IS the guest experience.
+CREATE POLICY todos_own_select ON todos FOR SELECT TO authenticated, anonymous USING (user_id = auth.uid());
+CREATE POLICY todos_own_insert ON todos FOR INSERT TO authenticated, anonymous WITH CHECK (user_id = auth.uid());
+CREATE POLICY todos_own_update ON todos FOR UPDATE TO authenticated, anonymous USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY todos_own_delete ON todos FOR DELETE TO authenticated, anonymous USING (user_id = auth.uid());
 
 -- authenticated only — NO anon grant (private per-user data). service_role
 -- reaches todos via ALTER DEFAULT PRIVILEGES (above) and bypasses RLS.
-GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON todos TO authenticated, anonymous;
+GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO authenticated, anonymous;
 
 -- Embedding test tables
 CREATE TABLE IF NOT EXISTS authors (
