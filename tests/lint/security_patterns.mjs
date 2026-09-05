@@ -686,6 +686,7 @@ function checkRoleWhitelistSync(allFiles) {
     "proxy-go/rest/rest.go",
     "proxy-go/middleware/rls.go",
     "proxy-go/functions/functions.go",
+    "proxy-go/functions/goja.go", // round 47 M6: the goja db.query() fork was un-scanned and silently demoted guests to anon
     "proxy/src/middleware/rls.rs",
   ];
   for (const relPath of SITES) {
@@ -708,6 +709,30 @@ function checkRoleWhitelistSync(allFiles) {
   }
 }
 
+// Rule SEC-R32 (round 47 H1) — the storage authenticated-only gates must
+// use the PAIRED guest check (storageGuestDenied / storage_guest_denied),
+// never a bare comparison against "anon": that exact pattern predated the
+// fourth role and let strict-mode `anonymous` guests upload into, list and
+// delete from surfaces the trust matrix denies them.
+function checkStorageGuestGates(allFiles) {
+  const SITES = ["proxy-go/routes/storage.go", "proxy/src/routes/storage.rs"];
+  for (const relPath of SITES) {
+    const f = allFiles.find((x) => x.replace(/\\/g, "/").endsWith("/" + relPath));
+    if (!f) { report(relPath, 1, "SEC-R32", "storage file not found by the lint walk"); continue; }
+    const lines = readFileSync(f, "utf-8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/lint:allow=SEC-R32/.test(line)) continue;
+      // the paired form itself (helper body) names both roles on one line
+      if (/"anonymous"/.test(line)) continue;
+      if (/^\s*(\/\/|\/\*|\*)/.test(line)) continue;
+      if (/[!=]=\s*"anon"/.test(line)) {
+        report(f, i + 1, "SEC-R32",
+          'bare comparison against "anon" in a storage gate — use the paired guest helper (storageGuestDenied / storage_guest_denied) so `anonymous` guests are denied too');
+      }
+    }
+  }
+}
 function runAll() {
   const files = [];
   for (const r of ROOTS) {
@@ -746,6 +771,7 @@ function runAll() {
   }
 
   checkRoleWhitelistSync(files);
+  checkStorageGuestGates(files);
 
   if (findings.length === 0) {
     console.log("OK — no unsafe patterns found.");

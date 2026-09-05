@@ -254,7 +254,8 @@ func handlePasswordGrant(w http.ResponseWriter, r *http.Request, ctx context.Con
 		SELECT id, encrypted_password, role,
 		       COALESCE(raw_user_meta, '{}')::jsonb,
 		       COALESCE(raw_app_meta, '{}')::jsonb,
-		       created_at, updated_at, email_confirmed_at, provider
+		       created_at, updated_at, email_confirmed_at, provider,
+		       COALESCE(providers, '{}'::text[])
 		FROM pgstack.users
 		WHERE email = $1
 	`, email)
@@ -269,8 +270,9 @@ func handlePasswordGrant(w http.ResponseWriter, r *http.Request, ctx context.Con
 		updatedAt        time.Time
 		emailConfirmedAt *time.Time
 		provider         string
+		providers        []string
 	)
-	err := row.Scan(&userID, &encryptedPwd, &role, &userMeta, &appMeta, &createdAt, &updatedAt, &emailConfirmedAt, &provider)
+	err := row.Scan(&userID, &encryptedPwd, &role, &userMeta, &appMeta, &createdAt, &updatedAt, &emailConfirmedAt, &provider, &providers)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusUnauthorized, "invalid email or password")
@@ -298,7 +300,23 @@ func handlePasswordGrant(w http.ResponseWriter, r *http.Request, ctx context.Con
 		return
 	}
 
-	access, refresh, err := generateTokenPair(ctx, d, userID, email, role)
+	// INV-B (round 47 H2): the guest marker and the guest TTL derive from the
+	// ROW at this mint site too — exactly like refresh rotation. A guest that
+	// set ONLY a password (providers still {anonymous}) must not launder
+	// itself into an unmarked member token via password login; in compat mode
+	// (row role = authenticated) the minted JWT was otherwise
+	// indistinguishable from a member's.
+	isGuest := len(providers) == 1 && providers[0] == "anonymous"
+	ttl := d.AccessTokenExpirySecs
+	var extra map[string]any
+	if isGuest {
+		extra = map[string]any{"is_anonymous": true}
+		ttl = d.AnonymousJWTTTLSecs
+		if ttl <= 0 {
+			ttl = 3600
+		}
+	}
+	access, refresh, err := generateTokenPairTTL(ctx, d, userID, email, role, ttl, extra)
 	if err != nil {
 		log.Error().Err(err).Msg("generate token pair (password grant)")
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -308,7 +326,7 @@ func handlePasswordGrant(w http.ResponseWriter, r *http.Request, ctx context.Con
 	writeJSON(w, http.StatusOK, AuthResponse{
 		AccessToken:  access,
 		TokenType:    "bearer",
-		ExpiresIn:    d.AccessTokenExpirySecs,
+		ExpiresIn:    ttl,
 		RefreshToken: refresh,
 		User: UserResponse{
 			ID:               userID,
@@ -320,6 +338,7 @@ func handlePasswordGrant(w http.ResponseWriter, r *http.Request, ctx context.Con
 			UpdatedAt:        updatedAt,
 			EmailConfirmedAt: emailConfirmedAt,
 			Provider:         provider,
+			IsAnonymous:      isGuest,
 		},
 	})
 }

@@ -408,6 +408,10 @@ jobs:
           node tests/security/auth__anonymous_role_isolation.test.mjs
           node tests/security/auth__anonymous_upgrade.test.mjs
           node tests/security/ws__anon_refused_when_required.test.mjs
+          # Round 47 L8: the Rust verifyPoolRoles contract was never exercised
+          # in CI — the startup suite defaulted to proxy-go. Run it against
+          # the sibling too (PROXY_SERVICE picks the compose service).
+          PROXY_SERVICE=proxy node tests/security/proxy__startup_rejects_privileged_login.test.mjs
 
       - name: Run doc-SQL smoke
         run: node tests/doc_sql_smoke_test.mjs

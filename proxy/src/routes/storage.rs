@@ -276,6 +276,15 @@ pub struct CreateBucketBody {
 }
 
 /// POST /storage/v1/bucket — create a bucket (service_role only).
+/// Paired gate for storage's authenticated-only surfaces (round 47 H1):
+/// refuse BOTH visitors (anon) and strict-mode guests (anonymous) — the trust
+/// matrix denies `anonymous` uploads, private reads/lists and deletes. Compat
+/// mode (ANONYMOUS_ROLE=authenticated) passes by construction. Lint SEC-R32
+/// forbids bare "anon" comparisons in the storage files.
+fn storage_guest_denied(role: &str) -> bool {
+    matches!(role, "anon" | "anonymous")
+}
+
 pub async fn create_bucket(
     State(state): State<AppState>,
     claims: RequestClaims,
@@ -442,8 +451,9 @@ pub async fn upload_object(
     let bucket = get_bucket(&state, &bucket_id).await?;
 
     // Audit F4: anon uploads are refused for BOTH public and private buckets.
-    // "public" authorises anon READ, never anon WRITE.
-    if claims.role == "anon" {
+    // "public" authorises anon READ, never anon WRITE. Round 47 H1: guests
+    // (anonymous) are denied by the same paired gate.
+    if storage_guest_denied(&claims.role) {
         return Err(AppError::Forbidden("upload requires authentication".into()));
     }
 
@@ -682,7 +692,8 @@ pub async fn download_object(
     // Access control. Public bucket → anyone reads. Private → auth + owner or
     // service_role (SECURITY.md storage surface; init.sql storage RLS mirror).
     if !bucket.public {
-        if claims.role == "anon" {
+        // Round 47 H1: guests (anonymous) denied alongside anon.
+        if storage_guest_denied(&claims.role) {
             return Err(AppError::Forbidden(
                 "access denied to private bucket".into(),
             ));
@@ -758,8 +769,9 @@ pub async fn delete_object(
 
     let _bucket = get_bucket(&state, &bucket_id).await?;
 
-    // anon cannot delete; authenticated deletes own objects; service_role any.
-    if claims.role == "anon" {
+    // anon and guests cannot delete; authenticated deletes own objects;
+    // service_role any (round 47 H1 paired gate).
+    if storage_guest_denied(&claims.role) {
         return Err(AppError::Forbidden("delete requires authentication".into()));
     }
 
@@ -863,8 +875,8 @@ pub async fn list_objects(
 ) -> Result<Response, AppError> {
     let bucket = get_bucket(&state, &bucket_id).await?;
 
-    // Private bucket: anon cannot list.
-    if !bucket.public && claims.role == "anon" {
+    // Private bucket: anon and guests cannot list (round 47 H1 paired gate).
+    if !bucket.public && storage_guest_denied(&claims.role) {
         return Err(AppError::Forbidden(
             "access denied to private bucket".into(),
         ));

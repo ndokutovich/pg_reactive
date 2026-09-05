@@ -130,7 +130,7 @@ function setup() {
   END $$;`);
 }
 function teardown() {
-  const roles = "r7_execprog,r7_inherit,r7_bypass,r7_attrs,r7_acl,r7_owner,r7_trans,r7_mid,r8_inherit,r8_admin,r8_setfalse,r8_admin_svc";
+  const roles = "r7_execprog,r7_inherit,r7_bypass,r7_attrs,r7_acl,r7_owner,r7_trans,r7_mid,r8_inherit,r8_admin,r8_setfalse,r8_admin_svc,r_anon_missing";
   try { psql(`DROP OWNED BY ${roles} CASCADE;`); } catch { /* ignore */ }
   try { psql(`DROP ROLE IF EXISTS ${roles};`); } catch { /* ignore */ }
 }

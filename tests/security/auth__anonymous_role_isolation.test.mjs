@@ -103,6 +103,34 @@ async function main() {
   const me = await api("GET", "/auth/v1/user", null, access_token);
   check(me.status === 200 && me.json?.id === user.id,
     `guest can read its own identity (GET /auth/v1/user → ${me.status})`);
+  // round 47 L7: the marker must be on the user OBJECT too, on both proxies —
+  // the SDK replaces its session user from this very response.
+  check(me.json?.is_anonymous === true,
+    "GET /auth/v1/user carries is_anonymous:true (round 47 L7)");
+
+  // 2c. round 47 H1: storage's authenticated-only gates refuse the guest.
+  // The trust matrix denies `anonymous` uploads and private listing; before
+  // round 47 the gates tested only role==="anon" and strict guests slid by.
+  const svcKey = process.env.SERVICE_ROLE_KEY ?? "dev-only-service-role-key-do-not-use-in-production";
+  const bname = `r47priv${Date.now()}`;
+  const mkb = await fetch(`${PROXY}/storage/v1/bucket`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${svcKey}` },
+    body: JSON.stringify({ name: bname, public: false }),
+  });
+  if (mkb.status >= 200 && mkb.status < 300) {
+    const fd = new FormData();
+    fd.append("file", new Blob(["guest-bytes"]), "guest.txt");
+    const up = await fetch(`${PROXY}/storage/v1/object/${bname}/guest.txt`, {
+      method: "POST", headers: { Authorization: `Bearer ${access_token}` }, body: fd,
+    });
+    check(up.status === 403, `guest upload refused with 403 (got ${up.status}) — round 47 H1`);
+    const ls = await api("GET", `/storage/v1/object/list/${bname}`, null, access_token);
+    check(ls.status === 403, `guest private-bucket list refused with 403 (got ${ls.status}) — round 47 H1`);
+    try { await fetch(`${PROXY}/storage/v1/bucket/${bname}`, { method: "DELETE", headers: { Authorization: `Bearer ${svcKey}` } }); } catch {}
+  } else {
+    bad(`storage fixture: private bucket create failed (${mkb.status}) — H1 gate unproven`);
+  }
 
   // 3. INV-A: members-only refuses the guest, accepts a member
   setupMembersOnly();

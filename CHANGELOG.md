@@ -5,6 +5,32 @@ All notable changes to pg_reactive / pgStack are tracked here. Format follows
 semantic versioning per component (the PostgreSQL extension version is
 declared in `ext/pg_reactive.control`).
 
+## [0.3.1] — 2026-09-05
+
+### Security (round 47 — external codex review of the 0.3.0 guest model)
+- **H1**: storage's authenticated-only gates (upload, private download/list,
+  delete) refused only `anon`; strict-mode guests (`anonymous`) slid through.
+  Both proxies now use a paired guest gate; lint `SEC-R32` bans bare
+  `== "anon"` comparisons in the storage files.
+- **H2**: password login minted unmarked tokens for guests that had set only
+  a password (`providers` still `{anonymous}`) — indistinguishable from a
+  member in compat mode. Both proxies now derive `is_anonymous` + the guest
+  TTL from the row at this mint site (INV-B).
+- **H3/M4**: the 0.3.0 upgrade migration granted by object NAME. It is now an
+  authorization mirror: pre-existing `anonymous` roles are validated
+  (attributes + members, loud abort on collision), demo-fixture grants
+  require the shipped policy fingerprint + RLS, and `auth`-schema EXECUTE is
+  per-function, only where `anon` already holds it.
+- **M5**: the Rust magic-link confirm minted from the PRE-upgrade role
+  (`role=anonymous` tokens for freshly upgraded members); now mints from
+  `UPDATE … RETURNING role, providers`.
+- **M6**: the Go goja `db.query()` whitelist silently demoted guests to
+  `anon`; it now carries all four data roles and is scanned by `SEC-R31b`.
+- **L7**: Rust GET/PATCH `/auth/v1/user` hardcoded `is_anonymous: null`; now
+  derived from `providers` (the SDK replaces its session user from there).
+- **L8**: CI now runs the startup verifyPoolRoles suite against the Rust
+  sibling too (`PROXY_SERVICE=proxy`).
+
 ## [0.3.0] — 2026-09-03
 
 ### Changed — BREAKING (only for `ALLOW_ANONYMOUS_SIGNIN=true` deployments)

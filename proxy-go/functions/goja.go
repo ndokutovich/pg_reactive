@@ -17,6 +17,7 @@ import (
 // inside the goja VM's db.query() calls.
 var gojaValidRoles = map[string]string{
 	"anon":          "SET LOCAL ROLE anon",
+	"anonymous":     "SET LOCAL ROLE anonymous", // guests (0.3.0) — round 47 M6: a guest otherwise silently demoted to anon
 	"authenticated": "SET LOCAL ROLE authenticated",
 	"service_role":  "SET LOCAL ROLE service_role",
 }

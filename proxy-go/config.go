@@ -70,9 +70,13 @@ type Config struct {
 	AuthRateLimit       int
 	AuthRateWindow      time.Duration
 	// AnonymousRateLimit gates /auth/v1/anonymous separately. Default is
-	// 10× AuthRateLimit because the endpoint mints a stateless throw-away
-	// JWT (~50μs CPU, zero DB writes) — bundling it in the same bucket as
-	// signup/token caps public guest-token demos at one tab per 2 seconds.
+	// 10× AuthRateLimit so public guest-token demos aren't capped at one tab
+	// per 2 seconds by the shared signup/token bucket. NOTE (round 47): since
+	// 0.3.0 this endpoint is NOT free — each signin INSERTs a pgstack.users
+	// row plus a refresh token, and the reaper defaults OFF. The endpoint is
+	// opt-in (ALLOW_ANONYMOUS_SIGNIN), but operators enabling it should size
+	// this budget and ANONYMOUS_USER_TTL/reaper against row-growth abuse,
+	// not CPU.
 	AnonymousRateLimit  int
 	AnonymousRateWindow time.Duration
 

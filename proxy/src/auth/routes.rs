@@ -240,8 +240,8 @@ async fn token_password(
         .ok_or_else(|| AppError::BadRequest("password is required".into()))?;
 
     // Fetch user
-    let user = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, serde_json::Value, serde_json::Value, Option<String>)>(
-        "SELECT id::text, email, role, encrypted_password, created_at::text, updated_at::text, raw_user_meta, raw_app_meta, email_confirmed_at::text
+    let user = sqlx::query_as::<_, (String, String, String, Option<String>, String, String, serde_json::Value, serde_json::Value, Option<String>, Vec<String>)>(
+        "SELECT id::text, email, role, encrypted_password, created_at::text, updated_at::text, raw_user_meta, raw_app_meta, email_confirmed_at::text, COALESCE(providers, '{}') AS providers
          FROM pgstack.users WHERE email = $1",
     )
     .bind(email)
@@ -258,6 +258,7 @@ async fn token_password(
         raw_user_meta,
         raw_app_meta,
         email_confirmed_at,
+        providers,
     ) = user.ok_or_else(|| AppError::Unauthorized("invalid login credentials".into()))?;
 
     let hash = encrypted_password
@@ -283,16 +284,38 @@ async fn token_password(
         return Err(AppError::Forbidden("email not verified".into()));
     }
 
+    // INV-B (round 47 H2): marker and guest TTL derive from the ROW at this
+    // mint site too — exactly like refresh rotation. A guest that set ONLY a
+    // password (providers still {anonymous}) must not launder itself into an
+    // unmarked member token via password login; in compat mode the row role
+    // is authenticated and the JWT was otherwise indistinguishable from a
+    // member's.
+    let is_guest = providers.len() == 1 && providers[0] == "anonymous";
+    let ttl = if is_guest {
+        state.config.anonymous_jwt_ttl_secs
+    } else {
+        state.config.access_token_expiry_secs
+    };
+
     // Generate tokens (new family)
-    let (access_token, refresh_token) =
-        generate_token_pair(&state, secret, &user_id, &user_email, &role, None).await?;
+    let (access_token, refresh_token) = generate_token_pair_opts(
+        &state,
+        secret,
+        &user_id,
+        &user_email,
+        &role,
+        None,
+        ttl,
+        is_guest,
+    )
+    .await?;
 
     Ok((
         StatusCode::OK,
         Json(AuthResponse {
             access_token,
             token_type: "bearer".into(),
-            expires_in: state.config.access_token_expiry_secs,
+            expires_in: ttl,
             refresh_token,
             user: UserResponse {
                 id: user_id,
@@ -302,7 +325,7 @@ async fn token_password(
                 app_metadata: Some(raw_app_meta),
                 created_at,
                 updated_at,
-                is_anonymous: None,
+                is_anonymous: if is_guest { Some(true) } else { None },
             },
         }),
     ))
@@ -437,16 +460,21 @@ pub async fn get_user(
 ) -> Result<impl IntoResponse, AppError> {
     let claims = extract_claims_from_headers(&state, &headers)?;
 
-    let user = sqlx::query_as::<_, (String, String, String, String, String, serde_json::Value, serde_json::Value)>(
-        "SELECT id::text, email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta
+    let user = sqlx::query_as::<_, (String, String, String, String, String, serde_json::Value, serde_json::Value, Vec<String>)>(
+        "SELECT id::text, email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta, COALESCE(providers, '{}') AS providers
          FROM pgstack.users WHERE id = $1::uuid",
     )
     .bind(&claims.sub)
     .fetch_optional(&state.admin_pool)
     .await?;
 
-    let (id, email, role, created_at, updated_at, raw_user_meta, raw_app_meta) =
+    let (id, email, role, created_at, updated_at, raw_user_meta, raw_app_meta, providers) =
         user.ok_or_else(|| AppError::NotFound("user not found".into()))?;
+
+    // Round 47 L7: derive the marker from the row (Go parity) — the SDK
+    // replaces its session user from this response, so a hardcoded None made
+    // a compat-mode guest look member-like to client code.
+    let is_guest = providers.len() == 1 && providers[0] == "anonymous";
 
     Ok(Json(UserResponse {
         id,
@@ -456,7 +484,7 @@ pub async fn get_user(
         app_metadata: Some(raw_app_meta),
         created_at,
         updated_at,
-        is_anonymous: None,
+        is_anonymous: if is_guest { Some(true) } else { None },
     }))
 }
 
@@ -573,15 +601,18 @@ pub async fn update_user(
     }
 
     // Return updated user
-    let user = sqlx::query_as::<_, (String, String, String, String, String, serde_json::Value, serde_json::Value)>(
-        "SELECT id::text, email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta
+    let user = sqlx::query_as::<_, (String, String, String, String, String, serde_json::Value, serde_json::Value, Vec<String>)>(
+        "SELECT id::text, email, role, created_at::text, updated_at::text, raw_user_meta, raw_app_meta, COALESCE(providers, '{}') AS providers
          FROM pgstack.users WHERE id = $1::uuid",
     )
     .bind(&claims.sub)
     .fetch_one(&state.admin_pool)
     .await?;
 
-    let (id, email, role, created_at, updated_at, raw_user_meta, raw_app_meta) = user;
+    let (id, email, role, created_at, updated_at, raw_user_meta, raw_app_meta, providers) = user;
+
+    // Round 47 L7: derived, not hardcoded — see get_user.
+    let is_guest = providers.len() == 1 && providers[0] == "anonymous";
 
     Ok(Json(UserResponse {
         id,
@@ -591,7 +622,7 @@ pub async fn update_user(
         app_metadata: Some(raw_app_meta),
         created_at,
         updated_at,
-        is_anonymous: None,
+        is_anonymous: if is_guest { Some(true) } else { None },
     }))
 }
 
@@ -1167,7 +1198,7 @@ pub async fn magiclink_verify(
     .fetch_one(&state.admin_pool)
     .await?;
 
-    let (email, role, _created_at, _updated_at, uid) = user;
+    let (email, _stale_role, _created_at, _updated_at, uid) = user;
 
     // Mark token used and confirm email (clicking the link proves email ownership)
     sqlx::query("UPDATE pgstack.email_tokens SET used_at = now() WHERE id = $1::uuid")
@@ -1175,22 +1206,42 @@ pub async fn magiclink_verify(
         .execute(&state.admin_pool)
         .await?;
 
-    sqlx::query(
+    // Round 47 M5 (INV-B): mint from the POST-flip row, never the value read
+    // before the upgrade — the old ordering issued a role=anonymous token
+    // with no guest marker for a freshly upgraded member (Go reloads after
+    // commit; RETURNING closes the same gap in one statement here).
+    let (fresh_role, fresh_providers) = sqlx::query_as::<_, (String, Vec<String>)>(
         // Guest upgrade (0.3.0) — same flip as verify_email; see there.
         "UPDATE pgstack.users SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
              role       = CASE WHEN role = 'anonymous' THEN 'authenticated' ELSE role END,
              provider   = CASE WHEN providers = ARRAY['anonymous'] THEN 'email' ELSE provider END,
              providers  = CASE WHEN providers = ARRAY['anonymous'] THEN ARRAY['anonymous','email'] ELSE providers END,
              updated_at = now()
-         WHERE id = $1::uuid",
+         WHERE id = $1::uuid
+         RETURNING role, COALESCE(providers, '{}') AS providers",
     )
     .bind(&user_id)
-    .execute(&state.admin_pool)
+    .fetch_one(&state.admin_pool)
     .await?;
+    let is_guest = fresh_providers.len() == 1 && fresh_providers[0] == "anonymous";
+    let ttl = if is_guest {
+        state.config.anonymous_jwt_ttl_secs
+    } else {
+        state.config.access_token_expiry_secs
+    };
 
     // Create session + token pair
-    let (access_token, refresh_token) =
-        generate_token_pair(&state, &secret, &uid, &email, &role, None).await?;
+    let (access_token, refresh_token) = generate_token_pair_opts(
+        &state,
+        &secret,
+        &uid,
+        &email,
+        &fresh_role,
+        None,
+        ttl,
+        is_guest,
+    )
+    .await?;
 
     let redirect_url = format!(
         "{}#access_token={}&refresh_token={}",

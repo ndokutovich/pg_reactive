@@ -125,6 +125,19 @@ const (
 
 // storageResolveClaims is a shorthand used by storage handlers. It returns
 // claims + writes an error response on failure.
+// storageGuestDenied is the paired gate for storage's authenticated-only
+// surfaces: it must refuse BOTH unauthenticated visitors (anon) and 0.3.0
+// strict-mode guests (anonymous) — the trust matrix denies `anonymous`
+// uploads, private reads/lists and deletes (SECURITY.md storage rows,
+// round 47 external review H1: the bare == "anon" checks predated the
+// fourth role and guests slid through). Compat mode is unaffected by
+// construction: ANONYMOUS_ROLE=authenticated guests carry role=authenticated
+// and intentionally receive the authenticated matrix cells. Lint SEC-R32
+// forbids bare "anon" comparisons in the storage files.
+func storageGuestDenied(role string) bool {
+	return role == "anon" || role == "anonymous"
+}
+
 func storageResolveClaims(d *StorageDeps, w http.ResponseWriter, r *http.Request) (middleware.RequestClaims, bool) {
 	claims, err := d.ResolveClaims(r)
 	if err != nil {
@@ -440,7 +453,8 @@ func UploadObject(d *StorageDeps) http.HandlerFunc {
 		// not authorise unauthenticated writes. Anon-writable storage is a
 		// classic abuse vector (spam hosting, malware delivery, deface).
 		// Allow only authenticated users or service_role to upload anywhere.
-		if claims.Role == "anon" {
+		// Round 47 H1: `anonymous` guests are denied the same way (paired gate).
+		if storageGuestDenied(claims.Role) {
 			writeJSONError(w, http.StatusForbidden, "upload requires authentication")
 			return
 		}
@@ -867,8 +881,9 @@ func DownloadObject(d *StorageDeps) http.HandlerFunc {
 
 		// Auth check
 		if !bucket.Public {
-			// Private bucket: only owner or service_role can download
-			if claims.Role == "anon" {
+			// Private bucket: only owner or service_role can download.
+			// Round 47 H1: guests (anonymous) are denied alongside anon.
+			if storageGuestDenied(claims.Role) {
 				writeJSONError(w, http.StatusForbidden, "access denied to private bucket")
 				return
 			}
@@ -951,9 +966,9 @@ func DeleteObject(d *StorageDeps) http.HandlerFunc {
 			return
 		}
 
-		// Check access: anon cannot delete; authenticated can delete own objects;
-		// service_role can delete any.
-		if claims.Role == "anon" {
+		// Check access: anon and guests cannot delete; authenticated deletes own
+		// objects; service_role any (round 47 H1 paired gate).
+		if storageGuestDenied(claims.Role) {
 			writeJSONError(w, http.StatusForbidden, "delete requires authentication")
 			return
 		}
@@ -1153,7 +1168,8 @@ func ListObjects(d *StorageDeps) http.HandlerFunc {
 		}
 
 		// Private bucket: only authenticated or service_role can list
-		if !bucket.Public && claims.Role == "anon" {
+		// (round 47 H1: guests denied by the paired gate).
+		if !bucket.Public && storageGuestDenied(claims.Role) {
 			writeJSONError(w, http.StatusForbidden, "access denied to private bucket")
 			return
 		}

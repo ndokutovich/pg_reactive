@@ -19,6 +19,7 @@
 // dev posture) — the PATCH itself is then the upgrade. The verification-on
 // flow flips at confirm time instead (unit-covered in proxy code).
 
+import crypto from "node:crypto";
 import { psql } from "../helpers.mjs";
 
 const PROXY = process.env.PROXY_URL ?? "http://127.0.0.1:8080";
@@ -103,6 +104,60 @@ async function main() {
   check(reapable.endsWith("0"), "reaper predicate (providers={anonymous}) no longer matches the upgraded row");
 
   try { psql(`DELETE FROM pgstack.users WHERE id = '${guestId}';`); } catch {}
+
+  // 6. round 47 H2: a guest that sets ONLY a password (providers still
+  // {anonymous}) must remain a MARKED guest through password login — the
+  // mint derives marker and guest TTL from the row, like refresh rotation.
+  const g2 = await api("POST", "/auth/v1/anonymous", {});
+  check(g2.status === 200, `second guest signin → 200 (got ${g2.status})`);
+  if (g2.status === 200) {
+    const gid = g2.json.user.id;
+    const gEmail = g2.json.user.email; // synthetic .invalid address
+    const gPwd = "guest-password-123";
+    const p = await api("PATCH", "/auth/v1/user", { password: gPwd }, g2.json.access_token);
+    check(p.status === 200, `guest sets password only → 200 (got ${p.status})`);
+    const still = psql(`SELECT array_to_string(providers, ',') FROM pgstack.users WHERE id = '${gid}';`).trim();
+    check(still === "anonymous", `providers unchanged by a password-only set (got ${still})`);
+    const relog = await api("POST", "/auth/v1/token", { grant_type: "password", email: gEmail, password: gPwd });
+    check(relog.status === 200, `password login on the synthetic address → 200 (got ${relog.status})`);
+    if (relog.status === 200) {
+      const c2 = jwtPayload(relog.json.access_token);
+      check(c2.is_anonymous === true,
+        "password-minted token KEEPS is_anonymous (round 47 H2 — INV-B at EVERY mint site)");
+      check(c2.role === "anonymous",
+        `password-minted token keeps role=anonymous in strict mode (got ${c2.role})`);
+      check(relog.json?.user?.is_anonymous === true, "password-grant user object marked is_anonymous");
+    }
+    try { psql(`DELETE FROM pgstack.users WHERE id = '${gid}';`); } catch {}
+  }
+
+  // 7. round 47 M5: magic-link confirm must mint from the POST-flip row.
+  // Plant a magiclink token directly (sha256-hex, the shared token-hash
+  // shape) for a fresh guest and decode the redirect fragment: the token
+  // must be an UNMARKED authenticated token, never role=anonymous.
+  const g3 = await api("POST", "/auth/v1/anonymous", {});
+  check(g3.status === 200, `third guest signin → 200 (got ${g3.status})`);
+  if (g3.status === 200) {
+    const gid = g3.json.user.id;
+    const raw = crypto.randomBytes(24).toString("hex");
+    const hash = crypto.createHash("sha256").update(raw).digest("hex");
+    psql(`INSERT INTO pgstack.email_tokens (user_id, token_hash, token_type, expires_at)
+          VALUES ('${gid}', '${hash}', 'magiclink', now() + interval '10 minutes');`);
+    const resp = await fetch(`${PROXY}/auth/v1/magiclink/verify?token=${raw}`, { redirect: "manual" });
+    const loc = resp.headers.get("location") ?? "";
+    const frag = new URLSearchParams(loc.split("#")[1] ?? "");
+    const at = frag.get("access_token");
+    check(!!at, `magiclink confirm redirects with an access_token (status ${resp.status})`);
+    if (at) {
+      const c3 = jwtPayload(at);
+      check(c3.role === "authenticated",
+        `magiclink-minted token has role=authenticated from the FLIPPED row (got ${c3.role}) — round 47 M5`);
+      check(c3.is_anonymous === undefined, "magiclink-minted token carries no is_anonymous");
+    }
+    const rrow = psql(`SELECT role FROM pgstack.users WHERE id = '${gid}';`).trim();
+    check(rrow.includes("authenticated"), `row role flipped to authenticated (${rrow})`);
+    try { psql(`DELETE FROM pgstack.users WHERE id = '${gid}';`); } catch {}
+  }
 }
 
 main().then(() => {
