@@ -761,13 +761,12 @@ jobs:
       # docs/site/package.json, so this gate stays meaningful instead of being
       # permanently red on an unshipped dev-server transitive.
       #
-      # 2026-08-30: image-size (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq —
-      # ICNS/JXL/HEIF infinite-loop DoS) has NO patched release; it is the
-      # build-time image prober in @docusaurus/mdx-loader and never ships in
-      # the static output. The gate script allowlists those two ids and FAILS
-      # the moment upstream publishes a fix, so the exception self-expires.
+      # 2026-09-19 (round 48): the 2026-08-30 image-size allowlist
+      # (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq) self-expired exactly as
+      # designed — upstream shipped 2.0.3+, the gate went red, the lockfile now
+      # pins 2.0.4 and the allowlist is empty again.
       - name: npm audit — Docs site
-        run: node scripts/npm-audit-gate.mjs docs/site GHSA-w3rx-r6r6-pgpr GHSA-5p2g-fcmc-qvqq
+        run: node scripts/npm-audit-gate.mjs docs/site
 
       - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
