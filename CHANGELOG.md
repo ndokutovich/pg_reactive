@@ -5,6 +5,27 @@ All notable changes to pg_reactive / pgStack are tracked here. Format follows
 semantic versioning per component (the PostgreSQL extension version is
 declared in `ext/pg_reactive.control`).
 
+## [ext 0.1.8 on PGXN] — 2026-09-19
+
+### Added (round 48 — PGXN packaging + PG 15-18 support matrix)
+- **PostgreSQL 18 support**: PG 18 removed the `attrs` flexible array member
+  from `TupleDescData`; `recompute.c` now uses the canonical `TupleDescAttr()`
+  accessor (compatible back to PG 10). The tree had only ever been built
+  against PG 16.
+- **Proven support matrix 15-18**: new CI job `ext-pg-compat` builds
+  (`-Wall -Werror`) and runs the full pg_regress + isolation suite on bare
+  PGDG containers for PostgreSQL 15, 16, 17 and 18 on every push. All four
+  majors pass with byte-identical expected outputs.
+- **PGXN packaging**: `ext/META.json` (PGXN Meta Spec v1.0.0, prereq
+  PostgreSQL 15.0.0), consolidated install script `pg_reactive--0.1.8.sql`
+  (base 0.1.5 + upgrade chain, proven standalone: 16/16 regress + 4/4
+  isolation with the chain files hidden), `scripts/pgxn-bundle.sh`
+  (check / consolidate / bundle via LF-normalized `git archive`), and the
+  `pgxn-release.yml` workflow — green-CI-gated upload to manager.pgxn.org on
+  `ext-v*` tags once the `PGXN_USERNAME` / `PGXN_PASSWORD` secrets exist.
+  Packaging parity (control == META == consolidated) is a CI gate, same
+  discipline as cli/dist.
+
 ## [0.3.1] — 2026-09-05
 
 ### Security (round 47 — external codex review of the 0.3.0 guest model)

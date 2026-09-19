@@ -71,6 +71,29 @@ jobs:
             ext/regression.diffs
             ext/regression.out
 
+  # ─── PGXN support matrix (round 48) ────────────────────────────────────────
+  # The PGXN distribution claims PostgreSQL 15+ (ext/META.json prereq). This
+  # job PROVES the claim: bare PGDG containers for each supported major, full
+  # build (-Wall -Werror) + pg_regress + isolation. It also gates packaging
+  # parity — META.json version == control default_version, and the
+  # consolidated install script matches the upgrade chain (same discipline as
+  # cli/dist parity). PG 18 removed TupleDescData.attrs; only this matrix
+  # catches the next such removal before a PGXN user does.
+  ext-pg-compat:
+    name: Extension PG 15-18 matrix (PGXN)
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    needs: [test-extension]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: PGXN packaging parity (META == control == consolidated script)
+        run: bash scripts/pgxn-bundle.sh check
+
+      - name: Build + full installcheck on every supported major
+        run: bash .github/scripts/ext-pg-compat.sh "15 16 17 18"
+
   # ─── Sibling proxies (Go + Rust, co-equal) ─────────────────────────────────
   # Both proxies are first-class and security-hardened to parity; BOTH gate the
   # release candidate (build-publish-images needs both). The currently published

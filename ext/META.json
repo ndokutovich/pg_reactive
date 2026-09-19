@@ -1,0 +1,51 @@
+{
+   "name": "pg_reactive",
+   "abstract": "Reactive live queries for PostgreSQL with real-time delta notifications",
+   "description": "pg_reactive turns SQL SELECTs into live queries. Subscribe with pgr.subscribe('id', 'SELECT ...'); the extension tracks table and column dependencies in shared memory, auto-installs statement triggers, recomputes EXCEPT-based deltas against UNLOGGED snapshots, and emits JSON deltas over LISTEN/NOTIFY — one channel for all queries, with per-subscription generations for safe re-registration. Optional background worker for async recompute. Supports PostgreSQL 15 through 18 (each version proven by the full pg_regress + isolation suite in CI).",
+   "version": "0.1.8",
+   "maintainer": "ndokutovich <ndokutovich@gmail.com>",
+   "license": "postgresql",
+   "provides": {
+      "pg_reactive": {
+         "file": "pg_reactive--0.1.8.sql",
+         "docfile": "README.md",
+         "version": "0.1.8",
+         "abstract": "Live SQL queries with delta notifications over LISTEN/NOTIFY"
+      }
+   },
+   "prereqs": {
+      "runtime": {
+         "requires": {
+            "PostgreSQL": "15.0.0"
+         }
+      }
+   },
+   "resources": {
+      "repository": {
+         "url": "https://github.com/ndokutovich/pg_reactive.git",
+         "web": "https://github.com/ndokutovich/pg_reactive",
+         "type": "git"
+      },
+      "bugtracker": {
+         "web": "https://github.com/ndokutovich/pg_reactive/issues"
+      }
+   },
+   "generated_by": "pg_reactive release tooling (scripts/pgxn-bundle.sh)",
+   "meta-spec": {
+      "version": "1.0.0",
+      "url": "https://pgxn.org/meta/spec.txt"
+   },
+   "tags": [
+      "reactive",
+      "live queries",
+      "realtime",
+      "notify",
+      "listen notify",
+      "subscriptions",
+      "delta",
+      "cdc",
+      "websocket",
+      "supabase"
+   ],
+   "release_status": "stable"
+}

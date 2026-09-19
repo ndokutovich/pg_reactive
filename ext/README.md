@@ -24,6 +24,12 @@ make
 sudo make install
 ```
 
+Or from [PGXN](https://pgxn.org/dist/pg_reactive/):
+
+```bash
+pgxn install pg_reactive
+```
+
 Then in your `postgresql.conf`:
 
 ```ini
@@ -39,7 +45,8 @@ CREATE EXTENSION pg_reactive;
 
 ### Requires
 
-- PostgreSQL 16 or newer
+- PostgreSQL 15, 16, 17 or 18 — each proven in CI by the full pg_regress +
+  isolation suite against a bare PGDG image (`.github/scripts/ext-pg-compat.sh`)
 - `pg_config` on `$PATH` (PGXS-based build)
 - A C toolchain (gcc/clang, make)
 

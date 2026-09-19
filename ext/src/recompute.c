@@ -533,8 +533,11 @@ pgr_rows_to_json_array(SPITupleTable *tuptable, uint64 numrows,
 
 		for (j = 1; j <= natts; j++)
 		{
-			char   *colname = NameStr(tupdesc->attrs[j - 1].attname);
-			Oid		typid = tupdesc->attrs[j - 1].atttypid;
+			/* TupleDescAttr(), not ->attrs[]: PG 18 removed the flexible
+			 * array member from TupleDescData. */
+			Form_pg_attribute att = TupleDescAttr(tupdesc, j - 1);
+			char   *colname = NameStr(att->attname);
+			Oid		typid = att->atttypid;
 			char   *value;
 
 			if (j > 1)

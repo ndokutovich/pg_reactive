@@ -1,0 +1,64 @@
+name: PGXN Release
+
+# Publishes the pg_reactive C extension (ext/) to the PostgreSQL Extension
+# Network. Separate from release.yml because the extension is versioned by
+# ext/pg_reactive.control (0.1.x), not by the umbrella v* tags (0.3.x).
+# Trigger: push an `ext-v<control default_version>` tag, or dispatch manually.
+on:
+  push:
+    tags:
+      - "ext-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pgxn-publish:
+    name: PGXN — pg_reactive extension
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # Same contract as release.yml's ci-gate: never publish an unverified
+      # commit. CI's ext-pg-compat job is what proves the PG 15-18 claim
+      # carried by ext/META.json.
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/require-green-ci.sh "${{ github.repository }}" "${{ github.sha }}"
+
+      - name: Tag matches the extension version
+        if: github.event_name == 'push'
+        run: |
+          CONTROL_V=$(sed -n "s/^default_version *= *'\(.*\)'/\1/p" ext/pg_reactive.control)
+          [ "${{ github.ref_name }}" = "ext-v${CONTROL_V}" ] || {
+            echo "::error::tag ${{ github.ref_name }} does not match ext-v${CONTROL_V} from pg_reactive.control"; exit 1; }
+
+      - name: Bundle (git archive of ext/ — tracked files only, LF-normalized)
+        run: bash scripts/pgxn-bundle.sh bundle
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pgxn-dist
+          path: dist/*.zip
+
+      # Needs a manager.pgxn.org account: set the PGXN_USERNAME and
+      # PGXN_PASSWORD repo secrets, then push the ext-v* tag (or re-dispatch).
+      - name: Publish to PGXN
+        env:
+          PGXN_USERNAME: ${{ secrets.PGXN_USERNAME }}
+          PGXN_PASSWORD: ${{ secrets.PGXN_PASSWORD }}
+        run: |
+          [ -n "$PGXN_USERNAME" ] && [ -n "$PGXN_PASSWORD" ] || {
+            echo "::error::PGXN_USERNAME / PGXN_PASSWORD secrets are not set — register at https://manager.pgxn.org, add the secrets, then re-run"; exit 1; }
+          CONTROL_V=$(sed -n "s/^default_version *= *'\(.*\)'/\1/p" ext/pg_reactive.control)
+          docker run --rm -e PGXN_USERNAME -e PGXN_PASSWORD \
+            -v "$PWD/dist:/dist" pgxn/pgxn-tools \
+            pgxn-release "/dist/pg_reactive-${CONTROL_V}.zip"
