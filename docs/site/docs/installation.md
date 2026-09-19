@@ -1,7 +1,7 @@
 ---
 title: Installation
 sidebar_position: 3
-description: All installation options for pgStack — Docker Compose, CLI scaffold, and manual setup.
+description: All installation options for pgStack — Docker Compose, CLI scaffold, manual setup, and the extension alone from PGXN.
 ---
 
 # Installation
@@ -58,6 +58,26 @@ cp .env.example .env
 # Fill in all required secrets (see below)
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+## Option 4: Extension only, from PGXN
+
+Just the `pg_reactive` C extension in an existing PostgreSQL 15–18 cluster —
+no proxy, no pgStack. Deltas arrive as JSON on the `pgr` NOTIFY channel, so
+any `LISTEN`-capable client can consume them.
+
+```bash
+pgxn install pg_reactive        # https://pgxn.org/dist/pg_reactive/
+```
+
+Then in `postgresql.conf`:
+
+```ini
+shared_preload_libraries = 'pg_reactive'
+```
+
+Restart PostgreSQL and run `CREATE EXTENSION pg_reactive;`. Every supported
+PostgreSQL major (15, 16, 17, 18) is proven in CI by the full regression +
+isolation suite on each release commit.
 
 ## System requirements
 

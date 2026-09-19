@@ -46,6 +46,13 @@ cd my-app
 npx pgstack dev
 ```
 
+Or take just the PostgreSQL extension (no proxy/pgStack) from
+[PGXN](https://pgxn.org/dist/pg_reactive/) into an existing 15–18 cluster:
+
+```bash
+pgxn install pg_reactive
+```
+
 ## Use it from your app
 
 ```typescript
