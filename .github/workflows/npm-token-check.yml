@@ -1,0 +1,32 @@
+name: npm token check
+
+# Non-destructive health probe for the NPM_TOKEN secret — the only npm
+# publish path (release.yml npm-sdk / npm-cli). `npm whoami` authenticates
+# against registry.npmjs.org without publishing anything, so a dispatch of
+# this workflow answers "will the next release's npm legs work?" before a
+# tag is cut. Created round 48 follow-up: the token was minted 2026-06-22
+# and the account's token-expiry traps are a known failure class
+# (Docker Hub PAT ~2mo, runner-cached logins).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  whoami:
+    name: npm whoami with NPM_TOKEN
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: npm whoami (auth probe, no publish)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "::error::NPM_TOKEN secret is empty or unset"; exit 1; }
+          npm whoami
+          echo "token is VALID — npm publish legs will authenticate"
