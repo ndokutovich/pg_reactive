@@ -215,7 +215,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # No id-token: --provenance is disabled (private repo — see Publish step).
+      # Trusted publishing: npm exchanges this short-lived OIDC token for a
+      # scoped, single-use publish credential. No long-lived NPM_TOKEN.
+      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -225,6 +227,11 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+
+      # Node 20 ships npm 10, which has no OIDC support and would silently fall
+      # back to looking for a token. Trusted publishing landed in npm 11.5.1.
+      - name: npm >= 11.5.1 (trusted publishing support)
+        run: npm install -g "npm@^11.5.1" && npm --version
 
       - name: Install and build
         working-directory: sdk
@@ -236,15 +243,16 @@ jobs:
           # dist-tag from the execution-tested npm-dist-tag.sh (pre-release -> next,
           # never latest). $GITHUB_WORKSPACE is the repo root (working-directory is the package).
           NPM_TAG="$(bash "$GITHUB_WORKSPACE/.github/scripts/npm-dist-tag.sh" "$GITHUB_REF_NAME")"
-          # No --provenance: npm/sigstore provenance requires a PUBLIC source repo,
-          # but this repo is private (422 "Unsupported GitHub Actions source
-          # repository visibility: private"). Publish without attestation —
-          # consumers can't rely on `npm audit signatures` for these packages
-          # (documented in SECURITY.md inv 23). Restore --provenance if the repo
-          # ever goes public.
-          npm publish --access public --tag "$NPM_TAG"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Auth is the OIDC exchange (trusted publisher configured on npmjs.com:
+          # ndokutovich/pg_reactive, workflow release.yml, no environment).
+          #
+          # --provenance=false is REQUIRED while the repo is private: trusted
+          # publishing turns provenance on by default, and npm/sigstore refuses a
+          # private source repo with 422 "Unsupported GitHub Actions source
+          # repository visibility: private". Consumers therefore can't rely on
+          # `npm audit signatures` (SECURITY.md inv 25). Drop this flag the moment
+          # the repo goes public — attestation then comes for free.
+          npm publish --access public --tag "$NPM_TAG" --provenance=false
 
   npm-cli:
     name: npm — pgstack CLI
@@ -252,7 +260,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # No id-token: --provenance is disabled (private repo — see Publish step).
+      # Trusted publishing — see npm-sdk above.
+      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -262,6 +271,11 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+
+      # Node 20 ships npm 10, which has no OIDC support and would silently fall
+      # back to looking for a token. Trusted publishing landed in npm 11.5.1.
+      - name: npm >= 11.5.1 (trusted publishing support)
+        run: npm install -g "npm@^11.5.1" && npm --version
 
       - name: Install and build
         working-directory: cli
@@ -273,15 +287,9 @@ jobs:
           # dist-tag from the execution-tested npm-dist-tag.sh (pre-release -> next,
           # never latest). $GITHUB_WORKSPACE is the repo root (working-directory is the package).
           NPM_TAG="$(bash "$GITHUB_WORKSPACE/.github/scripts/npm-dist-tag.sh" "$GITHUB_REF_NAME")"
-          # No --provenance: npm/sigstore provenance requires a PUBLIC source repo,
-          # but this repo is private (422 "Unsupported GitHub Actions source
-          # repository visibility: private"). Publish without attestation —
-          # consumers can't rely on `npm audit signatures` for these packages
-          # (documented in SECURITY.md inv 23). Restore --provenance if the repo
-          # ever goes public.
-          npm publish --access public --tag "$NPM_TAG"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Auth is the OIDC exchange; --provenance=false is required while the
+          # repo is private. Full rationale in the npm-sdk job above.
+          npm publish --access public --tag "$NPM_TAG" --provenance=false
 
   # ─── GitHub Release ──────────────────────────────────────────────────────────
   github-release:
