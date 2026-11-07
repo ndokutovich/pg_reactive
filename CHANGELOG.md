@@ -55,7 +55,7 @@ declared in `ext/pg_reactive.control`).
 ## [0.3.0] — 2026-09-03
 
 ### Changed — BREAKING (only for `ALLOW_ANONYMOUS_SIGNIN=true` deployments)
-- **Anonymous identity 0.3.0** (`docs/plans/anonymous-identity-0.3.md`): a
+- **Anonymous identity 0.3.0**: a
   guest is a fourth principal. `/auth/v1/anonymous` creates a real
   `pgstack.users` row (building on the prior real-account change) and signs
   it in with PG role **`anonymous`** — `TO authenticated` policies no longer
@@ -106,8 +106,8 @@ declared in `ext/pg_reactive.control`).
   `docker/all-in-one-entrypoint.sh`. Executable scripts there are started
   after the proxy answers `/health`, log to `/var/log/pgstack/<name>.log`,
   and receive SIGTERM on shutdown (sidecars → proxy → PostgreSQL). A sidecar
-  exiting never stops the container. First consumer: the Stardust game's
-  multiplayer netcode (`docs/plans/stardust-on-pgstack.md`).
+  exiting never stops the container. First consumer: a browser game's
+  multiplayer netcode.
 
 ### Fixed
 - REST upsert is now honored: `POST /rest/v1/{table}` with

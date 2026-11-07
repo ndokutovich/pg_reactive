@@ -16,7 +16,7 @@ const reaperInterval = 6 * time.Hour
 // StartAnonymousReaper deletes never-upgraded guest accounts that have gone
 // quiet. Opt-in (ANONYMOUS_ACCOUNT_TTL_DAYS > 0) because the delete cascades
 // through the operator's own FK ON DELETE choices — destructive cleanup must
-// be a deployment decision, not a default (docs/plans/anonymous-identity-0.3.md D9).
+// be a deployment decision, not a default.
 //
 // A row is reaped only when ALL hold:
 //   - providers = {anonymous}: the account was never upgraded. An upgraded

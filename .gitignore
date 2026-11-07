@@ -67,3 +67,9 @@ proxy-go/testdata/
 cli/.stryker-tmp/
 .serena/
 .review-last10.diff
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json
+
+# Internal drafts and business documents — live in the private repo
+*.docx

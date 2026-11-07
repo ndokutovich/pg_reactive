@@ -4,7 +4,6 @@ sdk/dist
 cli/node_modules
 cli/dist
 .git
-docs/plans/
 docs/site/node_modules/
 docs/site/build/
 docs/site/.docusaurus/

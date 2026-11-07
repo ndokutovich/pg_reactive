@@ -21,7 +21,7 @@ DO $$ BEGIN
   -- Guests from /auth/v1/anonymous (0.3.0): a real account row, but a lower
   -- trust tier than authenticated. INV-A: anonymous receives every grant anon
   -- has; grants TO authenticated reach guests only by an explicit decision at
-  -- the policy site. See docs/plans/anonymous-identity-0.3.md.
+  -- the policy site. See SECURITY.md (trust model).
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anonymous') THEN
     CREATE ROLE anonymous NOLOGIN;
   END IF;
