@@ -249,7 +249,7 @@ async fn lookup_function(pool: &sqlx::PgPool, fn_name: &str) -> Result<FunctionM
 
             let params: Vec<FnParam> = arg_names
                 .into_iter()
-                .zip(arg_types.into_iter())
+                .zip(arg_types)
                 .map(|(name, pg_type)| FnParam { name, pg_type })
                 .collect();
 
