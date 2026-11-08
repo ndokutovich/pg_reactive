@@ -55,7 +55,7 @@
     "@stryker-mutator/typescript-checker": "^9.6.0",
     "@stryker-mutator/vitest-runner": "^9.6.0",
     "@testing-library/react": "^16.1.0",
-    "@types/node": "^20",
+    "@types/node": "^24",
     "@types/pg": "^8.16.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.0.0",

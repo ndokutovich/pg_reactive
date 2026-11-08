@@ -12,7 +12,7 @@
 # digests (same tags). Re-pin together when bumping a tag.
 
 # Stage 1: Build studio SPA
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS studio-builder
+FROM node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS studio-builder
 WORKDIR /studio-build
 COPY studio/package.json studio/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm,id=npm-studio \
@@ -21,7 +21,7 @@ COPY studio/ .
 RUN npm run build
 
 # Stage 2: Build Docusaurus docs (mirror of proxy-go/Dockerfile's docs-builder)
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS docs-builder
+FROM node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS docs-builder
 ARG DOCS_BASE_URL=/docs/
 WORKDIR /docs-build
 COPY docs/site/package.json docs/site/package-lock.json ./
@@ -32,7 +32,7 @@ ENV DOCS_URL=http://localhost:8080 DOCS_BASE_URL=${DOCS_BASE_URL}
 RUN npm run build
 
 # Stage 3: Build Rust proxy
-FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS builder
+FROM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS builder
 ARG TARGETARCH
 WORKDIR /app
 COPY proxy/Cargo.toml proxy/Cargo.lock ./

@@ -33,7 +33,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       # Local mode npm-packs cli/ + sdk/, so their dist must be built first.
       - name: Install + build CLI and SDK

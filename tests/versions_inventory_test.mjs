@@ -79,7 +79,7 @@ ok(s(["stale"], { strict: true }).fatal.length === 1, "a stale patch fails the s
 const rows = collect();
 ok(rows.length > 20, `collector found ${rows.length} pins`);
 ok(rows.some((r) => r.id === "go" && r.version === "1.26.10"), "go 1.26.10 is collected");
-ok(rows.some((r) => r.id === "node" && r.version === "20"), "node 20 is collected");
+ok(rows.some((r) => r.id === "node" && r.version === "24"), "node 24 is collected");
 ok(rows.some((r) => r.id === "postgres" && r.cycle === "16" && r.source.includes("docker-compose")), "compose postgres pin is collected");
 ok(rows.every((r) => r.id && r.source), "every row carries a runtime and a source");
 ok(!rows.some((r) => r.source.includes("node_modules")), "no rows from ignored trees");

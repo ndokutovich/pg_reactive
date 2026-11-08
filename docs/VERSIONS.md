@@ -11,25 +11,24 @@ table by hand: `check.mjs` fails when it drifts from the tree.
 | debian | — | 12 | proxy-go/Dockerfile |
 | debian | — | 12 | proxy/Dockerfile |
 | dotnet | 10.0 | 10 | apps/polyglot/engines/dotnet/Dockerfile |
-| go | 1.23 | 1.23 | examples/functions/hello-go/Dockerfile |
 | go | 1.26.10 | 1.26 | .github/workflows/ci.yml |
 | go | 1.26.10 | 1.26 | apps/polyglot/engines/go/Dockerfile |
 | go | 1.26.10 | 1.26 | apps/polyglot/generator/Dockerfile |
 | go | 1.26.10 | 1.26 | docker/Dockerfile.all-in-one |
+| go | 1.26.10 | 1.26 | examples/functions/hello-go/Dockerfile |
 | go | 1.26.10 | 1.26 | proxy-go/Dockerfile |
 | java | 21 | 21 | apps/polyglot/engines/spring/Dockerfile |
 | nginx | — | — | apps/polyglot/web/Dockerfile |
 | nginx | — | — | apps/shopping/Dockerfile |
 | nginx | — | — | examples/Dockerfile.web |
-| node | 20 | 20 | .github/workflows/ci.yml |
-| node | 20 | 20 | .github/workflows/release.yml |
-| node | 20 | 20 | proxy-go/Dockerfile |
-| node | 20 | 20 | proxy/Dockerfile |
-| node | 22 | 22 | .github/workflows/ci.yml |
-| node | 22 | 22 | .github/workflows/cli-sdk-e2e.yml |
-| node | 22 | 22 | .github/workflows/versions.yml |
-| node | 22 | 22 | apps/polyglot/engines/node/Dockerfile |
-| node | 22 | 22 | tests/e2e_cli_sdk/Dockerfile.builder |
+| node | 24 | 24 | .github/workflows/ci.yml |
+| node | 24 | 24 | .github/workflows/cli-sdk-e2e.yml |
+| node | 24 | 24 | .github/workflows/release.yml |
+| node | 24 | 24 | .github/workflows/versions.yml |
+| node | 24 | 24 | apps/polyglot/engines/node/Dockerfile |
+| node | 24 | 24 | proxy-go/Dockerfile |
+| node | 24 | 24 | proxy/Dockerfile |
+| node | 24 | 24 | tests/e2e_cli_sdk/Dockerfile.builder |
 | postgres | 16 | 16 | bench/Dockerfile.bench |
 | postgres | 16 | 16 | deploy/templates/polyglot-showcase/docker-compose.yml |
 | postgres | 16 | 16 | deploy/templates/shop/docker-compose.yml |
@@ -37,9 +36,9 @@ table by hand: `check.mjs` fails when it drifts from the tree.
 | postgres | 16 | 16 | Dockerfile.dev |
 | postgres | 16 | 16 | examples/Dockerfile.examples |
 | python | 3.12 | 3.12 | apps/polyglot/engines/fastapi/Dockerfile |
-| rust | 1.85 | 1.85 | apps/polyglot/engines/rust/Dockerfile |
-| rust | 1.88 | 1.88 | .github/workflows/ci.yml |
-| rust | 1.88 | 1.88 | proxy/Dockerfile |
+| rust | 1.99 | 1.99 | .github/workflows/ci.yml |
+| rust | 1.99 | 1.99 | apps/polyglot/engines/rust/Dockerfile |
+| rust | 1.99 | 1.99 | proxy/Dockerfile |
 <!-- versions:end -->
 
 ## How freshness is judged
