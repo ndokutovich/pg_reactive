@@ -15,6 +15,13 @@ import { cmpVersion, normalizeVersion, versionParts } from "./versions.mjs";
 
 export function validateRules(rules) {
   const errors = [];
+  // A degenerate file must not read as "no rules, therefore nothing to check".
+  if (!rules || typeof rules !== "object" || Array.isArray(rules)) {
+    return ["rules.json must be a JSON object"];
+  }
+  if (rules.runtimes !== undefined && (typeof rules.runtimes !== "object" || Array.isArray(rules.runtimes))) {
+    return ["rules.json: runtimes must be an object of { product: { cycle: floor } }"];
+  }
   for (const [product, cycles] of Object.entries(rules.runtimes ?? {})) {
     for (const [cycle, floor] of Object.entries(cycles)) {
       if (floor === "eol") continue;

@@ -62,6 +62,9 @@ ok(judge(row24, { feeds: feed("25", "25.0.0"), rules: {}, today: "2026-11-08" })
 const badRules = validateRules({ runtimes: { nodejs: { 24: "latest" } } });
 ok(badRules.length === 1 && /neither/.test(badRules[0]),
   "an invalid CVE floor is rejected instead of being compared as NaN");
+ok(validateRules(null).length === 1, "a degenerate rules file is rejected, not read as 'no rules'");
+ok(validateRules({ runtimes: [] }).length === 1, "a non-object runtimes section is rejected");
+ok(validateRules({ runtimes: { nodejs: { 20: "eol", 24: "24.22.1" } } }).length === 0, "a well-formed rules file passes");
 
 // ── summary: silence is never green ─────────────────────────────────────────
 const s = (states, opts = {}) => summarize(states.map((state) => ({ state })), opts);
