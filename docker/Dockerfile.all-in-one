@@ -18,8 +18,7 @@
 #
 # Directly usable for a demo / single-tenant deployment that needs no extra
 # bundled content.
-# Deployments that bundle a frontend / docs / studio (e.g. the umbrella's
-# apps/pg-reactive and apps/longtask-template, or roblox-clone-app) write
+# Deployments that bundle a frontend / docs / studio (e.g. the umbrella's apps, or any project bundling its own content) write
 # their own Dockerfile but should MIRROR this runtime stage and COPY the
 # canonical docker/all-in-one-entrypoint.sh rather than duplicating it.
 #

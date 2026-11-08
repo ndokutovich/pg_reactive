@@ -18,7 +18,7 @@ architecture and the engine contract.
 | `migration.sql`                     | Schema + roles + grants + RPC + `pgr.subscribe` registrations |
 
 The umbrella nginx route for `polyglot.pgstack.org` is owned by the
-**vps-12gb-pgstack** repo (`nginx/conf.d/app-polyglot.conf` there), not
+**your reverse-proxy** repo (`nginx/conf.d/app-polyglot.conf` there), not
 this one. Adding a new variant subdomain = PR against that repo.
 
 ## Build the 8 polyglot images + the pgstack all-in-one
@@ -76,7 +76,7 @@ The first up will be slow — `polyglot-migration` runs once against the
 freshly-booted pgstack, then the six engines connect, LISTEN, and start
 consuming whatever the generator emits.
 
-The umbrella nginx route lives in the vps-12gb-pgstack repo at
+The umbrella nginx route lives in your reverse-proxy repo at
 `nginx/conf.d/app-polyglot.conf` (server_name `polyglot.pgstack.org`).
 On the VPS:
 

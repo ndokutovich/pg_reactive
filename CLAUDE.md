@@ -40,8 +40,8 @@ canonical "PostgreSQL + extension + proxy in one container" build. The
 entrypoint is background-and-wait (proxy is lifecycle leader), forwards its
 args to `postgres` (GUC flags via the compose `command:`), and runs an
 optional `/app/post-init.sh` hook for deployment-specific setup. Downstream
-all-in-one deployments (e.g. `roblox-clone-app`, the pgstack umbrella's
-`apps/pg-reactive` and `apps/longtask-template`) `COPY` this entrypoint
+all-in-one deployments (the pgstack umbrella's apps, and any project that
+bundles its own content) `COPY` this entrypoint
 rather than duplicating it — do not fork the boot logic into those repos.
 
 ## Build & Test Commands

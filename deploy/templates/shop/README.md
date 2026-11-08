@@ -14,7 +14,7 @@ frameworks by editing a single env variable.
 | `migration.sql`                     | Schema + RLS + SECURITY DEFINER functions, applied once at first up |
 
 The umbrella nginx route for `shop.pgstack.org` is owned by the
-**vps-12gb-pgstack** repo (`nginx/conf.d/app-shop.conf` there), not
+**your reverse-proxy** repo (`nginx/conf.d/app-shop.conf` there), not
 this one. A different subdomain = PR against that repo or hand-edit
 the conf there before reload.
 
@@ -44,7 +44,7 @@ done
 docker network create gateway 2>/dev/null || true
 docker compose up -d
 
-# 4. Umbrella nginx route already lives in the vps-12gb-pgstack repo
+# 4. Umbrella nginx route already lives in your reverse-proxy repo
 #    at nginx/conf.d/app-shop.conf (server_name shop.pgstack.org).
 #    On the VPS:
 cd /opt/proxy && git pull

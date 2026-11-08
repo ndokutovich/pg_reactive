@@ -113,7 +113,7 @@ services:
       gateway:
         aliases:
           - pgr-proxy
-          # Apex upstream: the umbrella (vps-12gb-pgstack) proxies pgstack.org/
+          # Apex upstream: the umbrella (your reverse proxy) proxies pgstack.org/
           # to pgstack-landing:8080, which serves PUBLIC_DIR (the landing above).
           # The pgStack landing's single source of truth is pg_reactive/public/.
           - pgstack-landing

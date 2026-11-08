@@ -225,7 +225,7 @@ rate).
 `deploy/templates/shop/`. Same network topology (gateway alias `polyglot-web`),
 same one-shot migration container, plus six engine sidecars and one order
 generator. Umbrella nginx routes `polyglot.pgstack.org` to it via
-`nginx/conf.d/app-polyglot.conf` in the vps-12gb-pgstack repo.
+`nginx/conf.d/app-polyglot.conf` in your reverse-proxy repo.
 
 ## Implementation order
 

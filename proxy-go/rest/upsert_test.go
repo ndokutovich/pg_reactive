@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Reproduces the Stardust cloud-save 409: the SDK's upsert() sends
+// Reproduces a browser game's cloud-save 409: the SDK's upsert() sends
 // POST /rest/v1/{table}?on_conflict=<cols> with Prefer: resolution=
 // merge-duplicates, but the proxy built a plain INSERT — the second save of
 // the same profile hit the primary key and mapped 23505 → 409 "duplicate

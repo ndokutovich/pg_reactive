@@ -100,7 +100,7 @@ declared in `ext/pg_reactive.control`).
   is refreshed through the rotation endpoint (a rejected token clears the
   store). `getSession()`/`getUser()` await the restore, so an app's boot
   code sees the recovered login. Every storage access is failure-tolerant.
-  Driven by Stardust: closing the tab forced a new Google redirect on every
+  Driven by a browser game: closing the tab forced a new Google redirect on every
   visit while 30-day rotating refresh tokens sat unused.
 - All-in-one image: `/app/services.d/*.sh` sidecar hook in
   `docker/all-in-one-entrypoint.sh`. Executable scripts there are started
@@ -117,7 +117,7 @@ declared in `ext/pg_reactive.control`).
   table's primary key. The SDK's `upsert()` has sent these since 0.2.x but
   the Go proxy ignored them and ran a plain INSERT — the second save of the
   same row died with 23505 → 409 "duplicate value violates unique
-  constraint" (found by Stardust's cloud saves). Batch operations still run
+  constraint" (found by a browser game's cloud saves). Batch operations still run
   plain inserts. Contract tests in `rest/upsert_test.go`.
 - All-in-one entrypoint: `docker stop` now shuts PostgreSQL down cleanly
   (exit 0 in ~10s, no WAL replay on the next start). `cmd | tee … &` put

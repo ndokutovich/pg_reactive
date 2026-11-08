@@ -120,7 +120,7 @@ jobs:
               up -d
 
             # Umbrella nginx routes are owned by the umbrella repo
-            # (vps-12gb-pgstack) — single source of truth. Adding a new
+            # (the umbrella nginx) — single source of truth. Adding a new
             # subdomain = PR to that repo's nginx/conf.d/, not here.
             # The previous in-place copy from deploy/umbrella/ silently
             # masked the umbrella's own app-reactive.conf because both
