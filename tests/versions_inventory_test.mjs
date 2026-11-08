@@ -35,6 +35,7 @@ const deb = classify("debian", "bookworm-slim");
 ok(deb?.id === "debian" && deb?.cycle === "12", "debian codename maps to a cycle");
 ok(classify("gcr.io/distroless/static-debian12", "nonroot") === null, "unknown images are not classified");
 ok(cycleOf({ cycle: "minor" }, "3.12.16", "3.12-slim") === "3.12", "python cycle is major.minor");
+ok(cycleOf({ cycle: "major" }, "8.0", "8.0") === "8", "dotnet cycle is the major, matching the feed's keys");
 
 // ── judgement: precision, EOL, and the NaN trap ──────────────────────────────
 const feed = (cycle, latest, eol = false) => new Map([["nodejs", [{ cycle, latest, eol }]]]);

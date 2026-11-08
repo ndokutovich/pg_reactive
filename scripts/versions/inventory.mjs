@@ -26,7 +26,9 @@ const RUNTIMES = [
   { id: "python", feed: "python", images: ["python"], cycle: "minor" },
   { id: "postgres", feed: "postgresql", images: ["postgres"], cycle: "major" },
   { id: "java", feed: "temurin", images: ["eclipse-temurin"], cycle: "major" },
-  { id: "dotnet", feed: "dotnet", images: ["dotnet/sdk", "dotnet/runtime"], cycle: "minor" },
+  // The dotnet feed keys cycles by major ("8"), while the image tag names the
+  // minor ("8.0") — derive the major or every pin lands in `unknown`.
+  { id: "dotnet", feed: "dotnet", images: ["dotnet/sdk", "dotnet/runtime"], cycle: "major" },
   { id: "debian", feed: "debian", images: ["debian"], cycle: "codename" },
   { id: "nginx", feed: "nginx", images: ["nginx"], cycle: "minor" },
 ];
