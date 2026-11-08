@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { collect, renderTable, parseFrom, classify, cycleOf } from "../scripts/versions/inventory.mjs";
+import { judge, validateRules } from "../scripts/versions/judge.mjs";
 
 let fail = 0;
 const ok = (cond, msg) => { console.log(`${cond ? "  ✓" : "  ✗"} ${msg}`); if (!cond) fail++; };
@@ -34,6 +35,32 @@ const deb = classify("debian", "bookworm-slim");
 ok(deb?.id === "debian" && deb?.cycle === "12", "debian codename maps to a cycle");
 ok(classify("gcr.io/distroless/static-debian12", "nonroot") === null, "unknown images are not classified");
 ok(cycleOf({ cycle: "minor" }, "3.12.16", "3.12-slim") === "3.12", "python cycle is major.minor");
+
+// ── judgement: precision, EOL, and the NaN trap ──────────────────────────────
+const feed = (cycle, latest, eol = false) => new Map([["nodejs", [{ cycle, latest, eol }]]]);
+const rulesWith = (floor) => ({ runtimes: { nodejs: { 24: floor } } });
+const row24 = { id: "node", feed: "nodejs", cycle: "24", version: "24" };
+const at = (version, opts = {}) => ({ ...row24, version, ...opts });
+
+ok(judge(row24, { feeds: feed("24", "24.22.2"), rules: {}, today: "2026-11-08" }).state === "floating",
+  "a major-only pin is floating, not stale (precision rule)");
+ok(judge(at("24.22.0"), { feeds: feed("24", "24.22.2"), rules: {}, today: "2026-11-08" }).state === "stale",
+  "a full pin behind the latest patch is stale");
+ok(judge(at("24.22.2"), { feeds: feed("24", "24.22.2"), rules: {}, today: "2026-11-08" }).state === "ok",
+  "the latest patch is ok");
+ok(judge(at("20", { cycle: "20" }), { feeds: feed("20", "20.19.0", "2026-04-30"), rules: {}, today: "2026-11-08" }).state === "eol",
+  "a branch dead in the feed is eol");
+ok(judge(row24, { feeds: new Map(), rules: rulesWith("eol"), today: "2026-11-08" }).state === "eol",
+  "an eol floor wins even when the feed is unavailable");
+ok(judge(row24, { feeds: feed("24", "24.22.2"), rules: rulesWith("24.22.1"), today: "2026-11-08" }).state === "floating",
+  "a major-only pin against a full CVE floor is floating, not stale");
+ok(judge(at("24.22.0"), { feeds: feed("24", "24.22.2"), rules: rulesWith("24.22.1"), today: "2026-11-08" }).state === "stale",
+  "a full pin below the CVE floor is stale");
+ok(judge(row24, { feeds: feed("25", "25.0.0"), rules: {}, today: "2026-11-08" }).state === "unknown",
+  "a cycle the feed does not know is unknown, never ok");
+const badRules = validateRules({ runtimes: { nodejs: { 24: "latest" } } });
+ok(badRules.length === 1 && /neither/.test(badRules[0]),
+  "an invalid CVE floor is rejected instead of being compared as NaN");
 
 // ── collection against this tree ─────────────────────────────────────────────
 const rows = collect();

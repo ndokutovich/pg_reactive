@@ -20,7 +20,8 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { collect, renderTable, ROOT, cmpVersion } from "./inventory.mjs";
+import { collect, renderTable, ROOT } from "./inventory.mjs";
+import { judge, validateRules } from "./judge.mjs";
 
 const args = new Set(process.argv.slice(2));
 const WRITE = args.has("--write");
@@ -31,6 +32,14 @@ const DOC = path.join(ROOT, "docs/VERSIONS.md");
 const BEGIN = "<!-- versions:begin -->";
 const END = "<!-- versions:end -->";
 const RULES = JSON.parse(readFileSync(path.join(ROOT, "scripts/versions/rules.json"), "utf8"));
+
+// A floor that is neither "eol" nor a version must never be read as "no floor":
+// that is exactly how an EOL branch used to pass as green.
+const ruleErrors = validateRules(RULES);
+if (ruleErrors.length) {
+  for (const e of ruleErrors) console.error(`FAIL  rules.json: ${e}`);
+  process.exit(1);
+}
 
 const rows = collect();
 const table = renderTable(rows);
@@ -116,29 +125,8 @@ for (const product of products) {
 }
 
 const today = new Date().toISOString().slice(0, 10);
-const parts = (v) => String(v).split(".").length;
 
-function judge(row) {
-  const floor = RULES.runtimes?.[row.feed]?.[row.cycle];
-  if (floor === "eol") return { state: "eol", note: "rules.json marks the branch dead" };
-  const entries = feeds.get(row.feed);
-  if (!entries) return { state: "unknown", note: "feed unavailable" };
-  if (!row.version) return { state: "floating", note: "only a moving tag is pinned" };
-  const entry = entries.find((e) => String(e.cycle) === String(row.cycle));
-  if (!entry) return { state: "unknown", note: `feed has no cycle ${row.cycle}` };
-  const dead = entry.eol === true || (typeof entry.eol === "string" && entry.eol <= today);
-  if (dead) return { state: "eol", note: `EOL ${entry.eol}` };
-  if (floor && cmpVersion(row.version, floor) < 0) return { state: "stale", note: `below CVE floor ${floor}` };
-  if (entry.latest && parts(row.version) < parts(entry.latest)) {
-    return { state: "floating", note: `latest patch ${entry.latest} — pin a full version to assert` };
-  }
-  if (entry.latest && cmpVersion(row.version, entry.latest) < 0) {
-    return { state: "stale", note: `latest ${entry.latest}` };
-  }
-  return { state: "ok", note: entry.latest ?? "" };
-}
-
-const judged = rows.map((r) => ({ ...r, ...judge(r) }));
+const judged = rows.map((r) => ({ ...r, ...judge(r, { feeds, rules: RULES, today }) }));
 
 const icon = { ok: "ok  ", stale: "STALE", eol: "EOL ", floating: "float", unknown: "??  " };
 const seenRuntime = new Set();

@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cmpVersion } from "./versions.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -131,21 +132,11 @@ export function collect() {
     }
   }
 
-  rows.sort((a, b) => a.id.localeCompare(b.id) || cmpVersion(a.version, b.version) || a.source.localeCompare(b.source));
+  // Sorting tolerates pins that name no version at all (nginx:alpine); the
+  // strict comparator is for judgement, not ordering.
+  const vcmp = (a, b) => (a === b ? 0 : !a ? 1 : !b ? -1 : cmpVersion(a, b));
+  rows.sort((a, b) => a.id.localeCompare(b.id) || vcmp(a.version, b.version) || a.source.localeCompare(b.source));
   return rows;
-}
-
-function cmpVersion(a, b) {
-  if (a === b) return 0;
-  if (!a) return 1;
-  if (!b) return -1;
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d) return d;
-  }
-  return 0;
 }
 
 export function renderTable(rows) {
