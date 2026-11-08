@@ -3,6 +3,11 @@
   "version": "0.3.2",
   "description": "TypeScript SDK for pg_reactive live queries",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ndokutovich/pg_reactive.git",
+    "directory": "sdk"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

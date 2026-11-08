@@ -2,6 +2,11 @@
   "name": "pgstack",
   "version": "0.3.2",
   "description": "Postgres-native backend platform. One PostgreSQL. Zero extra containers.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ndokutovich/pg_reactive.git",
+    "directory": "cli"
+  },
   "type": "module",
   "bin": {
     "pgstack": "./dist/index.js"
