@@ -33,7 +33,7 @@ jobs:
       # successful CI completion). A manual dispatch has no such proof, so it must
       # verify a green CI run exists for this exact SHA on master — otherwise a red
       # master commit could be hand-deployed (gemini finding 1, R23).
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'workflow_dispatch'
         with:
           persist-credentials: false

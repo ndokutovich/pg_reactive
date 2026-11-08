@@ -29,7 +29,7 @@ jobs:
     name: Extension tests
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -64,7 +64,7 @@ jobs:
 
       - name: Upload regression diffs on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: regression-diffs
           path: |
@@ -84,7 +84,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -104,11 +104,11 @@ jobs:
     name: Proxy (Go)
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
           cache-dependency-path: proxy-go/go.sum
@@ -138,17 +138,17 @@ jobs:
     name: Proxy (Rust)
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           toolchain: "1.88"
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -180,11 +180,11 @@ jobs:
     name: SDK (TypeScript)
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
           cache: "npm"
@@ -223,11 +223,11 @@ jobs:
     name: CLI (TypeScript)
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
           cache: "npm"
@@ -314,7 +314,7 @@ jobs:
       # any FR regresses below the pinned floor in docs/traceability.baseline.json.
       # Intentional downgrades: re-pin via `python scripts/check-traceability.py
       # --write-baseline` and commit the baseline.
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
 
@@ -330,11 +330,11 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-proxy-go]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
 
@@ -363,7 +363,7 @@ jobs:
       # database, so it self-skips without PGSTACK_TEST_DSN. Run it HERE, where
       # the compose stack is already up — otherwise it is permanently skipped
       # and the endpoint's row/claim/rotation behavior is untested.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
           cache-dependency-path: proxy-go/go.sum
@@ -450,7 +450,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-proxy-go]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -562,11 +562,11 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension, test-proxy-go, test-sdk]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
 
@@ -664,7 +664,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: docker-logs
           path: docker-logs.txt
@@ -675,7 +675,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -706,7 +706,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -732,11 +732,11 @@ jobs:
     name: Security audit
     runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
 
@@ -768,7 +768,7 @@ jobs:
       - name: npm audit — Docs site
         run: node scripts/npm-audit-gate.mjs docs/site
 
-      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           toolchain: "1.88"
 
@@ -787,11 +787,11 @@ jobs:
     name: Version inventory
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
 
@@ -846,15 +846,15 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up QEMU (multi-platform)
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           # Reuse one named builder across runs and DON'T tear it down at the end.
           # The Dockerfile's `--mount=type=cache` (cargo registry + per-arch target)
@@ -879,7 +879,7 @@ jobs:
               http = true
 
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -891,7 +891,7 @@ jobs:
       # leave sha-<sha> pointing at an un-smoked image (gemini finding 1).
       - name: Build and push pgstack-proxy (staging)
         id: proxy
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./proxy-go/Dockerfile
@@ -903,7 +903,7 @@ jobs:
 
       - name: Build and push pgstack-proxy-rust (staging)
         id: proxy_rust
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./proxy/Dockerfile
@@ -915,7 +915,7 @@ jobs:
 
       - name: Build and push pgstack-postgres (staging)
         id: postgres
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile.dev
@@ -930,7 +930,7 @@ jobs:
       # docker/Dockerfile.all-in-one). Built + smoked + promoted like the rest.
       - name: Build and push pgstack-all-in-one (staging)
         id: all_in_one
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./docker/Dockerfile.all-in-one
