@@ -10,7 +10,7 @@ table by hand: `check.mjs` fails when it drifts from the tree.
 | debian | — | 12 | examples/functions/hello-go/Dockerfile |
 | debian | — | 12 | proxy-go/Dockerfile |
 | debian | — | 12 | proxy/Dockerfile |
-| dotnet | 8.0 | 8 | apps/polyglot/engines/dotnet/Dockerfile |
+| dotnet | 10.0 | 10 | apps/polyglot/engines/dotnet/Dockerfile |
 | go | 1.23 | 1.23 | examples/functions/hello-go/Dockerfile |
 | go | 1.26.10 | 1.26 | .github/workflows/ci.yml |
 | go | 1.26.10 | 1.26 | apps/polyglot/engines/go/Dockerfile |
