@@ -26,6 +26,30 @@ export function validateRules(rules) {
   return errors;
 }
 
+// Silence is never green. A run that could not fetch a feed, or met a pin the
+// feed cannot judge, has not checked anything about those pins — in strict mode
+// that is a failure, not a quiet pass. Without strict (the per-push snapshot
+// job) they stay warnings, because neither is caused by the change under test.
+export function summarize(judged, { feedFailures = 0, strict = false } = {}) {
+  const count = (state) => judged.filter((r) => r.state === state).length;
+  const fatal = [];
+  const warnings = [];
+  const flag = (n, msg, always = false) => {
+    if (!n) return;
+    if (always || strict) fatal.push(msg);
+    else warnings.push(msg);
+  };
+
+  // A dead branch is a fact about upstream, not about the change under test:
+  // it fails every run, strict or not.
+  flag(count("eol"), `${count("eol")} pin(s) on a dead branch — no patch is coming`, true);
+  flag(count("stale"), `${count("stale")} pin(s) behind the latest patch of a live branch`);
+  flag(count("unknown"), `${count("unknown")} pin(s) the feed cannot judge — silence is not green`);
+  flag(feedFailures, `${feedFailures} feed(s) unavailable — freshness is incomplete`);
+
+  return { fatal, warnings };
+}
+
 export function judge(row, { feeds, rules, today }) {
   const floor = rules.runtimes?.[row.feed]?.[row.cycle];
 

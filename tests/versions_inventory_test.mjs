@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { collect, renderTable, parseFrom, classify, cycleOf } from "../scripts/versions/inventory.mjs";
-import { judge, validateRules } from "../scripts/versions/judge.mjs";
+import { judge, summarize, validateRules } from "../scripts/versions/judge.mjs";
 
 let fail = 0;
 const ok = (cond, msg) => { console.log(`${cond ? "  ✓" : "  ✗"} ${msg}`); if (!cond) fail++; };
@@ -61,6 +61,15 @@ ok(judge(row24, { feeds: feed("25", "25.0.0"), rules: {}, today: "2026-11-08" })
 const badRules = validateRules({ runtimes: { nodejs: { 24: "latest" } } });
 ok(badRules.length === 1 && /neither/.test(badRules[0]),
   "an invalid CVE floor is rejected instead of being compared as NaN");
+
+// ── summary: silence is never green ─────────────────────────────────────────
+const s = (states, opts = {}) => summarize(states.map((state) => ({ state })), opts);
+ok(s(["unknown"], { strict: false }).fatal.length === 0, "an unjudged pin is only a warning without --strict");
+ok(s(["unknown"], { strict: true }).fatal.length === 1, "an unjudged pin fails the strict run");
+ok(s([], { feedFailures: 1, strict: true }).fatal.length === 1, "an unavailable feed fails the strict run");
+ok(s(["eol"], { strict: false }).fatal.length === 1, "a dead branch is fatal without --strict");
+ok(s(["stale"], { strict: false }).fatal.length === 0, "a stale patch is only a warning without --strict");
+ok(s(["stale"], { strict: true }).fatal.length === 1, "a stale patch fails the strict run");
 
 // ── collection against this tree ─────────────────────────────────────────────
 const rows = collect();

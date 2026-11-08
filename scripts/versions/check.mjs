@@ -21,7 +21,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { collect, renderTable, ROOT } from "./inventory.mjs";
-import { judge, validateRules } from "./judge.mjs";
+import { judge, summarize, validateRules } from "./judge.mjs";
 
 const args = new Set(process.argv.slice(2));
 const WRITE = args.has("--write");
@@ -139,16 +139,12 @@ for (const r of judged) {
   console.log(`  ${icon[r.state]}  ${r.id.padEnd(9)} ${String(r.version ?? "—").padEnd(10)} ${r.source}${r.note ? `  (${r.note})` : ""}`);
 }
 
-const eol = judged.filter((r) => r.state === "eol");
-const stale = judged.filter((r) => r.state === "stale");
+const feedFailures = [...feeds.values()].filter((v) => v === null).length;
+const { fatal, warnings } = summarize(judged, { feedFailures, strict: STRICT });
 console.log("");
 
-if (eol.length) {
-  console.error(`FAIL  ${eol.length} pin(s) on a dead branch — no patch is coming`);
-  process.exitCode = 1;
-}
-if (stale.length) {
-  console.error(`${STRICT ? "FAIL" : "WARN"}  ${stale.length} pin(s) behind the latest patch of a live branch`);
-  if (STRICT) process.exitCode = 1;
-}
-if (!eol.length && !stale.length) console.log("OK    every pin is on a live branch at its latest patch");
+for (const w of warnings) console.warn(`WARN  ${w}`);
+for (const f of fatal) console.error(`FAIL  ${f}`);
+if (fatal.length) process.exitCode = 1;
+else if (!warnings.length) console.log("OK    every pin is on a live branch at its latest patch");
+else console.log("OK    no fatal findings (warnings above)");
