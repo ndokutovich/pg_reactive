@@ -27,7 +27,7 @@
 # Deployment setup: ship an executable /app/post-init.sh (see the entrypoint).
 
 # ── Stage 1: pgstack Go proxy ────────────────────────────────────────────────
-FROM golang:1.25.13-bookworm@sha256:e401dae1bf814e29204a8cb7915682e1780951e609ca0dd8865ee1937f510c48 AS proxy-builder
+FROM golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473 AS proxy-builder
 WORKDIR /app
 ENV GOTOOLCHAIN=auto
 COPY proxy-go/go.mod proxy-go/go.sum ./

@@ -1,10 +1,6 @@
 module pgstack-proxy-go
 
-go 1.25.0
-
-// Pin a patched toolchain — go1.25.0 carries fixed stdlib CVEs (TLS,
-// net/mail, crypto). GOTOOLCHAIN=auto fetches this exact version.
-toolchain go1.25.13
+go 1.26.0
 
 require (
 	github.com/dop251/goja v0.0.0-20260305124333-6a7976c22267
@@ -14,7 +10,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/rs/zerolog v1.33.0
-	golang.org/x/crypto v0.53.0
+	golang.org/x/crypto v0.57.0
 	pgregory.net/rapid v1.2.0
 )
 
@@ -27,8 +23,8 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
-	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 )
