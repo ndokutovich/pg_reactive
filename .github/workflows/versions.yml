@@ -1,0 +1,39 @@
+name: Version freshness
+
+# Weekly, not per-push: this is discovery, not a merge gate. Upstream shipping
+# a patch must not redden an unrelated PR — but somebody has to find out, and
+# the answer should be "on Monday" rather than "when the next audit ripens".
+#
+# A red run means: a pinned branch is dead (EOL, always fatal) or a pin is
+# behind the latest patch of a live branch (stale, fatal here because --strict
+# is set). Fix by bumping; record a deliberate exception in rules.json only
+# when a bulletin pins the floor more precisely than "latest".
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    name: Version freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      # Snapshot first: if the document drifted from the tree, freshness numbers
+      # describe a state that no longer exists.
+      - name: Snapshot matches the tree
+        run: node scripts/versions/check.mjs --offline
+
+      - name: Every pin is on a live branch at its latest patch
+        run: node scripts/versions/check.mjs --strict

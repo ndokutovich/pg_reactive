@@ -778,6 +778,29 @@ jobs:
           cargo install cargo-audit --locked --quiet
           cargo audit
 
+  # ─── Version inventory ───────────────────────────────────────────────────────
+  # Deterministic only. The committed docs/VERSIONS.md must match the pins in
+  # the tree, and the collector is execution-tested. Freshness against upstream
+  # runs in versions.yml on a schedule: gating a push on "upstream shipped a
+  # patch an hour ago" would redden unrelated work.
+  versions:
+    name: Version inventory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Inventory tests
+        run: node tests/versions_inventory_test.mjs
+
+      - name: Snapshot matches the tree
+        run: node scripts/versions/check.mjs --offline
+
   # ─── Publish release-candidate images (build ONCE, promote at release) ───────
   # Supply-chain provenance (gemini finding 7): release.yml must NOT rebuild the
   # Docker images from a mutable base (Dockerfile.dev's `FROM postgres:16-bookworm`)
@@ -817,6 +840,7 @@ jobs:
       - test-integration
       - test-async-bgworker
       - security
+      - versions
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: read

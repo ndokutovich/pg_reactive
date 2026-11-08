@@ -1,0 +1,70 @@
+// Execution tests for the version inventory (scripts/versions/).
+//
+// The collector is what decides whether the committed docs/VERSIONS.md can be
+// trusted, so it is tested by running it against this tree — not by grepping
+// its source. The snapshot gate itself is exercised as a subprocess: it must
+// exit 0 on a clean checkout and non-zero on a drifted document.
+import { execFileSync } from "node:child_process";
+import { copyFileSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { collect, renderTable, parseFrom, classify, cycleOf } from "../scripts/versions/inventory.mjs";
+
+let fail = 0;
+const ok = (cond, msg) => { console.log(`${cond ? "  ✓" : "  ✗"} ${msg}`); if (!cond) fail++; };
+const run = (args) => {
+  try { return { code: 0, out: execFileSync("node", ["scripts/versions/check.mjs", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim() }; }
+  catch (e) { return { code: e.status ?? 1, out: ((e.stdout || "") + (e.stderr || "")).trim() }; }
+};
+
+console.log("=== version inventory ===");
+
+// ── parsing ──────────────────────────────────────────────────────────────────
+const ref = parseFrom("FROM golang:1.26.10-bookworm@sha256:abc123 AS builder");
+ok(ref?.image === "golang" && ref?.tag === "1.26.10-bookworm", "FROM strips the digest and the AS alias");
+ok(parseFrom("FROM node:20-bookworm-slim")?.tag === "20-bookworm-slim", "FROM parses a suffixed tag");
+ok(parseFrom("RUN echo FROM nope") === null, "only real FROM lines are parsed");
+
+const go = classify("golang", "1.26.10-bookworm");
+ok(go?.id === "go" && go?.cycle === "1.26", "go cycle is major.minor");
+const node = classify("node", "20-bookworm-slim");
+ok(node?.id === "node" && node?.cycle === "20", "node cycle is the major");
+const pg = classify("postgres", "16-bookworm");
+ok(pg?.id === "postgres" && pg?.cycle === "16" && pg?.version === "16", "postgres cycle is the major");
+const deb = classify("debian", "bookworm-slim");
+ok(deb?.id === "debian" && deb?.cycle === "12", "debian codename maps to a cycle");
+ok(classify("gcr.io/distroless/static-debian12", "nonroot") === null, "unknown images are not classified");
+ok(cycleOf({ cycle: "minor" }, "3.12.16", "3.12-slim") === "3.12", "python cycle is major.minor");
+
+// ── collection against this tree ─────────────────────────────────────────────
+const rows = collect();
+ok(rows.length > 20, `collector found ${rows.length} pins`);
+ok(rows.some((r) => r.id === "go" && r.version === "1.26.10"), "go 1.26.10 is collected");
+ok(rows.some((r) => r.id === "node" && r.version === "20"), "node 20 is collected");
+ok(rows.some((r) => r.id === "postgres" && r.cycle === "16" && r.source.includes("docker-compose")), "compose postgres pin is collected");
+ok(rows.every((r) => r.id && r.source), "every row carries a runtime and a source");
+ok(!rows.some((r) => r.source.includes("node_modules")), "no rows from ignored trees");
+ok(new Set(rows.map((r) => `${r.id}|${r.version}|${r.source}`)).size === rows.length, "rows are deduplicated");
+
+const table = renderTable(rows);
+ok(table.startsWith("| Runtime | Version | Cycle | Source |"), "table has the expected header");
+ok(table.split("\n").length === rows.length + 2, "one table row per pin");
+
+// ── snapshot gate: clean tree passes, drift fails ────────────────────────────
+const clean = run(["--offline"]);
+ok(clean.code === 0, `check --offline exits 0 on a clean tree${clean.code ? `: ${clean.out.split("\n").pop()}` : ""}`);
+
+const DOC = join(process.cwd(), "docs", "VERSIONS.md");
+const backup = DOC + ".bak";
+copyFileSync(DOC, backup);
+try {
+  writeFileSync(DOC, readFileSync(DOC, "utf8").replace(/\| go \| 1\.26\.10 \|/, "| go | 9.9.9 |"));
+  const drifted = run(["--offline"]);
+  ok(drifted.code !== 0, "check --offline fails when the document drifts from the tree");
+  ok(/drifted/.test(drifted.out), "the failure names the drift");
+} finally {
+  copyFileSync(backup, DOC);
+  rmSync(backup);
+}
+
+console.log(fail ? `\n${fail} failed` : "\n✓ version inventory holds");
+process.exit(fail ? 1 : 0);

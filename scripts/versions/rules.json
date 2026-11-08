@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "CVE floors. The threshold is NOT hardcoded here for normal freshness — that",
+    "comes live from the endoflife.date feed (latest patch of the branch). This",
+    "file exists only for the cases a security bulletin pins more precisely than",
+    "'latest', and for branches that must be treated as dead regardless of what",
+    "the feed says.",
+    "",
+    "Shape: runtimes.<feed-product>.<cycle> = '<minimum safe version>' | 'eol'.",
+    "A floor stronger than the feed wins; 'eol' is an unreachable value so the",
+    "branch can never come back green."
+  ],
+  "runtimes": {
+    "nodejs": {
+      "20": "eol"
+    },
+    "go": {
+      "1.23": "eol"
+    }
+  }
+}
