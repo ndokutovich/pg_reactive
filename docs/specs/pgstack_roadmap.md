@@ -1,7 +1,7 @@
 # pgStack Project Roadmap
 
-**Last Updated:** 2026-03-01
-**Status:** Phase 3 (GA Preparation) in progress
+**Last Updated:** 2026-11-09
+**Status:** Phase 3 (GA Preparation) complete — public release pending
 
 ---
 
@@ -161,21 +161,31 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 
 ---
 
-## Phase 3 -- GA Preparation (CURRENT)
+## Phase 3 -- GA Preparation (COMPLETE)
 
 **Goal:** Harden the platform for general availability. Complete testing and documentation. (Proxy parity is settled: the Go proxy is the primary implementation and exceeds the Rust reference.)
 
 | Task | Status |
 |------|--------|
-| Go proxy feature parity with Rust proxy | Done — Go proxy is primary and exceeds it (edge functions, batch endpoint, TLS autocert); Rust proxy kept as reference |
+| Go proxy feature parity with Rust proxy | Done — Go proxy is primary and exceeds it (edge functions, batch endpoint, TLS autocert); Rust proxy kept at security parity |
 | Advanced query type testing (recursive CTEs, lateral joins) | Done |
 | Batch invalidation optimization | Done |
 | OpenAPI auto-generation from catalog | Done |
 | Studio Playwright E2E tests | Done |
-| Updated specification documents (this document) | In progress |
-| Landing page and marketing site | Planned |
-| npm package publishing preparation | Planned |
-| Docker Hub image publishing preparation | Planned |
+| Updated specification documents (this document) | Done |
+| Landing page and marketing site | Done — pgstack.org |
+| npm package publishing preparation | Done — `@pgstack/sdk` and `pgstack` at 0.3.3, trusted publishing over OIDC |
+| Docker Hub image publishing preparation | Done — four images at 0.3.3, promoted from CI by digest |
+| Version inventory and freshness gate | Done — `docs/VERSIONS.md`, checked weekly in CI |
+
+### Release surfaces
+
+| Surface | What ships |
+|---------|-----------|
+| npm | `@pgstack/sdk`, `pgstack` |
+| Docker Hub | `pgstack-proxy`, `pgstack-proxy-rust`, `pgstack-postgres`, `pgstack-all-in-one` |
+| GHCR | The same four images, built once per commit and promoted by digest |
+| GitHub Releases | One per tag, with the changelog section |
 
 ---
 
@@ -185,7 +195,7 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 |-----------|-----------|-----------------|
 | C Extension | C, PostgreSQL SPI/shmem | ~3,000 |
 | Go Proxy | Go, chi, pgx, zerolog | ~14,000 |
-| Rust Proxy (legacy) | Rust, axum, sqlx | ~3,200 |
+| Rust Proxy | Rust, axum, sqlx | ~3,200 |
 | TypeScript SDK | TypeScript | ~2,500 |
 | TypeScript CLI | TypeScript, commander | ~2,000 |
 | Studio (React SPA) | React, Vite, Tailwind CSS | ~8,000 |
@@ -266,6 +276,6 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 ```
 2025-Q3    Phase 1: pg_reactive standalone       [COMPLETE]
 2025-Q4    Phase 2: pgStack MVP                  [COMPLETE]
-2026-Q1    Phase 3: GA Preparation               [IN PROGRESS]
-2026-Q2    Open source release                   [PLANNED]
+2026-Q1    Phase 3: GA Preparation               [COMPLETE]
+2026-Q2    Open source release                   [PENDING]
 ```
