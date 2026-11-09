@@ -3,4 +3,11 @@
 # Pulled in transitively via sqlx-mysql 0.8.6. No fixed version is available
 # upstream. We do not use RSA key operations directly; this is a sqlx internal
 # dependency. Suppress until a fix is released.
-ignore = ["RUSTSEC-2023-0071"]
+#
+# RUSTSEC-2026-0459: CVE-2026-119375 in the SQLite bundled by libsqlite3-sys
+# 0.30.1, reached through sqlx-sqlite 0.8.6. sqlx 0.8 resolves every driver
+# into Cargo.lock but compiles only the features enabled here
+# (`runtime-tokio`, `postgres`); `cargo tree -i sqlx-sqlite` finds nothing, so
+# no SQLite code is linked. The fix (libsqlite3-sys >= 0.39) needs a sqlx
+# major. Suppress until then — revisit when sqlx 0.9 lands.
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0459"]
