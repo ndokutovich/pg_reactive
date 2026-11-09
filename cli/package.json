@@ -1,11 +1,15 @@
 {
   "name": "pgstack",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Postgres-native backend platform. One PostgreSQL. Zero extra containers.",
+  "homepage": "https://pgstack.org",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ndokutovich/pg_reactive.git",
     "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/ndokutovich/pg_reactive/issues"
   },
   "type": "module",
   "bin": {
