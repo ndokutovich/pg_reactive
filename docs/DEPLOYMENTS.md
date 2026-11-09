@@ -12,7 +12,7 @@ registries, what runs on the live VPS, and the pipelines that put it there.
 
 ## 1. Published artifacts (registries)
 
-Cut by tagging `vX.Y.Z` → `release.yml` (runs on `ubuntu-latest`). Build-once /
+Cut by tagging `vX.Y.Z` → `release.yml` (runs on `ubuntu-24.04`). Build-once /
 promote-by-digest: the CI candidate builds + smokes + `sha-<commit>`-tags; the
 release **promotes that exact digest** (no rebuild). Current: **v0.2.0**.
 
@@ -83,7 +83,7 @@ pipeline): the **all-in-one** (`pgstack/pgstack`) + 6 engines
 | Workflow | Trigger | Runner | Does |
 |----------|---------|--------|------|
 | `ci.yml` → `build-publish-images` | master push | **self-hosted** | build-once 4 multi-arch images, smoke each digest, create `sha-<commit>` tags |
-| `release.yml` | `v*` tag | **ubuntu-latest** | promote `sha-<commit>` digests → version tags (GHCR + Docker Hub mirror); publish npm; GitHub Release |
+| `release.yml` | `v*` tag | **ubuntu-24.04** | promote `sha-<commit>` digests → version tags (GHCR + Docker Hub mirror); publish npm; GitHub Release |
 | `deploy.yml` | master / dispatch | **self-hosted (the VPS)** | SSH deploy main app + polyglot showcase to the live VPS |
 
 - Self-hosted runner = local Docker Desktop; network occasionally flakes on the

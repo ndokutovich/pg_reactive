@@ -36,7 +36,7 @@ SOURCE=published VERSION=0.2.0 bash tests/e2e_cli_sdk/runner.sh
 
 ## Notes
 
-- Runs on a clean host (CI: `ubuntu-latest`). The self-hosted runners are usually
+- Runs on a clean host (CI: `ubuntu-24.04`). The self-hosted runners are usually
   saturated (4 runners + multi-arch candidate builds), which starves a co-located
   PostgreSQL and makes heavy `CREATE EXTENSION` / `pgr.subscribe` calls flake — run
   it where the machine isn't already loaded.
