@@ -27,7 +27,7 @@ jobs:
   # ─── Extension tests (pg_regress + isolation) ───────────────────────────────
   test-extension:
     name: Extension tests
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,7 +81,7 @@ jobs:
   # catches the next such removal before a PGXN user does.
   ext-pg-compat:
     name: Extension PG 15-18 matrix (PGXN)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,7 +102,7 @@ jobs:
   # Rust is now a sibling and a release gate.)
   test-proxy-go:
     name: Proxy (Go)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -136,7 +136,7 @@ jobs:
   # release. clippy -D warnings, fmt --check, build, and unit tests.
   test-proxy:
     name: Proxy (Rust)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -181,7 +181,7 @@ jobs:
   # ─── TypeScript SDK ──────────────────────────────────────────────────────────
   test-sdk:
     name: SDK (TypeScript)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -224,7 +224,7 @@ jobs:
   # ─── CLI ────────────────────────────────────────────────────────────────────
   test-cli:
     name: CLI (TypeScript)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -330,7 +330,7 @@ jobs:
   # such test behind, per the SECURITY.md ritual.
   test-security:
     name: Adversarial security
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -450,7 +450,7 @@ jobs:
   # deploy to a public VPS to discover the prod posture is broken.
   test-prod-validator:
     name: Production validator
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -562,7 +562,7 @@ jobs:
   # ─── E2E tests (full stack) ──────────────────────────────────────────────────
   test-e2e:
     name: E2E tests
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension, test-proxy-go, test-sdk]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -675,7 +675,7 @@ jobs:
   # ─── Integration tests ───────────────────────────────────────────────────────
   test-integration:
     name: Integration tests
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -706,7 +706,7 @@ jobs:
   # assert the worker connects + delivers an async delta. gemini audit R9-3.
   test-async-bgworker:
     name: Async recompute bgworker
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     needs: [test-extension]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -733,7 +733,7 @@ jobs:
   # ─── Security audit ──────────────────────────────────────────────────────────
   security:
     name: Security audit
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -791,7 +791,7 @@ jobs:
   # patch an hour ago" would redden unrelated work.
   versions:
     name: Version inventory
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

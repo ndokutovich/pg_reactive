@@ -16,7 +16,7 @@ permissions:
 jobs:
   pgxn-publish:
     name: PGXN — pg_reactive extension
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: read

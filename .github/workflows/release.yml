@@ -16,7 +16,7 @@ jobs:
   # this one, so a missing/failed CI run for the tagged SHA aborts the release.
   ci-gate:
     name: Require green CI for the tagged commit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: read
@@ -45,7 +45,7 @@ jobs:
   docker-proxy:
     name: Docker — pgstack-proxy
     needs: ci-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -91,7 +91,7 @@ jobs:
   docker-proxy-rust:
     name: Docker — pgstack-proxy-rust
     needs: ci-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -131,7 +131,7 @@ jobs:
   docker-postgres:
     name: Docker — pgstack-postgres
     needs: ci-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -172,7 +172,7 @@ jobs:
   docker-all-in-one:
     name: Docker — pgstack-all-in-one
     needs: ci-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -212,7 +212,7 @@ jobs:
   npm-sdk:
     name: npm — @pgstack/sdk
     needs: ci-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       # Trusted publishing: npm exchanges this short-lived OIDC token for a
@@ -257,7 +257,7 @@ jobs:
   npm-cli:
     name: npm — pgstack CLI
     needs: ci-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       # Trusted publishing — see npm-sdk above.
@@ -294,7 +294,7 @@ jobs:
   # ─── GitHub Release ──────────────────────────────────────────────────────────
   github-release:
     name: GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [docker-proxy, docker-proxy-rust, docker-postgres, docker-all-in-one, npm-sdk, npm-cli]
     permissions:
       contents: write
