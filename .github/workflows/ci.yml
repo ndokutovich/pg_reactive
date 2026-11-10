@@ -211,9 +211,10 @@ jobs:
 
       - name: Tests
         working-directory: sdk
-        env:
-          PG_HOST: db
-          PG_TEST_PORT: "5432"
+        # The suite defaults to 127.0.0.1:15432, which is exactly where compose
+        # publishes the database on the runner — no override needed (the old
+        # PG_HOST=db pointed at a name only resolvable from inside the compose
+        # network, which a hosted runner is not).
         run: npm test
 
       - name: Build
