@@ -17,7 +17,6 @@ import { readFileSync, existsSync } from 'node:fs';
 
 const FILES = [
   'public/index.html',
-  'docs/pgstack-landing/index.html',
 ];
 
 // Attribute carries an asset URL that the browser fetches as a sub-resource.
