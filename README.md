@@ -272,8 +272,10 @@ doesn't fit.
 
 ## Testing
 
-Per-component test commands and the full E2E matrix (~350 tests) are
-documented in [`CLAUDE.md`](CLAUDE.md). At the highest level:
+292 unit tests (SDK 92, CLI 160, Studio 40) plus 41 end-to-end, security and
+integration scripts, 21 regression and isolation files, and 7 perf benchmarks —
+all run in CI on every push. Per-component commands are in
+[`CLAUDE.md`](CLAUDE.md). At the highest level:
 
 ```bash
 # Extension (pg_regress + isolation)
@@ -287,7 +289,7 @@ cd sdk && npm test
 cd cli && npm test
 
 # E2E (requires docker compose up)
-node tests/e2e_ws_test.mjs       # …and 13 other E2E suites
+node tests/e2e_ws_test.mjs       # …and 23 other E2E suites
 bash tests/perf/runner.sh         # full perf suite (~10 min)
 ```
 

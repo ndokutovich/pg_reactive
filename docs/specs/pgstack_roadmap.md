@@ -30,8 +30,8 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 - Rust WebSocket proxy (reference implementation; modular axum + sqlx)
 - TypeScript SDK with LiveQuery class, local snapshot management, React hook
 - 12 example dashboards demonstrating various query types
-- pg_regress tests (12 SQL test files)
-- Isolation tests (3 concurrency specs)
+- pg_regress tests (17 SQL test files)
+- Isolation tests (4 concurrency specs)
 - Integration and E2E test suites
 - Performance benchmarks (P1-P7)
 
@@ -154,7 +154,7 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 
 | Item | Status |
 |------|--------|
-| Docusaurus 3 documentation site (39 pages, 9 sidebar categories) | Done |
+| Docusaurus 3 documentation site (37 pages, 8 sidebar categories) | Done |
 | CI/CD pipelines (GitHub Actions) | Done |
 | Docker images (GHCR) | Done |
 | Production docker-compose with .env.example | Done |
@@ -251,23 +251,21 @@ Every feature is a SQL function, an extension, or a row-level security policy. T
 
 | Category | Count | Technology |
 |----------|-------|------------|
-| pg_regress (C extension) | 12 files | SQL |
-| Isolation tests | 3 specs | pg_isolation_regress |
-| SDK unit tests | 73 tests | Vitest |
+| pg_regress (C extension) | 17 files | SQL |
+| Isolation tests | 4 specs | pg_isolation_regress |
+| SDK unit tests | 92 tests | Vitest |
 | CLI tests | 160 tests | Vitest |
-| E2E auth tests | 37 tests | Node.js |
-| E2E REST tests | 34 tests | Node.js |
-| E2E SDK tests | 29 tests | Node.js |
-| E2E embed/RPC tests | 40 tests | Node.js |
-| E2E realtime tests | 3 scripts | Node.js |
-| Integration tests | 2 scripts | Python |
-| Performance tests (P1-P7) | 7 benchmarks | Python + Node.js |
 | Studio Playwright tests | 40 tests | Playwright |
-| Security regression tests | 7 scripts | Node.js |
+| E2E suites | 24 scripts | Node.js |
+| Security regression tests | 12 scripts | Node.js |
+| Integration tests | 5 scripts | Python |
+| Performance tests (P1-P7) | 7 benchmarks | Python + Node.js |
 | Security lint | 1 script (SEC-R* rules) | Node.js |
 | Doc SQL smoke test | 1 harness | Node.js |
-| E2E batch/gzip/static-hosting/RLS/OAuth/RPC/embed | 7 scripts | Node.js |
-| **Total** | **350+ tests** | |
+
+Every count above is what the tree contains today; the numbers are checked
+against `git ls-files` rather than carried forward from an earlier phase.
+Unit tests total 292 across the three suites.
 
 ---
 

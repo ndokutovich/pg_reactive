@@ -52,10 +52,10 @@ rather than duplicating it — do not fork the boot logic into those repos.
 # Build + install
 docker compose exec -T db bash -c 'cd /ext/ext && make clean && make && make install'
 
-# pg_regress tests (12 SQL test files)
+# pg_regress tests (17 SQL test files)
 docker compose exec -T db bash -c 'su - postgres -c "cd /ext/ext && make installcheck"'
 
-# Isolation tests (3 concurrency specs)
+# Isolation tests (4 concurrency specs)
 docker compose exec -T db bash -c 'su - postgres -c "cd /ext/ext && make isolation_installcheck"'
 
 # Both together

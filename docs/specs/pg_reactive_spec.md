@@ -1,8 +1,15 @@
 # pg_reactive Technical Specification
 
 **Version:** 0.1.4
-**Last Updated:** 2026-06-11
+**Last Updated:** 2026-11-10
 **Status:** Production-ready (Phase 1 complete)
+
+> This document describes the extension **as of 0.1.4**. Work after that
+> version — per-message subscription generations (`gen`, `resubscribed`), the
+> rollback journal, and the recompute-role split — is not specified here; those
+> are documented in the source and in [`ext/README.md`](../../ext/README.md).
+> Do not treat this file as a description of current behaviour without
+> checking the code.
 
 ---
 
@@ -614,8 +621,8 @@ Use `DELETE` instead of `TRUNCATE` for snapshot tables inside trigger SPI contex
 
 | Test Type | Count | Command |
 |-----------|-------|---------|
-| pg_regress (SQL) | 12 files | `make installcheck` |
-| Isolation (concurrency) | 3 specs | `make isolation_installcheck` |
-| Integration (Python) | 3 scripts | `test_shmem_pressure.py`, `test_notify_throughput.py`, `test_lru_eviction.py` |
-| E2E (Node.js) | 4 scripts (realtime core) | `e2e_ws_test.mjs`, `e2e_fanout_test.mjs`, `e2e_jwt_test.mjs`, `e2e_gzip_test.mjs` (10 further pgStack-level `e2e_*.mjs` scripts live in `tests/`) |
+| pg_regress (SQL) | 17 files | `make installcheck` |
+| Isolation (concurrency) | 4 specs | `make isolation_installcheck` |
+| Integration (Python) | 5 scripts | `test_shmem_pressure.py`, `test_notify_throughput.py`, `test_lru_eviction.py`, `test_cross_db_isolation.py`, `test_async_recompute.py` |
+| E2E (Node.js) | 24 scripts | `e2e_*.mjs` in `tests/` — the realtime core (`e2e_ws_test.mjs`, `e2e_fanout_test.mjs`, `e2e_jwt_test.mjs`, `e2e_gzip_test.mjs`) plus the pgStack-level suites |
 | Performance (P1-P7) | 7 benchmarks | `tests/perf/runner.sh` |

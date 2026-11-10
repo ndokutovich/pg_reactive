@@ -26,14 +26,16 @@ Then open the Studio at the URL `pgstack dev` prints.
 |---|---|
 | `pgstack init` | Create a new project |
 | `pgstack dev` | Start PostgreSQL and the proxy locally |
+| `pgstack stop` | Stop the project's containers |
+| `pgstack status` | Show the state of the running services |
+| `pgstack logs` | Tail the project's container logs |
 | `pgstack deploy` | Deploy to a remote Docker host over SSH |
 | `pgstack migration` | Create, apply and roll back migrations |
+| `pgstack db` | Database management — `db shell` opens psql |
 | `pgstack functions` | Manage edge functions |
-| `pgstack db` | Database management |
 | `pgstack studio` | Open the Studio UI |
 | `pgstack generate` | Code generation |
 | `pgstack dbos` | Durable job queue |
-| `pgstack shell` | Open a psql shell against the project database |
 
 Run any command with `--help` for its options.
 

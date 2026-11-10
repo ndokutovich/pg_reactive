@@ -239,4 +239,5 @@ docker compose exec db psql -U postgres -c \
   "SELECT extversion FROM pg_extension WHERE extname = 'pg_reactive';"
 ```
 
-Upgrade scripts are cumulative (for example `0.1.2 → 0.1.3 → 0.1.4`); `ALTER EXTENSION ... UPDATE` chains them automatically.
+Upgrade scripts are cumulative — `ALTER EXTENSION ... UPDATE` chains them, so a
+cluster on any earlier version lands on 0.1.8 in one statement.

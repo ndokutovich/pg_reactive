@@ -72,7 +72,7 @@ Containers:
   proxy  running (healthy)
 
 Proxy health:
-  healthy v0.1.0  http://127.0.0.1:8080/health
+  healthy  http://127.0.0.1:8080/health
 
 Migrations:
   All migrations applied  (3 total)
