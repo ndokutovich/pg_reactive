@@ -13,6 +13,8 @@ img="${1:?usage: smoke-proxy.sh <image-ref>}"
 docker_cli="${DOCKER_CLI:-docker}"
 for plat in linux/amd64 linux/arm64; do
   echo "=== pgstack-proxy smoke on ${plat} ==="
+  # See smoke-postgres.sh: one repo@digest reference cannot hold two platforms.
+  "$docker_cli" rmi "$img" >/dev/null 2>&1 || true
   set +e
   out="$("$docker_cli" run --rm --platform "$plat" --pull=always -e PGSTACK_ENV=production \
     -e JWT_SECRET=dev-only-jwt-secret-do-not-use-in-production \

@@ -13,6 +13,10 @@ docker_cli="${DOCKER_CLI:-docker}"
 for plat in linux/amd64 linux/arm64; do
   echo "=== pgstack-postgres smoke on ${plat} ==="
   "$docker_cli" rm -f cand-db >/dev/null 2>&1 || true
+  # A manifest-list digest resolves to a different image per platform, but a
+  # classic image store files both under the same repo@digest reference — the
+  # second pull dies with "cannot overwrite digest". Drop the previous one.
+  "$docker_cli" rmi "$img" >/dev/null 2>&1 || true
   "$docker_cli" run -d --platform "$plat" --pull=always --name cand-db -e POSTGRES_DB=pg_reactive_test \
     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
     "$img" postgres -c shared_preload_libraries=pg_reactive -c log_min_messages=warning

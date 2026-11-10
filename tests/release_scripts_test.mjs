@@ -132,6 +132,10 @@ resetLog();
 const smP = run("smoke-postgres.sh", ["ghcr.io/o/pgstack-postgres@sha256:abc"], { env: { ...process.env, DOCKER_CLI: bashPath(dockerStub) } });
 ok(smP.code === 0, "smoke-postgres.sh passes against a healthy stubbed image");
 ok(/run -d[\s\S]*linux\/amd64/.test(log()) && /run -d[\s\S]*linux\/arm64/.test(log()) && /CREATE EXTENSION/.test(log()), "smoke-postgres boots BOTH amd64+arm64 AND runs CREATE EXTENSION (R29: not arm64 only)");
+// A classic image store cannot hold two platforms under one repo@digest
+// reference: the arm64 pull fails with "cannot overwrite digest" unless the
+// amd64 image is dropped first (seen on a hosted runner, 2026-11-11).
+ok(/run -d[^\n]*linux\/amd64[\s\S]*rmi [^\n]*pgstack-postgres@sha256:abc[\s\S]*run -d[^\n]*linux\/arm64/.test(log()), "smoke-postgres drops the amd64 image before pulling arm64 under the same digest ref");
 // smoke-proxy: runs the validator on both arches; passes because it rejects.
 resetLog();
 const smX = run("smoke-proxy.sh", ["ghcr.io/o/pgstack-proxy@sha256:abc"], { env: { ...process.env, DOCKER_CLI: bashPath(dockerStub) } });
