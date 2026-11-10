@@ -1,6 +1,6 @@
 {
   "name": "pgstack",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Postgres-native backend platform. One PostgreSQL. Zero extra containers.",
   "homepage": "https://pgstack.org",
   "repository": {

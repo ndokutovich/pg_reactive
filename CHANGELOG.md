@@ -5,6 +5,60 @@ All notable changes to pg_reactive / pgStack are tracked here. Format follows
 semantic versioning per component (the PostgreSQL extension version is
 declared in `ext/pg_reactive.control`).
 
+## [0.3.4] — 2026-11-10
+
+### Security
+- **openssl 0.10.75 → 0.10.82** in the Rust proxy image — closes
+  RUSTSEC-2026-0463 (out-of-bounds write in `aes::unwrap_key`), reached for
+  real through `native-tls` from `reqwest` and `lettre`.
+- RUSTSEC-2026-0459 (`libsqlite3-sys` 0.30.1) is recorded in
+  `proxy/.cargo/audit.toml` with its exit condition. sqlx 0.8 resolves every
+  driver into `Cargo.lock`, but only `runtime-tokio`+`postgres` are enabled, so
+  no SQLite code is linked — `cargo tree -i sqlx-sqlite` is empty.
+
+### Added
+- **npm provenance.** The source repository is public, so trusted publishing
+  attaches a sigstore attestation automatically: `npm audit signatures` now
+  works for both packages.
+
+### Fixed
+- The `pgstack` package README listed `pgstack shell`, which never existed —
+  the command is `pgstack db shell` — and omitted `stop`, `status` and `logs`.
+  Checked against `pgstack --help` on the built binary.
+
+## [0.3.3] — 2026-11-09
+
+### Fixed
+- `repository` declared in both package manifests — npm rejects a publish
+  without it.
+- Both packages now ship a README; the npm page had been rendering
+  `ERROR: No README data found!`.
+- Rust 1.99 rejects the redundant `into_iter()` in `proxy/src/rest/rpc.rs`.
+- `deploy.yml`: `script_stop` removed — ssh-action v1.2.5 no longer declares it.
+
+### Changed
+- Every runtime moved off a dead branch: Node 20 → 24, Go 1.23 → 1.26.10,
+  Rust 1.85 → 1.99. GitHub Actions moved off deprecated Node 20 runtimes.
+
+## [0.3.2] — 2026-11-08
+
+### Added
+- **Version inventory** (`scripts/versions/`, `docs/VERSIONS.md`): every pin
+  that decides what runs, a snapshot gate in CI, and a weekly freshness run
+  that fails on an EOL runtime. Silence is never green.
+- PGXN packaging for the extension (round 48): `ext/META.json`, the
+  consolidated `pg_reactive--0.1.8.sql`, and a PG 15–18 compatibility matrix
+  proving all four majors on bare PGDG images.
+
+### Changed
+- npm publishing moved to **trusted publishing over OIDC** — no long-lived
+  `NPM_TOKEN` left to expire or leak.
+- Polyglot .NET engine moved from .NET 8 to .NET 10.
+
+### Fixed
+- Advisories that ripened during the idle period: rustls 0.23.45
+  (RUSTSEC-2026-0285) and image-size 2.0.4 in the docs site.
+
 ## [ext 0.1.8 on PGXN] — 2026-09-19
 
 ### Added (round 48 — PGXN packaging + PG 15-18 support matrix)
