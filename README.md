@@ -22,12 +22,29 @@ lock-in, no per-row pricing, no proprietary protocol on top of PG.
 | **CLI** (`cli/`) | `pgstack init`, `pgstack dev`, migration management, type generation, project scaffolding | `pgstack` on npm |
 | **pg_reactive** (`ext/`) | PostgreSQL extension: live `SELECT` subscriptions with delta `NOTIFY`s. The realtime backend pgStack uses | Standalone — see [`ext/README.md`](ext/README.md) |
 
-## Quick start
+## Install
+
+Nothing below requires cloning the repository. Pick the row that matches what
+you want to run — the whole platform, the client library, or the extension on
+its own.
+
+| You want | Use |
+|---|---|
+| A new project, wired and running | [`npx pgstack init`](#1--scaffold-a-project-cli) |
+| The platform on a server | [Docker images](#2--the-platform-as-containers) |
+| The SDK in an existing app | [`npm install @pgstack/sdk`](#3--the-sdk-in-your-app) |
+| Only reactive SQL, inside your own cluster | [PGXN](#4--the-extension-alone) |
+
+### 1 — Scaffold a project (CLI)
+
+Generates a `docker-compose.yml`, an `.env` with freshly generated secrets, a
+migration directory and a starter page. The compose file uses the published
+images, so nothing is compiled.
 
 ```bash
-git clone https://github.com/ndokutovich/pg_reactive.git
-cd pg_reactive
-docker compose up -d --build
+npx pgstack init my-app
+cd my-app
+npx pgstack dev
 ```
 
 Then:
@@ -38,20 +55,79 @@ Then:
 - Studio: `http://127.0.0.1:8080/studio/`
 - Postgres: `127.0.0.1:15432`
 
-Or scaffold a fresh project with the CLI:
+### 2 — The platform as containers
+
+Four images, published to both registries on every release. Tags are the
+version (`0.3.3`), the minor line (`0.3`) and `latest`.
+
+| Image | Docker Hub | GHCR |
+|---|---|---|
+| Go proxy | `pgstack/pgstack-proxy` | `ghcr.io/ndokutovich/pgstack-proxy` |
+| PostgreSQL 16 + `pg_reactive` | `pgstack/pgstack-postgres` | `ghcr.io/ndokutovich/pgstack-postgres` |
+| PostgreSQL + extension + proxy in one container | `pgstack/pgstack-all-in-one` | `ghcr.io/ndokutovich/pgstack-all-in-one` |
+| Rust proxy (security-parity sibling) | `pgstack/pgstack-proxy-rust` | `ghcr.io/ndokutovich/pgstack-proxy-rust` |
 
 ```bash
-npx pgstack init my-app
-cd my-app
-npx pgstack dev
+# any image in the table above, at a pinned release:
+docker pull pgstack/pgstack-all-in-one:0.3.3
 ```
 
-Or take just the PostgreSQL extension (no proxy/pgStack) from
-[PGXN](https://pgxn.org/dist/pg_reactive/) into an existing 15–18 cluster:
+For a real deployment, [`docker-compose.prod.yml`](docker-compose.prod.yml)
+puts the same images behind persistent volumes, resource limits and the strict
+production validator, with TLS delegated to a reverse proxy by default:
 
 ```bash
-pgxn install pg_reactive
+curl -fsSLO https://raw.githubusercontent.com/ndokutovich/pg_reactive/master/docker-compose.prod.yml
+curl -fsSLO https://raw.githubusercontent.com/ndokutovich/pg_reactive/master/.env.example
+cp .env.example .env          # fill in the secrets; see "Configuration" below
+docker compose -f docker-compose.prod.yml up -d
 ```
+
+Compose fail-fasts with `POSTGRES_PASSWORD required` (and so on) rather than
+starting with a half-configured stack, and the proxy repeats the check at boot:
+in `PGSTACK_ENV=production` it refuses placeholder values, short keys, and a
+missing SMTP configuration.
+
+### 3 — The SDK in your app
+
+```bash
+npm install @pgstack/sdk
+```
+
+REST, auth, realtime and edge functions against any pgStack instance — see
+[Use it from your app](#use-it-from-your-app) below.
+
+### 4 — The extension alone
+
+Just the `pg_reactive` C extension in an existing PostgreSQL 15–18 cluster, no
+proxy and no pgStack. Deltas arrive as JSON on the `pgr` NOTIFY channel, so any
+`LISTEN`-capable client can consume them.
+
+```bash
+pgxn install pg_reactive          # https://pgxn.org/dist/pg_reactive/
+```
+
+```ini
+# postgresql.conf
+shared_preload_libraries = 'pg_reactive'
+```
+
+Restart PostgreSQL, then `CREATE EXTENSION pg_reactive;`. See
+[`ext/README.md`](ext/README.md) for the `pgr.subscribe()` API.
+
+The extension versions on its own line — 0.1.8 today, while the platform is at
+0.3.3 — because it has its own release cadence and its own license.
+
+### From source
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers cloning and `docker compose up
+--build`, which compiles the extension and both proxies locally.
+
+## Configuration
+
+Copy `.env.example` to `.env` and fill it in. The secrets that must be real —
+variables the stack will refuse to start without — are listed with generation
+recipes in [`docs/site/docs/installation.md`](docs/site/docs/installation.md).
 
 ## Use it from your app
 
@@ -82,27 +158,30 @@ const { data } = await client.functions.invoke("process-order", {
 });
 ```
 
-## Production deployment
+## Deploying
 
-`examples/docker-compose.prod.yml` is the canonical production overlay:
-fail-fast on missing secrets, `PGSTACK_ENV=production` strict validator,
-no host ports by default (traffic enters only through the umbrella nginx
-over the shared `gateway` network), scram-sha-256 auth,
-`REQUIRE_AUTHENTICATED_WS=true`. For a standalone single-box deploy with
-`127.0.0.1` port bindings and `TLS_MODE=auto` (autocert), use the root
-`docker-compose.prod.yml` instead.
+Two compose files ship, for two network postures.
 
-A fresh VPS bootstrap is one script:
+- **[`docker-compose.prod.yml`](docker-compose.prod.yml)** — one box. Binds the
+  proxy to `127.0.0.1:8080` and leaves TLS to a reverse proxy in front
+  (`TLS_MODE=off`); set `TLS_MODE=auto` to have the proxy fetch certificates
+  itself through ACME.
+- **[`examples/docker-compose.prod.yml`](examples/docker-compose.prod.yml)** —
+  overlay for a shared gateway: publishes no host ports, expects traffic
+  through your own reverse proxy on a `gateway` network, and stacks the
+  production guards on top of `examples/docker-compose.yml`.
+
+Both fail fast on missing secrets and run the same `PGSTACK_ENV=production`
+validator. Generate every secret once:
 
 ```bash
-bash scripts/bootstrap-env.sh   # idempotent: generates real secrets via openssl rand
-docker compose --env-file .env -f examples/docker-compose.yml \
-                                -f examples/docker-compose.prod.yml up -d
+bash scripts/bootstrap-env.sh   # idempotent; never overwrites existing values
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-Push to `master` triggers `.github/workflows/deploy.yml` which SSHes to
-the VPS and re-deploys. See [`docs/site/`](docs/site/) for the full
-deployment guide.
+Full deployment guide: [`docs/site/`](docs/site/). The CI/CD pipeline that
+builds and promotes these images is documented in
+[`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md).
 
 ## Architecture at a glance
 
@@ -229,12 +308,15 @@ scripts/              bootstrap-env.sh and friends
 
 ## Requirements
 
-- PostgreSQL 15–18 for the extension itself (each major CI-proven: full
-  pg_regress + isolation on bare PGDG images); the bundled pgStack images ship
-  PostgreSQL 16
-- Go 1.25.11 or a patched newer toolchain (for proxy) — the CI-verified build pins `go1.25.11`, on which `govulncheck` is clean; older 1.25.x patch releases may carry unpatched stdlib advisories
-- Node.js 18+ (for SDK and CLI)
-- Docker and Docker Compose (for development)
+**To run a published artifact:** Docker 20.10+ with Compose v2 — or nothing at
+all if you only take the SDK, and a PostgreSQL 15–18 cluster if you only take
+the extension. Every PostgreSQL major is CI-proven with the full regression and
+isolation suite on bare PGDG images; the bundled images ship PostgreSQL 16.
+
+**To build from source:** Docker and Compose, Go 1.26.10 (the CI-verified
+toolchain, on which `govulncheck` is clean), and Node.js 24 for the SDK and CLI
+build chains. The pinned versions live in [`docs/VERSIONS.md`](docs/VERSIONS.md)
+and are re-checked weekly by CI.
 
 ## License
 

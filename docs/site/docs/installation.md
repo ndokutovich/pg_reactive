@@ -49,7 +49,21 @@ The `--build` flag compiles the PostgreSQL extension and the proxy from source. 
 
 ## Option 3: Pre-built images (production)
 
-Use the production compose file with pre-built images from GitHub Container Registry:
+No build step. Every release publishes four images to **both** registries, under
+the same tags (`0.3.3`, the minor line `0.3`, and `latest`):
+
+| Image | Docker Hub | GHCR |
+|---|---|---|
+| Go proxy | `pgstack/pgstack-proxy` | `ghcr.io/ndokutovich/pgstack-proxy` |
+| PostgreSQL 16 + `pg_reactive` | `pgstack/pgstack-postgres` | `ghcr.io/ndokutovich/pgstack-postgres` |
+| All-in-one quickstart | `pgstack/pgstack-all-in-one` | `ghcr.io/ndokutovich/pgstack-all-in-one` |
+| Rust proxy | `pgstack/pgstack-proxy-rust` | `ghcr.io/ndokutovich/pgstack-proxy-rust` |
+
+`docker-compose.prod.yml` references `ghcr.io/…:latest`, which tracks the newest
+release. For a deployment you intend to keep, pin a concrete version in both
+`image:` lines — `:latest` will otherwise move under you on the next release.
+
+Use the production compose file with pre-built images:
 
 ```bash
 curl -O https://raw.githubusercontent.com/ndokutovich/pg_reactive/master/docker-compose.prod.yml
