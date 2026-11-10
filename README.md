@@ -1,4 +1,13 @@
+![pgStack — PostgreSQL is the application server](docs/assets/banner.png)
+
 # pgStack
+
+[![CI](https://img.shields.io/github/actions/workflow/status/ndokutovich/pg_reactive/ci.yml?branch=master&label=CI)](https://github.com/ndokutovich/pg_reactive/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/pgstack?label=npm)](https://www.npmjs.com/package/pgstack)
+[![npm downloads](https://img.shields.io/npm/dm/pgstack?label=downloads%2Fmonth)](https://www.npmjs.com/package/pgstack)
+[![Docker pulls](https://img.shields.io/docker/pulls/pgstack/pgstack-proxy?label=docker%20pulls)](https://hub.docker.com/r/pgstack/pgstack-proxy)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20%7C%20PostgreSQL-blue)](#license)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15--18-336791)
 
 **An open-source Supabase alternative you can run on any VPS with one `docker compose up`.**
 

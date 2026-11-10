@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-label="pgStack — PostgreSQL is the application server">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#161b22"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#336791" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#336791" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#336791"/>
+      <stop offset="1" stop-color="#ff6b35"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="340" fill="url(#bg)"/>
+  <circle cx="136" cy="166" r="150" fill="url(#glow)"/>
+
+  <g transform="translate(88 120) scale(1.9)">
+    <rect x="4" y="6" width="40" height="36" rx="6" fill="#336791"/>
+    <ellipse cx="24" cy="14" rx="16" ry="5" fill="#5ba3d0"/>
+    <path d="M8 14 Q8 19 24 19 Q40 19 40 14" fill="none" stroke="#5ba3d0" stroke-width="1.2"/>
+    <path d="M8 20 Q8 25 24 25 Q40 25 40 20" fill="none" stroke="#5ba3d0" stroke-width="1.2"/>
+    <path d="M8 26 Q8 31 24 31 Q40 31 40 26" fill="none" stroke="#5ba3d0" stroke-width="1.2"/>
+    <circle cx="36" cy="36" r="9" fill="#ff6b35"/>
+    <text x="36" y="41" text-anchor="middle" font-size="11" font-weight="bold" fill="#ffffff" font-family="Segoe UI, Helvetica, Arial, sans-serif">S</text>
+  </g>
+
+  <text x="212" y="166" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="64" font-weight="700" letter-spacing="-1.5" fill="#e6edf3">pgStack</text>
+  <text x="214" y="208" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="24" fill="#8b949e">PostgreSQL is the application server</text>
+  <rect x="214" y="238" width="210" height="3" rx="1.5" fill="url(#rule)"/>
+
+  <!-- the mechanism, in one glance -->
+  <g font-family="Consolas, Menlo, DejaVu Sans Mono, monospace" font-size="15">
+    <rect x="690" y="86" width="500" height="168" rx="10" fill="#161b22" stroke="#30363d"/>
+    <text x="714" y="120" fill="#8b949e">pgr.subscribe('orders_active',</text>
+    <text x="714" y="142" fill="#8b949e">              $$ SELECT id, total FROM orders $$);</text>
+    <text x="714" y="176" fill="#3fb950">inserted</text>
+    <text x="796" y="176" fill="#e6edf3">[{ "id": 7, "total": 109.99 }]</text>
+    <text x="714" y="198" fill="#f85149">deleted </text>
+    <text x="796" y="198" fill="#e6edf3">[{ "id": 7, "total":  99.99 }]</text>
+    <text x="714" y="228" fill="#484f58">-- the only rows that crossed the wire</text>
+  </g>
+</svg>
