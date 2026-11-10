@@ -36,10 +36,9 @@ SOURCE=published VERSION=0.2.0 bash tests/e2e_cli_sdk/runner.sh
 
 ## Notes
 
-- Runs on a clean host (CI: `ubuntu-24.04`). The self-hosted runners are usually
-  saturated (4 runners + multi-arch candidate builds), which starves a co-located
-  PostgreSQL and makes heavy `CREATE EXTENSION` / `pgr.subscribe` calls flake — run
-  it where the machine isn't already loaded.
+- Runs on a clean host (CI: `ubuntu-24.04`). Run it where the machine is not
+  already loaded: multi-arch candidate builds starve a co-located PostgreSQL and
+  make heavy `CREATE EXTENSION` / `pgr.subscribe` calls flake.
 - The all-in-one ships WITHOUT `pg_reactive` created (the deployment owns extension
   creation; the entrypoint only upgrades/restores a pre-existing one), so the runner
   does `CREATE EXTENSION pg_reactive` before seeding.

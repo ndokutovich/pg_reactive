@@ -82,12 +82,13 @@ pipeline): the **all-in-one** (`pgstack/pgstack`) + 6 engines
 
 | Workflow | Trigger | Runner | Does |
 |----------|---------|--------|------|
-| `ci.yml` → `build-publish-images` | master push | **self-hosted** | build-once 4 multi-arch images, smoke each digest, create `sha-<commit>` tags |
+| `ci.yml` → `build-publish-images` | master push | **ubuntu-24.04** | build-once 4 multi-arch images, smoke each digest, create `sha-<commit>` tags |
 | `release.yml` | `v*` tag | **ubuntu-24.04** | promote `sha-<commit>` digests → version tags (GHCR + Docker Hub mirror); publish npm; GitHub Release |
-| `deploy.yml` | master / dispatch | **self-hosted (the VPS)** | SSH deploy main app + polyglot showcase to the live VPS |
+| `deploy.yml` | master / dispatch | **ubuntu-24.04** | SSH deploy main app + polyglot showcase to the live VPS |
 
-- Self-hosted runner = local Docker Desktop; network occasionally flakes on the
-  heavy candidate build → just re-run. Release/deploy moved off it where possible.
+- Every job runs on a GitHub-hosted ephemeral VM: the repository is public, and a
+  self-hosted runner reachable from a fork PR is a credential-theft path. The
+  multi-arch build keeps its cargo/dependency layers via `cache-from: type=gha`.
 - Supply-chain integrity (no-rebuild, digest-binding, tag-after-smoke, registry
   allowlist) is enforced by `tests/ci_supply_chain_test.mjs` (mutation-tested).
 

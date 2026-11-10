@@ -245,14 +245,9 @@ jobs:
           NPM_TAG="$(bash "$GITHUB_WORKSPACE/.github/scripts/npm-dist-tag.sh" "$GITHUB_REF_NAME")"
           # Auth is the OIDC exchange (trusted publisher configured on npmjs.com:
           # ndokutovich/pg_reactive, workflow release.yml, no environment).
-          #
-          # --provenance=false is REQUIRED while the repo is private: trusted
-          # publishing turns provenance on by default, and npm/sigstore refuses a
-          # private source repo with 422 "Unsupported GitHub Actions source
-          # repository visibility: private". Consumers therefore can't rely on
-          # `npm audit signatures` (SECURITY.md inv 25). Drop this flag the moment
-          # the repo goes public — attestation then comes for free.
-          npm publish --access public --tag "$NPM_TAG" --provenance=false
+          # Provenance is on by default with trusted publishing, and the source
+          # repo is public, so the sigstore attestation ships with the tarball.
+          npm publish --access public --tag "$NPM_TAG"
 
   npm-cli:
     name: npm — pgstack CLI
@@ -287,9 +282,8 @@ jobs:
           # dist-tag from the execution-tested npm-dist-tag.sh (pre-release -> next,
           # never latest). $GITHUB_WORKSPACE is the repo root (working-directory is the package).
           NPM_TAG="$(bash "$GITHUB_WORKSPACE/.github/scripts/npm-dist-tag.sh" "$GITHUB_REF_NAME")"
-          # Auth is the OIDC exchange; --provenance=false is required while the
-          # repo is private. Full rationale in the npm-sdk job above.
-          npm publish --access public --tag "$NPM_TAG" --provenance=false
+          # Auth is the OIDC exchange; provenance comes with it. See npm-sdk above.
+          npm publish --access public --tag "$NPM_TAG"
 
   # ─── GitHub Release ──────────────────────────────────────────────────────────
   github-release:

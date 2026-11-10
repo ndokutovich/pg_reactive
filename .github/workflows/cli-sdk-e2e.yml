@@ -3,8 +3,7 @@ name: CLI+SDK e2e
 # Dogfood: prove the packaged CLI + SDK work end-to-end (scaffold → compile →
 # live query against the all-in-one). A SEPARATE workflow on purpose — it does NOT
 # feed deploy.yml's "CI is green" gate, so a flaky dockerised e2e can never block a
-# deploy. Runs on ubuntu-24.04 (clean + isolated): the self-hosted runners are
-# usually saturated, which starves the co-located PostgreSQL.
+# deploy. Runs on a clean, isolated hosted VM like everything else.
 on:
   push:
     branches: [master]

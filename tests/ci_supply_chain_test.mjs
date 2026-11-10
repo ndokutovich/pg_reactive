@@ -388,7 +388,8 @@ function scriptsContract() {
 }
 // A job can run UNTRUSTED pull_request code unless its `if` evaluates false under
 // a pull_request event. Push-only-gated jobs (build-publish) thus legitimately
-// hold packages:write and a self-hosted runner; a PR-reachable job must not. No
+// hold packages:write; a PR-reachable job must not. If a self-hosted runner is
+// ever reintroduced, the route taken under pull_request must still be hosted. No
 // `if` → runs on every event (true); parse error → fail closed (true). (finding 7)
 const PR_CTX = { github: { event_name: "pull_request", event: {}, ref: "refs/pull/1/merge", sha: "PRSHA" }, __funcs: { always: true, success: true, failure: false, cancelled: false } };
 const runsOnPR = (j) => { if (!j.if) return true; try { return truthy(ev(String(j.if), PR_CTX)); } catch { return true; } };

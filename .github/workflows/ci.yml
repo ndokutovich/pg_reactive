@@ -16,18 +16,18 @@ env:
 permissions:
   contents: read
 
-# Runner policy (gemini audit finding 3): PR-triggered runs execute UNTRUSTED
-# code, so they must NOT land on the self-hosted runner that also runs deploy/
-# release — a malicious PR could otherwise persist on the box and steal
-# publish/VPS credentials from a later trusted run. Every job below selects its
-# runner via `github.event_name`: `pull_request` -> ephemeral GitHub-hosted
-# (fresh VM, destroyed after the job); `push`/`workflow_dispatch` (trusted) ->
-# the self-hosted runner. deploy.yml / release.yml never trigger on PRs.
+# Runner policy (gemini audit finding 3, revised after the public flip): every
+# job runs on a GitHub-hosted ephemeral VM. The repository is public, so a fork
+# PR executes attacker-supplied code on whatever runner it reaches — a
+# self-hosted runner would let that code persist on the box and read
+# publish/VPS credentials from a later trusted run. A hosted VM is destroyed
+# when the job ends, so there is nothing to persist to. deploy.yml and
+# release.yml never trigger on PRs.
 jobs:
   # ─── Extension tests (pg_regress + isolation) ───────────────────────────────
   test-extension:
     name: Extension tests
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,7 +81,7 @@ jobs:
   # catches the next such removal before a PGXN user does.
   ext-pg-compat:
     name: Extension PG 15-18 matrix (PGXN)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     needs: [test-extension]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,7 +102,7 @@ jobs:
   # Rust is now a sibling and a release gate.)
   test-proxy-go:
     name: Proxy (Go)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -136,7 +136,7 @@ jobs:
   # release. clippy -D warnings, fmt --check, build, and unit tests.
   test-proxy:
     name: Proxy (Rust)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -181,7 +181,7 @@ jobs:
   # ─── TypeScript SDK ──────────────────────────────────────────────────────────
   test-sdk:
     name: SDK (TypeScript)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -197,9 +197,8 @@ jobs:
         run: |
           docker compose up -d --build db
           docker compose exec -T db bash -c 'until pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done'
-          # Self-hosted: join the compose network so the runner can reach
-          # `db:5432` directly without going through host port mapping
-          # (which 127.0.0.1 in this container can't see).
+          # Join the compose network when the runner happens to be a container
+          # (no-op on a hosted VM, where it is the Docker host).
           docker network connect "${COMPOSE_PROJECT_NAME:-pg_reactive}_default" "$(hostname)" || true
 
       - name: Install dependencies
@@ -224,7 +223,7 @@ jobs:
   # ─── CLI ────────────────────────────────────────────────────────────────────
   test-cli:
     name: CLI (TypeScript)
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -330,7 +329,7 @@ jobs:
   # such test behind, per the SECURITY.md ritual.
   test-security:
     name: Adversarial security
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -348,12 +347,11 @@ jobs:
       - name: Bring up stack (REQUIRE_AUTHENTICATED_WS=true)
         run: |
           REQUIRE_AUTHENTICATED_WS=true ALLOW_ANONYMOUS_SIGNIN=true docker compose up -d --build
-          # Health-check from inside the proxy-go container — works regardless
-          # of host port mapping (self-hosted runner can't see 127.0.0.1:8080
-          # on the daemon host).
+          # Health-check from inside the proxy-go container — independent of
+          # however the host maps published ports.
           timeout 120 bash -c 'until docker compose exec -T proxy-go curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
-          # Self-hosted: join the compose network so this runner can
-          # address the proxy by service name on later steps.
+          # Join the compose network so this job can address the proxy by
+          # service name on later steps.
           docker network connect "${COMPOSE_PROJECT_NAME:-pg_reactive}_default" "$(hostname)" || true
 
       - name: Install ws (needed by anon-WS test)
@@ -375,20 +373,34 @@ jobs:
         working-directory: proxy-go
         run: |
           DSN="postgres://postgres:postgres@127.0.0.1:15432/pg_reactive_test"
-          # Self-hosted runners cannot see published ports on the daemon host;
-          # they were joined to the compose network above — use the service name.
+          # The job was joined to the compose network above — fall back to the
+          # service name when the published port is not reachable.
           if ! (exec 3<>/dev/tcp/127.0.0.1/15432) 2>/dev/null; then
             DSN="postgres://postgres:postgres@db:5432/pg_reactive_test"
           fi
           PGSTACK_TEST_DSN="$DSN" go test -count=1 -run TestAnonymous -v ./auth/
 
+      # The compose ports are published on 127.0.0.1 of the Docker host, and a
+      # hosted runner IS that host — so the loopback address is the direct
+      # route. Keep the service-name fallback for any setup where the runner
+      # sits outside the daemon host.
+      - name: Resolve proxy endpoints
+        run: |
+          if (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null; then
+            echo "PROXY_URL=http://127.0.0.1:8080" >> "$GITHUB_ENV"
+            echo "BASE_URL=http://127.0.0.1:8080" >> "$GITHUB_ENV"
+          else
+            echo "PROXY_URL=http://proxy-go:8080" >> "$GITHUB_ENV"
+            echo "BASE_URL=http://proxy-go:8080" >> "$GITHUB_ENV"
+          fi
+          if (exec 3<>/dev/tcp/127.0.0.1/8081) 2>/dev/null; then
+            echo "PROXY_RUST_URL=http://127.0.0.1:8081" >> "$GITHUB_ENV"
+          else
+            echo "PROXY_RUST_URL=http://proxy:8080" >> "$GITHUB_ENV"
+          fi
+
       - name: Run adversarial fixtures
         env:
-          # Address proxy-go by its compose service name — the runner was
-          # joined to the network in the Bring-up step. This avoids the
-          # 127.0.0.1 vs published-port pitfall on self-hosted.
-          PROXY_URL: http://proxy-go:8080
-          BASE_URL: http://proxy-go:8080
           # Every secret here must match the dev-compose default the
           # proxy was started with (docker-compose.yml). Otherwise
           # tests that mint a "valid" token (auth__jwt_manipulation
@@ -418,8 +430,6 @@ jobs:
       # the anonymous-identity suites are cheap enough to pin in CI forever.
       - name: Anonymous identity fixtures against the Rust sibling
         env:
-          PROXY_URL: http://proxy:8080
-          BASE_URL: http://proxy:8080
           JWT_SECRET: dev-only-jwt-secret-do-not-use-in-production
           ANON_KEY: dev-only-anon-key-do-not-use-in-production
           SERVICE_ROLE_KEY: dev-only-service-role-key-do-not-use-in-production
@@ -427,10 +437,12 @@ jobs:
           ALLOW_ANONYMOUS_SIGNIN: "true"
         run: |
           set -e
+          export PROXY_URL="$PROXY_RUST_URL"
+          export BASE_URL="$PROXY_RUST_URL"
           # The Rust runtime image is distroless-ish (no curl/wget) — probe
-          # from the RUNNER over the compose network it joined at bring-up,
-          # exactly how the tests below will connect.
-          timeout 180 bash -c 'until curl -sf http://proxy:8080/health >/dev/null 2>&1; do sleep 2; done'
+          # from the runner over the endpoint resolved above, exactly how the
+          # tests below will connect.
+          timeout 180 bash -c 'until curl -sf "$PROXY_URL/health" >/dev/null 2>&1; do sleep 2; done'
           node tests/security/auth__anonymous_role_isolation.test.mjs
           node tests/security/auth__anonymous_upgrade.test.mjs
           node tests/security/ws__anon_refused_when_required.test.mjs
@@ -450,7 +462,7 @@ jobs:
   # deploy to a public VPS to discover the prod posture is broken.
   test-prod-validator:
     name: Production validator
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     needs: [test-proxy-go]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -562,7 +574,7 @@ jobs:
   # ─── E2E tests (full stack) ──────────────────────────────────────────────────
   test-e2e:
     name: E2E tests
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     needs: [test-extension, test-proxy-go, test-sdk]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -577,17 +589,18 @@ jobs:
         run: |
           docker compose up -d --build
           echo "Waiting for stack to be healthy..."
-          # Self-hosted: health-check via compose exec (127.0.0.1 inside
-          # this runner doesn't see the daemon-host's published ports).
+          # Health-check from inside the container — independent of however the
+          # host maps published ports.
           timeout 120 bash -c 'until docker compose exec -T proxy-go curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do sleep 2; done'
-          docker network connect "${COMPOSE_PROJECT_NAME:-pg_reactive}_default" "$(hostname)" || true
-          # E2E test files hardcode 127.0.0.1:8080 and 127.0.0.1:15432.
-          # socat forwards those to the compose service names so the
-          # tests run unchanged.
-          which socat >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y socat)
-          socat TCP-LISTEN:8080,fork,reuseaddr TCP:proxy-go:8080 &
-          socat TCP-LISTEN:15432,fork,reuseaddr TCP:db:5432 &
-          sleep 1
+          # The E2E files hardcode 127.0.0.1:8080 and 127.0.0.1:15432. A hosted
+          # runner is the Docker host, so those ports are already its own; only
+          # forward them when the runner sits outside the daemon host.
+          if ! (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null; then
+            which socat >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y socat)
+            socat TCP-LISTEN:8080,fork,reuseaddr TCP:proxy-go:8080 &
+            socat TCP-LISTEN:15432,fork,reuseaddr TCP:db:5432 &
+            sleep 1
+          fi
           echo "Stack ready"
 
       - name: E2E — WebSocket
@@ -675,7 +688,7 @@ jobs:
   # ─── Integration tests ───────────────────────────────────────────────────────
   test-integration:
     name: Integration tests
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     needs: [test-extension]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -706,7 +719,7 @@ jobs:
   # assert the worker connects + delivers an async delta. gemini audit R9-3.
   test-async-bgworker:
     name: Async recompute bgworker
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     needs: [test-extension]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -733,7 +746,7 @@ jobs:
   # ─── Security audit ──────────────────────────────────────────────────────────
   security:
     name: Security audit
-    runs-on: ${{ (github.event_name == 'pull_request') && fromJSON('["ubuntu-24.04"]') || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -847,7 +860,7 @@ jobs:
       - test-async-bgworker
       - security
       - versions
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -859,30 +872,13 @@ jobs:
       - name: Set up QEMU (multi-platform)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
+      # A hosted VM is discarded after the job, so nothing survives locally: the
+      # layer cache comes from `type=gha` (see cache-from/cache-to on each
+      # build below) and every build starts from that. The old named builder and
+      # its pull-through mirror lived on the persistent self-hosted runner and
+      # have no meaning here.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          # Reuse one named builder across runs and DON'T tear it down at the end.
-          # The Dockerfile's `--mount=type=cache` (cargo registry + per-arch target)
-          # lives inside the builder's BuildKit instance; a fresh builder per run
-          # left it empty every time, so the Rust build recompiled all ~300 deps
-          # (~1h40m). On this persistent self-hosted runner a kept builder makes the
-          # cache survive → an unchanged-deps build recompiles only the proxy crate
-          # (~2m, measured locally cold ~1h40m vs warm 105s).
-          name: pgstack-buildx
-          cleanup: false
-          # Route docker.io metadata/pulls through the VPS pull-through cache
-          # (installed by runner-maintenance.yml; docker0 gateway = 172.17.0.1,
-          # reachable from the buildkitd container). BuildKit falls back to the
-          # upstream registry when the mirror is down, so this is safe even
-          # before the mirror exists. Applies only when the builder is
-          # (re)created — an existing pgstack-buildx keeps its old config AND
-          # its warm cargo cache; do not rm it just to pick this up.
-          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["172.17.0.1:5000"]
-            [registry."172.17.0.1:5000"]
-              http = true
 
       - name: Log in to GHCR
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
