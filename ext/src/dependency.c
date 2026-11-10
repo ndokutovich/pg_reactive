@@ -20,6 +20,20 @@ HTAB *pgr_dep_hash = NULL;
 static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
+/* Ascending OID order — the global lock order for trigger removal. */
+static int
+pgr_oid_cmp(const void *a, const void *b)
+{
+	Oid			x = *(const Oid *) a;
+	Oid			y = *(const Oid *) b;
+
+	if (x < y)
+		return -1;
+	if (x > y)
+		return 1;
+	return 0;
+}
+
 /*
  * ── Transaction rollback journal (before-image) ─────────────────────────────
  *
@@ -523,6 +537,17 @@ pgr_dep_copy_tables(const char *query_id, Oid *table_oids, int max_tables)
 	}
 
 	LWLockRelease(pgr_state->lock);
+
+	/*
+	 * Hand the caller a deterministic order. Every caller of this function
+	 * drops per-table triggers, and DROP TRIGGER takes an AccessExclusiveLock
+	 * on the relation: two concurrent unsubscribes whose subscriptions span
+	 * the same tables would otherwise acquire those locks in opposite orders
+	 * and deadlock. Sorting by OID gives every backend the same lock order.
+	 */
+	if (num_tables > 1)
+		qsort(table_oids, num_tables, sizeof(Oid), pgr_oid_cmp);
+
 	return num_tables;
 }
 
