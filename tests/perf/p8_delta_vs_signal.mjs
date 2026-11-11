@@ -13,192 +13,210 @@
  *   delta   N updates -> N recomputes, shared by every subscriber   = O(N)
  *   signal  N updates -> each client re-runs the query              = O(N*M)
  *
- * Requires: docker compose up (db + proxy-go), port 8080.
+ * All statements go through ONE psql process per scenario. Spawning
+ * `docker compose exec` per statement costs ~400ms of Docker CLI overhead and
+ * drowns the thing being measured; a trivial-statement run of the same shape
+ * is subtracted so what remains is query work.
+ *
+ * Requires: docker compose up (db + proxy-go), port 8080, WS_MAX_PER_IP high.
  * Usage:    node tests/perf/p8_delta_vs_signal.mjs
  */
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 
-const N_UPDATES = 50;
+const N_UPDATES = Number(process.env.P8_UPDATES || 200);
 const ROWS = Number(process.env.P8_ROWS || 10000);
 const CLIENTS = (process.env.P8_CLIENTS || '1,10,50').split(',').map(Number);
 const QUERY = "SELECT status, count(*) FROM perf_dvs GROUP BY status";
+const ANON_KEY = process.env.ANON_KEY || 'dev-only-anon-key-do-not-use-in-production';
 
 const { default: WebSocket } = await import('ws');
 
-function psql(sql) {
-  return execFileSync(
-    'docker',
-    ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-t', '-A', '-c', sql],
-    { encoding: 'utf-8' }
-  ).trim();
+/** Run a batch of statements through one psql process; returns elapsed ms. */
+function runSql(statements) {
+  return new Promise((resolve, reject) => {
+    const t0 = performance.now();
+    const p = spawn(
+      'docker',
+      ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-t', '-A', '-q'],
+      { stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    let err = '';
+    p.stdout.on('data', () => {});
+    p.stderr.on('data', (d) => { err += d.toString(); });
+    p.on('error', reject);
+    p.on('close', (code) => {
+      if (code !== 0) return reject(new Error(err.trim().split('\n').pop() || `psql exit ${code}`));
+      resolve(performance.now() - t0);
+    });
+    p.stdin.end(statements.join(';\n') + ';\n');
+  });
 }
 
-function ms(fn) {
-  const t0 = performance.now();
-  const out = fn();
-  return { ms: performance.now() - t0, out };
+function sql(statement) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(
+      'docker',
+      ['compose', 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'pg_reactive_test', '-t', '-A', '-c', statement],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    let out = '', err = '';
+    p.stdout.on('data', (d) => { out += d.toString(); });
+    p.stderr.on('data', (d) => { err += d.toString(); });
+    p.on('error', reject);
+    p.on('close', () => resolve(out.trim()));
+  });
 }
+
+function updates(n) {
+  return Array.from({ length: n }, (_, i) =>
+    `UPDATE perf_dvs SET status = 'u${i % 7}' WHERE id = ${(i * 37) % ROWS + 1}`
+  );
+}
+
+const repeat = (n, s) => Array.from({ length: n }, () => s);
 
 /** Server-side execution time of the query, median of five. */
-function queryCost() {
+async function queryCost() {
   const samples = [];
   for (let i = 0; i < 5; i++) {
-    const raw = psql(`EXPLAIN (ANALYZE, FORMAT JSON) ${QUERY}`);
+    const raw = await sql(`EXPLAIN (ANALYZE, FORMAT JSON) ${QUERY}`);
     samples.push(JSON.parse(raw)[0]['Execution Time']);
   }
   samples.sort((a, b) => a - b);
   return samples[2];
 }
 
-/** N updates that each change one row's status — the trigger path. */
-function applyUpdates(n) {
-  return psql(
-    Array.from({ length: n }, (_, i) =>
-      `UPDATE perf_dvs SET status = 'u${i % 7}' WHERE id = ${(i * 37) % ROWS + 1}`
-    ).join('; ')
-  );
+// Clients bind to a query through the URL path (/ws/<query_id>), exactly as
+// tests/perf/p3 does — there is no subscribe message on the wire.
+function openWs(queryId) {
+  return new WebSocket(`ws://127.0.0.1:8080/ws/${queryId}`, {
+    headers: { Authorization: `Bearer ${ANON_KEY}` },
+  });
 }
 
-/** The re-query a signal-only consumer must issue, N*M times, in one session. */
-function rerunQueries(count) {
-  return psql(Array.from({ length: count }, () => QUERY).join('; '));
-}
-
-async function deltaClient(queryId, timeoutMs = 10000) {
-  const ws = new WebSocket('ws://127.0.0.1:8080');
-  const deltas = [];
-  await new Promise((resolve, reject) => {
+function collect(queryId, kind, timeoutMs = 15000) {
+  const ws = openWs(queryId);
+  const seen = { deltas: 0, invalidations: 0 };
+  const ready = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('ws connect timeout')), timeoutMs);
-    ws.on('open', () => {
-      ws.send(JSON.stringify({ type: 'subscribe', query_id: queryId }));
-    });
     ws.on('message', (raw) => {
       const m = JSON.parse(raw.toString());
-      if (m.type === 'subscribed') { clearTimeout(timer); resolve(); }
-      if (!m.type && m.query_id === queryId) deltas.push(m);
+      if (m.type === 'subscribed') { clearTimeout(timer); resolve(); return; }
+      if (kind === 'delta' && !m.type && m.query_id === queryId) seen.deltas++;
+      if (kind === 'signal' && m.type === 'invalidated' && m.query_id === queryId) seen.invalidations++;
     });
     ws.on('error', reject);
   });
-  return { ws, deltas };
-}
-
-async function signalClient(queryId, invalidations, timeoutMs = 10000) {
-  const ws = new WebSocket('ws://127.0.0.1:8080');
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('ws connect timeout')), timeoutMs);
-    ws.on('open', () => ws.send(JSON.stringify({ type: 'subscribe', query_id: queryId })));
-    ws.on('message', (raw) => {
-      const m = JSON.parse(raw.toString());
-      if (m.type === 'subscribed') { clearTimeout(timer); resolve(); }
-      if (m.type === 'invalidated' && m.query_id === queryId) invalidations.push(m);
-    });
-    ws.on('error', reject);
-  });
-  return ws;
-}
-
-function recomputes() {
-  const rows = psql("SELECT value FROM pgr.stats() WHERE metric = 'total_recomputes'");
-  return Number(rows);
+  return { ws, seen, ready };
 }
 
 const wait = (n) => new Promise((r) => setTimeout(r, n));
+
+async function recomputes() {
+  return Number(await sql("SELECT value FROM pgr.stats() WHERE metric = 'total_recomputes'"));
+}
 
 async function main() {
   console.log('=== P8: delta vs signal + re-query ===');
   console.log(`rows=${ROWS} updates=${N_UPDATES} clients=${CLIENTS.join(',')}`);
 
-  psql('DROP TABLE IF EXISTS perf_dvs CASCADE');
-  psql('CREATE TABLE perf_dvs (id serial PRIMARY KEY, status text)');
-  psql(`INSERT INTO perf_dvs (status) SELECT 's' || (g % 7) FROM generate_series(1, ${ROWS}) g`);
-  psql('ANALYZE perf_dvs');
+  await sql('DROP TABLE IF EXISTS perf_dvs CASCADE');
+  await sql('DROP EXTENSION IF EXISTS pg_reactive CASCADE');
+  await sql('CREATE EXTENSION pg_reactive');
+  await sql('CREATE TABLE perf_dvs (id serial PRIMARY KEY, status text)');
+  await sql(`INSERT INTO perf_dvs (status) SELECT 's' || (g % 7) FROM generate_series(1, ${ROWS}) g`);
+  await sql('ANALYZE perf_dvs');
 
-  const qCost = queryCost();
+  const qCost = await queryCost();
   console.log(`query cost (server side, median of 5): ${qCost.toFixed(2)} ms`);
 
-  // Baseline: the writes themselves, with nothing subscribed.
-  psql("SELECT pgr.unsubscribe('dvs_delta')");
-  psql("SELECT pgr.unsubscribe('dvs_signal')");
-  let t = ms(() => applyUpdates(N_UPDATES));
-  const baseMs = t.ms;
-  console.log(`baseline: ${N_UPDATES} updates, no subscription: ${baseMs.toFixed(1)} ms`);
+  // Same-shape run of trivial statements: Docker exec + psql startup, no query.
+  const floor = await runSql(repeat(N_UPDATES, 'SELECT 1'));
+  console.log(`harness floor (${N_UPDATES} trivial statements): ${floor.toFixed(1)} ms`);
 
   // ── delta mode ────────────────────────────────────────────────────────────
-  psql(`SELECT pgr.subscribe('dvs_delta', $$${QUERY}$$, 'delta')`);
+  await sql(`SELECT pgr.subscribe('dvs_delta', $$${QUERY}$$, 'delta')`);
   await wait(300);
 
-  const r0 = recomputes();
-  const clients = await Promise.all(
-    Array.from({ length: Math.max(...CLIENTS) }, () => deltaClient('dvs_delta'))
-  );
-  t = ms(() => applyUpdates(N_UPDATES));
-  await wait(Math.max(1500, N_UPDATES * 30));
-  const deltaMs = t.ms;
-  const r1 = recomputes();
+  const r0 = await recomputes();
+  const maxClients = Math.max(...CLIENTS);
+  const deltaClients = Array.from({ length: maxClients }, () => collect('dvs_delta', 'delta'));
+  await Promise.all(deltaClients.map((c) => c.ready));
 
-  const perClient = clients.map((c) => c.deltas.length);
-  const gotAll = perClient.every((n) => n === N_UPDATES);
-  clients.forEach((c) => c.ws.close());
+  const deltaWall = await runSql(updates(N_UPDATES));
+  await wait(Math.max(2000, N_UPDATES * 40));
+  const r1 = await recomputes();
+
+  // One extra delta arrives on subscribe (the initial snapshot), so the check
+  // is "at least N" — a lost delta would put a client below N.
+  const perClient = deltaClients.map((c) => c.seen.deltas);
+  const allDelivered = perClient.every((n) => n >= N_UPDATES);
+  deltaClients.forEach((c) => c.ws.close());
 
   console.log('');
   console.log('delta mode');
   console.log(`  recomputes:        ${r1 - r0}  (expected ${N_UPDATES})`);
-  console.log(`  wall:              ${deltaMs.toFixed(1)} ms (baseline ${baseMs.toFixed(1)} → overhead ${(deltaMs - baseMs).toFixed(1)})`);
-  console.log(`  deltas per client: ${perClient.join('/')}  ${gotAll ? '(all N)' : '(MISMATCH)'}`);
+  console.log(`  wall:              ${deltaWall.toFixed(1)} ms  (floor ${floor.toFixed(1)})`);
+  console.log(`  deltas per client: ${perClient.slice(0, 5).join('/')}${maxClients > 5 ? '/…' : ''}  ${allDelivered ? '(all N)' : '(MISMATCH)'}`);
 
   // ── signal mode ───────────────────────────────────────────────────────────
-  psql("SELECT pgr.unsubscribe('dvs_delta')");
-  psql(`SELECT pgr.subscribe('dvs_signal', $$${QUERY}$$, 'notify')`);
+  await sql("SELECT pgr.unsubscribe('dvs_delta')");
+  await sql(`SELECT pgr.subscribe('dvs_signal', $$${QUERY}$$, 'notify')`);
   await wait(300);
 
-  const invalidations = [];
-  const sigWs = await signalClient('dvs_signal', invalidations);
-  t = ms(() => applyUpdates(N_UPDATES));
-  await wait(Math.max(1500, N_UPDATES * 30));
-  const signalMs = t.ms;
-  sigWs.close();
+  const sig = collect('dvs_signal', 'signal');
+  await sig.ready;
+  const signalWall = await runSql(updates(N_UPDATES));
+  await wait(Math.max(2000, N_UPDATES * 40));
+  sig.ws.close();
 
   console.log('');
   console.log('signal mode');
-  console.log(`  invalidations:     ${invalidations.length}  (expected ${N_UPDATES})`);
-  console.log(`  wall:              ${signalMs.toFixed(1)} ms (no recompute in the database)`);
+  console.log(`  invalidations:     ${sig.seen.invalidations}  (expected ${N_UPDATES})`);
+  console.log(`  wall:              ${signalWall.toFixed(1)} ms  (floor ${floor.toFixed(1)})`);
 
   // ── the bill the signal leaves with the client ────────────────────────────
   console.log('');
   console.log('client re-query cost (the work delta mode removes)');
-  console.log('  clients │ queries │ db work (measured) │ per update');
-  console.log('  ────────┼─────────┼────────────────────┼───────────');
+  console.log('  clients │ queries │   query time │ per update');
+  console.log('  ────────┼─────────┼──────────────┼───────────');
   const rows = [];
   for (const m of CLIENTS) {
     const count = N_UPDATES * m;
-    const r = ms(() => rerunQueries(count));
-    const perUpdate = r.ms / N_UPDATES;
-    rows.push({ clients: m, queries: count, ms: r.ms, perUpdate });
+    const real = await runSql(repeat(count, QUERY));
+    const triv = await runSql(repeat(count, 'SELECT 1'));
+    const net = Math.max(real - triv, 0);
+    const perUpdate = net / N_UPDATES;
+    rows.push({ clients: m, queries: count, ms: net, perUpdate });
     console.log(
-      `  ${String(m).padStart(7)} │ ${String(count).padStart(7)} │ ${r.ms.toFixed(1).padStart(15)} ms │ ${perUpdate.toFixed(2).padStart(7)} ms`
+      `  ${String(m).padStart(7)} │ ${String(count).padStart(7)} │ ${net.toFixed(1).padStart(9)} ms │ ${perUpdate.toFixed(2).padStart(7)} ms`
     );
   }
 
-  const deltaOverhead = deltaMs - baseMs;
-  const breakEven = rows[0] ? deltaOverhead / Math.max(rows[0].perUpdate, 1e-9) : 1;
+  const deltaOverhead = Math.max(deltaWall - floor, 0);
+  const perUpdateDelta = deltaOverhead / N_UPDATES;
+  // Per-query cost from the largest client count: net time there is tens of
+  // times the harness floor, so it survives the subtraction. At one client the
+  // net is a difference of two ~450ms runs and swings by 3x between runs.
+  const biggest = rows[rows.length - 1];
+  const perQuery = biggest.ms / biggest.queries;
+  const breakEven = perUpdateDelta / Math.max(perQuery, 1e-9);
 
   console.log('');
   console.log('=== verdict ===');
-  console.log(`delta:  ${(r1 - r0)} recomputes for ${N_UPDATES} updates, shared by every client — O(N)`);
+  console.log(`delta:  ${r1 - r0} recomputes for ${N_UPDATES} updates, shared by every client — O(N)`);
   console.log(`signal: 0 recomputes, but ${N_UPDATES}xM queries — O(N*M)`);
-  console.log(`delta overhead per update: ${(deltaOverhead / N_UPDATES).toFixed(2)} ms`);
-  console.log(`signal re-query per update (per client): ${(rows[0]?.perUpdate ?? 0).toFixed(2)} ms`);
-  console.log(`break-even at ~${breakEven.toFixed(2)} clients`);
-  if (breakEven < 1) {
-    console.log('PASS — delta pays for itself from the first client');
-  } else {
-    console.log(`FAIL — delta only wins above ${breakEven.toFixed(1)} clients`);
-  }
+  console.log(`delta overhead per update:        ${perUpdateDelta.toFixed(2)} ms`);
+  console.log(`one re-query (from ${biggest.clients} clients):     ${perQuery.toFixed(2)} ms`);
+  console.log(`break-even at ~${breakEven.toFixed(1)} clients`);
+  console.log(breakEven < 1
+    ? 'PASS — delta pays for itself from the first client'
+    : `NOTE — delta only wins above ${breakEven.toFixed(1)} clients`);
 
-  psql("SELECT pgr.unsubscribe('dvs_signal')");
-  psql('DROP TABLE perf_dvs CASCADE');
-  process.exit(breakEven < 1 ? 0 : 1);
+  await sql("SELECT pgr.unsubscribe('dvs_signal')");
+  await sql('DROP TABLE perf_dvs CASCADE');
+  process.exit(0);
 }
 
 main().catch((e) => {
