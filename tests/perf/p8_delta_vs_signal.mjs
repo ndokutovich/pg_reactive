@@ -194,6 +194,40 @@ async function main() {
     );
   }
 
+  // ── many distinct subscriptions on the same table ─────────────────────────
+  // The fan-out case above is the shape pg_reactive is built for: one query,
+  // many subscribers. The opposite shape is one subscriber per predicate — a
+  // per-user query. Dependencies are tracked per table and column, not per row,
+  // so a write to one user's row invalidates every subscription reading that
+  // table. This measures how much that costs.
+  console.log('');
+  console.log('many subscriptions on one table (the shape where this can lose)');
+  await sql('DROP TABLE IF EXISTS perf_dvs_users');
+  await sql('CREATE TABLE perf_dvs_users (id serial PRIMARY KEY, status text)');
+  await sql(`INSERT INTO perf_dvs_users (status) SELECT 's' || (g % 7) FROM generate_series(1, ${ROWS}) g`);
+
+  const many = Math.min(Math.max(...CLIENTS), 50) || 10;
+  for (let i = 0; i < many; i++) {
+    await sql(`SELECT pgr.subscribe('dvs_u${i}', $$SELECT count(*) FROM perf_dvs_users WHERE id = ${i + 1}$$, 'delta')`);
+  }
+  await wait(500);
+
+  const before = await recomputes();
+  // Each statement touches one row; every subscription on the table invalidates.
+  const manyWall = await runSql(
+    Array.from({ length: N_UPDATES }, (_, i) => `UPDATE perf_dvs_users SET status = 'x' WHERE id = ${i + 1}`)
+  );
+  await wait(Math.max(2000, N_UPDATES * 40));
+  const after = await recomputes();
+
+  console.log(`  subscriptions:     ${many}`);
+  console.log(`  updates:           ${N_UPDATES}`);
+  console.log(`  recomputes:        ${after - before}  (a plain re-query model would run ${many} queries per update = ${many * N_UPDATES})`);
+  console.log(`  wall:              ${manyWall.toFixed(1)} ms  (floor ${floor.toFixed(1)})`);
+
+  for (let i = 0; i < many; i++) await sql(`SELECT pgr.unsubscribe('dvs_u${i}')`);
+  await sql('DROP TABLE perf_dvs_users');
+
   const deltaOverhead = Math.max(deltaWall - floor, 0);
   const perUpdateDelta = deltaOverhead / N_UPDATES;
   // Per-query cost from the largest client count: net time there is tens of
