@@ -1,4 +1,4 @@
-FROM golang:1.26.10-bookworm AS build
+FROM golang:1.26.11-bookworm AS build
 WORKDIR /app
 ENV GOTOOLCHAIN=auto
 # Reproducible build: pin to committed go.mod + go.sum. Previously this did

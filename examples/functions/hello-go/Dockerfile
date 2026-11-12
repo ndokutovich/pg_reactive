@@ -1,7 +1,7 @@
 # hello-go — reference polyglot edge function (runtime="http").
 # Stdlib only, no dependencies — so no go.sum and no `go mod tidy` needed.
 
-FROM golang:1.26.10-bookworm AS build
+FROM golang:1.26.11-bookworm AS build
 WORKDIR /src
 COPY go.mod .
 COPY main.go .

@@ -78,7 +78,7 @@ ok(s(["stale"], { strict: true }).fatal.length === 1, "a stale patch fails the s
 // ── collection against this tree ─────────────────────────────────────────────
 const rows = collect();
 ok(rows.length > 20, `collector found ${rows.length} pins`);
-ok(rows.some((r) => r.id === "go" && r.version === "1.26.10"), "go 1.26.10 is collected");
+ok(rows.some((r) => r.id === "go" && r.version === "1.26.11"), "go 1.26.11 is collected");
 ok(rows.some((r) => r.id === "node" && r.version === "24"), "node 24 is collected");
 ok(rows.some((r) => r.id === "postgres" && r.cycle === "16" && r.source.includes("docker-compose")), "compose postgres pin is collected");
 ok(rows.every((r) => r.id && r.source), "every row carries a runtime and a source");
@@ -97,7 +97,7 @@ const DOC = join(process.cwd(), "docs", "VERSIONS.md");
 const backup = DOC + ".bak";
 copyFileSync(DOC, backup);
 try {
-  writeFileSync(DOC, readFileSync(DOC, "utf8").replace(/\| go \| 1\.26\.10 \|/, "| go | 9.9.9 |"));
+  writeFileSync(DOC, readFileSync(DOC, "utf8").replace(/\| go \| 1\.26\.11 \|/, "| go | 9.9.9 |"));
   const drifted = run(["--offline"]);
   ok(drifted.code !== 0, "check --offline fails when the document drifts from the tree");
   ok(/drifted/.test(drifted.out), "the failure names the drift");

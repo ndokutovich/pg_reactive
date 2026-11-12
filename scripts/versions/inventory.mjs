@@ -39,7 +39,7 @@ function gitFiles() {
     .filter(Boolean);
 }
 
-// `golang:1.26.10-bookworm@sha256:... AS builder` -> { image, tag }
+// `golang:1.26.11-bookworm@sha256:... AS builder` -> { image, tag }
 function parseFrom(line) {
   const m = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)/i);
   if (!m) return null;

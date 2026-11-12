@@ -324,7 +324,7 @@ all if you only take the SDK, and a PostgreSQL 15–18 cluster if you only take
 the extension. Every PostgreSQL major is CI-proven with the full regression and
 isolation suite on bare PGDG images; the bundled images ship PostgreSQL 16.
 
-**To build from source:** Docker and Compose, Go 1.26.10 (the CI-verified
+**To build from source:** Docker and Compose, Go 1.26.11 (the CI-verified
 toolchain, on which `govulncheck` is clean), and Node.js 24 for the SDK and CLI
 build chains. The pinned versions live in [`docs/VERSIONS.md`](docs/VERSIONS.md)
 and are re-checked weekly by CI.
