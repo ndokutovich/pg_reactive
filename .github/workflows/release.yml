@@ -319,3 +319,14 @@ jobs:
             npm install @pgstack/sdk@${{ steps.version.outputs.version }}
             npm install -g pgstack@${{ steps.version.outputs.version }}
             ```
+
+            ### Upgrading a running deployment
+
+            ```bash
+            docker compose pull && docker compose up -d
+            ```
+
+            **Pinned to a version?** `pull` will fetch nothing — move the tag in
+            your compose file to `${{ steps.version.outputs.version }}` first.
+            Step-by-step, including the extension upgrade path and rollback:
+            https://github.com/${{ github.repository }}/blob/master/docs/site/docs/deploy/upgrading.md
