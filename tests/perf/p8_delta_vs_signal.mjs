@@ -220,10 +220,23 @@ async function main() {
   await wait(Math.max(2000, N_UPDATES * 40));
   const after = await recomputes();
 
+  // The same work the re-query model would do: N updates x M plain SELECTs.
+  const equivalent = Array.from({ length: N_UPDATES }, () =>
+    Array.from({ length: many }, (_, i) => `SELECT count(*) FROM perf_dvs_users WHERE id = ${i + 1}`).join('; ')
+  ).join(';\n');
+  const requeryWall = await runSql([equivalent]);
+  const requeryFloor = await runSql(repeat(many * N_UPDATES, 'SELECT 1'));
+
+  const recomputeNet = Math.max(manyWall - floor, 0);
+  const requeryNet = Math.max(requeryWall - requeryFloor, 0);
+  const ops = many * N_UPDATES;
+
   console.log(`  subscriptions:     ${many}`);
   console.log(`  updates:           ${N_UPDATES}`);
-  console.log(`  recomputes:        ${after - before}  (a plain re-query model would run ${many} queries per update = ${many * N_UPDATES})`);
-  console.log(`  wall:              ${manyWall.toFixed(1)} ms  (floor ${floor.toFixed(1)})`);
+  console.log(`  recomputes:        ${after - before}  (a plain re-query model would run ${many} queries per update = ${ops})`);
+  console.log(`  our time:          ${recomputeNet.toFixed(1)} ms net  (${(recomputeNet / ops).toFixed(3)} ms per recompute)`);
+  console.log(`  re-query time:     ${requeryNet.toFixed(1)} ms net  (${(requeryNet / ops).toFixed(3)} ms per query)`);
+  console.log(`  ratio:             ${(recomputeNet / Math.max(requeryNet, 1e-9)).toFixed(2)}x  (above 1 = we lose this shape)`);
 
   for (let i = 0; i < many; i++) await sql(`SELECT pgr.unsubscribe('dvs_u${i}')`);
   await sql('DROP TABLE perf_dvs_users');
