@@ -79,6 +79,7 @@ const sidebars: SidebarsConfig = {
         'deploy/docker',
         'deploy/env-vars',
         'deploy/production',
+        'deploy/upgrading',
       ],
     },
     'reference/api',
