@@ -5,6 +5,33 @@ All notable changes to pg_reactive / pgStack are tracked here. Format follows
 semantic versioning per component (the PostgreSQL extension version is
 declared in `ext/pg_reactive.control`).
 
+## [0.3.5] — 2026-11-12
+
+### Security
+- **Go 1.26.10 → 1.26.11** — closes GO-2026-6859 in `net/http`, reachable from
+  the proxy. The 0.3.4 images were built with 1.26.10 and carry it; this release
+  replaces them.
+
+### Fixed
+- **Deadlock between concurrent `pgr.unsubscribe` calls.** Trigger removal walked
+  the dependency list in whatever order the shared hash returned, which is not
+  stable across backends: two sessions could take the same relation locks in
+  opposite orders and PostgreSQL killed one. The list is now sorted by OID, so
+  every backend takes the locks in the same order. Caught by
+  `test_shmem_pressure.py` in CI.
+- **Candidate smoke on a hosted runner.** The arm64 pull failed with
+  `cannot overwrite digest`: both platforms resolve to different images but land
+  under one `repo@digest` reference in a classic image store. The previous
+  platform's image is now dropped first.
+
+### Changed
+- README rebuilt around the published artifacts — npm, Docker, PGXN — instead of
+  opening with a source build.
+- `ext/README.md` opens with a real session: subscribe, insert, an update to a
+  selected column, and then an update to a column the query never reads, followed
+  by silence. That silence is the feature and it was previously invisible.
+- Documentation numbers re-checked against the tree rather than carried forward.
+
 ## [0.3.4] — 2026-11-10
 
 ### Security
