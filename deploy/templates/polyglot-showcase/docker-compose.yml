@@ -72,7 +72,7 @@ services:
         aliases: [polyglot-pgstack]
 
   polyglot-migration:
-    image: postgres:16-alpine
+    image: postgres:16.16-alpine
     container_name: polyglot-migration
     restart: "no"
     depends_on:

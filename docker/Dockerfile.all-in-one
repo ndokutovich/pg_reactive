@@ -35,7 +35,7 @@ COPY proxy-go/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o pgstack-proxy .
 
 # ── Stage 2: all-in-one runtime ──────────────────────────────────────────────
-FROM postgres:16-bookworm@sha256:a0fd72825431f4b7fd3f9d5def9f370b9c22012f1a9e37ece1a5749b95333fb7
+FROM postgres:16.16-bookworm@sha256:a49f7438ba03589f9b1ca062f2da82e899b48ea1dc50d2449fa09a70be83ebcab95333fb7
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential postgresql-server-dev-16 ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*

@@ -144,7 +144,7 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
-          toolchain: "1.99"
+          toolchain: "1.100.0"
           # v2 ships its own cargo cache and probes the workspace root;
           # our crate lives in proxy/ and the proxy job already caches cargo.
           cache: false
@@ -189,7 +189,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.3"
           cache: "npm"
           cache-dependency-path: sdk/package-lock.json
 
@@ -232,7 +232,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.3"
           cache: "npm"
           cache-dependency-path: cli/package-lock.json
 
@@ -339,7 +339,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.3"
 
       # Round 32 F2: REQUIRE_AUTHENTICATED_WS=true is what makes the
       # ws__anon_refused_when_required test actually exercise the
@@ -584,7 +584,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.3"
 
       - name: Start full stack
         run: |
@@ -755,7 +755,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.3"
 
       # --omit=dev limits the audit to runtime dependencies. Dev-only chains
       # (vite, vitest, stryker, postcss, ...) ship vulns of their own that
@@ -787,7 +787,7 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
-          toolchain: "1.99"
+          toolchain: "1.100.0"
           # v2 ships its own cargo cache and probes the workspace root;
           # our crate lives in proxy/ and the proxy job already caches cargo.
           cache: false
@@ -813,7 +813,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.3"
 
       - name: Inventory tests
         run: node tests/versions_inventory_test.mjs
@@ -823,7 +823,7 @@ jobs:
 
   # ─── Publish release-candidate images (build ONCE, promote at release) ───────
   # Supply-chain provenance (gemini finding 7): release.yml must NOT rebuild the
-  # Docker images from a mutable base (Dockerfile.dev's `FROM postgres:16-bookworm`)
+  # Docker images from a mutable base (Dockerfile.dev's `FROM postgres:16.16-bookworm`)
   # — a release-time rebuild ships bytes CI never saw, and a base republish between
   # CI and release silently changes them. Instead CI builds each image ONCE here,
   # on a GREEN master push, and pushes it under the immutable per-commit staging

@@ -5,7 +5,7 @@ RUN mvn -B -q dependency:go-offline
 COPY src ./src
 RUN mvn -B -q -DskipTests package
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21.0.13_9-jre
 WORKDIR /app
 COPY --from=build /src/target/engine.jar ./engine.jar
 USER nobody

@@ -74,7 +74,7 @@ services:
         aliases: [shop-pgstack]
 
   shop-migration:
-    image: postgres:16-alpine
+    image: postgres:16.16-alpine
     container_name: shop-migration
     restart: "no"
     depends_on:

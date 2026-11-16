@@ -1,4 +1,4 @@
-FROM postgres:16-bookworm
+FROM postgres:16.16-bookworm
 
 # Install build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \

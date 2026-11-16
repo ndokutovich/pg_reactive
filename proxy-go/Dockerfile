@@ -13,7 +13,7 @@
 #     | tr -d '\r' | grep -i 'docker-content-digest:'
 
 # ── Stage 1: Build Studio SPA ──────────────────────────────────────────────────
-FROM node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS studio-builder
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS studio-builder
 WORKDIR /studio-build
 COPY studio/package.json studio/package-lock.json ./
 # Shared npm cache (same id as proxy/Dockerfile) so the warm download cache survives
@@ -25,7 +25,7 @@ COPY studio/ .
 RUN npm run build
 
 # ── Stage 2: Build Docusaurus docs ────────────────────────────────────────────
-FROM node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS docs-builder
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS docs-builder
 ARG DOCS_BASE_URL=/docs/
 WORKDIR /docs-build
 COPY docs/site/package.json docs/site/package-lock.json ./

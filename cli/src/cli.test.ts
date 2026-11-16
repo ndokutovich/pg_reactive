@@ -112,7 +112,7 @@ describe("pgstack init", () => {
     // the release pipeline actually publishes (ghcr.io), not a phantom.
     expect(dc).toContain("ghcr.io/ndokutovich/pgstack-postgres:latest");
     expect(dc).toContain("ghcr.io/ndokutovich/pgstack-proxy:latest");
-    expect(dc).not.toContain("postgres:16-bookworm");
+    expect(dc).not.toContain("postgres:16.16-bookworm");
     expect(dc).not.toContain("image: pgstack/proxy:latest");
     expect(dc).toContain("JWT_SECRET");
     expect(dc).toContain("ANON_KEY");
