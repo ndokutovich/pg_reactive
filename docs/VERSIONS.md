@@ -19,9 +19,9 @@ table by hand: `check.mjs` fails when it drifts from the tree.
 | go | 1.26.11 | 1.26 | examples/functions/hello-go/Dockerfile |
 | go | 1.26.11 | 1.26 | proxy-go/Dockerfile |
 | java | 21.0.13 | 21 | apps/polyglot/engines/spring/Dockerfile |
-| nginx | — | — | apps/polyglot/web/Dockerfile |
-| nginx | — | — | apps/shopping/Dockerfile |
-| nginx | — | — | examples/Dockerfile.web |
+| nginx | 1.31.9 | 1.31 | apps/polyglot/web/Dockerfile |
+| nginx | 1.31.9 | 1.31 | apps/shopping/Dockerfile |
+| nginx | 1.31.9 | 1.31 | examples/Dockerfile.web |
 | node | 24.22.3 | 24 | .github/workflows/ci.yml |
 | node | 24.22.3 | 24 | .github/workflows/cli-sdk-e2e.yml |
 | node | 24.22.3 | 24 | .github/workflows/release.yml |

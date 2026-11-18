@@ -14,7 +14,7 @@
 # same image works on shop.localhost as on shop.pgstack.org without a
 # rebuild.
 
-FROM nginx:alpine
+FROM nginx:1.31.9-alpine
 ARG VARIANT=vanilla
 RUN test -n "${VARIANT}"
 

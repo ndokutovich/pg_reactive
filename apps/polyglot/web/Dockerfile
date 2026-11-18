@@ -1,4 +1,4 @@
-FROM nginx:alpine
+FROM nginx:1.31.9-alpine
 WORKDIR /usr/share/nginx/html
 COPY index.html ./
 COPY config.js  ./
